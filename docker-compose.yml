@@ -80,7 +80,7 @@ services:
     dns_search: []
     volumes:
       # Mount agent setup script
-      - ./agent-setup.sh:/agent-setup.sh:ro
+      - ./scripts/agent-setup.sh:/agent-setup.sh:ro
     command: ["/agent-setup.sh"]
     depends_on:
       sekimore-gw:
