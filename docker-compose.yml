@@ -40,12 +40,15 @@ services:
       - ./config/squid:/etc/squid/templates:ro
       # Mount data directory (persistent storage for database)
       - gateway-data:/data
-    env_file:
-      - .env
     environment:
-      - PROJECT_NAME=${COMPOSE_PROJECT_NAME:-sekimore-gw}
+      # Docker Compose automatically uses directory name as project name
+      # Override with COMPOSE_PROJECT_NAME environment variable if needed
+      - PROJECT_NAME=${COMPOSE_PROJECT_NAME}
       - INTERNAL_NETWORK_NAME=${INTERNAL_NETWORK_NAME:-internal-net}
       - INTERNET_NETWORK_NAME=${INTERNET_NETWORK_NAME:-internet}
+      # Proxy authentication (optional, can be set via environment variables)
+      - SEKIMORE_UPSTREAM_PROXY_USERNAME=${SEKIMORE_UPSTREAM_PROXY_USERNAME:-}
+      - SEKIMORE_UPSTREAM_PROXY_PASSWORD=${SEKIMORE_UPSTREAM_PROXY_PASSWORD:-}
     ports:
       # Web UI
       - "8080:8080"

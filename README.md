@@ -56,18 +56,24 @@ cd sekimore-gw
 
 ```bash
 cp config/config.sample.yml config/config.yml
-cp .env.example .env
 ```
 
-3. Edit `config/config.yml` to configure allowed/blocked domains and IPs.
+3. (Optional) Create `.env` file if you need upstream proxy authentication:
 
-4. Start the gateway:
+```bash
+cp .env.example .env
+# Edit .env and uncomment proxy authentication settings
+```
+
+4. Edit `config/config.yml` to configure allowed/blocked domains and IPs.
+
+5. Start the gateway:
 
 ```bash
 docker-compose up -d
 ```
 
-5. Access the Web UI at `http://localhost:8080`
+6. Access the Web UI at `http://localhost:8080`
 
 ### Example: AI Agent Setup
 
@@ -94,15 +100,17 @@ The agent will automatically discover the gateway and route all traffic through 
 
 ## Configuration
 
-### Environment Variables
+### Environment Variables (Optional)
 
-Create `.env` file:
+The `.env` file is optional. Create it only if you need upstream proxy authentication:
 
 ```bash
-COMPOSE_PROJECT_NAME=sekimore-gw
-INTERNAL_NETWORK_NAME=internal-net
-INTERNET_NETWORK_NAME=internet
+# Optional: Upstream Proxy Authentication
+SEKIMORE_UPSTREAM_PROXY_USERNAME=your-username
+SEKIMORE_UPSTREAM_PROXY_PASSWORD=your-password
 ```
+
+**Note**: Docker Compose automatically uses the directory name as the project name. Network names use default values (`internal-net` and `internet`). Override these with environment variables if needed.
 
 ### Domain Filtering
 
