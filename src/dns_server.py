@@ -7,6 +7,7 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import aiosqlite
 import dns.resolver
@@ -14,6 +15,9 @@ from dnslib import AAAA, QTYPE, RR, A, DNSRecord
 
 from . import constants
 from .logger import ComponentType, log_dns_query, log_error, log_system_event
+
+if TYPE_CHECKING:
+    from .firewall_manager import FirewallManager  # type: ignore[import-untyped]
 
 
 @dataclass
@@ -285,7 +289,7 @@ class DNSServer:
         blocked_domains: set[str] | None = None,
         allowed_domains: list[str] | None = None,
         db_path: str | None = None,
-        firewall_manager: object | None = None,
+        firewall_manager: "FirewallManager | None" = None,
         cache_enabled: bool | None = None,
         cache_refresh_interval: int | None = None,
         lan_subnets: list[str] | None = None,
@@ -465,7 +469,7 @@ class DNSServer:
                 )
 
                 # IPアドレスを抽出（重複除去）
-                ips = list({addr[4][0] for addr in addrinfo})
+                ips: list[str] = list({str(addr[4][0]) for addr in addrinfo})
 
                 # Docker DNSはTTL情報を返さないため、デフォルト値を使用
                 ttl = 300  # 5分
@@ -546,7 +550,7 @@ class DNSServer:
             )
 
             reply.header.rcode = 3  # NXDOMAIN
-            return reply.pack()
+            return reply.pack()  # type: ignore[no-any-return]
 
         # sekimore-gw自身の名前解決（internal-net側IPを返す）
         # allowlistチェックより前に実行することで、allow_domainsに含まれていなくても解決可能
@@ -578,11 +582,11 @@ class DNSServer:
                     query_type=query_type,
                 )
 
-                return reply.pack()
+                return reply.pack()  # type: ignore[no-any-return]
             # AAAA (IPv6) クエリの場合は、upstream DNSに問い合わせない（IPv4のみサポート）
             elif query_type == "AAAA":
                 # 空のレスポンスを返す（IPv6アドレスなし）
-                return reply.pack()
+                return reply.pack()  # type: ignore[no-any-return]
 
         # ホワイトリストチェック（allow_domains にないドメインをブロック）
         if not self._is_allowed(query_name):
@@ -604,7 +608,7 @@ class DNSServer:
             )
 
             reply.header.rcode = 3  # NXDOMAIN
-            return reply.pack()
+            return reply.pack()  # type: ignore[no-any-return]
 
         # 上位DNSに問い合わせ（許可リストにある場合のみ）
         if query_type in ["A", "AAAA"]:
@@ -660,7 +664,7 @@ class DNSServer:
                     ttl=ttl,
                 )
 
-        return reply.pack()
+        return reply.pack()  # type: ignore[no-any-return]
 
     async def _save_cache_stats_to_db(self) -> None:
         """キャッシュ統計をデータベースに保存."""

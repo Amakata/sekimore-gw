@@ -10,13 +10,9 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
-
-if TYPE_CHECKING:
-    from watchdog.observers import Observer as ObserverType
 
 from .config import load_config
 from .dns_server import DNSServer
@@ -54,7 +50,7 @@ class ConfigFileEventHandler(FileSystemEventHandler):
             return
 
         # 監視対象のconfig.ymlのみ処理
-        if Path(event.src_path).resolve() != self.config_path.resolve():
+        if Path(str(event.src_path)).resolve() != self.config_path.resolve():
             return
 
         # 短時間に複数回トリガーされるのを防ぐ（デバウンス）
@@ -335,7 +331,7 @@ class SecurityGatewayOrchestrator:
                                 log_system_event(
                                     "Multiple LAN interfaces detected, using first one",
                                     first_interface=lan_if,
-                                    first_ip=lan_ip,
+                                    first_ip=lan_ip or "",
                                     additional_interface=current_if,
                                     additional_ip=ip_str,
                                 )
@@ -488,7 +484,7 @@ class SecurityGatewayOrchestrator:
             self.proxy_monitor = ProxyMonitor(db_path=self.config.database_path)
 
         # ファイル監視（config.yml変更時に自動リロード）
-        self.config_observer: ObserverType | None = None
+        self.config_observer: Observer | None = None  # type: ignore[valid-type]
         if self.config_path:
             # 設定ファイルのディレクトリを監視
             config_dir = Path(self.config_path).parent
@@ -679,7 +675,7 @@ class SecurityGatewayOrchestrator:
 
         # ファイル監視を開始（config.yml変更時の自動リロード）
         if self.config_observer:
-            self.config_observer.start()
+            self.config_observer.start()  # type: ignore[attr-defined]
             log_system_event("Configuration file monitoring started")
 
         # DNSサーバー起動（メインループ）
@@ -710,9 +706,9 @@ class SecurityGatewayOrchestrator:
 
         # ファイル監視停止
         if self.config_observer:
-            self.config_observer.stop()
-            if self.config_observer.is_alive():
-                self.config_observer.join()
+            self.config_observer.stop()  # type: ignore[attr-defined]
+            if self.config_observer.is_alive():  # type: ignore[attr-defined]
+                self.config_observer.join()  # type: ignore[attr-defined]
             log_system_event("Configuration file monitoring stopped")
 
         # DNSサーバー停止

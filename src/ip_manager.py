@@ -32,7 +32,7 @@ class StaticIPManager:
 
         ip_list = []
         current_ip = start_ip
-        while current_ip <= end_ip:
+        while current_ip <= end_ip:  # type: ignore[operator]
             ip_list.append(str(current_ip))
             # IPv4/IPv6両対応
             current_ip = ipaddress.ip_address(int(current_ip) + 1)
@@ -140,8 +140,8 @@ class StaticIPManager:
 
         log_system_event(
             "Static IP filtering configured",
-            allow_count=len(allow_ips),
-            block_count=len(block_ips),
+            allow_count=str(len(allow_ips)),
+            block_count=str(len(block_ips)),
         )
         return True
 

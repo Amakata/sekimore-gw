@@ -58,7 +58,7 @@ def setup_logging(log_level: str = "INFO") -> None:
 def get_logger(component: ComponentType) -> structlog.BoundLogger:
     """コンポーネント別ロガーを取得."""
     logger = structlog.get_logger()
-    return logger.bind(component=component.value)
+    return logger.bind(component=component.value)  # type: ignore[no-any-return]
 
 
 def log_dns_query(client_ip: str, query_domain: str, response_ips: list[str], ttl: int) -> None:

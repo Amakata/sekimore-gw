@@ -142,6 +142,8 @@ class FirewallMonitor:
                 # 非同期で行を読み取り
                 while self.running and process.returncode is None:
                     try:
+                        if process.stdout is None:
+                            break
                         line_bytes = await asyncio.wait_for(process.stdout.readline(), timeout=5.0)
 
                         if line_bytes:

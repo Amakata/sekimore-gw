@@ -159,7 +159,7 @@ def load_config() -> dict:
     """
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
-            return yaml.safe_load(f)
+            return yaml.safe_load(f)  # type: ignore[no-any-return]
     except Exception as e:
         log_error(ComponentType.SYSTEM, f"Failed to load config: {e}")
         return {"allow_domains": [], "block_domains": []}
@@ -667,7 +667,7 @@ async def get_allowed_domains() -> list[str]:
         許可ドメインのリスト
     """
     config = load_config()
-    return config.get("allow_domains", [])
+    return config.get("allow_domains", [])  # type: ignore[no-any-return]
 
 
 @app.get("/api/domains/blocked", response_model=list[str])
@@ -678,7 +678,7 @@ async def get_blocked_domains() -> list[str]:
         ブロックドメインのリスト
     """
     config = load_config()
-    return config.get("block_domains", [])
+    return config.get("block_domains", [])  # type: ignore[no-any-return]
 
 
 class BlockedDomainInfo(BaseModel):
