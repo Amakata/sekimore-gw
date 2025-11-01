@@ -46,9 +46,8 @@ services:
       - PROJECT_NAME=${COMPOSE_PROJECT_NAME}
       - INTERNAL_NETWORK_NAME=${INTERNAL_NETWORK_NAME:-internal-net}
       - INTERNET_NETWORK_NAME=${INTERNET_NETWORK_NAME:-internet}
-      # Proxy authentication (optional, can be set via environment variables)
-      - SEKIMORE_UPSTREAM_PROXY_USERNAME=${SEKIMORE_UPSTREAM_PROXY_USERNAME:-}
-      - SEKIMORE_UPSTREAM_PROXY_PASSWORD=${SEKIMORE_UPSTREAM_PROXY_PASSWORD:-}
+      # Note: SEKIMORE_UPSTREAM_PROXY_USERNAME and SEKIMORE_UPSTREAM_PROXY_PASSWORD
+      # are automatically inherited from environment variables or .env file
     ports:
       # Web UI
       - "8080:8080"
