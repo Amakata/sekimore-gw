@@ -1,7 +1,7 @@
 # sekimore-gw
 
-[![CI](https://github.com/YOUR_USERNAME/sekimore-gw/workflows/CI/badge.svg)](https://github.com/YOUR_USERNAME/sekimore-gw/actions)
-[![Docker Publish](https://github.com/YOUR_USERNAME/sekimore-gw/workflows/Docker%20Publish/badge.svg)](https://github.com/YOUR_USERNAME/sekimore-gw/actions)
+[![CI](https://github.com/Amakata/sekimore-gw/workflows/CI/badge.svg)](https://github.com/Amakata/sekimore-gw/actions)
+[![Docker Publish](https://github.com/Amakata/sekimore-gw/workflows/Docker%20Publish/badge.svg)](https://github.com/Amakata/sekimore-gw/actions)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 **AI Agent Security Gateway** - DNS/Firewall/Proxy for Docker
@@ -266,12 +266,3 @@ Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 ## Version
 
 v0.0.1 (Initial Release)
-
-## Related Projects
-
-- [sekimore](https://github.com/YOUR_USERNAME/sekimore) - Original proof-of-concept
-- [poc1](https://github.com/YOUR_USERNAME/poc1) - Docker network security research
-
-## Acknowledgments
-
-Built on research from sekimore and poc1 projects.
