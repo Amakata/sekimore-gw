@@ -331,7 +331,7 @@ def describe_websocket_integration():
             for i in range(60):
                 await db.execute(
                     "INSERT INTO dns_queries VALUES (?, ?, ?, ?, ?)",
-                    (now - i * 10, f"192.168.1.{i % 255}", f"domain{i}.com", "1.2.3.4", "allowed"),
+                    (now - i * 1, f"192.168.1.{i % 255}", f"domain{i}.com", "1.2.3.4", "allowed"),
                 )
             await db.commit()
 

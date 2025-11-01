@@ -1,6 +1,6 @@
 """Unit tests for firewall_monitor module."""
 
-import contextlib
+import asyncio
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -140,26 +140,43 @@ def describe_firewall_monitor():
         """Test start begins monitoring."""
         monitor = FirewallMonitor(db_path="/tmp/test.db")
 
-        # Mock subprocess
+        # Mock subprocess with proper stdout
         process_mock = AsyncMock()
-        process_mock.stdout.readline = AsyncMock(
-            side_effect=[
-                b"[FIREWALL-BLOCK] SRC=1.2.3.4 DST=5.6.7.8 PROTO=TCP DPT=80\n",
-                b"",  # EOF
-            ]
-        )
+        stdout_mock = AsyncMock()
+
+        # Setup readline to return one log line, then stop monitoring
+        call_count = 0
+
+        async def readline_side_effect():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return b"[FIREWALL-BLOCK] SRC=1.2.3.4 DST=5.6.7.8 PROTO=TCP DPT=80\n"
+            else:
+                # Stop monitoring after first log to prevent infinite loop
+                monitor.running = False
+                return b""  # EOF
+
+        stdout_mock.readline = readline_side_effect
+        process_mock.stdout = stdout_mock
+        process_mock.returncode = None
         process_mock.wait = AsyncMock()
+        process_mock.terminate = Mock()  # terminate is sync method
         mock_subprocess.return_value = process_mock
 
         monitor.db = AsyncMock()
         monitor.db.execute = AsyncMock()
         monitor.db.commit = AsyncMock()
-        monitor.running = True
+        monitor.db.close = AsyncMock()
 
-        # Start monitoring (will stop after processing one line)
-        with contextlib.suppress(Exception):
-            # Expected to fail when trying to read from mock
-            await monitor.start()
+        try:
+            # Start monitoring - should process one log and stop
+            await asyncio.wait_for(monitor.start(), timeout=1.0)
+        finally:
+            # Ensure cleanup
+            monitor.running = False
+            if monitor.db:
+                await monitor.db.close()
 
     @pytest.mark.asyncio
     async def it_stops_monitoring(tmp_path):
