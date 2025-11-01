@@ -1,7 +1,8 @@
 # sekimore-gw
 
-[![CI](https://github.com/Amakata/sekimore-gw/workflows/CI/badge.svg)](https://github.com/Amakata/sekimore-gw/actions)
-[![Docker Publish](https://github.com/Amakata/sekimore-gw/workflows/Docker%20Publish/badge.svg)](https://github.com/Amakata/sekimore-gw/actions)
+[![Lint](https://github.com/Amakata/sekimore-gw/actions/workflows/lint.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/lint.yml)
+[![Test](https://github.com/Amakata/sekimore-gw/actions/workflows/test.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/test.yml)
+[![Docker Publish](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 **AI Agent Security Gateway** - DNS/Firewall/Proxy for Docker
