@@ -1,0 +1,62 @@
+# Sekimore Gateway - AI Agent Security Gateway
+# Sample Configuration File
+
+# Allowed Domain List
+# Wildcard notation: ".example.com" allows "*.example.com", "*.*.example.com", etc.
+allow_domains:
+  - pypi.org
+  - .pythonhosted.org
+  - npmjs.com
+  - .npmjs.org
+  - .github.com
+  - api.openai.com
+  - .anthropic.com
+  - deb.debian.org
+  # Docker service names (for inter-container communication)
+  - sekimore-gw
+  - ai-agent
+
+# Blocked Domain List
+block_domains:
+  - .malicious.com
+  - adserver.example.com
+
+# Allowed IP List (direct access)
+# ⚠️  DO NOT include external DNS servers (e.g., 8.8.8.8)!
+# This would bypass DNS filtering.
+# External IPs are dynamically allowed only for DNS resolution results of allowed_domains.
+allow_ips: []
+  # Private networks (only if needed)
+  # - 192.168.1.0/24       # Corporate network (CIDR)
+  # - 10.0.0.0/8           # Private network
+
+# Blocked IP List
+block_ips:
+  - 203.0.113.0/24       # Known malicious IP block
+
+# Proxy Configuration (HTTP/HTTPS Proxy)
+proxy:
+  enabled: true                           # Enable Squid proxy
+  port: 3128                              # Proxy port
+  cache_enabled: true                     # Enable cache
+  cache_size_mb: 1000                     # Cache size (MB)
+  upstream_proxy: null                    # Upstream proxy (corporate proxy integration) e.g., "proxy.example.com:8080"
+
+  # Upstream proxy authentication (Basic Auth)
+  # ⚠️  For security, it is recommended to use environment variables instead of writing credentials in config.yml
+  # Environment variables: SEKIMORE_UPSTREAM_PROXY_USERNAME, SEKIMORE_UPSTREAM_PROXY_PASSWORD
+  # If environment variables are set, the following values will be overridden
+  upstream_proxy_username: null           # Upstream proxy username (env var recommended)
+  upstream_proxy_password: null           # Upstream proxy password (env var recommended)
+
+# Network Configuration
+network:
+  # LAN-side network subnets
+  # IMPORTANT: For sekimore-gw, this setting is primarily informational.
+  # Network detection is performed dynamically via Docker API (see orchestrator.py).
+  # However, this can be used as a fallback or for static validation.
+  lan_subnets:
+    - "10.100.0.0/16"
+
+# Database Path
+database_path: "/data/security_gateway.db"

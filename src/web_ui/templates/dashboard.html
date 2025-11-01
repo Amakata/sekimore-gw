@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sekimore Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f1419;
+            color: #e6edf3;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #58a6ff;
+            margin-bottom: 20px;
+            font-size: 32px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 20px;
+        }
+
+        .stat-value {
+            font-size: 36px;
+            font-weight: bold;
+            color: #58a6ff;
+        }
+
+        .stat-label {
+            color: #8b949e;
+            margin-top: 5px;
+        }
+
+        .logs-container {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .log-entry {
+            padding: 12px;
+            border-bottom: 1px solid #21262d;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 13px;
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+
+        .log-allowed {
+            background: rgba(46, 160, 67, 0.1);
+            border-left: 3px solid #2ea043;
+        }
+
+        .log-blocked {
+            background: rgba(248, 81, 73, 0.1);
+            border-left: 3px solid #f85149;
+        }
+
+        .log-time {
+            color: #8b949e;
+            margin-right: 10px;
+        }
+
+        .log-action {
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .action-allowed {
+            color: #2ea043;
+        }
+
+        .action-blocked {
+            color: #f85149;
+        }
+
+        .log-domain {
+            color: #58a6ff;
+        }
+
+        .log-ip {
+            color: #a5d6ff;
+        }
+
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            background: #238636;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background: #2ea043;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-connected {
+            background: #2ea043;
+        }
+
+        .status-disconnected {
+            background: #f85149;
+        }
+
+        /* タブナビゲーション */
+        .tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #30363d;
+        }
+
+        .tab {
+            background: transparent;
+            color: #8b949e;
+            border: none;
+            padding: 12px 20px;
+            cursor: pointer;
+            font-size: 14px;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            background: rgba(177, 186, 196, 0.12);
+            color: #e6edf3;
+        }
+
+        .tab.active {
+            color: #58a6ff;
+            border-bottom-color: #58a6ff;
+            background: transparent;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* ドメインリスト */
+        .domain-list {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .domain-item {
+            padding: 12px;
+            border-bottom: 1px solid #21262d;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .domain-item:last-child {
+            border-bottom: none;
+        }
+
+        .domain-name {
+            color: #58a6ff;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 14px;
+        }
+
+        .domain-stats {
+            display: flex;
+            gap: 15px;
+            font-size: 12px;
+        }
+
+        .domain-stat {
+            color: #8b949e;
+        }
+
+        .domain-stat strong {
+            color: #e6edf3;
+            margin-left: 5px;
+        }
+
+        .badge {
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .badge-allowed {
+            background: rgba(46, 160, 67, 0.2);
+            color: #2ea043;
+        }
+
+        .badge-blocked {
+            background: rgba(248, 81, 73, 0.2);
+            color: #f85149;
+        }
+
+        .badge-mixed {
+            background: rgba(187, 128, 9, 0.2);
+            color: #bb8009;
+        }
+
+        .badge-blocked-explicit {
+            background: rgba(248, 81, 73, 0.3);
+            color: #f85149;
+            border: 1px solid #f85149;
+        }
+
+        .badge-blocked-default {
+            background: rgba(139, 148, 158, 0.2);
+            color: #8b949e;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #8b949e;
+        }
+
+        .current-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 5px;
+        }
+
+        .status-label {
+            font-size: 11px;
+            color: #8b949e;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .historical-info {
+            font-size: 11px;
+            color: #6e7681;
+            margin-top: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>
+            <span id="status-indicator" class="status-indicator status-disconnected"></span>
+            Sekimore
+        </h1>
+
+        <!-- タブナビゲーション -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('dashboard')">Dashboard</button>
+            <button class="tab" onclick="switchTab('allowed')">Allowed Domains</button>
+            <button class="tab" onclick="switchTab('blocked')">Blocked Domains</button>
+            <button class="tab" onclick="switchTab('unique')">All Domains</button>
+            <button class="tab" onclick="switchTab('blocked-ips')">Blocked IPs</button>
+        </div>
+
+        <!-- Dashboard タブ -->
+        <div id="tab-dashboard" class="tab-content active">
+            <!-- 統計情報 -->
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="stat-total">0</div>
+                <div class="stat-label">Total Requests (24h)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-allowed">0</div>
+                <div class="stat-label">DNS Allowed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-blocked">0</div>
+                <div class="stat-label">DNS Blocked</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-firewall-blocked">0</div>
+                <div class="stat-label">Firewall Blocked</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-proxy-blocked">0</div>
+                <div class="stat-label">Proxy Blocked</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-domains">0</div>
+                <div class="stat-label">Unique Domains</div>
+            </div>
+        </div>
+
+        <!-- DNSキャッシュ統計 -->
+        <h2>DNS Cache Statistics</h2>
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="cache-enabled">N/A</div>
+                <div class="stat-label">Cache Status</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="cache-size">0</div>
+                <div class="stat-label">Cache Size</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="cache-hits">0</div>
+                <div class="stat-label">Cache Hits</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="cache-misses">0</div>
+                <div class="stat-label">Cache Misses</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="cache-hit-rate">0%</div>
+                <div class="stat-label">Hit Rate</div>
+            </div>
+        </div>
+
+        <!-- 制御ボタン -->
+        <div class="controls">
+            <button onclick="clearLogs()">Clear Logs</button>
+            <button onclick="refreshStats()">Refresh Stats</button>
+        </div>
+
+            <!-- ログ表示 -->
+            <div class="logs-container" id="logs">
+                <div style="color: #8b949e; text-align: center; padding: 20px;">
+                    Connecting to WebSocket...
+                </div>
+            </div>
+        </div>
+
+        <!-- Allowed Domains タブ -->
+        <div id="tab-allowed" class="tab-content">
+            <h2 style="color: #58a6ff; margin-bottom: 20px;">許可ドメイン一覧</h2>
+            <div class="domain-list" id="allowed-domains-list">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+        </div>
+
+        <!-- Blocked Domains タブ -->
+        <div id="tab-blocked" class="tab-content">
+            <h2 style="color: #58a6ff; margin-bottom: 20px;">ブロックされたドメイン一覧</h2>
+            <div class="controls">
+                <button onclick="loadBlockedDomains()">Refresh</button>
+            </div>
+            <div class="domain-list" id="blocked-domains-list">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+        </div>
+
+        <!-- All Domains タブ -->
+        <div id="tab-unique" class="tab-content">
+            <h2 style="color: #58a6ff; margin-bottom: 20px;">全ドメイン一覧（アクセス統計）</h2>
+            <div class="controls">
+                <button onclick="loadUniqueDomains()">Refresh</button>
+            </div>
+            <div class="domain-list" id="unique-domains-list">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+        </div>
+
+        <!-- Blocked IPs タブ -->
+        <div id="tab-blocked-ips" class="tab-content">
+            <h2 style="color: #58a6ff; margin-bottom: 20px;">ブロックされたIPアドレス一覧</h2>
+            <div class="controls">
+                <button onclick="loadBlockedIPs()">Refresh</button>
+            </div>
+            <div class="domain-list" id="blocked-ips-list">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        const maxLogs = 100;
+
+        // WebSocket接続
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                document.getElementById('status-indicator').className = 'status-indicator status-connected';
+            };
+
+            ws.onmessage = (event) => {
+                const log = JSON.parse(event.data);
+                addLogEntry(log);
+                refreshStats();
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                document.getElementById('status-indicator').className = 'status-indicator status-disconnected';
+
+                // 5秒後に再接続
+                setTimeout(connectWebSocket, 5000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        // ログエントリを追加
+        function addLogEntry(log) {
+            const logsDiv = document.getElementById('logs');
+
+            // 初回メッセージを削除
+            if (logsDiv.children.length === 1 && logsDiv.children[0].textContent.includes('Connecting')) {
+                logsDiv.innerHTML = '';
+            }
+
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${log.action === 'ALLOWED' ? 'log-allowed' : 'log-blocked'}`;
+
+            const time = new Date(log.timestamp * 1000).toLocaleTimeString('ja-JP');
+            const emoji = log.action === 'ALLOWED' ? '✅' : '❌';
+            const actionClass = log.action === 'ALLOWED' ? 'action-allowed' : 'action-blocked';
+
+            // コンポーネント表示（DNS or FIREWALL）
+            const componentBadge = log.component === 'FIREWALL'
+                ? '<span style="background: rgba(201, 209, 217, 0.1); color: #c9d1d9; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 8px;">FIREWALL</span>'
+                : '<span style="background: rgba(88, 166, 255, 0.1); color: #58a6ff; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 8px;">DNS</span>';
+
+            entry.innerHTML = `
+                <span class="log-time">${time}</span>
+                ${componentBadge}
+                <span class="log-action ${actionClass}">${emoji} ${log.action}</span>
+                ${log.src_ip ? `<span class="log-ip" style="color: #8b949e;">from ${log.src_ip}</span>` : ''}
+                ${log.domain ? `<span class="log-domain">${log.domain}</span>` : ''}
+                ${log.dst_ip ? `<span class="log-ip">→ ${log.dst_ip}${log.dst_port ? ':' + log.dst_port : ''}</span>` : ''}
+                ${log.reason ? `<span style="color: #8b949e; margin-left: 8px;">(${log.reason})</span>` : ''}
+            `;
+
+            // 先頭に追加
+            logsDiv.insertBefore(entry, logsDiv.firstChild);
+
+            // 最大件数を超えたら削除
+            while (logsDiv.children.length > maxLogs) {
+                logsDiv.removeChild(logsDiv.lastChild);
+            }
+        }
+
+        // 統計情報を更新
+        async function refreshStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const stats = await response.json();
+
+                document.getElementById('stat-total').textContent = stats.total.toLocaleString();
+                document.getElementById('stat-allowed').textContent = stats.allowed.toLocaleString();
+                document.getElementById('stat-blocked').textContent = stats.blocked.toLocaleString();
+                document.getElementById('stat-firewall-blocked').textContent = stats.firewall_blocked.toLocaleString();
+                document.getElementById('stat-proxy-blocked').textContent = stats.proxy_blocked.toLocaleString();
+                document.getElementById('stat-domains').textContent = stats.unique_domains.toLocaleString();
+            } catch (error) {
+                console.error('Failed to fetch stats:', error);
+            }
+
+            // キャッシュ統計を更新
+            try {
+                const cacheResponse = await fetch('/api/cache-stats');
+                const cacheStats = await cacheResponse.json();
+
+                if (cacheStats.enabled) {
+                    document.getElementById('cache-enabled').textContent = 'Enabled';
+                    document.getElementById('cache-enabled').style.color = '#3fb950';
+                    document.getElementById('cache-size').textContent = cacheStats.size.toLocaleString();
+                    document.getElementById('cache-hits').textContent = cacheStats.hits.toLocaleString();
+                    document.getElementById('cache-misses').textContent = cacheStats.misses.toLocaleString();
+                    document.getElementById('cache-hit-rate').textContent = cacheStats.hit_rate.toFixed(2) + '%';
+                } else {
+                    document.getElementById('cache-enabled').textContent = 'Disabled';
+                    document.getElementById('cache-enabled').style.color = '#f85149';
+                    document.getElementById('cache-size').textContent = '-';
+                    document.getElementById('cache-hits').textContent = '-';
+                    document.getElementById('cache-misses').textContent = '-';
+                    document.getElementById('cache-hit-rate').textContent = '-';
+                }
+            } catch (error) {
+                console.error('Failed to fetch cache stats:', error);
+            }
+        }
+
+        // ログをクリア
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        // タブ切り替え
+        function switchTab(tabName) {
+            // すべてのタブとコンテンツを非アクティブに
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+            // 指定されたタブとコンテンツをアクティブに
+            event.target.classList.add('active');
+            document.getElementById(`tab-${tabName}`).classList.add('active');
+
+            // タブ切り替え時にデータを読み込み
+            if (tabName === 'allowed') {
+                loadAllowedDomains();
+            } else if (tabName === 'blocked') {
+                loadBlockedDomains();
+            } else if (tabName === 'unique') {
+                loadUniqueDomains();
+            } else if (tabName === 'blocked-ips') {
+                loadBlockedIPs();
+            }
+        }
+
+        // 許可ドメイン一覧を読み込み
+        async function loadAllowedDomains() {
+            try {
+                const response = await fetch('/api/domains/allowed');
+                const domains = await response.json();
+
+                const listDiv = document.getElementById('allowed-domains-list');
+
+                if (domains.length === 0) {
+                    listDiv.innerHTML = '<div class="empty-state">許可ドメインが設定されていません</div>';
+                    return;
+                }
+
+                listDiv.innerHTML = domains.map(domain => `
+                    <div class="domain-item">
+                        <div class="domain-name">${domain}</div>
+                        <span class="badge badge-allowed">ALLOWED</span>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Failed to load allowed domains:', error);
+                document.getElementById('allowed-domains-list').innerHTML =
+                    '<div class="empty-state">エラー: データの読み込みに失敗しました</div>';
+            }
+        }
+
+        // ブロックドメイン一覧を読み込み（実際にブロックされたドメイン）
+        async function loadBlockedDomains() {
+            try {
+                const response = await fetch('/api/domains/blocked-actual');
+                const domains = await response.json();
+
+                const listDiv = document.getElementById('blocked-domains-list');
+
+                if (domains.length === 0) {
+                    listDiv.innerHTML = '<div class="empty-state">ブロックされたドメインがありません</div>';
+                    return;
+                }
+
+                listDiv.innerHTML = domains.map(domain => {
+                    const badgeClass = domain.block_type === 'explicit' ? 'badge-blocked-explicit' : 'badge-blocked-default';
+                    const badgeText = domain.block_type === 'explicit' ? '🚫 BLOCKED (Blocklist)' : '⛔ BLOCKED (Default Deny)';
+                    const lastAccess = new Date(domain.last_access * 1000).toLocaleString('ja-JP');
+
+                    return `
+                        <div class="domain-item">
+                            <div>
+                                <div class="domain-name">${domain.domain}</div>
+                                <div class="historical-info">
+                                    ブロック回数: ${domain.query_count}回 (最終: ${lastAccess})
+                                </div>
+                            </div>
+                            <span class="badge ${badgeClass}">${badgeText}</span>
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                console.error('Failed to load blocked domains:', error);
+                document.getElementById('blocked-domains-list').innerHTML =
+                    '<div class="empty-state">エラー: データの読み込みに失敗しました</div>';
+            }
+        }
+
+        // ユニークドメイン一覧を読み込み
+        async function loadUniqueDomains() {
+            try {
+                const response = await fetch('/api/domains/unique');
+                const domains = await response.json();
+
+                const listDiv = document.getElementById('unique-domains-list');
+
+                if (domains.length === 0) {
+                    listDiv.innerHTML = '<div class="empty-state">アクセスされたドメインがありません</div>';
+                    return;
+                }
+
+                listDiv.innerHTML = domains.map(domain => {
+                    // 現在のルールのバッジ
+                    let currentBadgeClass, currentBadgeText;
+                    if (domain.current_rule === 'allowed') {
+                        currentBadgeClass = 'badge-allowed';
+                        currentBadgeText = '✅ ALLOWED';
+                    } else if (domain.current_rule === 'blocked_explicit') {
+                        currentBadgeClass = 'badge-blocked-explicit';
+                        currentBadgeText = '🚫 BLOCKED (Blocklist)';
+                    } else {
+                        currentBadgeClass = 'badge-blocked-default';
+                        currentBadgeText = '⛔ BLOCKED (Default Deny)';
+                    }
+
+                    // 過去の履歴情報
+                    const historicalText = domain.status === 'mixed'
+                        ? `過去: 許可${domain.allowed_count}回 / ブロック${domain.blocked_count}回`
+                        : `過去: ${domain.status === 'allowed' ? '許可' : 'ブロック'}${domain.query_count}回`;
+
+                    const lastAccess = new Date(domain.last_access * 1000).toLocaleString('ja-JP');
+
+                    // 解決済みIPアドレスの表示
+                    let resolvedIpsHtml = '';
+                    if (domain.resolved_ips && domain.resolved_ips.length > 0) {
+                        const displayIps = domain.resolved_ips.slice(0, 3);
+                        const remainingCount = domain.resolved_ips.length - displayIps.length;
+                        resolvedIpsHtml = `
+                            <div class="historical-info" style="margin-top: 5px;">
+                                <span style="color: #58a6ff;">🌐 IP: </span>
+                                ${displayIps.join(', ')}
+                                ${remainingCount > 0 ? ` <span style="color: #8b949e;">...他${remainingCount}個</span>` : ''}
+                            </div>
+                        `;
+                    }
+
+                    return `
+                        <div class="domain-item">
+                            <div>
+                                <div class="domain-name">${domain.domain}</div>
+                                <div class="current-status">
+                                    <span class="status-label">現在のルール:</span>
+                                    <span class="badge ${currentBadgeClass}">${currentBadgeText}</span>
+                                </div>
+                                <div class="historical-info">
+                                    ${historicalText} (最終: ${lastAccess})
+                                </div>
+                                ${resolvedIpsHtml}
+                            </div>
+                            <div class="domain-stats">
+                                <span class="domain-stat">クエリ:<strong>${domain.query_count}</strong></span>
+                                <span class="domain-stat">許可:<strong>${domain.allowed_count}</strong></span>
+                                <span class="domain-stat">拒否:<strong>${domain.blocked_count}</strong></span>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                console.error('Failed to load unique domains:', error);
+                document.getElementById('unique-domains-list').innerHTML =
+                    '<div class="empty-state">エラー: データの読み込みに失敗しました</div>';
+            }
+        }
+
+        // ブロックされたIPアドレス一覧を読み込み
+        async function loadBlockedIPs() {
+            try {
+                const response = await fetch('/api/blocked-ips');
+                const blockedIps = await response.json();
+
+                const listDiv = document.getElementById('blocked-ips-list');
+
+                if (blockedIps.length === 0) {
+                    listDiv.innerHTML = '<div class="empty-state">ブロックされたIPアドレスがありません</div>';
+                    return;
+                }
+
+                listDiv.innerHTML = blockedIps.map(ipInfo => {
+                    const lastBlocked = new Date(ipInfo.last_blocked * 1000).toLocaleString('ja-JP');
+
+                    // ポート情報
+                    const portsText = ipInfo.ports.length > 0
+                        ? `ポート: ${ipInfo.ports.join(', ')}`
+                        : 'ポート: なし';
+
+                    // プロトコル情報
+                    const protocolsText = ipInfo.protocols.length > 0
+                        ? `プロトコル: ${ipInfo.protocols.join(', ')}`
+                        : 'プロトコル: なし';
+
+                    return `
+                        <div class="domain-item">
+                            <div>
+                                <div class="domain-name" style="color: #f85149;">🚫 ${ipInfo.ip_address}</div>
+                                <div class="current-status">
+                                    <span class="status-label">ブロック回数:</span>
+                                    <span class="badge badge-blocked-explicit">${ipInfo.block_count}回</span>
+                                </div>
+                                <div class="historical-info">
+                                    最終ブロック: ${lastBlocked}
+                                </div>
+                                <div class="historical-info" style="margin-top: 5px;">
+                                    ${portsText} | ${protocolsText}
+                                </div>
+                            </div>
+                            <div class="domain-stats">
+                                <span class="domain-stat">ブロック:<strong>${ipInfo.block_count}</strong></span>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                console.error('Failed to load blocked IPs:', error);
+                document.getElementById('blocked-ips-list').innerHTML =
+                    '<div class="empty-state">エラー: データの読み込みに失敗しました</div>';
+            }
+        }
+
+        // 初期化
+        connectWebSocket();
+        refreshStats();
+
+        // 定期的に統計を更新
+        setInterval(refreshStats, 10000);
+    </script>
+</body>
+</html>

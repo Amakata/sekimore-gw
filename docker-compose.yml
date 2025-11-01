@@ -1,0 +1,90 @@
+networks:
+  internal-net:  # Default name (can be changed via environment variable)
+    driver: bridge
+    # Subnet is auto-assigned (multi-organization support)
+  internet:  # Default name (can be changed via environment variable)
+    driver: bridge
+
+services:
+  sekimore-gw:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    container_name: sekimore-gw
+    cap_add:
+      # Grant network management permissions (for in-container iptables operations)
+      - NET_ADMIN
+      # Required for ARP operations and packet capture
+      - NET_RAW
+      # Required for kernel module loading (if needed)
+      - SYS_MODULE
+      # Required for system administration operations
+      - SYS_ADMIN
+    privileged: true          # For host-side iptables access
+    sysctls:
+      # Enable IP forwarding within sekimore-gw container
+      net.ipv4.ip_forward: "1"
+      # Disable ICMP redirects for security
+      net.ipv4.conf.all.send_redirects: "0"
+      net.ipv4.conf.default.send_redirects: "0"
+    networks:
+      internal-net: {}               # sekimore-gw internal side (dynamic IP)
+      internet: {}                   # sekimore-gw external side (dynamic IP)
+    volumes:
+      # Mount Docker socket as read-only
+      # Used for network IP address detection and host-side iptables control
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount config directory
+      - ./config:/etc/sekimore:ro
+      # Mount squid config directory
+      - ./config/squid:/etc/squid/templates:ro
+      # Mount data directory (persistent storage for database)
+      - gateway-data:/data
+    env_file:
+      - .env
+    environment:
+      - PROJECT_NAME=${COMPOSE_PROJECT_NAME:-sekimore-gw}
+      - INTERNAL_NETWORK_NAME=${INTERNAL_NETWORK_NAME:-internal-net}
+      - INTERNET_NETWORK_NAME=${INTERNET_NETWORK_NAME:-internet}
+    ports:
+      # Web UI
+      - "8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      # Check if DNS server (TCP/53) is ready by verifying port is listening
+      # DNSServer binds to internal-net IP (e.g., 172.22.0.2:53), not localhost
+      test: ["CMD", "sh", "-c", "ss -tuln | grep ':53 ' || exit 1"]
+      interval: 5s      # Check every 5 seconds
+      timeout: 3s       # Timeout after 3 seconds
+      retries: 10       # Retry up to 10 times (50 seconds total)
+      start_period: 10s # Grace period before first check
+
+  # Example AI agent container
+  # Uncomment and customize for your use case
+  ai-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: ai-agent
+    cap_add:
+      # Grant network management permissions (for in-container default route setup)
+      - NET_ADMIN
+    networks:
+      internal-net: {}               # Dynamic IP
+    dns:
+      # Dummy DNS (required to disable Docker internal DNS 127.0.0.11)
+      # Without this, agents can bypass DNS filtering via internal DNS
+      - 127.0.0.1
+    dns_search: []
+    volumes:
+      # Mount agent setup script
+      - ./agent-setup.sh:/agent-setup.sh:ro
+    command: ["/agent-setup.sh"]
+    depends_on:
+      sekimore-gw:
+        condition: service_healthy  # Wait until DNS server (TCP/53) is ready
+    init: true
+
+volumes:
+  gateway-data:
+    driver: local
