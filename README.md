@@ -228,7 +228,7 @@ docker build -t sekimore-gw:latest .
 ### Pull from GitHub Container Registry
 
 ```bash
-docker pull ghcr.io/YOUR_USERNAME/sekimore-gw:latest
+docker pull ghcr.io/Amakata/sekimore-gw:latest
 ```
 
 ## Multi-Organization Support
