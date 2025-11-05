@@ -37,7 +37,7 @@ services:
       # Mount config directory
       - ./config:/etc/sekimore:ro
       # Mount squid config directory
-      - ./config/squid:/etc/squid/templates:ro
+      - ./config/squid/squid.conf.template:/etc/squid/squid.conf.template:ro
       # Mount data directory (persistent storage for database)
       - gateway-data:/data
     env_file:
@@ -49,7 +49,6 @@ services:
     ports:
       # Web UI
       - "8080:8080"
-    restart: unless-stopped
     healthcheck:
       # Check if DNS server (TCP/53) is ready by verifying port is listening
       # DNSServer binds to internal-net IP (e.g., 172.22.0.2:53), not localhost
@@ -79,7 +78,7 @@ services:
     volumes:
       # Mount agent setup script
       - ./agent-setup.sh:/agent-setup.sh:ro
-    command: ["/agent-setup.sh"]
+    command: ["bash", "-c", "/agent-setup.sh && sleep infinity"]
     depends_on:
       sekimore-gw:
         condition: service_healthy  # Wait until DNS server (TCP/53) is ready

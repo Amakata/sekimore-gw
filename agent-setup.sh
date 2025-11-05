@@ -322,6 +322,3 @@ else
 fi
 
 echo "[agent] Setup complete"
-
-# Keep container running
-tail -f /dev/null

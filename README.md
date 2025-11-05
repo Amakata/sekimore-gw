@@ -84,7 +84,7 @@ ai-agent:
     - 127.0.0.1  # Disable Docker internal DNS
   dns_search: []
   volumes:
-    - ./scripts/agent-setup.sh:/agent-setup.sh:ro
+    - ./agent-setup.sh:/agent-setup.sh:ro
   command: ["/agent-setup.sh"]
   depends_on:
     - sekimore-gw
