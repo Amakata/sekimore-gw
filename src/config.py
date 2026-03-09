@@ -66,7 +66,9 @@ class Config(BaseModel):
     # ドメインフィルタリング
     allow_domains: list[str] = Field(default_factory=list, description="許可ドメインリスト")
     block_domains: list[str] = Field(default_factory=list, description="拒否ドメインリスト")
-    ignore_domains: list[str] = Field(default_factory=list, description="無視ドメインリスト（UI非表示）")
+    ignore_domains: list[str] = Field(
+        default_factory=list, description="無視ドメインリスト（UI非表示）"
+    )
 
     # IPフィルタリング
     allow_ips: list[str] = Field(default_factory=list, description="許可IPリスト")
