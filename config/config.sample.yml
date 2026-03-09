@@ -3,9 +3,11 @@
 
 # Gateway Display Name (shown in Web UI header)
 # name: "My Security Gateway"
+name: Sample | Sekimore
 
 # Gateway Description (shown in Web UI and HTML meta)
 # description: "AI agent security gateway for development"
+description: Sample Sekimore Description
 
 # Allowed Domain List
 # Wildcard notation: ".example.com" allows "*.example.com", "*.*.example.com", etc.
