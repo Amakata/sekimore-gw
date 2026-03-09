@@ -29,6 +29,12 @@
             font-size: 32px;
         }
 
+        .gateway-description {
+            color: #8b949e;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
         .stats {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -305,8 +311,9 @@
     <div class="container">
         <h1>
             <span id="status-indicator" class="status-indicator status-disconnected"></span>
-            Sekimore
+            <span id="gateway-name">Sekimore</span>
         </h1>
+        <p id="gateway-description" class="gateway-description" style="display: none;"></p>
 
         <!-- タブナビゲーション -->
         <div class="tabs">
@@ -847,9 +854,39 @@
             }
         }
 
+        // ゲートウェイ情報を読み込み
+        async function loadGatewayInfo() {
+            try {
+                const response = await fetch('/api/gateway-info');
+                const info = await response.json();
+
+                if (info.name) {
+                    document.getElementById('gateway-name').textContent = info.name;
+                    document.title = info.name + ' Dashboard';
+                }
+
+                if (info.description) {
+                    const descEl = document.getElementById('gateway-description');
+                    descEl.textContent = info.description;
+                    descEl.style.display = 'block';
+
+                    let meta = document.querySelector('meta[name="description"]');
+                    if (!meta) {
+                        meta = document.createElement('meta');
+                        meta.name = 'description';
+                        document.head.appendChild(meta);
+                    }
+                    meta.content = info.description;
+                }
+            } catch (error) {
+                console.error('Failed to load gateway info:', error);
+            }
+        }
+
         // 初期化
         connectWebSocket();
         refreshStats();
+        loadGatewayInfo();
 
         // 定期的に統計を更新
         setInterval(refreshStats, 10000);

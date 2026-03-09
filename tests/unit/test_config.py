@@ -37,6 +37,18 @@ def describe_config():
         assert ".telemetry.example.com" in config.ignore_domains
         assert "healthcheck.example.com" in config.ignore_domains
 
+    def it_defaults_name_and_description_to_none():
+        """Test that name and description default to None."""
+        config = Config()
+        assert config.name is None
+        assert config.description is None
+
+    def it_loads_name_and_description():
+        """Test that name and description can be set."""
+        config = Config(name="My Gateway", description="Test gateway")
+        assert config.name == "My Gateway"
+        assert config.description == "Test gateway"
+
     def it_defaults_ignore_domains_to_empty():
         """Test that ignore_domains defaults to empty list."""
         config = Config()
