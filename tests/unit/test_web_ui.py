@@ -30,6 +30,7 @@ def describe_pydantic_models():
             total=100,
             allowed=80,
             blocked=20,
+            ignored=10,
             unique_domains=50,
             firewall_blocked=15,
             proxy_blocked=5,
@@ -37,6 +38,7 @@ def describe_pydantic_models():
         assert stats.total == 100
         assert stats.allowed == 80
         assert stats.blocked == 20
+        assert stats.ignored == 10
 
     def it_creates_cache_stats_response():
         """Test CacheStatsResponse model."""
@@ -78,6 +80,21 @@ def describe_pydantic_models():
         assert domain_info.query_count == 100
         assert len(domain_info.resolved_ips) == 1
 
+    def it_creates_domain_info_with_ignored_count():
+        """Test DomainInfo model with ignored_count."""
+        domain_info = DomainInfo(
+            domain="telemetry.example.com",
+            query_count=50,
+            allowed_count=0,
+            blocked_count=0,
+            ignored_count=50,
+            last_access=1234567890.0,
+            status="ignored",
+            current_rule="ignored",
+        )
+        assert domain_info.ignored_count == 50
+        assert domain_info.current_rule == "ignored"
+
     def it_creates_blocked_ip_info():
         """Test BlockedIPInfo model."""
         blocked_ip = BlockedIPInfo(
@@ -90,6 +107,51 @@ def describe_pydantic_models():
         assert blocked_ip.ip_address == "1.2.3.4"
         assert blocked_ip.block_count == 10
         assert len(blocked_ip.ports) == 2
+
+
+def describe_get_current_rule():
+    """Tests for get_current_rule function."""
+
+    def it_returns_ignored_for_ignored_domain():
+        """Test get_current_rule returns 'ignored' for ignored domains.
+
+        ignore_domains does not require the domain to be in allow_domains.
+        """
+        from src.web_ui.app import get_current_rule
+
+        config = {
+            "allow_domains": [],
+            "block_domains": [],
+            "ignore_domains": [".telemetry.example.com", "google.com"],
+        }
+
+        assert get_current_rule("telemetry.example.com", config) == "ignored"
+        assert get_current_rule("sub.telemetry.example.com", config) == "ignored"
+        assert get_current_rule("google.com", config) == "ignored"
+
+    def it_returns_allowed_for_non_ignored_allowed_domain():
+        """Test get_current_rule returns 'allowed' for allowed non-ignored domains."""
+        from src.web_ui.app import get_current_rule
+
+        config = {
+            "allow_domains": [".example.com"],
+            "block_domains": [],
+            "ignore_domains": [".telemetry.example.com"],
+        }
+
+        assert get_current_rule("api.example.com", config) == "allowed"
+
+    def it_block_takes_priority_over_ignore():
+        """Test get_current_rule: block takes priority over ignore."""
+        from src.web_ui.app import get_current_rule
+
+        config = {
+            "allow_domains": [],
+            "block_domains": ["telemetry.example.com"],
+            "ignore_domains": ["telemetry.example.com"],
+        }
+
+        assert get_current_rule("telemetry.example.com", config) == "blocked_explicit"
 
 
 def describe_connection_manager():

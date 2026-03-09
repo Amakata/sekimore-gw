@@ -461,6 +461,7 @@ class SecurityGatewayOrchestrator:
             db_path=self.config.database_path,
             firewall_manager=self.firewall,
             lan_subnets=detected_lan_subnets,
+            ignored_domains=self.config.ignore_domains,
         )
 
         # ファイアウォールモニター（iptablesログを監視）
@@ -752,6 +753,7 @@ class SecurityGatewayOrchestrator:
             # DNS Server更新
             self.dns_server.allowed_domains = new_config.allow_domains
             self.dns_server.blocked_domains = set(new_config.block_domains)
+            self.dns_server.ignored_domains = new_config.ignore_domains
 
             # 削除されたドメインのiptablesルールを削除
             for domain in removed_allow_domains:
@@ -815,6 +817,7 @@ class SecurityGatewayOrchestrator:
             # 4. DNS Serverの設定を更新
             self.dns_server.allowed_domains = self.config.allow_domains
             self.dns_server.blocked_domains = set(self.config.block_domains)
+            self.dns_server.ignored_domains = self.config.ignore_domains
 
             # 5. DNSサーバーを再起動
             await self.dns_server.start()

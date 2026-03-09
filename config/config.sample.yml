@@ -16,6 +16,10 @@ allow_domains:
   - sekimore-gw
   - ai-agent
 
+# Ignored Domain List (hidden from UI dashboard, but DNS resolves normally)
+# Use for noisy harmless domains (telemetry, health checks, etc.)
+ignore_domains: []
+
 # Blocked Domain List
 block_domains:
   - .malicious.com

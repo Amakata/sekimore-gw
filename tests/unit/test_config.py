@@ -31,6 +31,17 @@ def describe_config():
         assert "pypi.org" in config.allow_domains
         assert ".pythonhosted.org" in config.allow_domains
 
+    def it_validates_ignore_domains(sample_config_data):
+        """Test that ignore_domains validation works."""
+        config = Config(**sample_config_data)
+        assert ".telemetry.example.com" in config.ignore_domains
+        assert "healthcheck.example.com" in config.ignore_domains
+
+    def it_defaults_ignore_domains_to_empty():
+        """Test that ignore_domains defaults to empty list."""
+        config = Config()
+        assert config.ignore_domains == []
+
     def it_validates_proxy_config(sample_config_data):
         """Test that proxy config validation works."""
         config = Config(**sample_config_data)

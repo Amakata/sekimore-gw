@@ -24,6 +24,15 @@ def sample_block_domains():
 
 
 @pytest.fixture
+def sample_ignore_domains():
+    """Sample ignored domains list for testing."""
+    return [
+        ".telemetry.example.com",
+        "healthcheck.example.com",
+    ]
+
+
+@pytest.fixture
 def sample_allow_ips():
     """Sample allowed IPs list for testing."""
     return [
@@ -51,6 +60,10 @@ def sample_config_data():
         ],
         "block_domains": [
             ".malicious.com",
+        ],
+        "ignore_domains": [
+            ".telemetry.example.com",
+            "healthcheck.example.com",
         ],
         "allow_ips": [],
         "block_ips": ["203.0.113.0/24"],

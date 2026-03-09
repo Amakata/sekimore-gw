@@ -293,6 +293,7 @@ class DNSServer:
         cache_enabled: bool | None = None,
         cache_refresh_interval: int | None = None,
         lan_subnets: list[str] | None = None,
+        ignored_domains: list[str] | None = None,
     ):
         """初期化.
 
@@ -312,6 +313,7 @@ class DNSServer:
             cache_enabled: DNSキャッシュ有効化
             cache_refresh_interval: キャッシュ更新チェック間隔（秒）
             lan_subnets: LAN側ネットワークサブネット（バインドIP検出用）
+            ignored_domains: 無視ドメインリスト（UI非表示、DNSは正常解決）
         """
         self.upstream_dns = upstream_dns or constants.DEFAULT_UPSTREAM_DNS
         self.port = port or constants.DEFAULT_DNS_PORT
@@ -323,6 +325,7 @@ class DNSServer:
         self.resolver.nameservers = [self.upstream_dns]
         self.running = False
         self.lan_subnets = lan_subnets or constants.DEFAULT_LAN_SUBNETS
+        self.ignored_domains = ignored_domains or []
 
         # DNSキャッシュ
         self.cache_enabled = (
@@ -404,6 +407,30 @@ class DNSServer:
                 if domain_lower.endswith(suffix) or domain_lower.endswith(suffix[1:]):
                     # files.pythonhosted.org → endswith(".pythonhosted.org") → True
                     # pythonhosted.org → endswith("pythonhosted.org") → True
+                    return True
+
+        return False
+
+    def _is_ignored(self, domain: str) -> bool:
+        """ドメインが無視リストに含まれるか確認.
+
+        Args:
+            domain: チェックするドメイン
+
+        Returns:
+            無視対象の場合True
+        """
+        domain_lower = domain.lower().rstrip(".")
+
+        for ignored in self.ignored_domains:
+            # 完全一致
+            if ignored == domain_lower:
+                return True
+
+            # .example.com 形式のワイルドカード
+            if ignored.startswith("."):
+                suffix = ignored
+                if domain_lower.endswith(suffix) or domain_lower.endswith(suffix[1:]):
                     return True
 
         return False
@@ -547,6 +574,28 @@ class DNSServer:
                 ttl=0,
                 query_type=query_type,
                 status="blocked",
+            )
+
+            reply.header.rcode = 3  # NXDOMAIN
+            return reply.pack()  # type: ignore[no-any-return]
+
+        # 無視リストチェック（blockの次、allowの前）
+        # DNS応答はNXDOMAIN（ブロックと同じ）だが、status='ignored'で記録
+        # allow_domainsへの追加は不要
+        if self._is_ignored(query_name):
+            log_system_event(
+                "DNS query ignored",
+                domain=query_name,
+                client_ip=client_addr[0],
+            )
+
+            await self.mapping.record_query(
+                client_ip=client_addr[0],
+                domain=query_name,
+                ips=[],
+                ttl=0,
+                query_type=query_type,
+                status="ignored",
             )
 
             reply.header.rcode = 3  # NXDOMAIN
