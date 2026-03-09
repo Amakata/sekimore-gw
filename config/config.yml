@@ -1,6 +1,9 @@
 # Sekimore Gateway - AI Agent Security Gateway
 # Sample Configuration File
 
+name: Sample | Sekimore
+description: Sample Sekimore Description
+
 # Allowed Domain List
 # Wildcard notation: ".example.com" allows "*.example.com", "*.*.example.com", etc.
 allow_domains:

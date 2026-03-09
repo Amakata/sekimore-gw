@@ -109,6 +109,48 @@ def describe_pydantic_models():
         assert len(blocked_ip.ports) == 2
 
 
+def describe_gateway_info():
+    """Tests for /api/gateway-info endpoint."""
+
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data='name: "My Gateway"\ndescription: "Test description"\nallow_domains: []\nblock_domains: []\n',
+    )
+    def it_returns_gateway_info(mock_file):
+        """Test GET /api/gateway-info returns name and description."""
+        from fastapi.testclient import TestClient
+
+        from src.web_ui.app import app
+
+        client = TestClient(app)
+        response = client.get("/api/gateway-info")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "My Gateway"
+        assert data["description"] == "Test description"
+
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data="allow_domains: []\nblock_domains: []\n",
+    )
+    def it_returns_none_when_not_configured(mock_file):
+        """Test GET /api/gateway-info returns None when not configured."""
+        from fastapi.testclient import TestClient
+
+        from src.web_ui.app import app
+
+        client = TestClient(app)
+        response = client.get("/api/gateway-info")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] is None
+        assert data["description"] is None
+
+
 def describe_get_current_rule():
     """Tests for get_current_rule function."""
 

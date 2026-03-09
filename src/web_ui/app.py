@@ -218,6 +218,20 @@ def get_current_rule(domain: str, config: dict) -> str:
     return "blocked_default"
 
 
+@app.get("/api/gateway-info")
+async def get_gateway_info() -> dict:
+    """ゲートウェイ情報API.
+
+    Returns:
+        ゲートウェイ名称・説明
+    """
+    config = load_config()
+    return {
+        "name": config.get("name"),
+        "description": config.get("description"),
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     """ダッシュボードメイン画面.

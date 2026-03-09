@@ -63,6 +63,10 @@ class NetworkConfig(BaseModel):
 class Config(BaseModel):
     """AI Security Gateway 設定."""
 
+    # ゲートウェイ情報
+    name: str | None = Field(default=None, description="ゲートウェイ名称")
+    description: str | None = Field(default=None, description="ゲートウェイ説明")
+
     # ドメインフィルタリング
     allow_domains: list[str] = Field(default_factory=list, description="許可ドメインリスト")
     block_domains: list[str] = Field(default_factory=list, description="拒否ドメインリスト")
