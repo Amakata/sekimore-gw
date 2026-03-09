@@ -61,7 +61,13 @@ def get_logger(component: ComponentType) -> structlog.BoundLogger:
     return logger.bind(component=component.value)  # type: ignore[no-any-return]
 
 
-def log_dns_query(client_ip: str, query_domain: str, response_ips: list[str], ttl: int) -> None:
+def log_dns_query(
+    client_ip: str,
+    query_domain: str,
+    response_ips: list[str],
+    ttl: int,
+    status: str = "allowed",
+) -> None:
     """DNS クエリログ."""
     logger = get_logger(ComponentType.DNS)
     logger.info(
@@ -70,6 +76,7 @@ def log_dns_query(client_ip: str, query_domain: str, response_ips: list[str], tt
         query_domain=query_domain,
         response_ips=response_ips,
         ttl=ttl,
+        status=status,
     )
 
 

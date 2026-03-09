@@ -27,6 +27,7 @@ class StatsResponse(BaseModel):
     total: int
     allowed: int
     blocked: int
+    ignored: int
     unique_domains: int
     firewall_blocked: int  # iptablesでブロックされた数
     proxy_blocked: int  # Squidプロキシでブロックされた数
@@ -62,9 +63,10 @@ class DomainInfo(BaseModel):
     query_count: int
     allowed_count: int
     blocked_count: int
+    ignored_count: int = 0
     last_access: float
     status: str  # 過去の履歴: "allowed", "blocked", "mixed"
-    current_rule: str  # 現在のルール: "allowed", "blocked_explicit", "blocked_default"
+    current_rule: str  # 現在のルール: "allowed", "blocked_explicit", "blocked_default", "ignored"
     resolved_ips: list[str] | None = None  # 解決されたIPアドレスのリスト
 
 
@@ -173,13 +175,14 @@ def get_current_rule(domain: str, config: dict) -> str:
         config: 設定辞書
 
     Returns:
-        現在のルール: "allowed", "blocked_explicit", "blocked_default"
+        現在のルール: "allowed", "ignored", "blocked_explicit", "blocked_default"
     """
     domain_lower = domain.lower().rstrip(".")
     allow_domains = config.get("allow_domains", [])
     block_domains = config.get("block_domains", [])
+    ignore_domains = config.get("ignore_domains", [])
 
-    # ブロックリストチェック（優先）
+    # ブロックリストチェック（最優先）
     for blocked in block_domains:
         # 完全一致
         if blocked == domain_lower:
@@ -189,6 +192,16 @@ def get_current_rule(domain: str, config: dict) -> str:
             domain_lower.endswith(blocked) or domain_lower.endswith(blocked[1:])
         ):
             return "blocked_explicit"
+
+    # 無視リストチェック（blockの次、allowの前）
+    # allow_domainsへの追加は不要。DNS応答はNXDOMAINだがログノイズを軽減
+    for ignored in ignore_domains:
+        if ignored == domain_lower:
+            return "ignored"
+        if ignored.startswith(".") and (
+            domain_lower.endswith(ignored) or domain_lower.endswith(ignored[1:])
+        ):
+            return "ignored"
 
     # 許可リストチェック
     for allowed in allow_domains:
@@ -258,6 +271,14 @@ async def get_stats() -> StatsResponse:
         row = await cursor.fetchone()
         blocked = row[0] if row else 0
 
+        # 無視数
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM dns_queries WHERE timestamp > ? AND status = 'ignored'",
+            (one_day_ago,),
+        )
+        row = await cursor.fetchone()
+        ignored = row[0] if row else 0
+
         # ユニークドメイン数
         cursor = await db.execute(
             "SELECT COUNT(DISTINCT query_domain) FROM dns_queries WHERE timestamp > ?",
@@ -286,6 +307,7 @@ async def get_stats() -> StatsResponse:
             total=total,
             allowed=allowed,
             blocked=blocked,
+            ignored=ignored,
             unique_domains=unique_domains,
             firewall_blocked=firewall_blocked,
             proxy_blocked=proxy_blocked,
@@ -347,11 +369,14 @@ async def get_logs(limit: int = 100) -> list[LogEntry]:
             """
             SELECT timestamp, client_ip, query_domain, response_ips, status
             FROM dns_queries
+            WHERE status != 'ignored'
             ORDER BY timestamp DESC
             LIMIT ?
             """,
             (limit,),
         )
+
+        action_map = {"allowed": "ALLOWED", "blocked": "BLOCKED", "ignored": "IGNORED"}
 
         logs = []
         async for row in cursor:
@@ -360,7 +385,7 @@ async def get_logs(limit: int = 100) -> list[LogEntry]:
                 LogEntry(
                     timestamp=row[0],
                     component="DNS",
-                    action="ALLOWED" if status == "allowed" else "BLOCKED",
+                    action=action_map.get(status, "BLOCKED"),
                     src_ip=row[1],
                     domain=row[2],
                     dst_ip=row[3].split(",")[0] if row[3] else None,
@@ -575,16 +600,22 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 # 最後のタイムスタンプより新しいログを取得
                 db = await get_db()
                 try:
-                    # DNSクエリログ
+                    # DNSクエリログ（ignoredを除外）
                     cursor = await db.execute(
                         """
                         SELECT timestamp, client_ip, query_domain, response_ips, status
                         FROM dns_queries
-                        WHERE timestamp > ?
+                        WHERE timestamp > ? AND status != 'ignored'
                         ORDER BY timestamp ASC
                         """,
                         (last_timestamp,),
                     )
+
+                    ws_action_map = {
+                        "allowed": "ALLOWED",
+                        "blocked": "BLOCKED",
+                        "ignored": "IGNORED",
+                    }
 
                     new_logs = []
                     async for row in cursor:
@@ -592,7 +623,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         log_entry = LogEntry(
                             timestamp=row[0],
                             component="DNS",
-                            action="ALLOWED" if status == "allowed" else "BLOCKED",
+                            action=ws_action_map.get(status, "BLOCKED"),
                             src_ip=row[1],
                             domain=row[2],
                             dst_ip=row[3].split(",")[0] if row[3] else None,
@@ -757,6 +788,7 @@ async def get_unique_domains() -> list[DomainInfo]:
                 COUNT(*) as query_count,
                 SUM(CASE WHEN status = 'allowed' THEN 1 ELSE 0 END) as allowed_count,
                 SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) as blocked_count,
+                SUM(CASE WHEN status = 'ignored' THEN 1 ELSE 0 END) as ignored_count,
                 MAX(timestamp) as last_access,
                 GROUP_CONCAT(DISTINCT response_ips) as all_response_ips
             FROM dns_queries
@@ -769,6 +801,7 @@ async def get_unique_domains() -> list[DomainInfo]:
         async for row in cursor:
             allowed_count = row["allowed_count"] or 0
             blocked_count = row["blocked_count"] or 0
+            ignored_count = row["ignored_count"] or 0
 
             # 過去の履歴ステータスを判定
             if allowed_count > 0 and blocked_count == 0:
@@ -780,6 +813,10 @@ async def get_unique_domains() -> list[DomainInfo]:
 
             # 現在のルールを判定
             current_rule = get_current_rule(row["query_domain"], config)
+
+            # ignored ドメインはデフォルトで除外
+            if current_rule == "ignored":
+                continue
 
             # IPアドレスのリストを作成（重複を除去）
             resolved_ips = []
@@ -799,8 +836,87 @@ async def get_unique_domains() -> list[DomainInfo]:
                     query_count=row["query_count"],
                     allowed_count=allowed_count,
                     blocked_count=blocked_count,
+                    ignored_count=ignored_count,
                     last_access=row["last_access"],
                     status=historical_status,
+                    current_rule=current_rule,
+                    resolved_ips=resolved_ips if resolved_ips else None,
+                )
+            )
+
+        return domains
+
+    finally:
+        await db.close()
+
+
+@app.get("/api/domains/ignored-config", response_model=list[str])
+async def get_ignored_domains_config() -> list[str]:
+    """無視ドメイン設定一覧を取得（config.yml）.
+
+    Returns:
+        無視ドメインのリスト
+    """
+    config = load_config()
+    return config.get("ignore_domains", [])  # type: ignore[no-any-return]
+
+
+@app.get("/api/domains/ignored", response_model=list[DomainInfo])
+async def get_ignored_domains() -> list[DomainInfo]:
+    """無視されたドメインの統計を取得（DBから）.
+
+    Returns:
+        無視ドメイン情報のリスト
+    """
+    db = await get_db()
+    config = load_config()
+
+    try:
+        cursor = await db.execute(
+            """
+            SELECT
+                query_domain,
+                COUNT(*) as query_count,
+                SUM(CASE WHEN status = 'allowed' THEN 1 ELSE 0 END) as allowed_count,
+                SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) as blocked_count,
+                SUM(CASE WHEN status = 'ignored' THEN 1 ELSE 0 END) as ignored_count,
+                MAX(timestamp) as last_access,
+                GROUP_CONCAT(DISTINCT response_ips) as all_response_ips
+            FROM dns_queries
+            WHERE status = 'ignored'
+            GROUP BY query_domain
+            ORDER BY query_count DESC
+            """
+        )
+
+        domains = []
+        async for row in cursor:
+            allowed_count = row["allowed_count"] or 0
+            blocked_count = row["blocked_count"] or 0
+            ignored_count = row["ignored_count"] or 0
+
+            current_rule = get_current_rule(row["query_domain"], config)
+
+            # IPアドレスのリストを作成（重複を除去）
+            resolved_ips: list[str] = []
+            all_response_ips = row["all_response_ips"]
+            if all_response_ips:
+                ip_set: set[str] = set()
+                for ip in all_response_ips.split(","):
+                    ip = ip.strip()
+                    if ip:
+                        ip_set.add(ip)
+                resolved_ips = sorted(ip_set)
+
+            domains.append(
+                DomainInfo(
+                    domain=row["query_domain"],
+                    query_count=row["query_count"],
+                    allowed_count=allowed_count,
+                    blocked_count=blocked_count,
+                    ignored_count=ignored_count,
+                    last_access=row["last_access"],
+                    status="ignored",
                     current_rule=current_rule,
                     resolved_ips=resolved_ips if resolved_ips else None,
                 )

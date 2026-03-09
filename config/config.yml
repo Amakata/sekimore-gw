@@ -16,6 +16,11 @@ allow_domains:
   - sekimore-gw
   - ai-agent
 
+# Ignored Domain List (hidden from UI dashboard, but DNS resolves normally)
+ignore_domains:
+  - _http._tcp.deb.debian.org
+  - google.com
+
 # Blocked Domain List
 block_domains:
   - .malicious.com

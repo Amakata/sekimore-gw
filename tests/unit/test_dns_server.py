@@ -394,6 +394,106 @@ def describe_dns_server():
         assert stats is None
 
 
+def describe_dns_server_ignored_domains():
+    """DNSServer ignored domains tests."""
+
+    def it_checks_ignored_domain_explicitly():
+        """Test _is_ignored returns True for explicitly ignored domain."""
+        from src.dns_server import DNSServer
+
+        dns_server = DNSServer.__new__(DNSServer)
+        dns_server.ignored_domains = ["healthcheck.example.com"]
+
+        assert dns_server._is_ignored("healthcheck.example.com") is True
+        assert dns_server._is_ignored("other.example.com") is False
+
+    def it_checks_ignored_domain_with_wildcard():
+        """Test _is_ignored handles wildcard patterns."""
+        from src.dns_server import DNSServer
+
+        dns_server = DNSServer.__new__(DNSServer)
+        dns_server.ignored_domains = [".telemetry.example.com"]
+
+        assert dns_server._is_ignored("sub.telemetry.example.com") is True
+        assert dns_server._is_ignored("telemetry.example.com") is True
+        assert dns_server._is_ignored("other.example.com") is False
+
+    def it_handles_empty_ignored_list():
+        """Test _is_ignored with empty list."""
+        from src.dns_server import DNSServer
+
+        dns_server = DNSServer.__new__(DNSServer)
+        dns_server.ignored_domains = []
+
+        assert dns_server._is_ignored("any.domain.com") is False
+
+    @pytest.mark.asyncio
+    async def it_records_ignored_status_in_db():
+        """Test handle_query records 'ignored' status and returns NXDOMAIN for ignored domains."""
+        import tempfile
+
+        from dnslib import DNSRecord
+
+        from src.dns_server import DNSMapping, DNSServer
+
+        query = DNSRecord.question("telemetry.example.com", "A")
+        query_data = query.pack()
+
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            db_path = f.name
+
+        dns_server = DNSServer.__new__(DNSServer)
+        dns_server.allowed_domains = [".example.com"]
+        dns_server.blocked_domains = []
+        dns_server.ignored_domains = [".telemetry.example.com"]
+        dns_server.mapping = DNSMapping(db_path=db_path)
+        await dns_server.mapping.init_db()
+
+        response_data = await dns_server.handle_query(query_data, ("192.168.1.100", 53))
+
+        response = DNSRecord.parse(response_data)
+        # DNS response should be NXDOMAIN (blocked, but recorded as ignored)
+        assert response.header.rcode == 3
+
+        # Verify DB has 'ignored' status
+        cursor = await dns_server.mapping.db.execute(
+            "SELECT status FROM dns_queries WHERE query_domain = 'telemetry.example.com'"
+        )
+        row = await cursor.fetchone()
+        assert row[0] == "ignored"
+
+        await dns_server.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_block_takes_priority_over_ignore():
+        """Test that blocked domains are blocked even if in ignore list."""
+        import tempfile
+
+        from dnslib import DNSRecord
+
+        from src.dns_server import DNSMapping, DNSServer
+
+        query = DNSRecord.question("malicious.com", "A")
+        query_data = query.pack()
+
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            db_path = f.name
+
+        dns_server = DNSServer.__new__(DNSServer)
+        dns_server.allowed_domains = ["malicious.com"]
+        dns_server.blocked_domains = ["malicious.com"]
+        dns_server.ignored_domains = ["malicious.com"]
+        dns_server.mapping = DNSMapping(db_path=db_path)
+        await dns_server.mapping.init_db()
+
+        response_data = await dns_server.handle_query(query_data, ("192.168.1.100", 53))
+
+        response = DNSRecord.parse(response_data)
+        assert response.header.rcode == 3  # NXDOMAIN (blocked takes priority)
+
+        await dns_server.mapping.db.close()
+
+
 def describe_dns_server_domain_checking():
     """DNSServer domain checking methods."""
 
@@ -596,6 +696,7 @@ def describe_dns_server_query_handling():
         dns_server = DNSServer.__new__(DNSServer)
         dns_server.allowed_domains = ["example.com"]
         dns_server.blocked_domains = []
+        dns_server.ignored_domains = []
         dns_server.mapping = DNSMapping(db_path=db_path)
         await dns_server.mapping.init_db()
         dns_server.gateway_hostname = None
@@ -626,6 +727,7 @@ def describe_dns_server_query_handling():
         dns_server = DNSServer.__new__(DNSServer)
         dns_server.allowed_domains = ["example.com"]
         dns_server.blocked_domains = []
+        dns_server.ignored_domains = []
         dns_server.mapping = DNSMapping(db_path=db_path)
         await dns_server.mapping.init_db()
         dns_server.cache_enabled = False
@@ -665,6 +767,7 @@ def describe_dns_server_query_handling():
         dns_server = DNSServer.__new__(DNSServer)
         dns_server.allowed_domains = ["example.com"]
         dns_server.blocked_domains = []
+        dns_server.ignored_domains = []
         dns_server.mapping = DNSMapping(db_path=db_path)
         await dns_server.mapping.init_db()
         dns_server.cache_enabled = False
@@ -709,6 +812,7 @@ def describe_gateway_hostname_resolution():
         dns_server = DNSServer.__new__(DNSServer)
         dns_server.allowed_domains = ["example.com"]  # sekimore-gw is NOT in allowlist
         dns_server.blocked_domains = []
+        dns_server.ignored_domains = []
         dns_server.mapping = DNSMapping(db_path=db_path)
         await dns_server.mapping.init_db()
         dns_server.cache_enabled = False
@@ -744,6 +848,7 @@ def describe_gateway_hostname_resolution():
         dns_server = DNSServer.__new__(DNSServer)
         dns_server.allowed_domains = []
         dns_server.blocked_domains = []
+        dns_server.ignored_domains = []
         dns_server.mapping = DNSMapping(db_path=db_path)
         await dns_server.mapping.init_db()
         dns_server.cache_enabled = False
@@ -778,6 +883,7 @@ def describe_gateway_hostname_resolution():
         dns_server = DNSServer.__new__(DNSServer)
         dns_server.allowed_domains = ["example.com"]  # blocked.com is NOT in allowlist
         dns_server.blocked_domains = []
+        dns_server.ignored_domains = []
         dns_server.mapping = DNSMapping(db_path=db_path)
         await dns_server.mapping.init_db()
         dns_server.cache_enabled = False

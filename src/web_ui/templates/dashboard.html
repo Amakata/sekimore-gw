@@ -260,6 +260,20 @@
             color: #8b949e;
         }
 
+        .badge-ignored {
+            background: rgba(139, 148, 158, 0.2);
+            color: #8b949e;
+        }
+
+        .log-ignored {
+            background: rgba(139, 148, 158, 0.1);
+            border-left: 3px solid #8b949e;
+        }
+
+        .action-ignored {
+            color: #8b949e;
+        }
+
         .empty-state {
             text-align: center;
             padding: 40px;
@@ -300,6 +314,7 @@
             <button class="tab" onclick="switchTab('allowed')">Allowed Domains</button>
             <button class="tab" onclick="switchTab('blocked')">Blocked Domains</button>
             <button class="tab" onclick="switchTab('unique')">All Domains</button>
+            <button class="tab" onclick="switchTab('ignored')">Ignored Domains</button>
             <button class="tab" onclick="switchTab('blocked-ips')">Blocked IPs</button>
         </div>
 
@@ -318,6 +333,10 @@
             <div class="stat-card">
                 <div class="stat-value" id="stat-blocked">0</div>
                 <div class="stat-label">DNS Blocked</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-ignored">0</div>
+                <div class="stat-label">DNS Ignored</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="stat-firewall-blocked">0</div>
@@ -402,6 +421,17 @@
             </div>
         </div>
 
+        <!-- Ignored Domains タブ -->
+        <div id="tab-ignored" class="tab-content">
+            <h2 style="color: #58a6ff; margin-bottom: 20px;">無視されたドメイン一覧</h2>
+            <div class="controls">
+                <button onclick="loadIgnoredDomains()">Refresh</button>
+            </div>
+            <div class="domain-list" id="ignored-domains-list">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+        </div>
+
         <!-- Blocked IPs タブ -->
         <div id="tab-blocked-ips" class="tab-content">
             <h2 style="color: #58a6ff; margin-bottom: 20px;">ブロックされたIPアドレス一覧</h2>
@@ -459,11 +489,16 @@
             }
 
             const entry = document.createElement('div');
-            entry.className = `log-entry ${log.action === 'ALLOWED' ? 'log-allowed' : 'log-blocked'}`;
+            let logClass = 'log-blocked';
+            if (log.action === 'ALLOWED') logClass = 'log-allowed';
+            else if (log.action === 'IGNORED') logClass = 'log-ignored';
+            entry.className = `log-entry ${logClass}`;
 
             const time = new Date(log.timestamp * 1000).toLocaleTimeString('ja-JP');
-            const emoji = log.action === 'ALLOWED' ? '✅' : '❌';
-            const actionClass = log.action === 'ALLOWED' ? 'action-allowed' : 'action-blocked';
+            let emoji = '❌';
+            let actionClass = 'action-blocked';
+            if (log.action === 'ALLOWED') { emoji = '✅'; actionClass = 'action-allowed'; }
+            else if (log.action === 'IGNORED') { emoji = '⏭️'; actionClass = 'action-ignored'; }
 
             // コンポーネント表示（DNS or FIREWALL）
             const componentBadge = log.component === 'FIREWALL'
@@ -498,6 +533,7 @@
                 document.getElementById('stat-total').textContent = stats.total.toLocaleString();
                 document.getElementById('stat-allowed').textContent = stats.allowed.toLocaleString();
                 document.getElementById('stat-blocked').textContent = stats.blocked.toLocaleString();
+                document.getElementById('stat-ignored').textContent = stats.ignored.toLocaleString();
                 document.getElementById('stat-firewall-blocked').textContent = stats.firewall_blocked.toLocaleString();
                 document.getElementById('stat-proxy-blocked').textContent = stats.proxy_blocked.toLocaleString();
                 document.getElementById('stat-domains').textContent = stats.unique_domains.toLocaleString();
@@ -552,6 +588,8 @@
                 loadBlockedDomains();
             } else if (tabName === 'unique') {
                 loadUniqueDomains();
+            } else if (tabName === 'ignored') {
+                loadIgnoredDomains();
             } else if (tabName === 'blocked-ips') {
                 loadBlockedIPs();
             }
@@ -639,6 +677,9 @@
                     if (domain.current_rule === 'allowed') {
                         currentBadgeClass = 'badge-allowed';
                         currentBadgeText = '✅ ALLOWED';
+                    } else if (domain.current_rule === 'ignored') {
+                        currentBadgeClass = 'badge-ignored';
+                        currentBadgeText = '⏭️ IGNORED';
                     } else if (domain.current_rule === 'blocked_explicit') {
                         currentBadgeClass = 'badge-blocked-explicit';
                         currentBadgeText = '🚫 BLOCKED (Blocklist)';
@@ -692,6 +733,62 @@
             } catch (error) {
                 console.error('Failed to load unique domains:', error);
                 document.getElementById('unique-domains-list').innerHTML =
+                    '<div class="empty-state">エラー: データの読み込みに失敗しました</div>';
+            }
+        }
+
+        // 無視されたドメイン一覧を読み込み
+        async function loadIgnoredDomains() {
+            try {
+                const response = await fetch('/api/domains/ignored');
+                const domains = await response.json();
+
+                const listDiv = document.getElementById('ignored-domains-list');
+
+                if (domains.length === 0) {
+                    listDiv.innerHTML = '<div class="empty-state">無視されたドメインがありません</div>';
+                    return;
+                }
+
+                listDiv.innerHTML = domains.map(domain => {
+                    const lastAccess = new Date(domain.last_access * 1000).toLocaleString('ja-JP');
+
+                    // 解決済みIPアドレスの表示
+                    let resolvedIpsHtml = '';
+                    if (domain.resolved_ips && domain.resolved_ips.length > 0) {
+                        const displayIps = domain.resolved_ips.slice(0, 3);
+                        const remainingCount = domain.resolved_ips.length - displayIps.length;
+                        resolvedIpsHtml = `
+                            <div class="historical-info" style="margin-top: 5px;">
+                                <span style="color: #58a6ff;">IP: </span>
+                                ${displayIps.join(', ')}
+                                ${remainingCount > 0 ? ` <span style="color: #8b949e;">...他${remainingCount}個</span>` : ''}
+                            </div>
+                        `;
+                    }
+
+                    return `
+                        <div class="domain-item">
+                            <div>
+                                <div class="domain-name">${domain.domain}</div>
+                                <div class="current-status">
+                                    <span class="status-label">ステータス:</span>
+                                    <span class="badge badge-ignored">IGNORED</span>
+                                </div>
+                                <div class="historical-info">
+                                    クエリ数: ${domain.ignored_count}回 (最終: ${lastAccess})
+                                </div>
+                                ${resolvedIpsHtml}
+                            </div>
+                            <div class="domain-stats">
+                                <span class="domain-stat">無視:<strong>${domain.ignored_count}</strong></span>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                console.error('Failed to load ignored domains:', error);
+                document.getElementById('ignored-domains-list').innerHTML =
                     '<div class="empty-state">エラー: データの読み込みに失敗しました</div>';
             }
         }
