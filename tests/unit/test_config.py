@@ -73,6 +73,16 @@ def describe_proxy_config():
         assert proxy.cache_enabled is True
         assert proxy.cache_size_mb == 1000
         assert proxy.upstream_proxy is None
+        assert proxy.upstream_proxy_tls is False
+
+    def it_supports_upstream_proxy_tls():
+        """Test ProxyConfig with upstream_proxy_tls enabled."""
+        proxy = ProxyConfig(
+            upstream_proxy="proxy.example.com:3129",
+            upstream_proxy_tls=True,
+        )
+        assert proxy.upstream_proxy_tls is True
+        assert proxy.upstream_proxy == "proxy.example.com:3129"
 
 
 def describe_network_config():

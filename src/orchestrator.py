@@ -474,6 +474,7 @@ class SecurityGatewayOrchestrator:
                 cache_enabled=self.config.proxy.cache_enabled,
                 cache_size_mb=self.config.proxy.cache_size_mb,
                 upstream_proxy=self.config.proxy.upstream_proxy,
+                upstream_proxy_tls=self.config.proxy.upstream_proxy_tls,
                 upstream_dns="127.0.0.11",  # Docker内蔵DNS（squidはGW内部プロセスのためフィルタリング不要）
                 upstream_proxy_username=self.config.proxy.upstream_proxy_username,
                 upstream_proxy_password=self.config.proxy.upstream_proxy_password,

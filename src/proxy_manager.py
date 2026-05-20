@@ -17,6 +17,7 @@ class ProxyManager:
         cache_enabled: bool = True,
         cache_size_mb: int = 10000,
         upstream_proxy: str | None = None,
+        upstream_proxy_tls: bool = False,
         upstream_dns: str = "127.0.0.11",
         upstream_proxy_username: str | None = None,
         upstream_proxy_password: str | None = None,
@@ -29,6 +30,7 @@ class ProxyManager:
             cache_enabled: キャッシュ有効化
             cache_size_mb: キャッシュサイズ（MB）
             upstream_proxy: 上位プロキシ（host:port）
+            upstream_proxy_tls: 上位プロキシへの接続にTLSを使用
             upstream_dns: 上位DNSサーバー（デフォルト: Docker内蔵DNS 127.0.0.11）
             upstream_proxy_username: 上位プロキシ認証ユーザー名
             upstream_proxy_password: 上位プロキシ認証パスワード
@@ -38,6 +40,7 @@ class ProxyManager:
         self.cache_enabled = cache_enabled
         self.cache_size_mb = cache_size_mb
         self.upstream_proxy = upstream_proxy
+        self.upstream_proxy_tls = upstream_proxy_tls
         self.upstream_dns = upstream_dns
         self.upstream_proxy_username = upstream_proxy_username
         self.upstream_proxy_password = upstream_proxy_password
@@ -156,25 +159,29 @@ cache_mem 256 MB"""
 
         host, port = parts
 
-        # 認証情報がある場合はloginオプションを追加
-        auth_option = ""
+        # オプション構築
+        options = ""
+        if self.upstream_proxy_tls:
+            options += " tls"
         if self.upstream_proxy_username and self.upstream_proxy_password:
-            auth_option = f" login={self.upstream_proxy_username}:{self.upstream_proxy_password}"
+            options += f" login={self.upstream_proxy_username}:{self.upstream_proxy_password}"
             log_system_event(
                 "Upstream proxy configured with Basic authentication",
                 host=host,
                 port=port,
                 username=self.upstream_proxy_username,
+                tls=str(self.upstream_proxy_tls),
             )
         else:
             log_system_event(
                 "Upstream proxy configured without authentication",
                 host=host,
                 port=port,
+                tls=str(self.upstream_proxy_tls),
             )
 
         return f"""# Upstream proxy configuration
-cache_peer {host} parent {port} 0 no-query default{auth_option}
+cache_peer {host} parent {port} 0 no-query default{options}
 never_direct allow all"""
 
     def reload_config(self) -> bool:

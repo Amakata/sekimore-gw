@@ -18,6 +18,8 @@ def describe_proxy_manager():
         assert pm.cache_enabled is True
         assert pm.cache_size_mb == 10000
         assert pm.upstream_proxy is None
+        assert pm.upstream_proxy_tls is False
+        assert pm.upstream_dns == "127.0.0.11"
 
     def it_initializes_with_custom_paths():
         """Test ProxyManager initializes with custom paths."""
@@ -71,7 +73,51 @@ def describe_proxy_manager():
 
         result = pm._generate_upstream_proxy_config()
 
-        assert "proxy.example.com" in result or "cache_peer" in result
+        assert "cache_peer" in result
+        assert "proxy.example.com" in result
+        assert "8080" in result
+        assert "tls" not in result
+
+    def it_generates_upstream_proxy_config_with_tls():
+        """Test _generate_upstream_proxy_config with TLS enabled."""
+        pm = ProxyManager(
+            upstream_proxy="proxy.example.com:8080",
+            upstream_proxy_tls=True,
+        )
+
+        result = pm._generate_upstream_proxy_config()
+
+        assert "cache_peer" in result
+        assert "proxy.example.com" in result
+        assert "tls" in result
+
+    def it_generates_upstream_proxy_config_with_tls_and_auth():
+        """Test _generate_upstream_proxy_config with TLS and authentication."""
+        pm = ProxyManager(
+            upstream_proxy="proxy.example.com:3129",
+            upstream_proxy_tls=True,
+            upstream_proxy_username="user",
+            upstream_proxy_password="pass",
+        )
+
+        result = pm._generate_upstream_proxy_config()
+
+        assert "cache_peer proxy.example.com parent 3129 0 no-query default tls login=user:pass" in result
+        assert "never_direct allow all" in result
+
+    def it_generates_upstream_proxy_config_without_tls():
+        """Test _generate_upstream_proxy_config with TLS explicitly disabled."""
+        pm = ProxyManager(
+            upstream_proxy="proxy.example.com:8080",
+            upstream_proxy_tls=False,
+            upstream_proxy_username="user",
+            upstream_proxy_password="pass",
+        )
+
+        result = pm._generate_upstream_proxy_config()
+
+        assert "tls" not in result
+        assert "login=user:pass" in result
 
     def it_generates_upstream_proxy_config_when_not_set():
         """Test _generate_upstream_proxy_config when upstream is not set."""
