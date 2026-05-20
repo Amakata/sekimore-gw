@@ -17,7 +17,7 @@ class ProxyManager:
         cache_enabled: bool = True,
         cache_size_mb: int = 10000,
         upstream_proxy: str | None = None,
-        upstream_dns: str = "127.0.0.1",
+        upstream_dns: str = "127.0.0.11",
         upstream_proxy_username: str | None = None,
         upstream_proxy_password: str | None = None,
     ):
@@ -29,7 +29,7 @@ class ProxyManager:
             cache_enabled: キャッシュ有効化
             cache_size_mb: キャッシュサイズ（MB）
             upstream_proxy: 上位プロキシ（host:port）
-            upstream_dns: 上位DNSサーバー（デフォルト: ゲートウェイ自身のDNS）
+            upstream_dns: 上位DNSサーバー（デフォルト: Docker内蔵DNS 127.0.0.11）
             upstream_proxy_username: 上位プロキシ認証ユーザー名
             upstream_proxy_password: 上位プロキシ認証パスワード
         """
