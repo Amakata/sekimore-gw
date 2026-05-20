@@ -44,6 +44,19 @@ def describe_websocket_integration():
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE proxy_logs (
+                    timestamp REAL,
+                    client_ip TEXT,
+                    method TEXT,
+                    url TEXT,
+                    status_code INTEGER,
+                    squid_result TEXT,
+                    action TEXT DEFAULT 'allowed'
+                )
+                """
+            )
 
             # Insert test data
             now = time.time()
@@ -155,6 +168,19 @@ def describe_websocket_integration():
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE proxy_logs (
+                    timestamp REAL,
+                    client_ip TEXT,
+                    method TEXT,
+                    url TEXT,
+                    status_code INTEGER,
+                    squid_result TEXT,
+                    action TEXT DEFAULT 'allowed'
+                )
+                """
+            )
             await db.commit()
 
         original_db_path = web_app_module.DB_PATH
@@ -233,6 +259,19 @@ def describe_websocket_integration():
                     dst_ip TEXT,
                     dst_port INTEGER,
                     protocol TEXT
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE proxy_logs (
+                    timestamp REAL,
+                    client_ip TEXT,
+                    method TEXT,
+                    url TEXT,
+                    status_code INTEGER,
+                    squid_result TEXT,
+                    action TEXT DEFAULT 'allowed'
                 )
                 """
             )
@@ -322,6 +361,19 @@ def describe_websocket_integration():
                     dst_ip TEXT,
                     dst_port INTEGER,
                     protocol TEXT
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE proxy_logs (
+                    timestamp REAL,
+                    client_ip TEXT,
+                    method TEXT,
+                    url TEXT,
+                    status_code INTEGER,
+                    squid_result TEXT,
+                    action TEXT DEFAULT 'allowed'
                 )
                 """
             )

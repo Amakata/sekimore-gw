@@ -1,5 +1,7 @@
 """FastAPI Webアプリケーション - リアルタイム監視ダッシュボード."""
 
+# NOTE: proxy_blocks テーブルは proxy_logs に統合済み（ProxyMonitor.init_db で自動マイグレーション）
+
 import asyncio
 import contextlib
 import time
@@ -30,6 +32,7 @@ class StatsResponse(BaseModel):
     ignored: int
     unique_domains: int
     firewall_blocked: int  # iptablesでブロックされた数
+    proxy_allowed: int  # Squidプロキシで許可された数
     proxy_blocked: int  # Squidプロキシでブロックされた数
 
 
@@ -309,13 +312,25 @@ async def get_stats() -> StatsResponse:
         row = await cursor.fetchone()
         firewall_blocked = row[0] if row else 0
 
-        # プロキシブロック数
-        cursor = await db.execute(
-            "SELECT COUNT(*) FROM proxy_blocks WHERE timestamp > ?",
-            (one_day_ago,),
-        )
-        row = await cursor.fetchone()
-        proxy_blocked = row[0] if row else 0
+        # プロキシ許可数
+        proxy_allowed = 0
+        proxy_blocked = 0
+        try:
+            cursor = await db.execute(
+                """
+                SELECT action, COUNT(*) FROM proxy_logs
+                WHERE timestamp > ?
+                GROUP BY action
+                """,
+                (one_day_ago,),
+            )
+            async for row in cursor:
+                if row[0] == "allowed":
+                    proxy_allowed = row[1]
+                elif row[0] == "blocked":
+                    proxy_blocked = row[1]
+        except Exception:
+            pass
 
         return StatsResponse(
             total=total,
@@ -324,6 +339,7 @@ async def get_stats() -> StatsResponse:
             ignored=ignored,
             unique_domains=unique_domains,
             firewall_blocked=firewall_blocked,
+            proxy_allowed=proxy_allowed,
             proxy_blocked=proxy_blocked,
         )
 
@@ -466,9 +482,9 @@ async def get_firewall_blocks(limit: int = 100) -> list[LogEntry]:
         await db.close()
 
 
-@app.get("/api/proxy-blocks", response_model=list[LogEntry])
-async def get_proxy_blocks(limit: int = 100) -> list[LogEntry]:
-    """最近のプロキシブロックログを取得.
+@app.get("/api/proxy-logs", response_model=list[LogEntry])
+async def get_proxy_logs(limit: int = 100) -> list[LogEntry]:
+    """最近のプロキシアクセスログを取得（許可・拒否両方）.
 
     Args:
         limit: 取得件数
@@ -481,8 +497,49 @@ async def get_proxy_blocks(limit: int = 100) -> list[LogEntry]:
     try:
         cursor = await db.execute(
             """
-            SELECT timestamp, client_ip, method, url, status_code
-            FROM proxy_blocks
+            SELECT timestamp, client_ip, method, url, status_code, squid_result, action
+            FROM proxy_logs
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+
+        logs = []
+        async for row in cursor:
+            action_str = "ALLOWED" if row[6] == "allowed" else "BLOCKED"
+            if row[6] == "allowed":
+                reason = f"{row[2]} via proxy ({row[5]})"
+            else:
+                reason = f"{row[2]} blocked by proxy ({row[5]}/{row[4]})"
+            logs.append(
+                LogEntry(
+                    timestamp=row[0],
+                    component="PROXY",
+                    action=action_str,
+                    src_ip=row[1],
+                    domain=row[3],
+                    reason=reason,
+                )
+            )
+
+        return logs
+
+    finally:
+        await db.close()
+
+
+@app.get("/api/proxy-blocks", response_model=list[LogEntry])
+async def get_proxy_blocks(limit: int = 100) -> list[LogEntry]:
+    """後方互換用: プロキシブロックログのみ取得."""
+    db = await get_db()
+
+    try:
+        cursor = await db.execute(
+            """
+            SELECT timestamp, client_ip, method, url, status_code, squid_result, action
+            FROM proxy_logs
+            WHERE action = 'blocked'
             ORDER BY timestamp DESC
             LIMIT ?
             """,
@@ -497,8 +554,8 @@ async def get_proxy_blocks(limit: int = 100) -> list[LogEntry]:
                     component="PROXY",
                     action="BLOCKED",
                     src_ip=row[1],
-                    domain=row[3],  # URL
-                    reason=f"{row[2]} request blocked by proxy (status: {row[4]})",
+                    domain=row[3],
+                    reason=f"{row[2]} blocked by proxy ({row[5]}/{row[4]})",
                 )
             )
 
@@ -578,7 +635,7 @@ async def get_blocked_ips(limit: int = 100) -> list[BlockedIPInfo]:
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
-    """WebSocketエンドポイント - リアルタイムログ配信（DNS + Firewall）.
+    """WebSocketエンドポイント - リアルタイムログ配信（DNS + Firewall + Proxy）.
 
     Args:
         websocket: WebSocketインスタンス
@@ -587,22 +644,22 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     last_timestamp = 0.0
 
     try:
-        # 最近のDNSログを送信
         try:
-            dns_logs = await get_logs(limit=25)
-            # 最近のファイアウォールブロックログを送信
-            fw_logs = await get_firewall_blocks(limit=25)
+            dns_logs = await get_logs(limit=20)
+            fw_logs = await get_firewall_blocks(limit=15)
+            proxy_logs = await get_proxy_logs(limit=15)
 
-            # 統合してタイムスタンプ順にソート（昇順）
-            # フロントエンドで先頭に追加していくと降順になる
-            all_logs = sorted(dns_logs + fw_logs, key=lambda x: x.timestamp, reverse=False)
+            all_logs = sorted(
+                dns_logs + fw_logs + proxy_logs,
+                key=lambda x: x.timestamp,
+                reverse=False,
+            )
 
-            for log in all_logs[:50]:  # 最新50件に制限
+            for log in all_logs[:50]:
                 await websocket.send_json(log.model_dump())
                 if log.timestamp > last_timestamp:
                     last_timestamp = log.timestamp
         except Exception as e:
-            # 初期ログ送信エラーは無視して接続を継続
             print(f"Warning: Failed to send initial logs: {e}")
 
         # 新しいログを定期的にポーリング
@@ -681,6 +738,39 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         new_logs.append(log_entry)
                         if row[0] > last_timestamp:
                             last_timestamp = row[0]
+
+                    # プロキシアクセスログ
+                    try:
+                        cursor = await db.execute(
+                            """
+                            SELECT timestamp, client_ip, method, url, status_code,
+                                   squid_result, action
+                            FROM proxy_logs
+                            WHERE timestamp > ?
+                            ORDER BY timestamp ASC
+                            """,
+                            (last_timestamp,),
+                        )
+
+                        async for row in cursor:
+                            action_str = "ALLOWED" if row[6] == "allowed" else "BLOCKED"
+                            if row[6] == "allowed":
+                                reason = f"{row[2]} via proxy ({row[5]})"
+                            else:
+                                reason = f"{row[2]} blocked by proxy ({row[5]}/{row[4]})"
+                            log_entry = LogEntry(
+                                timestamp=row[0],
+                                component="PROXY",
+                                action=action_str,
+                                src_ip=row[1],
+                                domain=row[3],
+                                reason=reason,
+                            )
+                            new_logs.append(log_entry)
+                            if row[0] > last_timestamp:
+                                last_timestamp = row[0]
+                    except Exception:
+                        pass
 
                     # タイムスタンプ順にソートして送信
                     new_logs.sort(key=lambda x: x.timestamp)

@@ -350,6 +350,10 @@
                 <div class="stat-label">Firewall Blocked</div>
             </div>
             <div class="stat-card">
+                <div class="stat-value" id="stat-proxy-allowed">0</div>
+                <div class="stat-label">Proxy Allowed</div>
+            </div>
+            <div class="stat-card">
                 <div class="stat-value" id="stat-proxy-blocked">0</div>
                 <div class="stat-label">Proxy Blocked</div>
             </div>
@@ -507,10 +511,15 @@
             if (log.action === 'ALLOWED') { emoji = '✅'; actionClass = 'action-allowed'; }
             else if (log.action === 'IGNORED') { emoji = '⏭️'; actionClass = 'action-ignored'; }
 
-            // コンポーネント表示（DNS or FIREWALL）
-            const componentBadge = log.component === 'FIREWALL'
-                ? '<span style="background: rgba(201, 209, 217, 0.1); color: #c9d1d9; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 8px;">FIREWALL</span>'
-                : '<span style="background: rgba(88, 166, 255, 0.1); color: #58a6ff; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 8px;">DNS</span>';
+            // コンポーネント表示（DNS / FIREWALL / PROXY）
+            let componentBadge;
+            if (log.component === 'FIREWALL') {
+                componentBadge = '<span style="background: rgba(201, 209, 217, 0.1); color: #c9d1d9; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 8px;">FIREWALL</span>';
+            } else if (log.component === 'PROXY') {
+                componentBadge = '<span style="background: rgba(187, 128, 9, 0.1); color: #d29922; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 8px;">PROXY</span>';
+            } else {
+                componentBadge = '<span style="background: rgba(88, 166, 255, 0.1); color: #58a6ff; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 8px;">DNS</span>';
+            }
 
             entry.innerHTML = `
                 <span class="log-time">${time}</span>
@@ -542,6 +551,7 @@
                 document.getElementById('stat-blocked').textContent = stats.blocked.toLocaleString();
                 document.getElementById('stat-ignored').textContent = stats.ignored.toLocaleString();
                 document.getElementById('stat-firewall-blocked').textContent = stats.firewall_blocked.toLocaleString();
+                document.getElementById('stat-proxy-allowed').textContent = stats.proxy_allowed.toLocaleString();
                 document.getElementById('stat-proxy-blocked').textContent = stats.proxy_blocked.toLocaleString();
                 document.getElementById('stat-domains').textContent = stats.unique_domains.toLocaleString();
             } catch (error) {
