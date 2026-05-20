@@ -33,12 +33,14 @@ def describe_pydantic_models():
             ignored=10,
             unique_domains=50,
             firewall_blocked=15,
+            proxy_allowed=10,
             proxy_blocked=5,
         )
         assert stats.total == 100
         assert stats.allowed == 80
         assert stats.blocked == 20
         assert stats.ignored == 10
+        assert stats.proxy_allowed == 10
 
     def it_creates_cache_stats_response():
         """Test CacheStatsResponse model."""
@@ -326,13 +328,16 @@ def describe_fastapi_endpoints():
                     )
                 """)
 
-                # Create proxy_blocks table
+                # Create proxy_logs table
                 await db.execute("""
-                    CREATE TABLE proxy_blocks (
+                    CREATE TABLE proxy_logs (
                         timestamp REAL,
                         client_ip TEXT,
+                        method TEXT,
                         url TEXT,
-                        reason TEXT
+                        status_code INTEGER,
+                        squid_result TEXT,
+                        action TEXT DEFAULT 'allowed'
                     )
                 """)
 
@@ -537,7 +542,17 @@ def describe_api_endpoints_with_db():
                 """
             )
             await db.execute("CREATE TABLE firewall_blocks (timestamp REAL, src_ip TEXT)")
-            await db.execute("CREATE TABLE proxy_blocks (timestamp REAL, client_ip TEXT)")
+            await db.execute("""
+                CREATE TABLE proxy_logs (
+                    timestamp REAL,
+                    client_ip TEXT,
+                    method TEXT,
+                    url TEXT,
+                    status_code INTEGER,
+                    squid_result TEXT,
+                    action TEXT DEFAULT 'allowed'
+                )
+            """)
 
             # Insert test data
             import time
@@ -550,7 +565,10 @@ def describe_api_endpoints_with_db():
                 "INSERT INTO dns_queries VALUES (?, ?, ?)", (now, "blocked.com", "blocked")
             )
             await db.execute("INSERT INTO firewall_blocks VALUES (?, ?)", (now, "1.2.3.4"))
-            await db.execute("INSERT INTO proxy_blocks VALUES (?, ?)", (now, "5.6.7.8"))
+            await db.execute(
+                "INSERT INTO proxy_logs VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (now, "5.6.7.8", "CONNECT", "blocked.com:443", 403, "TCP_DENIED", "blocked"),
+            )
             await db.commit()
 
         # Patch database path
@@ -726,7 +744,7 @@ def describe_api_endpoints_with_db():
 
     @pytest.mark.asyncio
     async def it_returns_proxy_blocks(tmp_path):
-        """Test /api/proxy-blocks returns proxy block events."""
+        """Test /api/proxy-blocks returns proxy block events from proxy_logs."""
         import time
 
         import aiosqlite
@@ -737,20 +755,34 @@ def describe_api_endpoints_with_db():
         async with aiosqlite.connect(str(db_path)) as db:
             await db.execute(
                 """
-                CREATE TABLE proxy_blocks (
+                CREATE TABLE proxy_logs (
                     timestamp REAL,
                     client_ip TEXT,
                     method TEXT,
                     url TEXT,
-                    status_code INTEGER
+                    status_code INTEGER,
+                    squid_result TEXT,
+                    action TEXT DEFAULT 'allowed'
                 )
                 """
             )
 
             now = time.time()
             await db.execute(
-                "INSERT INTO proxy_blocks VALUES (?, ?, ?, ?, ?)",
-                (now, "192.168.1.100", "CONNECT", "blocked.com:443", 403),
+                "INSERT INTO proxy_logs VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (now, "192.168.1.100", "CONNECT", "blocked.com:443", 403, "TCP_DENIED", "blocked"),
+            )
+            await db.execute(
+                "INSERT INTO proxy_logs VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    now - 10,
+                    "192.168.1.100",
+                    "GET",
+                    "http://example.com",
+                    200,
+                    "TCP_MISS",
+                    "allowed",
+                ),
             )
             await db.commit()
 
@@ -766,6 +798,70 @@ def describe_api_endpoints_with_db():
             assert response.status_code == 200
             data = response.json()
             assert isinstance(data, list)
+            assert len(data) == 1
+            assert data[0]["action"] == "BLOCKED"
+        finally:
+            web_app_module.DB_PATH = original_db_path
+
+    @pytest.mark.asyncio
+    async def it_returns_proxy_logs(tmp_path):
+        """Test /api/proxy-logs returns both allowed and blocked proxy events."""
+        import time
+
+        import aiosqlite
+
+        from src.web_ui.app import app
+
+        db_path = tmp_path / "test.db"
+        async with aiosqlite.connect(str(db_path)) as db:
+            await db.execute(
+                """
+                CREATE TABLE proxy_logs (
+                    timestamp REAL,
+                    client_ip TEXT,
+                    method TEXT,
+                    url TEXT,
+                    status_code INTEGER,
+                    squid_result TEXT,
+                    action TEXT DEFAULT 'allowed'
+                )
+                """
+            )
+
+            now = time.time()
+            await db.execute(
+                "INSERT INTO proxy_logs VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (now, "192.168.1.100", "CONNECT", "blocked.com:443", 403, "TCP_DENIED", "blocked"),
+            )
+            await db.execute(
+                "INSERT INTO proxy_logs VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    now - 10,
+                    "192.168.1.100",
+                    "GET",
+                    "http://example.com",
+                    200,
+                    "TCP_MISS",
+                    "allowed",
+                ),
+            )
+            await db.commit()
+
+        import src.web_ui.app as web_app_module
+
+        original_db_path = web_app_module.DB_PATH
+        web_app_module.DB_PATH = str(db_path)
+
+        try:
+            client = TestClient(app)
+            response = client.get("/api/proxy-logs?limit=10")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert isinstance(data, list)
+            assert len(data) == 2
+            assert data[0]["action"] == "BLOCKED"
+            assert data[1]["action"] == "ALLOWED"
         finally:
             web_app_module.DB_PATH = original_db_path
 

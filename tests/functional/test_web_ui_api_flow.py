@@ -47,12 +47,14 @@ def describe_web_ui_api_functional_flow():
                     )
                 """)
                 await db.execute("""
-                    CREATE TABLE proxy_blocks (
+                    CREATE TABLE proxy_logs (
                         timestamp REAL,
                         client_ip TEXT,
                         method TEXT,
                         url TEXT,
-                        status_code INTEGER
+                        status_code INTEGER,
+                        squid_result TEXT,
+                        action TEXT DEFAULT 'allowed'
                     )
                 """)
 
@@ -73,10 +75,22 @@ def describe_web_ui_api_functional_flow():
                     (now, "10.0.0.5", "8.8.8.8", 53, "UDP"),
                 )
 
-                # Insert proxy blocks
+                # Insert proxy logs (blocked + allowed)
                 await db.execute(
-                    "INSERT INTO proxy_blocks VALUES (?, ?, ?, ?, ?)",
-                    (now, "10.0.0.6", "CONNECT", "blocked.com:443", 403),
+                    "INSERT INTO proxy_logs VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (now, "10.0.0.6", "CONNECT", "blocked.com:443", 403, "TCP_DENIED", "blocked"),
+                )
+                await db.execute(
+                    "INSERT INTO proxy_logs VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        now - 50,
+                        "10.0.0.7",
+                        "GET",
+                        "http://allowed.com/page",
+                        200,
+                        "TCP_MISS",
+                        "allowed",
+                    ),
                 )
 
                 await db.commit()
@@ -103,6 +117,7 @@ def describe_web_ui_api_functional_flow():
             assert data["allowed"] == 1
             assert data["blocked"] == 1
             assert data["firewall_blocked"] == 1
+            assert data["proxy_allowed"] == 1
             assert data["proxy_blocked"] == 1
             assert data["unique_domains"] == 2
 

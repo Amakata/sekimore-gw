@@ -102,7 +102,10 @@ def describe_proxy_manager():
 
         result = pm._generate_upstream_proxy_config()
 
-        assert "cache_peer proxy.example.com parent 3129 0 no-query default tls login=user:pass" in result
+        assert (
+            "cache_peer proxy.example.com parent 3129 0 no-query default tls login=user:pass"
+            in result
+        )
         assert "never_direct allow all" in result
 
     def it_generates_upstream_proxy_config_without_tls():
