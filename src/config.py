@@ -32,6 +32,7 @@ class ProxyConfig(BaseModel):
     cache_enabled: bool = Field(default=True, description="キャッシュ有効化")
     cache_size_mb: int = Field(default=1000, description="キャッシュサイズ（MB）")
     upstream_proxy: str | None = Field(default=None, description="上位プロキシ（host:port）")
+    upstream_proxy_tls: bool = Field(default=False, description="上位プロキシへの接続にTLSを使用")
     upstream_proxy_username: str | None = Field(
         default=None,
         description="上位プロキシ認証ユーザー名（環境変数SEKIMORE_UPSTREAM_PROXY_USERNAMEで上書き可能）",

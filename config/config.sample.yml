@@ -53,6 +53,7 @@ proxy:
   cache_enabled: true                     # Enable cache
   cache_size_mb: 1000                     # Cache size (MB)
   upstream_proxy: null                    # Upstream proxy (corporate proxy integration) e.g., "proxy.example.com:8080"
+  upstream_proxy_tls: false               # Use TLS for upstream proxy connection
 
   # Upstream proxy authentication (Basic Auth)
   # ⚠️  For security, it is recommended to use environment variables instead of writing credentials in config.yml
