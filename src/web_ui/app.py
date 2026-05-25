@@ -4,7 +4,10 @@
 
 import asyncio
 import contextlib
+import os
+import subprocess
 import time
+from importlib.metadata import PackageNotFoundError, version as pkg_version
 from pathlib import Path
 
 import aiosqlite
@@ -13,8 +16,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from .. import __version__ as core_version
 from .. import constants
 from ..logger import ComponentType, log_error, log_system_event
+from . import __version__ as webui_version
 
 
 class DomainRequest(BaseModel):
@@ -71,6 +76,45 @@ class DomainInfo(BaseModel):
     status: str  # 過去の履歴: "allowed", "blocked", "mixed"
     current_rule: str  # 現在のルール: "allowed", "blocked_explicit", "blocked_default", "ignored"
     resolved_ips: list[str] | None = None  # 解決されたIPアドレスのリスト
+
+
+class ProxyConfigResponse(BaseModel):
+    """プロキシ設定レスポンス."""
+
+    enabled: bool
+    port: int
+    cache_enabled: bool
+    cache_size_mb: int
+    upstream_proxy: str | None = None
+    upstream_proxy_tls: bool = False
+    has_upstream_auth: bool = False
+
+
+class SquidConfigResponse(BaseModel):
+    """Squid設定レスポンス."""
+
+    available: bool
+    config_text: str | None = None
+
+
+class IptablesResponse(BaseModel):
+    """iptablesルールレスポンス."""
+
+    available: bool
+    rules_text: str | None = None
+    error: str | None = None
+
+
+class ConfigResponse(BaseModel):
+    """設定情報レスポンス."""
+
+    version_package: str
+    version_core: str
+    version_webui: str
+    proxy: ProxyConfigResponse
+    squid: SquidConfigResponse
+    iptables: IptablesResponse
+    host_iptables: IptablesResponse
 
 
 class BlockedIPInfo(BaseModel):
@@ -133,7 +177,7 @@ class ConnectionManager:
 # FastAPIアプリケーション
 app = FastAPI(
     title="AI Security Gateway Dashboard",
-    version="0.2.0",
+    version="0.3.0",
     description="リアルタイム監視ダッシュボード",
 )
 
@@ -233,6 +277,92 @@ async def get_gateway_info() -> dict:
         "name": config.get("name"),
         "description": config.get("description"),
     }
+
+
+def _read_squid_config() -> SquidConfigResponse:
+    """Squid設定ファイルを読み取る."""
+    squid_path = Path(constants.SQUID_CONFIG_PATH)
+    if squid_path.exists():
+        try:
+            return SquidConfigResponse(
+                available=True,
+                config_text=squid_path.read_text(encoding="utf-8"),
+            )
+        except Exception:
+            return SquidConfigResponse(available=False)
+    return SquidConfigResponse(available=False)
+
+
+def _run_iptables(cmd: list[str]) -> IptablesResponse:
+    """iptablesコマンドを実行してルールを取得する."""
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return IptablesResponse(available=True, rules_text=result.stdout)
+        return IptablesResponse(available=False, error=result.stderr.strip())
+    except FileNotFoundError:
+        return IptablesResponse(available=False, error=f"{cmd[0]} not found")
+    except subprocess.TimeoutExpired:
+        return IptablesResponse(available=False, error="Command timed out")
+    except Exception as e:
+        return IptablesResponse(available=False, error=str(e))
+
+
+@app.get("/api/config", response_model=ConfigResponse)
+async def get_config() -> ConfigResponse:
+    """設定情報API - バージョン、プロキシ、Squid、iptables設定を返す.
+
+    Returns:
+        設定情報
+    """
+    try:
+        package_version = pkg_version("sekimore-gw")
+    except PackageNotFoundError:
+        package_version = "unknown"
+
+    config = load_config()
+    proxy_cfg = config.get("proxy", {})
+
+    # 認証情報の有無のみ公開（パスワード自体は返さない）
+    has_auth = bool(
+        proxy_cfg.get("upstream_proxy_username")
+        or os.getenv("SEKIMORE_UPSTREAM_PROXY_USERNAME")
+    )
+
+    proxy_response = ProxyConfigResponse(
+        enabled=proxy_cfg.get("enabled", False),
+        port=proxy_cfg.get("port", 3128),
+        cache_enabled=proxy_cfg.get("cache_enabled", True),
+        cache_size_mb=proxy_cfg.get("cache_size_mb", 1000),
+        upstream_proxy=proxy_cfg.get("upstream_proxy"),
+        upstream_proxy_tls=proxy_cfg.get("upstream_proxy_tls", False),
+        has_upstream_auth=has_auth,
+    )
+
+    # Squid設定
+    squid_response = _read_squid_config()
+
+    # sekimore-gw内部iptablesルール（iptables-legacy = legacyバックエンド）
+    iptables_response = _run_iptables(["iptables-legacy", "-L", "-n", "-v"])
+
+    # ホストOS側iptablesルール（iptables = nf_tablesバックエンド）
+    # privileged: trueなのでコンテナ内からホスト側のルールも取得可能
+    host_firewall_response = _run_iptables(["iptables", "-L", "-n", "-v"])
+
+    return ConfigResponse(
+        version_package=package_version,
+        version_core=core_version,
+        version_webui=webui_version,
+        proxy=proxy_response,
+        squid=squid_response,
+        iptables=iptables_response,
+        host_iptables=host_firewall_response,
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
