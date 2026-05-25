@@ -245,7 +245,10 @@ def describe_gateway_info():
 def describe_config_endpoint():
     """Tests for /api/config endpoint."""
 
-    @patch("src.web_ui.app._run_iptables", return_value=IptablesResponse(available=False, error="not found"))
+    @patch(
+        "src.web_ui.app._run_iptables",
+        return_value=IptablesResponse(available=False, error="not found"),
+    )
     @patch("src.web_ui.app._read_squid_config", return_value=SquidConfigResponse(available=False))
     @patch(
         "builtins.open",
@@ -279,7 +282,10 @@ def describe_config_endpoint():
         assert data["proxy"]["upstream_proxy"] == "proxy.corp:8080"
         assert data["proxy"]["upstream_proxy_tls"] is True
 
-    @patch("src.web_ui.app._run_iptables", return_value=IptablesResponse(available=False, error="not found"))
+    @patch(
+        "src.web_ui.app._run_iptables",
+        return_value=IptablesResponse(available=False, error="not found"),
+    )
     @patch("src.web_ui.app._read_squid_config", return_value=SquidConfigResponse(available=False))
     @patch(
         "builtins.open",
@@ -287,7 +293,9 @@ def describe_config_endpoint():
         read_data="allow_domains: []\nblock_domains: []\n",
     )
     @patch("src.web_ui.app.pkg_version", return_value="0.0.5")
-    def it_returns_default_proxy_when_not_configured(mock_pkg_version, mock_file, mock_squid, mock_ipt):
+    def it_returns_default_proxy_when_not_configured(
+        mock_pkg_version, mock_file, mock_squid, mock_ipt
+    ):
         """Test GET /api/config returns defaults when proxy is not in config."""
         from fastapi.testclient import TestClient
 
@@ -305,7 +313,10 @@ def describe_config_endpoint():
         assert data["proxy"]["upstream_proxy"] is None
         assert data["proxy"]["has_upstream_auth"] is False
 
-    @patch("src.web_ui.app._run_iptables", return_value=IptablesResponse(available=False, error="not found"))
+    @patch(
+        "src.web_ui.app._run_iptables",
+        return_value=IptablesResponse(available=False, error="not found"),
+    )
     @patch("src.web_ui.app._read_squid_config", return_value=SquidConfigResponse(available=False))
     @patch(
         "builtins.open",
@@ -314,9 +325,13 @@ def describe_config_endpoint():
     )
     @patch(
         "src.web_ui.app.pkg_version",
-        side_effect=__import__("importlib.metadata", fromlist=["PackageNotFoundError"]).PackageNotFoundError,
+        side_effect=__import__(
+            "importlib.metadata", fromlist=["PackageNotFoundError"]
+        ).PackageNotFoundError,
     )
-    def it_returns_unknown_when_package_not_found(mock_pkg_version, mock_file, mock_squid, mock_ipt):
+    def it_returns_unknown_when_package_not_found(
+        mock_pkg_version, mock_file, mock_squid, mock_ipt
+    ):
         """Test GET /api/config returns 'unknown' when package is not installed."""
         from fastapi.testclient import TestClient
 
@@ -329,7 +344,10 @@ def describe_config_endpoint():
         data = response.json()
         assert data["version_package"] == "unknown"
 
-    @patch("src.web_ui.app._run_iptables", return_value=IptablesResponse(available=False, error="not found"))
+    @patch(
+        "src.web_ui.app._run_iptables",
+        return_value=IptablesResponse(available=False, error="not found"),
+    )
     @patch("src.web_ui.app._read_squid_config", return_value=SquidConfigResponse(available=False))
     @patch(
         "builtins.open",
@@ -410,7 +428,9 @@ def describe_config_endpoint():
         read_data="allow_domains: []\nblock_domains: []\n",
     )
     @patch("src.web_ui.app.pkg_version", return_value="0.0.5")
-    def it_handles_unavailable_squid_and_iptables(mock_pkg_version, mock_file, mock_squid, mock_ipt):
+    def it_handles_unavailable_squid_and_iptables(
+        mock_pkg_version, mock_file, mock_squid, mock_ipt
+    ):
         """Test GET /api/config handles unavailable squid/iptables gracefully."""
         from fastapi.testclient import TestClient
 
@@ -496,7 +516,10 @@ def describe_run_iptables():
         assert result.available is False
         assert "not found" in result.error
 
-    @patch("src.web_ui.app.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="test", timeout=5))
+    @patch(
+        "src.web_ui.app.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd="test", timeout=5),
+    )
     def it_handles_timeout(mock_run):
         """Test _run_iptables handles command timeout."""
         from src.web_ui.app import _run_iptables

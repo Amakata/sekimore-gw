@@ -331,8 +331,7 @@ async def get_config() -> ConfigResponse:
 
     # 認証情報の有無のみ公開（パスワード自体は返さない）
     has_auth = bool(
-        proxy_cfg.get("upstream_proxy_username")
-        or os.getenv("SEKIMORE_UPSTREAM_PROXY_USERNAME")
+        proxy_cfg.get("upstream_proxy_username") or os.getenv("SEKIMORE_UPSTREAM_PROXY_USERNAME")
     )
 
     proxy_response = ProxyConfigResponse(
