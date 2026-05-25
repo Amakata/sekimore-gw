@@ -164,10 +164,12 @@ def describe_pydantic_models():
         """Test IptablesResponse model."""
         ipt = IptablesResponse(
             available=True,
-            rules_text="Chain INPUT (policy DROP)\n",
+            filter_rules="Chain INPUT (policy DROP)\n",
+            nat_rules="Chain POSTROUTING\n",
         )
         assert ipt.available is True
-        assert "Chain INPUT" in ipt.rules_text
+        assert "Chain INPUT" in ipt.filter_rules
+        assert "Chain POSTROUTING" in ipt.nat_rules
 
     def it_creates_iptables_response_with_error():
         """Test IptablesResponse model with error."""
@@ -188,7 +190,7 @@ def describe_pydantic_models():
                 cache_size_mb=1000,
             ),
             squid=SquidConfigResponse(available=True, config_text="http_port 3128"),
-            iptables=IptablesResponse(available=True, rules_text="Chain INPUT"),
+            iptables=IptablesResponse(available=True, filter_rules="Chain INPUT"),
             host_iptables=IptablesResponse(available=False, error="not found"),
         )
         assert config.version_package == "0.0.5"
@@ -379,8 +381,16 @@ def describe_config_endpoint():
     @patch(
         "src.web_ui.app._run_iptables",
         side_effect=[
-            IptablesResponse(available=True, rules_text="Chain FORWARD (policy DROP)"),
-            IptablesResponse(available=True, rules_text="Chain FORWARD (policy ACCEPT)"),
+            IptablesResponse(
+                available=True,
+                filter_rules="Chain FORWARD (policy DROP)",
+                nat_rules="Chain POSTROUTING\nMASQUERADE",
+            ),
+            IptablesResponse(
+                available=True,
+                filter_rules="Chain FORWARD (policy ACCEPT)\nDOCKER-USER",
+                nat_rules="Chain POSTROUTING\nDNAT",
+            ),
         ],
     )
     @patch(
@@ -411,11 +421,13 @@ def describe_config_endpoint():
 
         # sekimore-gw iptables (legacy)
         assert data["iptables"]["available"] is True
-        assert "Chain FORWARD" in data["iptables"]["rules_text"]
+        assert "Chain FORWARD" in data["iptables"]["filter_rules"]
+        assert "MASQUERADE" in data["iptables"]["nat_rules"]
 
         # Host OS iptables
         assert data["host_iptables"]["available"] is True
-        assert "Chain FORWARD" in data["host_iptables"]["rules_text"]
+        assert "DOCKER-USER" in data["host_iptables"]["filter_rules"]
+        assert "DNAT" in data["host_iptables"]["nat_rules"]
 
     @patch(
         "src.web_ui.app._run_iptables",
@@ -480,28 +492,46 @@ def describe_run_iptables():
     """Tests for _run_iptables helper."""
 
     @patch("src.web_ui.app.subprocess.run")
-    def it_returns_rules_on_success(mock_run):
-        """Test _run_iptables returns rules when command succeeds."""
+    def it_returns_filter_and_nat_rules(mock_run):
+        """Test _run_iptables returns both filter and nat tables."""
         from src.web_ui.app import _run_iptables
 
-        mock_run.return_value = Mock(
-            returncode=0,
-            stdout="Chain INPUT (policy DROP)\ntarget     prot opt source\n",
-        )
+        mock_run.side_effect = [
+            Mock(returncode=0, stdout="Chain INPUT (policy DROP)\n"),
+            Mock(returncode=0, stdout="Chain POSTROUTING\nMASQUERADE\n"),
+        ]
 
-        result = _run_iptables(["iptables-legacy", "-L", "-n", "-v"])
+        result = _run_iptables("iptables-legacy")
 
         assert result.available is True
-        assert "Chain INPUT" in result.rules_text
+        assert "Chain INPUT" in result.filter_rules
+        assert "MASQUERADE" in result.nat_rules
+        assert mock_run.call_count == 2
 
     @patch("src.web_ui.app.subprocess.run")
-    def it_returns_error_on_failure(mock_run):
-        """Test _run_iptables returns error when command fails."""
+    def it_returns_filter_only_when_nat_fails(mock_run):
+        """Test _run_iptables returns filter even if nat table fails."""
+        from src.web_ui.app import _run_iptables
+
+        mock_run.side_effect = [
+            Mock(returncode=0, stdout="Chain INPUT (policy DROP)\n"),
+            Mock(returncode=1, stderr="nat table error"),
+        ]
+
+        result = _run_iptables("iptables-legacy")
+
+        assert result.available is True
+        assert "Chain INPUT" in result.filter_rules
+        assert result.nat_rules is None
+
+    @patch("src.web_ui.app.subprocess.run")
+    def it_returns_error_on_filter_failure(mock_run):
+        """Test _run_iptables returns error when filter table fails."""
         from src.web_ui.app import _run_iptables
 
         mock_run.return_value = Mock(returncode=1, stderr="Permission denied")
 
-        result = _run_iptables(["iptables-legacy", "-L", "-n", "-v"])
+        result = _run_iptables("iptables-legacy")
 
         assert result.available is False
         assert result.error == "Permission denied"
@@ -511,7 +541,7 @@ def describe_run_iptables():
         """Test _run_iptables handles missing iptables command."""
         from src.web_ui.app import _run_iptables
 
-        result = _run_iptables(["iptables-legacy", "-L", "-n", "-v"])
+        result = _run_iptables("iptables-legacy")
 
         assert result.available is False
         assert "not found" in result.error
@@ -524,7 +554,7 @@ def describe_run_iptables():
         """Test _run_iptables handles command timeout."""
         from src.web_ui.app import _run_iptables
 
-        result = _run_iptables(["iptables-legacy", "-L", "-n", "-v"])
+        result = _run_iptables("iptables-legacy")
 
         assert result.available is False
         assert result.error == "Command timed out"

@@ -487,13 +487,23 @@
                 <div class="empty-state">読み込み中...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">sekimore-gw iptables (legacy)</h3>
-            <div class="domain-list" id="config-iptables">
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">sekimore-gw iptables (legacy) - filter</h3>
+            <div class="domain-list" id="config-iptables-filter">
                 <div class="empty-state">読み込み中...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Host OS iptables (nf_tables)</h3>
-            <div class="domain-list" id="config-host-iptables">
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">sekimore-gw iptables (legacy) - nat</h3>
+            <div class="domain-list" id="config-iptables-nat">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Host OS iptables (nf_tables) - filter</h3>
+            <div class="domain-list" id="config-host-iptables-filter">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Host OS iptables (nf_tables) - nat</h3>
+            <div class="domain-list" id="config-host-iptables-nat">
                 <div class="empty-state">読み込み中...</div>
             </div>
         </div>
@@ -947,13 +957,13 @@
                 `).join('');
 
                 // Squid設定
-                renderPreBlock('config-squid', config.squid);
+                renderPreBlock('config-squid', config.squid, 'config_text');
 
                 // sekimore-gw iptables
-                renderPreBlock('config-iptables', config.iptables);
+                renderIptablesBlock('config-iptables', config.iptables);
 
                 // Host OS iptables
-                renderPreBlock('config-host-iptables', config.host_iptables);
+                renderIptablesBlock('config-host-iptables', config.host_iptables);
             } catch (error) {
                 console.error('Failed to load config:', error);
                 document.getElementById('config-proxy-list').innerHTML =
@@ -961,15 +971,31 @@
             }
         }
 
-        function renderPreBlock(elementId, data) {
+        function renderPreBlock(elementId, data, field) {
             const el = document.getElementById(elementId);
             if (!data.available) {
                 const msg = data.error || 'Not available';
                 el.innerHTML = `<div class="empty-state">${escapeHtml(msg)}</div>`;
                 return;
             }
-            const text = data.config_text || data.rules_text || '';
+            const text = data[field] || '';
             el.innerHTML = `<pre style="margin: 0; white-space: pre-wrap; word-break: break-all; font-family: 'SF Mono', Monaco, monospace; font-size: 12px; color: #c9d1d9; line-height: 1.5;">${escapeHtml(text)}</pre>`;
+        }
+
+        function renderIptablesBlock(prefix, data) {
+            const filterEl = document.getElementById(prefix + '-filter');
+            const natEl = document.getElementById(prefix + '-nat');
+            if (!data.available) {
+                const msg = data.error || 'Not available';
+                filterEl.innerHTML = `<div class="empty-state">${escapeHtml(msg)}</div>`;
+                natEl.innerHTML = `<div class="empty-state">${escapeHtml(msg)}</div>`;
+                return;
+            }
+            const preStyle = 'margin: 0; white-space: pre-wrap; word-break: break-all; font-family: \'SF Mono\', Monaco, monospace; font-size: 12px; color: #c9d1d9; line-height: 1.5;';
+            filterEl.innerHTML = `<pre style="${preStyle}">${escapeHtml(data.filter_rules || '')}</pre>`;
+            natEl.innerHTML = data.nat_rules
+                ? `<pre style="${preStyle}">${escapeHtml(data.nat_rules)}</pre>`
+                : '<div class="empty-state">Not available</div>';
         }
 
         function escapeHtml(str) {
