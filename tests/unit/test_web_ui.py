@@ -191,7 +191,6 @@ def describe_pydantic_models():
             ),
             squid=SquidConfigResponse(available=True, config_text="http_port 3128"),
             iptables=IptablesResponse(available=True, filter_rules="Chain INPUT"),
-            host_iptables=IptablesResponse(available=False, error="not found"),
         )
         assert config.version_package == "0.0.5"
         assert config.version_core == "0.1.0"
@@ -199,7 +198,6 @@ def describe_pydantic_models():
         assert config.proxy.enabled is True
         assert config.squid.available is True
         assert config.iptables.available is True
-        assert config.host_iptables.available is False
 
 
 def describe_gateway_info():
@@ -380,18 +378,11 @@ def describe_config_endpoint():
 
     @patch(
         "src.web_ui.app._run_iptables",
-        side_effect=[
-            IptablesResponse(
-                available=True,
-                filter_rules="Chain FORWARD (policy DROP)",
-                nat_rules="Chain POSTROUTING\nMASQUERADE",
-            ),
-            IptablesResponse(
-                available=True,
-                filter_rules="Chain FORWARD (policy ACCEPT)\nDOCKER-USER",
-                nat_rules="Chain POSTROUTING\nDNAT",
-            ),
-        ],
+        return_value=IptablesResponse(
+            available=True,
+            filter_rules="Chain FORWARD (policy DROP)",
+            nat_rules="Chain POSTROUTING\nMASQUERADE",
+        ),
     )
     @patch(
         "src.web_ui.app._read_squid_config",
@@ -419,15 +410,11 @@ def describe_config_endpoint():
         assert data["squid"]["available"] is True
         assert "http_port 3128" in data["squid"]["config_text"]
 
-        # sekimore-gw iptables (legacy)
+        # iptables
         assert data["iptables"]["available"] is True
         assert "Chain FORWARD" in data["iptables"]["filter_rules"]
         assert "MASQUERADE" in data["iptables"]["nat_rules"]
-
-        # Host OS iptables
-        assert data["host_iptables"]["available"] is True
-        assert "DOCKER-USER" in data["host_iptables"]["filter_rules"]
-        assert "DNAT" in data["host_iptables"]["nat_rules"]
+        assert "host_iptables" not in data
 
     @patch(
         "src.web_ui.app._run_iptables",
@@ -456,7 +443,6 @@ def describe_config_endpoint():
         assert data["squid"]["available"] is False
         assert data["iptables"]["available"] is False
         assert data["iptables"]["error"] == "iptables-legacy not found"
-        assert data["host_iptables"]["available"] is False
 
 
 def describe_read_squid_config():
