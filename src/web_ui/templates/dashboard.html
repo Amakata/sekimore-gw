@@ -487,23 +487,13 @@
                 <div class="empty-state">読み込み中...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">sekimore-gw iptables (legacy) - filter</h3>
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">iptables (filter)</h3>
             <div class="domain-list" id="config-iptables-filter">
                 <div class="empty-state">読み込み中...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">sekimore-gw iptables (legacy) - nat</h3>
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">iptables (nat)</h3>
             <div class="domain-list" id="config-iptables-nat">
-                <div class="empty-state">読み込み中...</div>
-            </div>
-
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Host OS iptables (nf_tables) - filter</h3>
-            <div class="domain-list" id="config-host-iptables-filter">
-                <div class="empty-state">読み込み中...</div>
-            </div>
-
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Host OS iptables (nf_tables) - nat</h3>
-            <div class="domain-list" id="config-host-iptables-nat">
                 <div class="empty-state">読み込み中...</div>
             </div>
         </div>
@@ -959,11 +949,8 @@
                 // Squid設定
                 renderPreBlock('config-squid', config.squid, 'config_text');
 
-                // sekimore-gw iptables
+                // iptables
                 renderIptablesBlock('config-iptables', config.iptables);
-
-                // Host OS iptables
-                renderIptablesBlock('config-host-iptables', config.host_iptables);
             } catch (error) {
                 console.error('Failed to load config:', error);
                 document.getElementById('config-proxy-list').innerHTML =

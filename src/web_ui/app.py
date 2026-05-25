@@ -116,7 +116,6 @@ class ConfigResponse(BaseModel):
     proxy: ProxyConfigResponse
     squid: SquidConfigResponse
     iptables: IptablesResponse
-    host_iptables: IptablesResponse
 
 
 class BlockedIPInfo(BaseModel):
@@ -363,12 +362,8 @@ async def get_config() -> ConfigResponse:
     # Squid設定
     squid_response = _read_squid_config()
 
-    # sekimore-gw内部iptablesルール（iptables-legacy = legacyバックエンド）
+    # iptablesルール（iptables-legacy = コンテナ内のファイアウォールルール）
     iptables_response = _run_iptables("iptables-legacy")
-
-    # ホストOS側iptablesルール（iptables = nf_tablesバックエンド）
-    # privileged: trueなのでコンテナ内からホスト側のルールも取得可能
-    host_firewall_response = _run_iptables("iptables")
 
     return ConfigResponse(
         version_package=package_version,
@@ -377,7 +372,6 @@ async def get_config() -> ConfigResponse:
         proxy=proxy_response,
         squid=squid_response,
         iptables=iptables_response,
-        host_iptables=host_firewall_response,
     )
 
 
