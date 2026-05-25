@@ -179,7 +179,7 @@ class ConnectionManager:
 # FastAPIアプリケーション
 app = FastAPI(
     title="AI Security Gateway Dashboard",
-    version="0.3.0.1",
+    version="0.3.1",
     description="リアルタイム監視ダッシュボード",
 )
 
