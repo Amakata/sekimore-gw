@@ -1,5 +1,6 @@
 """Unit tests for web_ui module."""
 
+import subprocess
 from unittest.mock import AsyncMock, Mock, mock_open, patch
 
 import pytest
@@ -8,10 +9,14 @@ from fastapi.testclient import TestClient
 from src.web_ui.app import (
     BlockedIPInfo,
     CacheStatsResponse,
+    ConfigResponse,
     ConnectionManager,
     DomainInfo,
     DomainRequest,
+    IptablesResponse,
     LogEntry,
+    ProxyConfigResponse,
+    SquidConfigResponse,
     StatsResponse,
 )
 
@@ -110,6 +115,90 @@ def describe_pydantic_models():
         assert blocked_ip.block_count == 10
         assert len(blocked_ip.ports) == 2
 
+    def it_creates_proxy_config_response():
+        """Test ProxyConfigResponse model."""
+        proxy = ProxyConfigResponse(
+            enabled=True,
+            port=3128,
+            cache_enabled=True,
+            cache_size_mb=500,
+            upstream_proxy="proxy.example.com:8080",
+            upstream_proxy_tls=True,
+            has_upstream_auth=True,
+        )
+        assert proxy.enabled is True
+        assert proxy.port == 3128
+        assert proxy.cache_size_mb == 500
+        assert proxy.upstream_proxy == "proxy.example.com:8080"
+        assert proxy.upstream_proxy_tls is True
+        assert proxy.has_upstream_auth is True
+
+    def it_creates_proxy_config_response_with_defaults():
+        """Test ProxyConfigResponse model with default values."""
+        proxy = ProxyConfigResponse(
+            enabled=False,
+            port=3128,
+            cache_enabled=True,
+            cache_size_mb=1000,
+        )
+        assert proxy.upstream_proxy is None
+        assert proxy.upstream_proxy_tls is False
+        assert proxy.has_upstream_auth is False
+
+    def it_creates_squid_config_response():
+        """Test SquidConfigResponse model."""
+        squid = SquidConfigResponse(
+            available=True,
+            config_text="http_port 3128\n",
+        )
+        assert squid.available is True
+        assert squid.config_text == "http_port 3128\n"
+
+    def it_creates_squid_config_response_unavailable():
+        """Test SquidConfigResponse model when unavailable."""
+        squid = SquidConfigResponse(available=False)
+        assert squid.available is False
+        assert squid.config_text is None
+
+    def it_creates_iptables_response():
+        """Test IptablesResponse model."""
+        ipt = IptablesResponse(
+            available=True,
+            rules_text="Chain INPUT (policy DROP)\n",
+        )
+        assert ipt.available is True
+        assert "Chain INPUT" in ipt.rules_text
+
+    def it_creates_iptables_response_with_error():
+        """Test IptablesResponse model with error."""
+        ipt = IptablesResponse(available=False, error="iptables-legacy not found")
+        assert ipt.available is False
+        assert ipt.error == "iptables-legacy not found"
+
+    def it_creates_config_response():
+        """Test ConfigResponse model."""
+        config = ConfigResponse(
+            version_package="0.0.5",
+            version_core="0.1.0",
+            version_webui="0.2.0",
+            proxy=ProxyConfigResponse(
+                enabled=True,
+                port=3128,
+                cache_enabled=True,
+                cache_size_mb=1000,
+            ),
+            squid=SquidConfigResponse(available=True, config_text="http_port 3128"),
+            iptables=IptablesResponse(available=True, rules_text="Chain INPUT"),
+            host_iptables=IptablesResponse(available=False, error="not found"),
+        )
+        assert config.version_package == "0.0.5"
+        assert config.version_core == "0.1.0"
+        assert config.version_webui == "0.2.0"
+        assert config.proxy.enabled is True
+        assert config.squid.available is True
+        assert config.iptables.available is True
+        assert config.host_iptables.available is False
+
 
 def describe_gateway_info():
     """Tests for /api/gateway-info endpoint."""
@@ -151,6 +240,294 @@ def describe_gateway_info():
         data = response.json()
         assert data["name"] is None
         assert data["description"] is None
+
+
+def describe_config_endpoint():
+    """Tests for /api/config endpoint."""
+
+    @patch(
+        "src.web_ui.app._run_iptables",
+        return_value=IptablesResponse(available=False, error="not found"),
+    )
+    @patch("src.web_ui.app._read_squid_config", return_value=SquidConfigResponse(available=False))
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=(
+            "allow_domains: []\nblock_domains: []\n"
+            "proxy:\n  enabled: true\n  port: 3128\n  cache_enabled: true\n"
+            "  cache_size_mb: 500\n  upstream_proxy: proxy.corp:8080\n"
+            "  upstream_proxy_tls: true\n"
+        ),
+    )
+    @patch("src.web_ui.app.pkg_version", return_value="0.0.5")
+    def it_returns_config_with_proxy(mock_pkg_version, mock_file, mock_squid, mock_ipt):
+        """Test GET /api/config returns version and proxy settings."""
+        from fastapi.testclient import TestClient
+
+        from src.web_ui.app import app
+
+        client = TestClient(app)
+        response = client.get("/api/config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["version_package"] == "0.0.5"
+        assert "version_core" in data
+        assert "version_webui" in data
+        assert data["proxy"]["enabled"] is True
+        assert data["proxy"]["port"] == 3128
+        assert data["proxy"]["cache_enabled"] is True
+        assert data["proxy"]["cache_size_mb"] == 500
+        assert data["proxy"]["upstream_proxy"] == "proxy.corp:8080"
+        assert data["proxy"]["upstream_proxy_tls"] is True
+
+    @patch(
+        "src.web_ui.app._run_iptables",
+        return_value=IptablesResponse(available=False, error="not found"),
+    )
+    @patch("src.web_ui.app._read_squid_config", return_value=SquidConfigResponse(available=False))
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data="allow_domains: []\nblock_domains: []\n",
+    )
+    @patch("src.web_ui.app.pkg_version", return_value="0.0.5")
+    def it_returns_default_proxy_when_not_configured(
+        mock_pkg_version, mock_file, mock_squid, mock_ipt
+    ):
+        """Test GET /api/config returns defaults when proxy is not in config."""
+        from fastapi.testclient import TestClient
+
+        from src.web_ui.app import app
+
+        client = TestClient(app)
+        response = client.get("/api/config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["proxy"]["enabled"] is False
+        assert data["proxy"]["port"] == 3128
+        assert data["proxy"]["cache_enabled"] is True
+        assert data["proxy"]["cache_size_mb"] == 1000
+        assert data["proxy"]["upstream_proxy"] is None
+        assert data["proxy"]["has_upstream_auth"] is False
+
+    @patch(
+        "src.web_ui.app._run_iptables",
+        return_value=IptablesResponse(available=False, error="not found"),
+    )
+    @patch("src.web_ui.app._read_squid_config", return_value=SquidConfigResponse(available=False))
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data="allow_domains: []\nblock_domains: []\n",
+    )
+    @patch(
+        "src.web_ui.app.pkg_version",
+        side_effect=__import__(
+            "importlib.metadata", fromlist=["PackageNotFoundError"]
+        ).PackageNotFoundError,
+    )
+    def it_returns_unknown_when_package_not_found(
+        mock_pkg_version, mock_file, mock_squid, mock_ipt
+    ):
+        """Test GET /api/config returns 'unknown' when package is not installed."""
+        from fastapi.testclient import TestClient
+
+        from src.web_ui.app import app
+
+        client = TestClient(app)
+        response = client.get("/api/config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["version_package"] == "unknown"
+
+    @patch(
+        "src.web_ui.app._run_iptables",
+        return_value=IptablesResponse(available=False, error="not found"),
+    )
+    @patch("src.web_ui.app._read_squid_config", return_value=SquidConfigResponse(available=False))
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data=(
+            "allow_domains: []\nblock_domains: []\n"
+            "proxy:\n  enabled: true\n  port: 3128\n  cache_enabled: true\n"
+            "  cache_size_mb: 1000\n  upstream_proxy: proxy.corp:8080\n"
+            "  upstream_proxy_username: user1\n"
+        ),
+    )
+    @patch("src.web_ui.app.pkg_version", return_value="0.0.5")
+    def it_detects_upstream_auth_from_config(mock_pkg_version, mock_file, mock_squid, mock_ipt):
+        """Test GET /api/config detects upstream auth credentials."""
+        from fastapi.testclient import TestClient
+
+        from src.web_ui.app import app
+
+        client = TestClient(app)
+        response = client.get("/api/config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["proxy"]["has_upstream_auth"] is True
+        # パスワードは返さないことを確認
+        assert "upstream_proxy_password" not in data["proxy"]
+        assert "upstream_proxy_username" not in data["proxy"]
+
+    @patch(
+        "src.web_ui.app._run_iptables",
+        side_effect=[
+            IptablesResponse(available=True, rules_text="Chain FORWARD (policy DROP)"),
+            IptablesResponse(available=True, rules_text="Chain FORWARD (policy ACCEPT)"),
+        ],
+    )
+    @patch(
+        "src.web_ui.app._read_squid_config",
+        return_value=SquidConfigResponse(available=True, config_text="http_port 3128\nacl test"),
+    )
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data="allow_domains: []\nblock_domains: []\n",
+    )
+    @patch("src.web_ui.app.pkg_version", return_value="0.0.5")
+    def it_returns_squid_and_iptables(mock_pkg_version, mock_file, mock_squid, mock_ipt):
+        """Test GET /api/config returns squid config and iptables rules."""
+        from fastapi.testclient import TestClient
+
+        from src.web_ui.app import app
+
+        client = TestClient(app)
+        response = client.get("/api/config")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Squid設定
+        assert data["squid"]["available"] is True
+        assert "http_port 3128" in data["squid"]["config_text"]
+
+        # sekimore-gw iptables (legacy)
+        assert data["iptables"]["available"] is True
+        assert "Chain FORWARD" in data["iptables"]["rules_text"]
+
+        # Host OS iptables
+        assert data["host_iptables"]["available"] is True
+        assert "Chain FORWARD" in data["host_iptables"]["rules_text"]
+
+    @patch(
+        "src.web_ui.app._run_iptables",
+        return_value=IptablesResponse(available=False, error="iptables-legacy not found"),
+    )
+    @patch("src.web_ui.app._read_squid_config", return_value=SquidConfigResponse(available=False))
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data="allow_domains: []\nblock_domains: []\n",
+    )
+    @patch("src.web_ui.app.pkg_version", return_value="0.0.5")
+    def it_handles_unavailable_squid_and_iptables(
+        mock_pkg_version, mock_file, mock_squid, mock_ipt
+    ):
+        """Test GET /api/config handles unavailable squid/iptables gracefully."""
+        from fastapi.testclient import TestClient
+
+        from src.web_ui.app import app
+
+        client = TestClient(app)
+        response = client.get("/api/config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["squid"]["available"] is False
+        assert data["iptables"]["available"] is False
+        assert data["iptables"]["error"] == "iptables-legacy not found"
+        assert data["host_iptables"]["available"] is False
+
+
+def describe_read_squid_config():
+    """Tests for _read_squid_config helper."""
+
+    def it_reads_existing_squid_config(tmp_path):
+        """Test _read_squid_config reads squid.conf when it exists."""
+        from src.web_ui.app import _read_squid_config
+
+        squid_conf = tmp_path / "squid.conf"
+        squid_conf.write_text("http_port 3128\nacl test dstdomain .example.com\n")
+
+        with patch("src.web_ui.app.constants") as mock_constants:
+            mock_constants.SQUID_CONFIG_PATH = str(squid_conf)
+            result = _read_squid_config()
+
+        assert result.available is True
+        assert "http_port 3128" in result.config_text
+
+    def it_returns_unavailable_when_file_missing():
+        """Test _read_squid_config returns unavailable when file doesn't exist."""
+        from src.web_ui.app import _read_squid_config
+
+        with patch("src.web_ui.app.constants") as mock_constants:
+            mock_constants.SQUID_CONFIG_PATH = "/nonexistent/squid.conf"
+            result = _read_squid_config()
+
+        assert result.available is False
+        assert result.config_text is None
+
+
+def describe_run_iptables():
+    """Tests for _run_iptables helper."""
+
+    @patch("src.web_ui.app.subprocess.run")
+    def it_returns_rules_on_success(mock_run):
+        """Test _run_iptables returns rules when command succeeds."""
+        from src.web_ui.app import _run_iptables
+
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout="Chain INPUT (policy DROP)\ntarget     prot opt source\n",
+        )
+
+        result = _run_iptables(["iptables-legacy", "-L", "-n", "-v"])
+
+        assert result.available is True
+        assert "Chain INPUT" in result.rules_text
+
+    @patch("src.web_ui.app.subprocess.run")
+    def it_returns_error_on_failure(mock_run):
+        """Test _run_iptables returns error when command fails."""
+        from src.web_ui.app import _run_iptables
+
+        mock_run.return_value = Mock(returncode=1, stderr="Permission denied")
+
+        result = _run_iptables(["iptables-legacy", "-L", "-n", "-v"])
+
+        assert result.available is False
+        assert result.error == "Permission denied"
+
+    @patch("src.web_ui.app.subprocess.run", side_effect=FileNotFoundError)
+    def it_handles_missing_command(mock_run):
+        """Test _run_iptables handles missing iptables command."""
+        from src.web_ui.app import _run_iptables
+
+        result = _run_iptables(["iptables-legacy", "-L", "-n", "-v"])
+
+        assert result.available is False
+        assert "not found" in result.error
+
+    @patch(
+        "src.web_ui.app.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd="test", timeout=5),
+    )
+    def it_handles_timeout(mock_run):
+        """Test _run_iptables handles command timeout."""
+        from src.web_ui.app import _run_iptables
+
+        result = _run_iptables(["iptables-legacy", "-L", "-n", "-v"])
+
+        assert result.available is False
+        assert result.error == "Command timed out"
 
 
 def describe_get_current_rule():
