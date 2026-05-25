@@ -499,8 +499,6 @@ def describe_run_iptables():
     @patch("src.web_ui.app.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="test", timeout=5))
     def it_handles_timeout(mock_run):
         """Test _run_iptables handles command timeout."""
-        import subprocess
-
         from src.web_ui.app import _run_iptables
 
         result = _run_iptables(["iptables-legacy", "-L", "-n", "-v"])
