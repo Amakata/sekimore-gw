@@ -102,7 +102,8 @@ class IptablesResponse(BaseModel):
     """iptablesルールレスポンス."""
 
     available: bool
-    rules_text: str | None = None
+    filter_rules: str | None = None
+    nat_rules: str | None = None
     error: str | None = None
 
 
@@ -294,20 +295,35 @@ def _read_squid_config() -> SquidConfigResponse:
     return SquidConfigResponse(available=False)
 
 
-def _run_iptables(cmd: list[str]) -> IptablesResponse:
-    """iptablesコマンドを実行してルールを取得する."""
+def _run_iptables(iptables_cmd: str) -> IptablesResponse:
+    """iptablesコマンドでfilterとnatテーブルのルールを取得する."""
     try:
-        result = subprocess.run(
-            cmd,
+        # filterテーブル
+        filter_result = subprocess.run(
+            [iptables_cmd, "-L", "-n", "-v"],
             capture_output=True,
             text=True,
             timeout=5,
         )
-        if result.returncode == 0:
-            return IptablesResponse(available=True, rules_text=result.stdout)
-        return IptablesResponse(available=False, error=result.stderr.strip())
+        if filter_result.returncode != 0:
+            return IptablesResponse(available=False, error=filter_result.stderr.strip())
+
+        # natテーブル
+        nat_result = subprocess.run(
+            [iptables_cmd, "-t", "nat", "-L", "-n", "-v"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        nat_text = nat_result.stdout if nat_result.returncode == 0 else None
+
+        return IptablesResponse(
+            available=True,
+            filter_rules=filter_result.stdout,
+            nat_rules=nat_text,
+        )
     except FileNotFoundError:
-        return IptablesResponse(available=False, error=f"{cmd[0]} not found")
+        return IptablesResponse(available=False, error=f"{iptables_cmd} not found")
     except subprocess.TimeoutExpired:
         return IptablesResponse(available=False, error="Command timed out")
     except Exception as e:
@@ -348,11 +364,11 @@ async def get_config() -> ConfigResponse:
     squid_response = _read_squid_config()
 
     # sekimore-gw内部iptablesルール（iptables-legacy = legacyバックエンド）
-    iptables_response = _run_iptables(["iptables-legacy", "-L", "-n", "-v"])
+    iptables_response = _run_iptables("iptables-legacy")
 
     # ホストOS側iptablesルール（iptables = nf_tablesバックエンド）
     # privileged: trueなのでコンテナ内からホスト側のルールも取得可能
-    host_firewall_response = _run_iptables(["iptables", "-L", "-n", "-v"])
+    host_firewall_response = _run_iptables("iptables")
 
     return ConfigResponse(
         version_package=package_version,
