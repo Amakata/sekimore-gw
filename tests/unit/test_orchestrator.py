@@ -1052,3 +1052,135 @@ database_path: /tmp/test.db
         # Check proxy was stopped and restarted
         orch.proxy_manager.stop.assert_called_once()
         orch.proxy_manager.start.assert_called_once()
+
+
+def describe_relay_wiring():
+    """domain_handlers / relay_ports の受け渡しと reload 時の扱い."""
+
+    @patch("src.orchestrator.load_config")
+    @patch(
+        "src.orchestrator.SecurityGatewayOrchestrator._detect_network_interfaces_from_docker_api"
+    )
+    @patch("src.orchestrator.SecurityGatewayOrchestrator._setup_default_route")
+    @patch("src.orchestrator.DNSServer")
+    @patch("src.orchestrator.FirewallManager")
+    def it_passes_handlers_and_ports_when_configured(
+        mock_firewall, mock_dns, mock_route, mock_detect, mock_load_config
+    ):
+        from src.config import Config
+
+        mock_load_config.return_value = Config(
+            allow_domains=["github.com"],
+            domain_handlers={
+                "github.com": {"handler": "git-relay"},
+                "t.example.com": {"handler": "deny"},
+            },
+            network={"lan_subnets": ["172.20.0.0/16"]},
+        )
+        mock_detect.return_value = (
+            "eth1",
+            "eth0",
+            "172.20.0.2",
+            "172.21.0.2",
+            "172.21.0.1",
+            "172.20.0.0/16",
+        )
+        mock_route.return_value = True
+
+        SecurityGatewayOrchestrator(config_path=Path("/etc/sekimore/config.yml"))
+
+        assert mock_firewall.call_args.kwargs["relay_ports"] == [22, 8420, 443]
+        assert mock_dns.call_args.kwargs["domain_handlers"] == {
+            "github.com": "git-relay",
+            "t.example.com": "deny",
+        }
+
+    @patch("src.orchestrator.load_config")
+    @patch(
+        "src.orchestrator.SecurityGatewayOrchestrator._detect_network_interfaces_from_docker_api"
+    )
+    @patch("src.orchestrator.SecurityGatewayOrchestrator._setup_default_route")
+    @patch("src.orchestrator.DNSServer")
+    @patch("src.orchestrator.FirewallManager")
+    def it_passes_nothing_without_handlers(
+        mock_firewall, mock_dns, mock_route, mock_detect, mock_load_config
+    ):
+        from src.config import Config
+
+        mock_load_config.return_value = Config(allow_domains=["example.com"])
+        mock_detect.return_value = (
+            "eth1",
+            "eth0",
+            "172.20.0.2",
+            "172.21.0.2",
+            "172.21.0.1",
+            "172.20.0.0/16",
+        )
+        mock_route.return_value = True
+
+        SecurityGatewayOrchestrator(config_path=Path("/etc/sekimore/config.yml"))
+
+        assert mock_firewall.call_args.kwargs["relay_ports"] == []
+        assert mock_dns.call_args.kwargs["domain_handlers"] == {}
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def it_keeps_old_handlers_on_reload_and_asks_for_restart(mock_run, tmp_path):
+        config_file = tmp_path / "config.yml"
+        base = """
+allow_domains:
+  - github.com
+block_domains: []
+allow_ips: []
+block_ips: []
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+proxy:
+  enabled: false
+database_path: /tmp/test.db
+"""
+        config_file.write_text(base)
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.firewall.remove_domain = Mock()
+        orch.proxy_manager = None
+        assert orch.dns_server.domain_handlers == {}
+
+        config_file.write_text(
+            base
+            + """
+domain_handlers:
+  github.com:
+    handler: git-relay
+relay:
+  project:
+    name: x
+"""
+        )
+        with patch("src.orchestrator.log_error") as mock_err:
+            assert await orch.reload_config() is True
+        assert orch.config.domain_handlers == {}, "relay settings must not change without a restart"
+        assert orch.dns_server.domain_handlers == {}
+        assert any("restart" in str(c.args) for c in mock_err.call_args_list)
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def it_warns_when_relay_is_not_listening(mock_run, tmp_path):
+        config_file = tmp_path / "config.yml"
+        config_file.write_text(
+            "allow_domains: [github.com]\nnetwork:\n  lan_subnets: ['172.20.0.0/16']\n"
+        )
+        mock_run.return_value = Mock(
+            returncode=0, stdout="LISTEN 0 4096 0.0.0.0:53 0.0.0.0:*\n", stderr=""
+        )
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        with patch("src.orchestrator.log_error") as mock_err:
+            assert await orch._warn_if_relay_not_listening(22, delay=0) is False
+        assert any("not listening" in str(c.args) for c in mock_err.call_args_list)
+        mock_run.return_value = Mock(
+            returncode=0, stdout="LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*\n", stderr=""
+        )
+        with patch("src.orchestrator.log_error") as mock_err:
+            assert await orch._warn_if_relay_not_listening(22, delay=0) is True
+        assert not mock_err.called

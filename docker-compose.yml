@@ -40,15 +40,21 @@ services:
       - ./config/squid/squid.conf.template:/etc/squid/squid.conf.template:ro
       # Mount data directory (persistent storage for database)
       - gateway-data:/data
+      # relay 使用時: 依頼者の ssh-agent socket を置いた「ディレクトリ」をマウントする（socket のパスは
+      # セッション毎に変わるので固定ディレクトリを介する）。docs: doc/sekimore-gw/design/relay.md
+      # - ${SEKIMORE_AGENT_SOCK_DIR:?dir containing agent.sock}:/ssh-agent:ro
     env_file:
       - .env
     environment:
       - PROJECT_NAME=${COMPOSE_PROJECT_NAME:-sekimore-gw}
       - INTERNAL_NETWORK_NAME=${INTERNAL_NETWORK_NAME:-internal-net}
       - INTERNET_NETWORK_NAME=${INTERNET_NETWORK_NAME:-internet}
+      # relay 使用時: - SSH_AUTH_SOCK=/ssh-agent/agent.sock
     ports:
       # Web UI
       - "8080:8080"
+      # sekimore-relay (git over SSH :22, API :8420, 443 passthrough) is NOT published:
+      # agents reach it over internal-net, and publishing 22 would collide with the host sshd.
     healthcheck:
       # Check if DNS server (TCP/53) is ready by verifying port is listening
       # DNSServer binds to internal-net IP (e.g., 172.22.0.2:53), not localhost

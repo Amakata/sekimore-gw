@@ -1,0 +1,5 @@
+[advisories]
+# RUSTSEC-2023-0071: `rsa` Marvin timing side-channel. Pulled in transitively via russh -> ssh-key.
+# The relay only *verifies* RSA client public keys (public-key side); it never performs RSA
+# private-key operations. Re-evaluate on every russh bump.
+ignore = ["RUSTSEC-2023-0071"]

@@ -1147,3 +1147,200 @@ def describe_resolve_domain():
         ips, ttl = result
         assert "2001:db8::1" in ips
         assert ttl == 300
+
+
+def describe_domain_handler_resolution():
+    """domain_handlers（git-relay / deny / splice）の DNS 分岐."""
+
+    import tempfile
+    from unittest.mock import AsyncMock, Mock
+
+    async def _server(handlers, gateway_ip="172.22.0.2", allowed=None, blocked=None):
+        from src.dns_server import DNSMapping, DNSServer
+
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            db_path = f.name
+        s = DNSServer.__new__(DNSServer)
+        s.allowed_domains = allowed if allowed is not None else ["example.com"]
+        s.blocked_domains = set(blocked or [])
+        s.ignored_domains = []
+        s.mapping = DNSMapping(db_path=db_path)
+        await s.mapping.init_db()
+        s.cache_enabled = False
+        s.cache = None
+        s.firewall_manager = Mock()
+        s.gateway_hostname = "sekimore-gw"
+        s.gateway_ip = gateway_ip
+        s.domain_handlers = handlers
+        return s
+
+    async def _query(s, name, qtype="A", client="172.22.0.3"):
+        from dnslib import DNSRecord
+
+        data = await s.handle_query(DNSRecord.question(name, qtype).pack(), (client, 53))
+        return DNSRecord.parse(data)
+
+    async def _status_rows(s, domain):
+        async with s.mapping.db.execute(
+            "SELECT status, response_ips FROM dns_queries WHERE query_domain = ?", (domain,)
+        ) as cur:
+            return await cur.fetchall()
+
+    @pytest.mark.asyncio
+    async def it_redirects_git_relay_domain_to_gateway_ip_without_ipset():
+        s = await _server({"github.com": "git-relay"}, allowed=["github.com"])
+        r = await _query(s, "github.com")
+        assert r.header.rcode == 0
+        assert len(r.rr) == 1
+        assert str(r.rr[0].rdata) == "172.22.0.2"
+        assert r.rr[0].ttl == 60
+        s.firewall_manager.setup_domain.assert_not_called()
+        rows = await _status_rows(s, "github.com")
+        assert rows and rows[0][0] == "allowed"
+        assert "172.22.0.2" in rows[0][1]
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_returns_empty_for_aaaa():
+        s = await _server({"github.com": "git-relay"}, allowed=["github.com"])
+        r = await _query(s, "github.com", "AAAA")
+        assert r.header.rcode == 0
+        assert len(r.rr) == 0
+        s.firewall_manager.setup_domain.assert_not_called()
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_uses_normal_path_for_self_and_loopback_queries():
+        for client in ("172.22.0.2", "127.0.0.1"):
+            s = await _server({"github.com": "git-relay"}, allowed=["github.com"])
+            s._resolve_domain = AsyncMock(return_value=(["140.82.112.3"], 300))
+            r = await _query(s, "github.com", client=client)
+            assert r.header.rcode == 0
+            assert str(r.rr[0].rdata) == "140.82.112.3", client
+            s.firewall_manager.setup_domain.assert_called_once()
+            await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_redirects_even_if_not_in_allowlist():
+        s = await _server({"github.com": "git-relay"}, allowed=["example.com"])
+        r = await _query(s, "github.com")
+        assert r.header.rcode == 0
+        assert str(r.rr[0].rdata) == "172.22.0.2"
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_block_list_wins_over_handler():
+        s = await _server(
+            {"github.com": "git-relay"}, allowed=["github.com"], blocked=["github.com"]
+        )
+        r = await _query(s, "github.com")
+        assert r.header.rcode == 3
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_deny_handler_returns_nxdomain():
+        s = await _server({"telemetry.example.com": "deny"}, allowed=[".example.com"])
+        r = await _query(s, "telemetry.example.com")
+        assert r.header.rcode == 3
+        rows = await _status_rows(s, "telemetry.example.com")
+        assert rows and rows[0][0] == "blocked"
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_splice_handler_uses_normal_path():
+        s = await _server({"static.example.com": "splice"}, allowed=["static.example.com"])
+        s._resolve_domain = AsyncMock(return_value=(["203.0.113.9"], 300))
+        r = await _query(s, "static.example.com")
+        assert str(r.rr[0].rdata) == "203.0.113.9"
+        s.firewall_manager.setup_domain.assert_called_once()
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_matches_exact_fqdn_only():
+        s = await _server({"github.com": "git-relay"}, allowed=[".github.com"])
+        s._resolve_domain = AsyncMock(return_value=(["140.82.112.5"], 300))
+        r = await _query(s, "api.github.com")
+        assert str(r.rr[0].rdata) == "140.82.112.5", "api.github.com must not be redirected"
+        s.firewall_manager.setup_domain.assert_called_once()
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_falls_back_when_gateway_ip_unknown():
+        for gw in (None, "0.0.0.0"):
+            s = await _server({"github.com": "git-relay"}, gateway_ip=gw, allowed=["github.com"])
+            s._resolve_domain = AsyncMock(return_value=(["140.82.112.3"], 300))
+            r = await _query(s, "github.com")
+            assert str(r.rr[0].rdata) == "140.82.112.3"
+            await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_handles_servers_constructed_without_the_attribute():
+        # 既存テストは __new__ で組み立てて属性を個別に入れる。domain_handlers 無しでも動く
+        s = await _server({}, allowed=["example.com"])
+        del s.domain_handlers
+        s._resolve_domain = AsyncMock(return_value=(["93.184.216.34"], 300))
+        r = await _query(s, "example.com")
+        assert str(r.rr[0].rdata) == "93.184.216.34"
+        await s.mapping.db.close()
+
+
+def describe_domain_handlers_backward_compat():
+    """domain_handlers を渡さない場合と {} を渡した場合で応答バイト列と ipset 呼出が一致する（ゴールデン）."""
+
+    import tempfile
+    from unittest.mock import AsyncMock, Mock
+
+    async def _real_server(**extra):
+        from src.dns_server import DNSServer
+
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            db_path = f.name
+        s = DNSServer(
+            upstream_dns="127.0.0.11",
+            port=53,
+            blocked_domains={"evil.example.com"},
+            allowed_domains=["example.com", ".github.com"],
+            db_path=db_path,
+            firewall_manager=Mock(),
+            ignored_domains=["telemetry.example.com"],
+            **extra,
+        )
+        await s.mapping.init_db()
+        s.gateway_hostname = "sekimore-gw"
+        s.gateway_ip = "172.22.0.2"
+
+        async def fake_resolve(domain, query_type="A"):
+            return (["2001:db8::1"], 300) if query_type == "AAAA" else (["1.2.3.4"], 300)
+
+        s._resolve_domain = AsyncMock(side_effect=fake_resolve)
+        return s
+
+    @pytest.mark.asyncio
+    async def it_produces_identical_responses_and_ipset_calls():
+        from dnslib import DNSRecord
+
+        legacy = await _real_server()
+        empty = await _real_server(domain_handlers={})
+        assert legacy.domain_handlers == {} and empty.domain_handlers == {}
+        queries = [
+            ("example.com", "A"),
+            ("example.com", "AAAA"),
+            ("api.github.com", "A"),
+            ("notallowed.example.org", "A"),
+            ("evil.example.com", "A"),
+            ("telemetry.example.com", "A"),
+            ("sekimore-gw", "A"),
+            ("sekimore-gw", "AAAA"),
+        ]
+        for name, qtype in queries:
+            packed = DNSRecord.question(name, qtype).pack()
+            a = await legacy.handle_query(packed, ("172.22.0.3", 5353))
+            b = await empty.handle_query(packed, ("172.22.0.3", 5353))
+            assert a == b, f"{name} {qtype}: responses differ"
+        assert (
+            legacy.firewall_manager.setup_domain.call_args_list
+            == empty.firewall_manager.setup_domain.call_args_list
+        )
+        assert legacy.firewall_manager.setup_domain.call_count == 3  # example.com A/AAAA, api.github.com A
+        await legacy.mapping.db.close()
+        await empty.mapping.db.close()

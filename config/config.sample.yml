@@ -73,3 +73,21 @@ network:
 
 # Database Path
 database_path: "/data/security_gateway.db"
+
+# ---- 中継関所（sekimore-relay）。省略時は relay は起動せず、既存挙動は不変 ----
+# git@github.com:Org/Repo.git を関所の SSH(22) で受け、案件単位のポリシーで上流へ中継する。
+# 詳細: doc/sekimore-gw/requirements/04-relay.md, doc/sekimore-gw/design/relay.md
+# domain_handlers:
+#   github.com:
+#     handler: git-relay          # 完全一致 FQDN。git-relay は 1 つのみ（splice / deny も指定可）
+# relay:
+#   https: passthrough            # 同一ドメインの 443: passthrough | reject
+#   bootstrap: auto               # 使い捨て鍵の登録 + 案件トークン発行を POST /bootstrap で自動化: auto | manual
+#   token_ttl: 12h
+#   project:
+#     name: case-a
+#     repos:
+#       - name: Org/Repo
+#         mode: read-write        # read-only | read-write
+#         bases: [main]           # PR の base として許可するブランチ。直接 push は既定で sekimore/* のみ
+#     permissions: [pr:create, issue:create]   # リソース:アクション。書かないものは拒否
