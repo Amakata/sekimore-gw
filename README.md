@@ -32,6 +32,7 @@ A security gateway designed for AI agent environments running in Docker. Provide
 
 ### Optional Components
 
+- **Git / GitHub API Relay (sekimore-relay)**: Opt-in, in-container relay that lets AI agents use `git@github.com:…` and a small GitHub API CLI under a per-project policy, without ever holding upstream credentials. See [relay/README.md](relay/README.md)
 - **Squid Proxy**: HTTP/HTTPS caching proxy with upstream proxy support
 - **Corporate Proxy Integration**: Transparent proxy chaining for enterprise environments
 
@@ -244,6 +245,19 @@ COMPOSE_PROJECT_NAME=sekimore-org-b docker-compose up -d
 ```
 
 Networks and subnets are automatically isolated.
+
+## Git / GitHub API Relay (sekimore-relay)
+
+Optional. When `config.yml` declares `domain_handlers: { github.com: { handler: git-relay } }`, the gateway starts
+`sekimore-relay` (Rust, bundled in the image): DNS points `github.com` at the gateway, the relay accepts `git` over SSH
+on port 22 with disposable agent keys, enforces a per-project policy (allowed repos, read-only / read-write, PR base
+branches, `pr:create` / `issue:comment` … permissions), turns `git push HEAD:refs/for/main` into a branch + pull request,
+and forwards to the real upstream with the operator's ssh-agent and a device-flow token that agents never see.
+Without `domain_handlers` nothing changes.
+
+Setup, agent-side steps, daily usage and troubleshooting: **[relay/README.md](relay/README.md)**.
+Requirements and design live in the workspace repository (`doc/sekimore-gw/requirements/04-relay.md`,
+`doc/sekimore-gw/design/relay.md`).
 
 ## Troubleshooting
 
