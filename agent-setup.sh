@@ -27,11 +27,19 @@ set -ex
 # ---------------------------------------------------------------------------
 # 署名鍵を用意する。$1 = 鍵ディレクトリ、$2 = コメント。無ければ生成、旧既定コメントのままなら更新 (fingerprint は変わらない)
 sekimore_ensure_signing_key() {
-  local keydir=$1 comment=$2
+  local keydir=$1 comment=$2 current
   if [ ! -f "$keydir/signing_ed25519" ]; then
     ssh-keygen -q -t ed25519 -N '' -C "$comment" -f "$keydir/signing_ed25519"
-  elif grep -q ' sekimore-agent-signing@' "$keydir/signing_ed25519.pub" 2>/dev/null \
-       && [ "${comment#sekimore-agent-signing@}" = "$comment" ]; then
+    return 0
+  fi
+  current=$(cut -d' ' -f3- "$keydir/signing_ed25519.pub" 2>/dev/null || true)
+  if [ -n "${SEKIMORE_SIGNING_KEY_COMMENT:-}" ]; then
+    # 操作者が明示したコメントは既存鍵にも反映する (違うときだけ書き換え。鍵は不変)
+    if [ "$current" != "$comment" ]; then
+      ssh-keygen -q -c -C "$comment" -P '' -f "$keydir/signing_ed25519" >/dev/null 2>&1 || true
+    fi
+  elif [ "${current#sekimore-agent-signing@}" != "$current" ] && [ "${comment#sekimore-agent-signing@}" = "$comment" ]; then
+    # 旧既定 (…@<hostname>) のままなら名前入りに更新する
     ssh-keygen -q -c -C "$comment" -P '' -f "$keydir/signing_ed25519" >/dev/null 2>&1 || true
   fi
 }

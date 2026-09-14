@@ -727,12 +727,14 @@ esac
         assert pub2.endswith(" sekimore-agent-signing: case-a / Taro Test <taro@example.com>"), pub2
         assert " ".join(pub2.split(" ")[:2]) == key_part
 
-        # 明示したコメントが優先。名前入りの既存コメントは触らない (旧既定形式のときだけ更新する)
+        # 操作者が明示したコメントは既存鍵にも反映される (鍵は不変)
         proc, home = _run(
             tmp_path, shim, extra_env={"SEKIMORE_SIGNING_KEY_COMMENT": "my agent key"}
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
-        assert (keydir / "signing_ed25519.pub").read_text().rstrip("\n") == pub2
+        pub3 = (keydir / "signing_ed25519.pub").read_text().rstrip("\n")
+        assert pub3.endswith(" my agent key"), pub3
+        assert " ".join(pub3.split(" ")[:2]) == key_part
 
     def it_falls_back_to_hostname_when_no_identity_is_known(tmp_path):
         shim, _log = _shims(tmp_path)
