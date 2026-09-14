@@ -197,6 +197,8 @@ pub async fn start_api(
         token_ttl: Duration::from_secs(3600),
         body_cap: 64 * 1024,
         rate: Mutex::new(VecDeque::new()),
+        git_domain: "github.com".into(),
+        upstream: "github.com".into(),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

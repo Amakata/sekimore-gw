@@ -399,6 +399,8 @@ pub async fn bootstrap(
             .iter()
             .map(|r| r.full_name.clone())
             .collect(),
+        git_domain: Some(ctx.git_domain.clone()),
+        upstream: Some(ctx.upstream.clone()),
     })
 }
 

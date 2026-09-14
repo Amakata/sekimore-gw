@@ -1,6 +1,212 @@
 #!/bin/bash
 set -ex
 
+# ---------------------------------------------------------------------------
+# sekimore-relay (git / GitHub API の中継関所) のエージェント側セットアップ
+#
+# gateway に relay が居る (http://<gw>:8420/healthz が応答する) ときだけ動く。居なければ何もしない。
+# postStartCommand は毎起動で走るので、全ての書き込みは冪等 (生成は存在チェック、追記は置換、env は atomic)。
+#
+#   - 使い捨て認証鍵   <home>/.ssh/sekimore/id_ed25519        (関所にしか通用しない)
+#   - AI 専用署名鍵    <home>/.ssh/sekimore/signing_ed25519   (公開鍵を GitHub に Signing Key として登録する)
+#   - 案件トークン     /etc/sekimore-agent/env の SEKIMORE_TOKEN (POST /bootstrap で受け取る。既存が有効なら再利用)
+#   - known_hosts      関所のホスト鍵を <git_domain> として登録
+#   - ~/.ssh/config    Host <git_domain> → 使い捨て鍵 (マーカー付きブロックを置換)
+#   - git config       gpg.format ssh / user.signingkey / commit.gpgsign / gpg.ssh.allowedSignersFile
+#
+# 環境変数 (任意):
+#   SEKIMORE_AGENT_USER      鍵と設定の所有者 (既定 vscode。無ければ現在のユーザー)
+#   SEKIMORE_AGENT_HOME      上記ユーザーのホーム (既定 getent)
+#   SEKIMORE_KEY_DIR         鍵の置き場 (既定 <home>/.ssh/sekimore。volume にすると再ビルドでも鍵が変わらない)
+#   SEKIMORE_AGENT_ENV_FILE  env ファイル (既定 /etc/sekimore-agent/env)
+#   SEKIMORE_BOOTSTRAP       auto (既定) | manual  — manual なら鍵登録もトークン取得もせず、操作者に任せる
+#   SEKIMORE_GIT_DOMAIN      relay に向けたドメイン (既定は /bootstrap の応答、無ければ github.com)
+#   SEKIMORE_RELAY_API_PORT / SEKIMORE_RELAY_SSH_PORT  (既定 8420 / 22)
+# ---------------------------------------------------------------------------
+sekimore_relay_setup() {
+  local gw=$1
+  local api_port=${SEKIMORE_RELAY_API_PORT:-8420}
+  local ssh_port=${SEKIMORE_RELAY_SSH_PORT:-22}
+  local endpoint="http://$gw:$api_port"
+  local env_file=${SEKIMORE_AGENT_ENV_FILE:-/etc/sekimore-agent/env}
+  local mode=${SEKIMORE_BOOTSTRAP:-auto}
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "[agent] relay: 'curl' not found, skipping relay setup"
+    return 0
+  fi
+  if ! curl -fsS -m 3 -o /dev/null "$endpoint/healthz" 2>/dev/null; then
+    echo "[agent] relay: no relay on $gw:$api_port, skipping (gateway without git-relay)"
+    return 0
+  fi
+  local c
+  for c in ssh-keygen ssh-keyscan git; do
+    if ! command -v "$c" >/dev/null 2>&1; then
+      echo "[agent] relay: ERROR: '$c' not found (install openssh-client and git in the agent image)"
+      return 1
+    fi
+  done
+
+  # 対象ユーザー
+  local user=${SEKIMORE_AGENT_USER:-vscode}
+  if ! getent passwd "$user" >/dev/null 2>&1; then
+    echo "[agent] relay: user '$user' not found, using $(id -un)"
+    user=$(id -un)
+  fi
+  local home=${SEKIMORE_AGENT_HOME:-$(getent passwd "$user" | cut -d: -f6)}
+  local own="$user:$(id -gn "$user")"
+  local keydir=${SEKIMORE_KEY_DIR:-$home/.ssh/sekimore}
+
+  install -d -m 700 "$home/.ssh" "$keydir"
+  chown "$own" "$home/.ssh" "$keydir"
+  install -d -m 755 "$(dirname "$env_file")"
+
+  # 鍵 (存在すれば生成しない)
+  if [ ! -f "$keydir/id_ed25519" ]; then
+    ssh-keygen -q -t ed25519 -N '' -C "sekimore-agent@$(hostname)" -f "$keydir/id_ed25519"
+  fi
+  if [ ! -f "$keydir/signing_ed25519" ]; then
+    ssh-keygen -q -t ed25519 -N '' -C "sekimore-agent-signing@$(hostname)" -f "$keydir/signing_ed25519"
+  fi
+  chown -R "$own" "$keydir"
+  chmod 600 "$keydir/id_ed25519" "$keydir/signing_ed25519"
+  chmod 644 "$keydir/id_ed25519.pub" "$keydir/signing_ed25519.pub"
+
+  # ---- 案件トークン (トレースに出さない) ----
+  local xtrace=0
+  case $- in *x*) xtrace=1 ;; esac
+  set +x
+  local token="" repo="" git_domain="" resp=""
+  if [ -r "$env_file" ]; then
+    token=$(sed -n 's/^SEKIMORE_TOKEN=//p' "$env_file" | head -1)
+    repo=$(sed -n 's/^SEKIMORE_REPO=//p' "$env_file" | head -1)
+    git_domain=$(sed -n 's/^SEKIMORE_GIT_DOMAIN=//p' "$env_file" | head -1)
+  fi
+  if [ -n "$token" ] && curl -fsS -m 5 -o /dev/null -X POST -H "Authorization: Bearer $token" \
+       -H 'Content-Type: application/json' -d '{}' "$endpoint/whoami" 2>/dev/null; then
+    echo "[agent] relay: existing project token is still valid, keeping it"
+  else
+    token=""
+    if [ "$mode" = "auto" ]; then
+      local pub
+      pub=$(cat "$keydir/id_ed25519.pub")
+      resp=$(curl -sS -m 10 -X POST -H 'Content-Type: application/json' \
+               -d "{\"public_key\":\"$pub\",\"label\":\"$(hostname)\"}" "$endpoint/bootstrap" 2>/dev/null) || resp=""
+      token=$(printf '%s' "$resp" | grep -o 'skm_[0-9a-f]\{64\}' | head -1)
+      if [ -n "$token" ]; then
+        echo "[agent] relay: registered the disposable key and received a project token"
+        if [ -z "$repo" ]; then
+          repo=$(printf '%s' "$resp" | grep -o '"repos":\[[^]]*\]' | grep -o '"[^"]*"' | sed -n '2p' | tr -d '"')
+        fi
+        local d
+        d=$(printf '%s' "$resp" | grep -o '"git_domain":"[^"]*"' | cut -d'"' -f4)
+        if [ -n "$d" ]; then git_domain=$d; fi
+      else
+        echo "[agent] relay: WARNING: bootstrap did not return a token: $(printf '%s' "$resp" | head -c 300)"
+        echo "[agent] relay:   the operator can register the key and issue a token on the gateway:"
+        echo "[agent] relay:     sekimore-relay add-key \"$pub\" && sekimore-relay token"
+      fi
+    else
+      echo "[agent] relay: bootstrap is manual; the operator must put SEKIMORE_TOKEN into $env_file"
+    fi
+  fi
+  git_domain=${git_domain:-${SEKIMORE_GIT_DOMAIN:-github.com}}
+
+  # env ファイル (atomic、0600、所有者は対象ユーザー)
+  local tmp="$env_file.tmp.$$"
+  {
+    echo "# generated by sekimore-agent-setup.sh — re-run the setup to refresh"
+    echo "SEKIMORE_IP=$gw"
+    echo "SEKIMORE_ENDPOINT=$endpoint"
+    echo "SEKIMORE_GIT_DOMAIN=$git_domain"
+    if [ -n "$repo" ]; then echo "SEKIMORE_REPO=$repo"; fi
+    if [ -n "$token" ]; then echo "SEKIMORE_TOKEN=$token"; fi
+  } > "$tmp"
+  chmod 600 "$tmp"
+  chown "$own" "$tmp"
+  mv -f "$tmp" "$env_file"
+  local token_note="(NO token)"
+  if [ -n "$token" ]; then token_note="(token issued)"; fi
+  unset token resp
+  if [ "$xtrace" = 1 ]; then set -x; fi
+
+  # ---- known_hosts: 関所のホスト鍵を <git_domain> として登録 (置換なので鍵が変わっても追従) ----
+  local kh="$home/.ssh/known_hosts"
+  touch "$kh"
+  ssh-keygen -q -R "$git_domain" -f "$kh" >/dev/null 2>&1 || true
+  ssh-keygen -q -R "$gw" -f "$kh" >/dev/null 2>&1 || true
+  if [ "$ssh_port" != 22 ]; then
+    ssh-keygen -q -R "[$git_domain]:$ssh_port" -f "$kh" >/dev/null 2>&1 || true
+    ssh-keygen -q -R "[$gw]:$ssh_port" -f "$kh" >/dev/null 2>&1 || true
+  fi
+  rm -f "$kh.old"
+  local scan="" i
+  for i in 1 2 3; do
+    scan=$(ssh-keyscan -T 3 -p "$ssh_port" "$gw" 2>/dev/null) || scan=""
+    if [ -n "$scan" ]; then break; fi
+    sleep 1
+  done
+  if [ -z "$scan" ]; then
+    echo "[agent] relay: ERROR: relay on $gw:$ssh_port did not answer ssh-keyscan"
+    return 1
+  fi
+  local hostnames
+  if [ "$ssh_port" = 22 ]; then hostnames="$git_domain,$gw"; else hostnames="[$git_domain]:$ssh_port,[$gw]:$ssh_port"; fi
+  # keyscan の先頭フィールド ("<ip>" または "[<ip>]:<port>") を差し替える
+  printf '%s\n' "$scan" | grep -v '^#' | awk -v h="$hostnames" '{ $1 = h; print }' >> "$kh"
+  chown "$own" "$kh"
+  chmod 644 "$kh"
+
+  # ---- ~/.ssh/config: マーカー付きブロックを置換 ----
+  local cfg="$home/.ssh/config"
+  touch "$cfg"
+  local tmpc="$cfg.tmp.$$"
+  awk '/^# >>> sekimore-relay >>>/{skip=1} /^# <<< sekimore-relay <<</{skip=0; next} !skip' "$cfg" > "$tmpc"
+  cat >> "$tmpc" <<CFG
+# >>> sekimore-relay >>>
+Host $git_domain
+  User git
+  Port $ssh_port
+  IdentityFile $keydir/id_ed25519
+  IdentitiesOnly yes
+# <<< sekimore-relay <<<
+CFG
+  mv -f "$tmpc" "$cfg"
+  chmod 600 "$cfg"
+  chown "$own" "$cfg"
+
+  # ---- git: AI 専用鍵で署名 (依頼者の鍵では署名しない) ----
+  mkdir -p "$home/.config/git"
+  if [ -O "$home/.config" ]; then chown "$own" "$home/.config"; fi
+  chown "$own" "$home/.config/git"
+  local signers="$home/.config/git/allowed_signers"
+  HOME=$home git config --global gpg.format ssh
+  HOME=$home git config --global user.signingkey "$keydir/signing_ed25519.pub"
+  HOME=$home git config --global commit.gpgsign true
+  HOME=$home git config --global tag.gpgsign true
+  HOME=$home git config --global gpg.ssh.allowedSignersFile "$signers"
+  local sigpub principal
+  sigpub=$(cut -d' ' -f1,2 "$keydir/signing_ed25519.pub")
+  principal=${GIT_COMMITTER_EMAIL:-${GIT_AUTHOR_EMAIL:-*}}
+  touch "$signers"
+  if ! grep -qF "$sigpub" "$signers"; then
+    echo "$principal namespaces=\"git\" $sigpub" >> "$signers"
+  fi
+  chown "$own" "$signers"
+  if [ -f "$home/.gitconfig" ]; then chown "$own" "$home/.gitconfig"; fi
+
+  echo "[agent] relay: ready — git via $git_domain → $gw:$ssh_port, API $endpoint, env $env_file $token_note"
+  echo "[agent] relay: commits are signed with $keydir/signing_ed25519.pub"
+  echo "[agent] relay: register that public key on GitHub as a *Signing Key* (Settings → SSH and GPG keys → New SSH key → Key type: Signing Key):"
+  cat "$keydir/signing_ed25519.pub"
+  return 0
+}
+
+# テストから関数だけ読み込むためのガード (SEKIMORE_AGENT_SETUP_SOURCE_ONLY=1 で source する)
+if [ -n "${SEKIMORE_AGENT_SETUP_SOURCE_ONLY:-}" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 echo "[agent] Starting agent setup..."
 
 # Check if required commands are available
@@ -320,5 +526,8 @@ if nslookup google.com $SEKIMORE_IP > /dev/null 2>&1; then
 else
   echo "[agent] WARNING: DNS resolution via sekimore-gw failed"
 fi
+
+# sekimore-relay (git / GitHub API 中継関所)。gateway に relay が居なければ何もしない。失敗しても DNS / ルートは維持する
+sekimore_relay_setup "$SEKIMORE_IP" || echo "[agent] WARNING: relay setup failed; git through the relay will not work until it is fixed"
 
 echo "[agent] Setup complete"

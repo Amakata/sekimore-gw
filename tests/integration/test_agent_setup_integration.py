@@ -481,3 +481,198 @@ echo "[agent] This should not be reached"
         assert "ERROR: 'ip' command not found" in result.stdout
         assert "install iproute2" in result.stdout
         assert "This should not be reached" not in result.stdout
+
+
+def describe_sekimore_relay_setup():
+    """agent-setup.sh の sekimore_relay_setup（relay のエージェント側セットアップ）を偽 curl / ssh-keyscan で検証する."""
+
+    import os
+    import pwd
+    import re
+    import stat
+
+    script_path = Path(__file__).parent.parent.parent / "agent-setup.sh"
+    token = "skm_" + "ab12" * 16
+    gw = "172.19.0.2"
+
+    def _shims(tmp_path: Path, *, relay_present=True, valid_token=None, bootstrap_json=None):
+        """PATH に置く偽コマンド。呼び出しは calls.log に記録する."""
+        shim = tmp_path / "shim"
+        shim.mkdir(exist_ok=True)
+        log = tmp_path / "calls.log"
+        if bootstrap_json is None:
+            bootstrap_json = (
+                '{"ok":true,"fingerprint":"SHA256:x","added":true,"token":"' + token + '",'
+                '"token_expires":"2026-01-01T00:00:00Z","project":"case-a",'
+                '"repos":["LibOrg/awesome-lib","VendorOrg/reference-impl"],"git_domain":"ghe.example.com",'
+                '"upstream":"ghe.example.com"}'
+            )
+        (shim / "curl").write_text(
+            f"""#!/bin/bash
+url="${{@: -1}}"
+echo "curl $url" >> "{log}"
+case "$url" in
+  */healthz) {"exit 0" if relay_present else "exit 7"} ;;
+  */whoami)
+    for a in "$@"; do case "$a" in "Authorization: Bearer {valid_token or "__none__"}") echo whoami-ok >> "{log}"; exit 0;; esac; done
+    exit 22 ;;
+  */bootstrap) echo bootstrap-called >> "{log}"; printf '%s' '{bootstrap_json}' ;;
+  *) exit 1 ;;
+esac
+"""
+        )
+        (shim / "ssh-keyscan").write_text(
+            "#!/bin/bash\n"
+            'host="${@: -1}"\n'
+            f'echo "ssh-keyscan $*" >> "{log}"\n'
+            'echo "# $host:22 SSH-2.0-sekimore-relay"\n'
+            'echo "$host ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"\n'
+        )
+        for f in shim.iterdir():
+            f.chmod(0o755)
+        return shim, log
+
+    def _run(tmp_path: Path, shim: Path, extra_env=None, xtrace=True):
+        home = tmp_path / "home"
+        home.mkdir(exist_ok=True)
+        env = {
+            "PATH": f"{shim}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "HOME": str(home),
+            "SEKIMORE_AGENT_SETUP_SOURCE_ONLY": "1",
+            "SEKIMORE_AGENT_USER": pwd.getpwuid(os.getuid()).pw_name,
+            "SEKIMORE_AGENT_HOME": str(home),
+            "SEKIMORE_AGENT_ENV_FILE": str(tmp_path / "etc" / "env"),
+            "GIT_COMMITTER_EMAIL": "agent@example.invalid",
+        }
+        env.update(extra_env or {})
+        trace = "set -x;" if xtrace else ""
+        proc = subprocess.run(
+            ["bash", "-c", f"{trace} source '{script_path}'; sekimore_relay_setup {gw}"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        return proc, home
+
+    def it_bootstraps_and_configures_everything_once(tmp_path):
+        shim, log = _shims(tmp_path)
+        proc, home = _run(tmp_path, shim)
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 0, out
+        assert token not in out, "plaintext token must not appear in stdout or xtrace"
+        assert "received a project token" in out
+
+        env_file = tmp_path / "etc" / "env"
+        assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+        text = env_file.read_text()
+        assert f"SEKIMORE_IP={gw}" in text
+        assert f"SEKIMORE_ENDPOINT=http://{gw}:8420" in text
+        assert f"SEKIMORE_TOKEN={token}" in text
+        assert "SEKIMORE_REPO=LibOrg/awesome-lib" in text
+        assert "SEKIMORE_GIT_DOMAIN=ghe.example.com" in text
+
+        keydir = home / ".ssh" / "sekimore"
+        for k in ("id_ed25519", "signing_ed25519"):
+            assert (keydir / k).exists() and (keydir / f"{k}.pub").exists()
+            assert stat.S_IMODE((keydir / k).stat().st_mode) == 0o600
+
+        kh = (home / ".ssh" / "known_hosts").read_text().splitlines()
+        assert len(kh) == 1, kh
+        assert kh[0].startswith(
+            f"ghe.example.com,{gw} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKE"
+        ), kh[0]
+
+        cfg = (home / ".ssh" / "config").read_text()
+        assert cfg.count("# >>> sekimore-relay >>>") == 1
+        assert (
+            "Host ghe.example.com" in cfg
+            and f"IdentityFile {keydir}/id_ed25519" in cfg
+            and "IdentitiesOnly yes" in cfg
+        )
+        assert stat.S_IMODE((home / ".ssh" / "config").stat().st_mode) == 0o600
+
+        gitconfig = (home / ".gitconfig").read_text()
+        assert "format = ssh" in gitconfig
+        assert f"signingkey = {keydir}/signing_ed25519.pub" in gitconfig
+        assert "gpgsign = true" in gitconfig
+        signers = (home / ".config" / "git" / "allowed_signers").read_text().splitlines()
+        assert len(signers) == 1 and signers[0].startswith(
+            'agent@example.invalid namespaces="git" ssh-ed25519 '
+        )
+
+        calls = log.read_text()
+        assert calls.count("bootstrap-called") == 1
+        assert "whoami-ok" not in calls
+
+    def it_is_idempotent_and_keeps_a_valid_token(tmp_path):
+        shim, log = _shims(tmp_path)
+        proc, home = _run(tmp_path, shim)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        keydir = home / ".ssh" / "sekimore"
+        pub_before = (keydir / "id_ed25519.pub").read_text()
+        sign_before = (keydir / "signing_ed25519.pub").read_text()
+
+        # 2 回目: 既存トークンが /whoami で有効 → bootstrap を呼ばない、鍵は変わらない、追記は増えない
+        shim, log = _shims(tmp_path, valid_token=token)
+        log.write_text("")
+        proc, home = _run(tmp_path, shim)
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 0, out
+        assert "still valid" in out
+        assert (keydir / "id_ed25519.pub").read_text() == pub_before
+        assert (keydir / "signing_ed25519.pub").read_text() == sign_before
+        assert f"SEKIMORE_TOKEN={token}" in (tmp_path / "etc" / "env").read_text()
+        calls = log.read_text()
+        assert "bootstrap-called" not in calls and "whoami-ok" in calls
+        assert len((home / ".ssh" / "known_hosts").read_text().splitlines()) == 1
+        assert (home / ".ssh" / "config").read_text().count("# >>> sekimore-relay >>>") == 1
+        assert len((home / ".config" / "git" / "allowed_signers").read_text().splitlines()) == 1
+        assert token not in out
+
+    def it_skips_when_the_gateway_has_no_relay(tmp_path):
+        shim, log = _shims(tmp_path, relay_present=False)
+        proc, home = _run(tmp_path, shim)
+        assert proc.returncode == 0
+        assert "skipping" in proc.stdout
+        assert not (tmp_path / "etc" / "env").exists()
+        assert not (home / ".ssh").exists()
+        assert "bootstrap-called" not in log.read_text()
+
+    def it_does_not_bootstrap_in_manual_mode(tmp_path):
+        shim, log = _shims(tmp_path)
+        proc, home = _run(
+            tmp_path,
+            shim,
+            extra_env={"SEKIMORE_BOOTSTRAP": "manual", "SEKIMORE_GIT_DOMAIN": "github.com"},
+        )
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 0, out
+        assert "manual" in out
+        assert "bootstrap-called" not in log.read_text()
+        text = (tmp_path / "etc" / "env").read_text()
+        assert "SEKIMORE_TOKEN" not in text and "SEKIMORE_GIT_DOMAIN=github.com" in text
+        # 鍵と known_hosts / ssh config は作られる（操作者が add-key するため）
+        assert (home / ".ssh" / "sekimore" / "id_ed25519.pub").exists()
+        assert "Host github.com" in (home / ".ssh" / "config").read_text()
+
+    def it_warns_but_continues_when_bootstrap_is_denied(tmp_path):
+        shim, log = _shims(
+            tmp_path, bootstrap_json='{"ok":false,"error":"bootstrap is disabled by the operator"}'
+        )
+        proc, home = _run(tmp_path, shim)
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 0, out
+        assert "did not return a token" in out and "sekimore-relay add-key" in out
+        assert "SEKIMORE_TOKEN" not in (tmp_path / "etc" / "env").read_text()
+        assert (home / ".ssh" / "known_hosts").exists()
+
+    def it_uses_bracketed_known_hosts_for_non_default_port(tmp_path):
+        shim, log = _shims(tmp_path)
+        proc, home = _run(tmp_path, shim, extra_env={"SEKIMORE_RELAY_SSH_PORT": "2222"})
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        kh = (home / ".ssh" / "known_hosts").read_text()
+        assert kh.startswith(f"[ghe.example.com]:2222,[{gw}]:2222 ssh-ed25519 ")
+        assert "Port 2222" in (home / ".ssh" / "config").read_text()
+        assert re.search(r"ssh-keyscan .*-p 2222", log.read_text())

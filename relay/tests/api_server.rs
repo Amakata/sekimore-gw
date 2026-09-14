@@ -243,6 +243,8 @@ async fn bootstrap_registers_key_and_issues_token() {
     assert!(token.starts_with("skm_"));
     assert_eq!(resp.project.as_deref(), Some("case-a"));
     assert_eq!(resp.repos.len(), 2);
+    assert_eq!(resp.git_domain.as_deref(), Some("github.com"));
+    assert_eq!(resp.upstream.as_deref(), Some("github.com"));
     assert!(resp.fingerprint.unwrap().starts_with("SHA256:"));
     // 発行されたトークンで API が使える
     let (code, _) = post(f.addr, "/whoami", Some(&token), &ApiRequest::default()).await;
