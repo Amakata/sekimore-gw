@@ -6,6 +6,9 @@ RUN apt-get update && \
         iproute2 \
         iputils-ping \
         dnsutils \
+        curl \
+        openssh-client \
+        git \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory

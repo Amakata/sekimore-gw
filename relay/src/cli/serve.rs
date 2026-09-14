@@ -93,6 +93,8 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         token_ttl: r.relay.token_ttl,
         body_cap: r.relay.limits.api_body_max_bytes,
         rate: Mutex::new(VecDeque::new()),
+        git_domain: r.domain.clone(),
+        upstream: r.upstream.clone(),
     });
     let api_listener = TcpListener::bind(r.relay.api_listen)
         .await

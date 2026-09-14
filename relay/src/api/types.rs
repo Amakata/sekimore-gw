@@ -103,4 +103,10 @@ pub struct BootstrapResponse {
     pub project: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repos: Vec<String>,
+    /// DNS で関所に向けられるドメイン（エージェントは known_hosts / ssh config にこの名前を使う）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_domain: Option<String>,
+    /// 上流ホスト（表示用）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
 }

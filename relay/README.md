@@ -94,28 +94,30 @@ docker compose exec sekimore-gw sekimore-relay login
 
 ## エージェント側の準備（dev コンテナ内）
 
-Phase 4 で `agent-setup.sh` が全て自動で行う予定。現時点では手作業。
+`agent-setup.sh`（sgw-devcontainer-base では `/usr/local/bin/sekimore-agent-setup.sh`、postStartCommand で毎起動）が
+**関所を見つけたら自動で**行う。gateway に relay が居なければ何もしない。
 
-```bash
-# 使い捨て認証鍵を作り、関所に登録して案件トークンを受け取る（bootstrap: auto のとき）
-ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/sekimore_ed25519
-export SEKIMORE_ENDPOINT=http://<関所の internal-net IP>:8420
-sekimore-relay agent bootstrap --pubkey-file ~/.ssh/sekimore_ed25519.pub   # JSON で token が返る
-export SEKIMORE_TOKEN=skm_...  SEKIMORE_REPO=Org/Repo
+- 使い捨て認証鍵 `~/.ssh/sekimore/id_ed25519` と AI 専用署名鍵 `~/.ssh/sekimore/signing_ed25519` を生成（既にあれば再利用）
+- `POST /bootstrap` で公開鍵を登録し案件トークンを受け取る（既存トークンが有効なら再発行しない）
+- `/etc/sekimore-agent/env` に `SEKIMORE_IP` `SEKIMORE_ENDPOINT` `SEKIMORE_TOKEN` `SEKIMORE_REPO` `SEKIMORE_GIT_DOMAIN`（0600、vscode 所有）
+- `~/.ssh/known_hosts` に関所のホスト鍵を `github.com` として登録、`~/.ssh/config` に `Host github.com → 使い捨て鍵`
+- `git config --global gpg.format ssh / user.signingkey / commit.gpgsign true`。**署名鍵の公開鍵は GitHub に「Signing Key」として手で登録する**（ログに表示される）
 
-# DNS は既に関所を向いているので、github.com として関所のホスト鍵を受け入れる
-ssh-keyscan github.com >> ~/.ssh/known_hosts
-printf 'Host github.com\n  User git\n  IdentityFile ~/.ssh/sekimore_ed25519\n  IdentitiesOnly yes\n' >> ~/.ssh/config
-
-# AI 専用の署名鍵（依頼者の鍵でコミットに署名しない）。公開鍵は GitHub に「Signing Key」として登録する
-ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/sekimore_signing_ed25519
-git config --global gpg.format ssh
-git config --global user.signingkey ~/.ssh/sekimore_signing_ed25519.pub
-git config --global commit.gpgsign true
-```
+環境変数で調整: `SEKIMORE_BOOTSTRAP=manual`（登録・発行を操作者に任せる）、`SEKIMORE_AGENT_USER` / `SEKIMORE_KEY_DIR` / `SEKIMORE_AGENT_ENV_FILE`。
 
 `bootstrap: manual` のときは操作者が gateway 内で `sekimore-relay add-key "<公開鍵行>"` と `sekimore-relay token` を実行し、
-トークンをエージェントに渡す。
+トークンを `/etc/sekimore-agent/env` の `SEKIMORE_TOKEN` に入れる。
+
+手作業で同じことをする場合:
+
+```bash
+ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/sekimore_ed25519
+export SEKIMORE_ENDPOINT=http://<関所の internal-net IP>:8420
+sekimore-relay agent bootstrap --pubkey-file ~/.ssh/sekimore_ed25519.pub   # JSON で token / repos / git_domain が返る
+export SEKIMORE_TOKEN=skm_...  SEKIMORE_REPO=Org/Repo
+ssh-keyscan github.com >> ~/.ssh/known_hosts          # DNS は既に関所を向いている
+printf 'Host github.com\n  User git\n  IdentityFile ~/.ssh/sekimore_ed25519\n  IdentitiesOnly yes\n' >> ~/.ssh/config
+```
 
 ## 日常の使い方（エージェント）
 
@@ -124,7 +126,7 @@ git clone git@github.com:Org/Repo.git           # URL はそのまま。関所�
 git push origin HEAD:refs/for/main              # refs/heads/sekimore/main-<sha7> に push され、PR（base=main）が作られる
 git push origin HEAD:refs/heads/sekimore/x      # 自分の名前空間 sekimore/* への直接 push は可（PR ブランチの更新）
 
-sekimore-relay agent whoami                     # 案件・権限・リポジトリ（既定拒否の内容が分かる）
+sekimore whoami                                 # = sekimore-relay agent whoami（ラッパーが /etc/sekimore-agent/env を読む）
 sekimore-relay agent pr create --head sekimore/main-abc1234 --base main --title T
 sekimore-relay agent issue create --title T --labels bug     # ラベル付きは issue:label も要る
 sekimore-relay agent project add-item --project-id P --content-id C

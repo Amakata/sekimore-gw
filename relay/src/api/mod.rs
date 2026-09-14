@@ -42,6 +42,9 @@ pub struct ApiContext {
     pub token_ttl: Duration,
     pub body_cap: usize,
     pub rate: Mutex<VecDeque<Instant>>,
+    /// git-relay のドメインと上流（/bootstrap の応答でエージェントに伝える）
+    pub git_domain: String,
+    pub upstream: String,
 }
 
 pub const BOOTSTRAP_RATE_PER_MINUTE: usize = 10;
