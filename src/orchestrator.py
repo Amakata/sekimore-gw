@@ -80,6 +80,35 @@ class ConfigFileEventHandler(FileSystemEventHandler):
             log_error(ComponentType.ORCHESTRATOR, f"Auto-reload error: {e}")
 
 
+def _domain_handlers_of(config: object) -> dict[str, str]:
+    """config.domain_handlers を {domain: handler 名} に平坦化する（Mock 設定にも耐える）."""
+    handlers = getattr(config, "domain_handlers", None)
+    if not isinstance(handlers, dict):
+        return {}
+    out: dict[str, str] = {}
+    for domain, h in handlers.items():
+        name = getattr(h, "handler", h)
+        if isinstance(name, str):
+            out[str(domain)] = name
+    return out
+
+
+def _relay_ports_of(config: object) -> list[int]:
+    """relay のために INPUT で開けるポート（git-relay 無しなら空）."""
+    fn = getattr(config, "relay_input_ports", None)
+    ports = fn() if callable(fn) else []
+    if not isinstance(ports, list):
+        return []
+    return [p for p in ports if isinstance(p, int)]
+
+
+def _relay_settings_changed(old: object, new: object) -> bool:
+    """domain_handlers / relay に差分があるか（再起動が必要な変更）."""
+    return _domain_handlers_of(old) != _domain_handlers_of(new) or getattr(
+        old, "relay", None
+    ) != getattr(new, "relay", None)
+
+
 class SecurityGatewayOrchestrator:
     """セキュリティゲートウェイ統合管理."""
 
@@ -442,6 +471,7 @@ class SecurityGatewayOrchestrator:
         self.firewall = FirewallManager(
             wan_interface=wan_interface,
             lan_interface=lan_interface,
+            relay_ports=_relay_ports_of(self.config),
         )
         self.ip_manager = StaticIPManager()
 
@@ -462,6 +492,7 @@ class SecurityGatewayOrchestrator:
             firewall_manager=self.firewall,
             lan_subnets=detected_lan_subnets,
             ignored_domains=self.config.ignore_domains,
+            domain_handlers=_domain_handlers_of(self.config),
         )
 
         # ファイアウォールモニター（iptablesログを監視）
@@ -487,6 +518,8 @@ class SecurityGatewayOrchestrator:
 
         # ファイル監視（config.yml変更時に自動リロード）
         self.config_observer: Observer | None = None  # type: ignore[valid-type]
+        # 中継関所の listen 確認タスク（git-relay 設定時のみ）
+        self._relay_check_task: asyncio.Task[bool] | None = None
         if self.config_path:
             # 設定ファイルのディレクトリを監視
             config_dir = Path(self.config_path).parent
@@ -590,6 +623,23 @@ class SecurityGatewayOrchestrator:
 
         return True
 
+    async def _warn_if_relay_not_listening(self, port: int, delay: float = 10.0) -> bool:
+        """relay が listen しているか（ss -tln）。していなければ ERROR。agents の connection refused を無言にしない."""
+        await asyncio.sleep(delay)
+        try:
+            result = subprocess.run(["ss", "-tln"], capture_output=True, text=True, check=False)
+            listening = f":{port} " in result.stdout or result.stdout.rstrip().endswith(f":{port}")
+        except (FileNotFoundError, OSError) as e:
+            log_error(ComponentType.ORCHESTRATOR, f"cannot check relay listener: {e}")
+            return False
+        if not listening:
+            log_error(
+                ComponentType.ORCHESTRATOR,
+                f"domain_handlers has git-relay but sekimore-relay is not listening on :{port}; "
+                "agents will get connection refused for git. Check `sekimore-relay needs-relay` and the container log.",
+            )
+        return listening
+
     async def initialize(self) -> bool:
         """セキュリティゲートウェイを初期化.
 
@@ -641,6 +691,13 @@ class SecurityGatewayOrchestrator:
             else:
                 log_system_event("Squid proxy config generated")
 
+        # 7. 中継関所: git-relay が設定されているのに relay が listen していなければ ERROR を出す
+        relay_ports = _relay_ports_of(self.config)
+        if relay_ports:
+            self._relay_check_task = asyncio.create_task(
+                self._warn_if_relay_not_listening(relay_ports[0])
+            )
+
         log_system_event(
             "Security Gateway initialized",
             allowed_domains=str(len(self.config.allow_domains)),
@@ -648,6 +705,8 @@ class SecurityGatewayOrchestrator:
             allowed_ips=str(len(self.config.allow_ips)),
             blocked_ips=str(len(self.config.block_ips)),
             proxy_enabled=str(self.config.proxy.enabled),
+            git_relay_domains=str(_domain_handlers_of(self.config)),
+            relay_ports=str(relay_ports),
         )
 
         return True
@@ -740,6 +799,21 @@ class SecurityGatewayOrchestrator:
             # 新しい設定を読み込み
             new_config = load_config(self.config_path)
 
+            # domain_handlers / relay は起動時に決まる（relay プロセスと INPUT 規則）。
+            # ここで DNS だけ切り替えると無言ハングを作るので、旧値を維持して再起動を促す
+            if _relay_settings_changed(self.config, new_config):
+                log_error(
+                    ComponentType.ORCHESTRATOR,
+                    "domain_handlers / relay changed in config.yml; restart the container to apply "
+                    "(the relay process and INPUT rules are decided at startup). Keeping the old values.",
+                )
+                new_config = new_config.model_copy(
+                    update={
+                        "domain_handlers": self.config.domain_handlers,
+                        "relay": self.config.relay,
+                    }
+                )
+
             # 差分検出
             old_allow_domains = set(self.config.allow_domains)
             new_allow_domains = set(new_config.allow_domains)
@@ -812,7 +886,19 @@ class SecurityGatewayOrchestrator:
                 log_system_event("Proxy stopped")
 
             # 3. 設定を再読み込み
-            self.config = load_config(self.config_path)
+            reloaded = load_config(self.config_path)
+            if _relay_settings_changed(self.config, reloaded):
+                log_error(
+                    ComponentType.ORCHESTRATOR,
+                    "domain_handlers / relay changed; restart the container to apply. Keeping the old values.",
+                )
+                reloaded = reloaded.model_copy(
+                    update={
+                        "domain_handlers": self.config.domain_handlers,
+                        "relay": self.config.relay,
+                    }
+                )
+            self.config = reloaded
             log_system_event("Configuration reloaded")
 
             # 4. DNS Serverの設定を更新

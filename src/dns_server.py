@@ -294,6 +294,7 @@ class DNSServer:
         cache_refresh_interval: int | None = None,
         lan_subnets: list[str] | None = None,
         ignored_domains: list[str] | None = None,
+        domain_handlers: dict[str, str] | None = None,
     ):
         """初期化.
 
@@ -314,6 +315,7 @@ class DNSServer:
             cache_refresh_interval: キャッシュ更新チェック間隔（秒）
             lan_subnets: LAN側ネットワークサブネット（バインドIP検出用）
             ignored_domains: 無視ドメインリスト（UI非表示、DNSは正常解決）
+            domain_handlers: ドメイン別 handler（git-relay / deny / splice）。完全一致 FQDN → handler 名
         """
         self.upstream_dns = upstream_dns or constants.DEFAULT_UPSTREAM_DNS
         self.port = port or constants.DEFAULT_DNS_PORT
@@ -326,6 +328,9 @@ class DNSServer:
         self.running = False
         self.lan_subnets = lan_subnets or constants.DEFAULT_LAN_SUBNETS
         self.ignored_domains = ignored_domains or []
+        # 中継関所: git-relay のドメインには関所自身の IP を返す（doc/sekimore-gw/design/relay.md）
+        self.domain_handlers: dict[str, str] = dict(domain_handlers or {})
+        self._relay_ip_warned = False
 
         # DNSキャッシュ
         self.cache_enabled = (
@@ -338,6 +343,19 @@ class DNSServer:
         # sekimore-gw自身の名前解決用（internal-net側IPを返すため）
         self.gateway_hostname: str | None = None
         self.gateway_ip: str | None = None
+
+    def _handler_for(self, domain: str) -> str | None:
+        """domain_handlers の handler（完全一致）。無ければ None."""
+        handlers = getattr(self, "domain_handlers", None) or {}
+        return handlers.get(domain.lower().rstrip("."))
+
+    def _is_self_query(self, client_ip: str) -> bool:
+        """送信元が関所自身（internal-net IP / loopback）か。自己参照ループの除外."""
+        return (
+            client_ip == getattr(self, "gateway_ip", None)
+            or client_ip.startswith("127.")
+            or client_ip == "::1"
+        )
 
     def _detect_dns_bind_ip(self) -> str:
         """DNSサービスを提供するネットワークのIPアドレスを自動検出.
@@ -635,6 +653,71 @@ class DNSServer:
             # AAAA (IPv6) クエリの場合は、upstream DNSに問い合わせない（IPv4のみサポート）
             elif query_type == "AAAA":
                 # 空のレスポンスを返す（IPv6アドレスなし）
+                return reply.pack()  # type: ignore[no-any-return]
+
+        # 中継関所（domain_handlers）。allowlist より先、block / ignore / 自ホスト名より後
+        handler = self._handler_for(query_name)
+        if handler == "deny":
+            log_system_event(
+                "DNS query denied (domain_handlers: deny)",
+                domain=query_name,
+                client_ip=client_addr[0],
+            )
+            await self.mapping.record_query(
+                client_ip=client_addr[0],
+                domain=query_name,
+                ips=[],
+                ttl=0,
+                query_type=query_type,
+                status="blocked",
+            )
+            reply.header.rcode = 3  # NXDOMAIN
+            return reply.pack()  # type: ignore[no-any-return]
+        if handler == "git-relay" and not self._is_self_query(client_addr[0]):
+            gateway_ip = getattr(self, "gateway_ip", None)
+            if not gateway_ip or gateway_ip == "0.0.0.0":
+                # 関所 IP が未検出なら従来経路にフォールバック（0.0.0.0 を返さない）
+                if not getattr(self, "_relay_ip_warned", False):
+                    log_error(
+                        ComponentType.DNS,
+                        f"git-relay handler for {query_name} but the gateway IP is unknown; "
+                        "falling back to normal resolution",
+                    )
+                    self._relay_ip_warned = True
+            elif query_type == "A":
+                reply.add_answer(
+                    RR(
+                        rname=request.q.qname,
+                        rtype=QTYPE.A,
+                        rdata=A(gateway_ip),
+                        ttl=60,
+                    )
+                )
+                log_system_event(
+                    "DNS query redirected to git-relay (returning gateway IP)",
+                    domain=query_name,
+                    client_ip=client_addr[0],
+                    gateway_ip=gateway_ip,
+                )
+                # 実 IP は ipset に入れない（setup_domain を呼ばない）。記録は allowed
+                await self.mapping.record_query(
+                    client_ip=client_addr[0],
+                    domain=query_name,
+                    ips=[gateway_ip],
+                    ttl=60,
+                    query_type=query_type,
+                    status="allowed",
+                )
+                return reply.pack()  # type: ignore[no-any-return]
+            elif query_type == "AAAA":
+                await self.mapping.record_query(
+                    client_ip=client_addr[0],
+                    domain=query_name,
+                    ips=[],
+                    ttl=60,
+                    query_type=query_type,
+                    status="allowed",
+                )
                 return reply.pack()  # type: ignore[no-any-return]
 
         # ホワイトリストチェック（allow_domains にないドメインをブロック）

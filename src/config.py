@@ -3,10 +3,10 @@
 import ipaddress
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class DNSConfig(BaseModel):
@@ -61,6 +61,40 @@ class NetworkConfig(BaseModel):
     )
 
 
+class DomainHandlerConfig(BaseModel):
+    """domain_handlers の 1 エントリ（中継関所）."""
+
+    handler: Literal["splice", "git-relay", "deny"] = Field(
+        default="splice",
+        description="splice=従来どおり / git-relay=関所の SSH で受ける（DNS は関所 IP）/ deny=拒否",
+    )
+
+
+class RelayConfig(BaseModel):
+    """relay セクションのうち Python が読む部分.
+
+    残りのキーは relay バイナリ（Rust）が所有する。Pydantic の既定（未知キー無視）で素通しする。
+    """
+
+    ssh_listen: str = Field(default="0.0.0.0:22", description="関所 SSH の listen アドレス")
+    api_listen: str = Field(default="0.0.0.0:8420", description="関所 HTTP API の listen アドレス")
+    https_listen: str = Field(
+        default="0.0.0.0:443", description="同一ドメインの 443 を受けるアドレス"
+    )
+    https: Literal["passthrough", "reject"] = Field(
+        default="passthrough",
+        description="443 の扱い（passthrough=実 upstream へ素通し / reject=即切断）",
+    )
+
+
+def _port_of(listen: str, default: int) -> int:
+    """'host:port' からポートを取り出す."""
+    try:
+        return int(str(listen).rsplit(":", 1)[-1])
+    except (ValueError, IndexError):
+        return default
+
+
 class Config(BaseModel):
     """AI Security Gateway 設定."""
 
@@ -88,6 +122,68 @@ class Config(BaseModel):
     database_path: str = Field(
         default="/data/security_gateway.db", description="SQLiteデータベースパス"
     )
+
+    # 中継関所（relay）。無ければ既存挙動は不変（doc/sekimore-gw/requirements/04-relay.md）
+    domain_handlers: dict[str, DomainHandlerConfig] = Field(
+        default_factory=dict,
+        description="ドメイン別 handler（git-relay / deny / splice）。完全一致 FQDN",
+    )
+    relay: RelayConfig = Field(default_factory=RelayConfig)
+
+    @field_validator("domain_handlers", mode="before")
+    @classmethod
+    def normalize_domain_handlers(cls, v: Any) -> Any:
+        """キーを正規化（lower、末尾 . 除去）し、ワイルドカード・空・重複を拒否する."""
+        if v is None:
+            return {}
+        if not isinstance(v, dict):
+            raise ValueError("domain_handlers must be a mapping of domain -> {handler: ...}")
+        out: dict[str, Any] = {}
+        for key, val in v.items():
+            norm = str(key).strip().rstrip(".").lower()
+            if not norm:
+                raise ValueError("domain_handlers: empty domain key")
+            if norm.startswith(".") or "*" in norm:
+                raise ValueError(
+                    f"domain_handlers: {key!r} must be an exact FQDN "
+                    "(a wildcard would redirect every subdomain, e.g. api.github.com)"
+                )
+            if norm in out:
+                raise ValueError(f"domain_handlers: duplicate domain {norm!r}")
+            out[norm] = val if val is not None else {}
+        return out
+
+    @model_validator(mode="after")
+    def validate_single_git_relay(self) -> "Config":
+        """git-relay は 1 ドメインのみ（SSH の exec はリポジトリパスしか運ばない）."""
+        relays = self.git_relay_domains()
+        if len(relays) > 1:
+            raise ValueError(
+                f"domain_handlers has {len(relays)} git-relay entries ({', '.join(relays)}); "
+                "only one is supported because the SSH exec request carries only the repository path"
+            )
+        return self
+
+    def git_relay_domains(self) -> list[str]:
+        """handler が git-relay のドメイン."""
+        return [d for d, h in self.domain_handlers.items() if h.handler == "git-relay"]
+
+    def has_git_relay(self) -> bool:
+        return bool(self.git_relay_domains())
+
+    def relay_input_ports(self) -> list[int]:
+        """relay のために lan_if 側 INPUT で開けるポート。git-relay が無ければ空.
+
+        443 は https の設定に関係なく開ける（reject でも relay が受けて即切断する。
+        INPUT で落とすと無言タイムアウトになる）。
+        """
+        if not self.has_git_relay():
+            return []
+        return [
+            _port_of(self.relay.ssh_listen, 22),
+            _port_of(self.relay.api_listen, 8420),
+            _port_of(self.relay.https_listen, 443),
+        ]
 
     @field_validator("allow_ips", "block_ips")
     @classmethod

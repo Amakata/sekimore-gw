@@ -283,3 +283,112 @@ def describe_load_config_function():
         # Should return default config
         assert config.allow_domains == []
         assert config.proxy.enabled is False
+
+
+def describe_domain_handlers():
+    """domain_handlers / relay（中継関所）の設定."""
+
+    def it_defaults_to_empty_and_no_relay_ports(sample_config_data):
+        config = Config(**sample_config_data)
+        assert config.domain_handlers == {}
+        assert config.git_relay_domains() == []
+        assert config.has_git_relay() is False
+        assert config.relay_input_ports() == []
+        assert Config().domain_handlers == {}
+        assert Config().relay.https == "passthrough"
+
+    def it_parses_git_relay_and_normalizes_keys():
+        config = Config(
+            domain_handlers={
+                "GitHub.COM.": {"handler": "git-relay"},
+                "telemetry.example.com": {"handler": "deny"},
+                "static.example.com": {},
+            }
+        )
+        assert config.domain_handlers["github.com"].handler == "git-relay"
+        assert config.domain_handlers["telemetry.example.com"].handler == "deny"
+        assert config.domain_handlers["static.example.com"].handler == "splice"
+        assert config.git_relay_domains() == ["github.com"]
+        assert config.has_git_relay() is True
+        assert config.relay_input_ports() == [22, 8420, 443]
+
+    def it_rejects_invalid_handler_wildcard_empty_and_duplicates():
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Config(domain_handlers={"github.com": {"handler": "proxy"}})
+        with pytest.raises(ValidationError):
+            Config(domain_handlers={".github.com": {"handler": "git-relay"}})
+        with pytest.raises(ValidationError):
+            Config(domain_handlers={"*.github.com": {"handler": "git-relay"}})
+        with pytest.raises(ValidationError):
+            Config(domain_handlers={"": {"handler": "deny"}})
+        with pytest.raises(ValidationError):
+            Config(
+                domain_handlers={
+                    "github.com": {"handler": "deny"},
+                    "GITHUB.com": {"handler": "deny"},
+                }
+            )
+        with pytest.raises(ValidationError):
+            Config(domain_handlers="github.com")
+
+    def it_rejects_two_git_relay_domains():
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="only one is supported"):
+            Config(
+                domain_handlers={
+                    "a.example.com": {"handler": "git-relay"},
+                    "b.example.com": {"handler": "git-relay"},
+                }
+            )
+
+    def it_reads_relay_ports_and_ignores_relay_only_keys():
+        config = Config(
+            domain_handlers={"github.com": {"handler": "git-relay"}},
+            relay={
+                "ssh_listen": "0.0.0.0:2222",
+                "api_listen": "127.0.0.1:9000",
+                "https": "reject",
+                "token_ttl": "12h",
+                "bootstrap": "auto",
+                "project": {"name": "x", "repos": [], "permissions": ["pr:create"]},
+            },
+        )
+        assert config.relay.https == "reject"
+        # reject でも 443 は開ける（relay が受けて即切断する。INPUT で落とすと無言タイムアウト）
+        assert config.relay_input_ports() == [2222, 9000, 443]
+
+    def it_needs_no_ports_for_deny_or_splice_only():
+        config = Config(
+            domain_handlers={
+                "x.example.com": {"handler": "deny"},
+                "y.example.com": {"handler": "splice"},
+            }
+        )
+        assert config.relay_input_ports() == []
+        assert config.has_git_relay() is False
+
+    def it_loads_shared_fixtures_like_the_relay_binary():
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        without = Config.from_yaml(root / "tests" / "fixtures" / "config_without_relay.yml")
+        assert without.domain_handlers == {}
+        assert without.relay_input_ports() == []
+        with_relay = Config.from_yaml(root / "tests" / "fixtures" / "config_with_relay.yml")
+        assert with_relay.git_relay_domains() == ["github.com"]
+        assert with_relay.domain_handlers["telemetry.example.com"].handler == "deny"
+        assert with_relay.domain_handlers["static.example.com"].handler == "splice"
+        assert with_relay.relay_input_ports() == [22, 8420, 443]
+        assert "pypi.org" in with_relay.allow_domains
+
+    def it_round_trips_through_yaml(tmp_path):
+        from pathlib import Path
+
+        config = Config(domain_handlers={"github.com": {"handler": "git-relay"}})
+        out = tmp_path / "out.yml"
+        config.to_yaml(Path(out))
+        again = Config.from_yaml(Path(out))
+        assert again.domain_handlers["github.com"].handler == "git-relay"

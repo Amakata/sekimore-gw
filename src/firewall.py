@@ -12,15 +12,18 @@ class FirewallManager:
         self,
         wan_interface: str,
         lan_interface: str,
+        relay_ports: list[int] | None = None,
     ):
         """初期化.
 
         Args:
             wan_interface: WAN側インターフェース（インターネット側、orchestratorで動的検出）
             lan_interface: LAN側インターフェース（ローカルネットワーク側、orchestratorで動的検出）
+            relay_ports: 中継関所のために lan_if 側 INPUT で開ける TCP ポート（無ければ規則を追加しない）
         """
         self.wan_if = wan_interface
         self.lan_if = lan_interface
+        self.relay_ports: list[int] = list(relay_ports or [])
         self.domain_ipsets: dict[str, str] = {}  # domain -> ipset_name のマッピング
 
         # iptables/ipsetコマンド（legacyを使用）
@@ -205,6 +208,24 @@ class FirewallManager:
                 "ACCEPT",
             ]
         )
+        # 中継関所（sekimore-relay）- ai-agent からの SSH(git) / HTTP API / 443。lan_if 限定。
+        # relay_ports が空（domain_handlers 無し）ならコマンド列は従来と完全に同じ
+        for relay_port in self.relay_ports:
+            self._run_command(
+                [
+                    self.iptables_cmd,
+                    "-A",
+                    "INPUT",
+                    "-i",
+                    self.lan_if,
+                    "-p",
+                    "tcp",
+                    "--dport",
+                    str(relay_port),
+                    "-j",
+                    "ACCEPT",
+                ]
+            )
         # Web UI (8080/tcp) - 管理者からのアクセス
         self._run_command(
             [

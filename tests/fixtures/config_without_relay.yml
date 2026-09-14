@@ -1,0 +1,17 @@
+# 共有 fixture: relay 無しの従来設定。Python テストと relay（Rust）テストの双方が読む。
+name: fixture-without-relay
+allow_domains:
+  - pypi.org
+  - .github.com
+  - api.openai.com
+block_domains:
+  - evil.example.com
+ignore_domains: []
+allow_ips: []
+block_ips: []
+proxy:
+  enabled: false
+  port: 3128
+network:
+  lan_subnets: []
+database_path: /data/security_gateway.db

@@ -503,3 +503,64 @@ def describe_firewall_manager():
         )
 
         assert result is True
+
+
+def describe_relay_ports():
+    """中継関所のための INPUT 開放（lan_if 限定、無ければ規則が増えない）."""
+
+    def _input_dport_rules(mock_run):
+        rules = []
+        for c in mock_run.call_args_list:
+            cmd = c.args[0]
+            if len(cmd) > 3 and cmd[1:3] == ["-A", "INPUT"] and "--dport" in cmd:
+                rules.append(cmd)
+        return rules
+
+    @patch("subprocess.run")
+    def it_does_not_add_relay_rules_by_default(mock_run):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        FirewallManager(wan_interface="eth0", lan_interface="eth1").initialize_firewall()
+        baseline = [c.args[0] for c in mock_run.call_args_list]
+        ports = {r[r.index("--dport") + 1] for r in _input_dport_rules(mock_run)}
+        assert ports == {"53", "3128", "8080"}
+
+        mock_run.reset_mock()
+        FirewallManager(
+            wan_interface="eth0", lan_interface="eth1", relay_ports=[]
+        ).initialize_firewall()
+        assert [c.args[0] for c in mock_run.call_args_list] == baseline, (
+            "relay_ports=[] must be byte-identical"
+        )
+
+    @patch("subprocess.run")
+    def it_opens_relay_ports_on_lan_interface_only(mock_run):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        FirewallManager(
+            wan_interface="eth0", lan_interface="eth1", relay_ports=[22, 8420, 443]
+        ).initialize_firewall()
+        cmds = [c.args[0] for c in mock_run.call_args_list]
+        for port in ("22", "8420", "443"):
+            assert [
+                "iptables-legacy",
+                "-A",
+                "INPUT",
+                "-i",
+                "eth1",
+                "-p",
+                "tcp",
+                "--dport",
+                port,
+                "-j",
+                "ACCEPT",
+            ] in cmds
+        for rule in _input_dport_rules(mock_run):
+            if rule[rule.index("--dport") + 1] in ("22", "8420", "443"):
+                assert "-i" in rule and rule[rule.index("-i") + 1] == "eth1", rule
+        # relay 規則は Web UI(8080) の前に入る（INPUT の順序）
+        idx = [
+            i
+            for i, c in enumerate(cmds)
+            if len(c) > 3 and c[1:3] == ["-A", "INPUT"] and "--dport" in c
+        ]
+        dports = [cmds[i][cmds[i].index("--dport") + 1] for i in idx]
+        assert dports.index("22") < dports.index("8080")

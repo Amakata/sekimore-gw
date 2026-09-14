@@ -1,0 +1,84 @@
+name: Relay (Rust)
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "relay/**"
+      - ".github/workflows/relay.yml"
+      - "tests/fixtures/**"
+  pull_request:
+    paths:
+      - "relay/**"
+      - ".github/workflows/relay.yml"
+      - "tests/fixtures/**"
+  schedule:
+    - cron: "17 3 * * 1" # 週次で advisory を拾う
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --all-targets --features test-hooks -- -D warnings
+      - name: test (e2e requires git + ssh)
+        run: cargo test --features test-hooks --locked
+        env:
+          SEKIMORE_E2E_REQUIRED: "1"
+      - name: forbidden dependencies
+        run: |
+          ! cargo tree -i aws-lc-rs 2>/dev/null
+          ! cargo tree -i openssl-sys 2>/dev/null
+
+  audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
+  musl-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: statically linked and needs-relay exit codes
+        # Actions のシェルは bash -e。needs-relay が 1 を返すのは正常なので `|| rc=$?` で受ける
+        run: |
+          BIN=target/x86_64-unknown-linux-musl/release/sekimore-relay
+          file "$BIN"
+          file "$BIN" | grep -q "static"
+          "$BIN" --version
+          rc=0; "$BIN" --config ../tests/fixtures/config_without_relay.yml needs-relay || rc=$?
+          test "$rc" -eq 1
+          rc=0; "$BIN" --config ../tests/fixtures/config_with_relay.yml needs-relay || rc=$?
+          test "$rc" -eq 0
