@@ -57,10 +57,13 @@ jobs:
           platforms: linux/amd64,linux/arm64
 
       - name: Smoke test relay binary (amd64)
+        # bash -e 下で needs-relay の終了コードを検査するため `|| rc=$?` で受ける
         run: |
           IMAGE=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
           docker pull --platform linux/amd64 "$IMAGE"
           docker run --rm --platform linux/amd64 "$IMAGE" sekimore-relay --version
           docker run --rm --platform linux/amd64 "$IMAGE" sh -c 'ldd /usr/local/bin/sekimore-relay 2>&1 | grep -qi "not a dynamic\|statically"'
-          docker run --rm --platform linux/amd64 -v "$PWD/tests/fixtures/config_without_relay.yml:/etc/sekimore/config.yml:ro" "$IMAGE" sekimore-relay needs-relay; test $? -eq 1
-          docker run --rm --platform linux/amd64 -v "$PWD/tests/fixtures/config_with_relay.yml:/etc/sekimore/config.yml:ro" "$IMAGE" sekimore-relay needs-relay; test $? -eq 0
+          rc=0; docker run --rm --platform linux/amd64 -v "$PWD/tests/fixtures/config_without_relay.yml:/etc/sekimore/config.yml:ro" "$IMAGE" sekimore-relay needs-relay || rc=$?
+          test "$rc" -eq 1
+          rc=0; docker run --rm --platform linux/amd64 -v "$PWD/tests/fixtures/config_with_relay.yml:/etc/sekimore/config.yml:ro" "$IMAGE" sekimore-relay needs-relay || rc=$?
+          test "$rc" -eq 0

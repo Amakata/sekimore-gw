@@ -71,10 +71,14 @@ jobs:
           workspaces: relay
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --locked --target x86_64-unknown-linux-musl
-      - name: statically linked
+      - name: statically linked and needs-relay exit codes
+        # Actions のシェルは bash -e。needs-relay が 1 を返すのは正常なので `|| rc=$?` で受ける
         run: |
-          file target/x86_64-unknown-linux-musl/release/sekimore-relay
-          ldd target/x86_64-unknown-linux-musl/release/sekimore-relay 2>&1 | grep -qi "not a dynamic\|statically" 
-          ./target/x86_64-unknown-linux-musl/release/sekimore-relay --version
-          ./target/x86_64-unknown-linux-musl/release/sekimore-relay --config ../tests/fixtures/config_without_relay.yml needs-relay; test $? -eq 1
-          ./target/x86_64-unknown-linux-musl/release/sekimore-relay --config ../tests/fixtures/config_with_relay.yml needs-relay; test $? -eq 0
+          BIN=target/x86_64-unknown-linux-musl/release/sekimore-relay
+          file "$BIN"
+          file "$BIN" | grep -q "static"
+          "$BIN" --version
+          rc=0; "$BIN" --config ../tests/fixtures/config_without_relay.yml needs-relay || rc=$?
+          test "$rc" -eq 1
+          rc=0; "$BIN" --config ../tests/fixtures/config_with_relay.yml needs-relay || rc=$?
+          test "$rc" -eq 0

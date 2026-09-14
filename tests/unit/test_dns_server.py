@@ -1341,6 +1341,7 @@ def describe_domain_handlers_backward_compat():
             legacy.firewall_manager.setup_domain.call_args_list
             == empty.firewall_manager.setup_domain.call_args_list
         )
-        assert legacy.firewall_manager.setup_domain.call_count == 3  # example.com A/AAAA, api.github.com A
+        # example.com A/AAAA, api.github.com A
+        assert legacy.firewall_manager.setup_domain.call_count == 3
         await legacy.mapping.db.close()
         await empty.mapping.db.close()
