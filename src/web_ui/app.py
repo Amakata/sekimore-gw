@@ -1232,3 +1232,38 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(app, host="0.0.0.0", port=8080)
+
+
+# ---- Relay（中継関所）タブ: /data/relay を読むだけ（変更系は sekimore-relay CLI のみ） ----
+from . import relay_view  # noqa: E402
+
+
+def _relay_state_dir() -> Path:
+    return Path(relay_view.build_config(load_config()).state_dir)
+
+
+@app.get("/api/relay/config", response_model=relay_view.RelayConfigResponse)
+async def get_relay_config() -> relay_view.RelayConfigResponse:
+    """relay の設定（domain_handlers / relay セクション）と状態ファイルの有無."""
+    return relay_view.build_config(load_config())
+
+
+@app.get("/api/relay/stats", response_model=relay_view.RelayStatsResponse)
+async def get_relay_stats() -> relay_view.RelayStatsResponse:
+    """relay の 24h 統計（許可 / 拒否件数、トークン、登録鍵）."""
+    return relay_view.build_stats(load_config())
+
+
+@app.get("/api/relay/tokens", response_model=list[relay_view.RelayTokenInfo])
+async def get_relay_tokens() -> list[relay_view.RelayTokenInfo]:
+    """案件トークンの一覧（ラベルとメタデータのみ。ハッシュも平文も出さない）."""
+    return relay_view.read_tokens(_relay_state_dir())
+
+
+@app.get("/api/relay/audit", response_model=list[relay_view.RelayAuditEntry])
+async def get_relay_audit(limit: int = 100, kind: str = "all") -> list[relay_view.RelayAuditEntry]:
+    """監査ログ（新しい順）。kind=allowed でアクセス履歴、kind=blocked でブロック履歴."""
+    limit = max(1, min(limit, 1000))
+    if kind not in ("all", "allowed", "blocked"):
+        kind = "all"
+    return relay_view.read_audit(_relay_state_dir(), limit=limit, kind=kind)
