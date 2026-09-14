@@ -491,9 +491,9 @@ def describe_sekimore_relay_setup():
     import re
     import stat
 
-    SCRIPT = Path(__file__).parent.parent.parent / "agent-setup.sh"
-    TOKEN = "skm_" + "ab12" * 16
-    GW = "172.19.0.2"
+    script_path = Path(__file__).parent.parent.parent / "agent-setup.sh"
+    token = "skm_" + "ab12" * 16
+    gw = "172.19.0.2"
 
     def _shims(tmp_path: Path, *, relay_present=True, valid_token=None, bootstrap_json=None):
         """PATH に置く偽コマンド。呼び出しは calls.log に記録する."""
@@ -502,10 +502,10 @@ def describe_sekimore_relay_setup():
         log = tmp_path / "calls.log"
         if bootstrap_json is None:
             bootstrap_json = (
-                '{"ok":true,"fingerprint":"SHA256:x","added":true,"token":"%s",'
+                '{"ok":true,"fingerprint":"SHA256:x","added":true,"token":"' + token + '",'
                 '"token_expires":"2026-01-01T00:00:00Z","project":"case-a",'
                 '"repos":["LibOrg/awesome-lib","VendorOrg/reference-impl"],"git_domain":"ghe.example.com",'
-                '"upstream":"ghe.example.com"}' % TOKEN
+                '"upstream":"ghe.example.com"}'
             )
         (shim / "curl").write_text(
             f"""#!/bin/bash
@@ -522,13 +522,11 @@ esac
 """
         )
         (shim / "ssh-keyscan").write_text(
-            """#!/bin/bash
-host="${@: -1}"
-echo "ssh-keyscan $*" >> "%s"
-echo "# $host:22 SSH-2.0-sekimore-relay"
-echo "$host ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"
-"""
-            % log
+            "#!/bin/bash\n"
+            'host="${@: -1}"\n'
+            f'echo "ssh-keyscan $*" >> "{log}"\n'
+            'echo "# $host:22 SSH-2.0-sekimore-relay"\n'
+            'echo "$host ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"\n'
         )
         for f in shim.iterdir():
             f.chmod(0o755)
@@ -549,7 +547,7 @@ echo "$host ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAK
         env.update(extra_env or {})
         trace = "set -x;" if xtrace else ""
         proc = subprocess.run(
-            ["bash", "-c", f"{trace} source '{SCRIPT}'; sekimore_relay_setup {GW}"],
+            ["bash", "-c", f"{trace} source '{script_path}'; sekimore_relay_setup {gw}"],
             env=env,
             capture_output=True,
             text=True,
@@ -563,15 +561,15 @@ echo "$host ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAK
         proc, home = _run(tmp_path, shim)
         out = proc.stdout + proc.stderr
         assert proc.returncode == 0, out
-        assert TOKEN not in out, "plaintext token must not appear in stdout or xtrace"
+        assert token not in out, "plaintext token must not appear in stdout or xtrace"
         assert "received a project token" in out
 
         env_file = tmp_path / "etc" / "env"
         assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
         text = env_file.read_text()
-        assert f"SEKIMORE_IP={GW}" in text
-        assert f"SEKIMORE_ENDPOINT=http://{GW}:8420" in text
-        assert f"SEKIMORE_TOKEN={TOKEN}" in text
+        assert f"SEKIMORE_IP={gw}" in text
+        assert f"SEKIMORE_ENDPOINT=http://{gw}:8420" in text
+        assert f"SEKIMORE_TOKEN={token}" in text
         assert "SEKIMORE_REPO=LibOrg/awesome-lib" in text
         assert "SEKIMORE_GIT_DOMAIN=ghe.example.com" in text
 
@@ -583,7 +581,7 @@ echo "$host ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAK
         kh = (home / ".ssh" / "known_hosts").read_text().splitlines()
         assert len(kh) == 1, kh
         assert kh[0].startswith(
-            f"ghe.example.com,{GW} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKE"
+            f"ghe.example.com,{gw} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKE"
         ), kh[0]
 
         cfg = (home / ".ssh" / "config").read_text()
@@ -617,7 +615,7 @@ echo "$host ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAK
         sign_before = (keydir / "signing_ed25519.pub").read_text()
 
         # 2 回目: 既存トークンが /whoami で有効 → bootstrap を呼ばない、鍵は変わらない、追記は増えない
-        shim, log = _shims(tmp_path, valid_token=TOKEN)
+        shim, log = _shims(tmp_path, valid_token=token)
         log.write_text("")
         proc, home = _run(tmp_path, shim)
         out = proc.stdout + proc.stderr
@@ -625,13 +623,13 @@ echo "$host ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAK
         assert "still valid" in out
         assert (keydir / "id_ed25519.pub").read_text() == pub_before
         assert (keydir / "signing_ed25519.pub").read_text() == sign_before
-        assert f"SEKIMORE_TOKEN={TOKEN}" in (tmp_path / "etc" / "env").read_text()
+        assert f"SEKIMORE_TOKEN={token}" in (tmp_path / "etc" / "env").read_text()
         calls = log.read_text()
         assert "bootstrap-called" not in calls and "whoami-ok" in calls
         assert len((home / ".ssh" / "known_hosts").read_text().splitlines()) == 1
         assert (home / ".ssh" / "config").read_text().count("# >>> sekimore-relay >>>") == 1
         assert len((home / ".config" / "git" / "allowed_signers").read_text().splitlines()) == 1
-        assert TOKEN not in out
+        assert token not in out
 
     def it_skips_when_the_gateway_has_no_relay(tmp_path):
         shim, log = _shims(tmp_path, relay_present=False)
@@ -675,6 +673,6 @@ echo "$host ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAK
         proc, home = _run(tmp_path, shim, extra_env={"SEKIMORE_RELAY_SSH_PORT": "2222"})
         assert proc.returncode == 0, proc.stdout + proc.stderr
         kh = (home / ".ssh" / "known_hosts").read_text()
-        assert kh.startswith(f"[ghe.example.com]:2222,[{GW}]:2222 ssh-ed25519 ")
+        assert kh.startswith(f"[ghe.example.com]:2222,[{gw}]:2222 ssh-ed25519 ")
         assert "Port 2222" in (home / ".ssh" / "config").read_text()
         assert re.search(r"ssh-keyscan .*-p 2222", log.read_text())
