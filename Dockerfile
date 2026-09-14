@@ -1,19 +1,26 @@
 # syntax=docker/dockerfile:1.7
 
 # ---- sekimore-relay (Rust) ----
-# 各アーキで native にビルドした静的 musl バイナリ。glibc 世代に依存しないので
-# devcontainer base イメージへ COPY --from してもそのまま動く。
-# （buildx の arm64 は QEMU で遅い。cargo-zigbuild による cross は将来の最適化: relay/README.md）
-FROM rust:1.89-slim-bookworm AS relay-builder
-RUN apt-get update && apt-get install -y --no-install-recommends musl-tools pkg-config \
-    && rm -rf /var/lib/apt/lists/* \
-    && rustup target add "$(uname -m)-unknown-linux-musl"
+# ビルドはランナーの CPU (BUILDPLATFORM) で native に走らせ、TARGETARCH 向けの静的 musl バイナリを
+# cargo-zigbuild でクロスコンパイルする。arm64 を QEMU で回すと 40 分超かかるため。
+# 静的 musl なので glibc 世代に依存せず、devcontainer base イメージへ COPY --from してもそのまま動く。
+FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.20.1 AS relay-builder
+ARG TARGETARCH
 WORKDIR /build
-COPY relay/Cargo.toml relay/Cargo.lock relay/rust-toolchain.toml ./
+# rust-toolchain.toml の版を先に入れておく (ソース変更で無効化されないレイヤ)
+COPY relay/rust-toolchain.toml ./
+RUN CHANNEL="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" \
+    && rustup toolchain install "$CHANNEL" --profile minimal --component rustfmt --component clippy \
+    && rustup target add --toolchain "$CHANNEL" x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+COPY relay/Cargo.toml relay/Cargo.lock ./
 COPY relay/src ./src
-# テストの fixture は Rust のユニットテストが include_str! するだけなので不要（--release はテストを含まない）
-RUN cargo build --release --locked --target "$(uname -m)-unknown-linux-musl" \
-    && install -m 0755 "target/$(uname -m)-unknown-linux-musl/release/sekimore-relay" /sekimore-relay
+RUN case "$TARGETARCH" in \
+      amd64) T=x86_64-unknown-linux-musl ;; \
+      arm64) T=aarch64-unknown-linux-musl ;; \
+      *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && cargo zigbuild --release --locked --target "$T" \
+    && install -m 0755 "target/$T/release/sekimore-relay" /sekimore-relay
 
 # ---- gateway ----
 FROM python:3.13-slim

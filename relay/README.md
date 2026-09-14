@@ -179,5 +179,14 @@ cargo tree -i aws-lc-rs; cargo tree -i openssl-sys  # どちらも無いこと
 
 ## ビルド（イメージ）
 
-`rust:1.89-slim-bookworm` + `musl-tools` で各アーキ native の静的 musl バイナリ（`sekimore-gw/Dockerfile` の `relay-builder` 段）。
+`sekimore-gw/Dockerfile` の `relay-builder` 段が `ghcr.io/rust-cross/cargo-zigbuild` を `--platform=$BUILDPLATFORM` で使い、
+`TARGETARCH` 向けの静的 musl バイナリを **クロスコンパイル**する（arm64 を QEMU で回すと 45 分かかるため。クロスなら両アーキで数分）。
 glibc 世代に依存しないので、devcontainer base イメージへ `COPY --from` してそのまま動く。
+
+手元で両ターゲットを作る例:
+
+```bash
+docker run --rm -v "$PWD:/src:ro" -w /src -e CARGO_TARGET_DIR=/target -v relay-target:/target ghcr.io/rust-cross/cargo-zigbuild:0.20.1 \
+  sh -c 'rustup toolchain install 1.89.0 --profile minimal && rustup target add --toolchain 1.89.0 x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+         && cargo zigbuild --release --locked --target x86_64-unknown-linux-musl && cargo zigbuild --release --locked --target aarch64-unknown-linux-musl'
+```
