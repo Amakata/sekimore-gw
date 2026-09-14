@@ -676,3 +676,67 @@ esac
         assert kh.startswith(f"[ghe.example.com]:2222,[{gw}]:2222 ssh-ed25519 ")
         assert "Port 2222" in (home / ".ssh" / "config").read_text()
         assert re.search(r"ssh-keyscan .*-p 2222", log.read_text())
+
+    def it_names_the_signing_key_after_the_operator_and_project(tmp_path):
+        """署名鍵のコメント = GitHub 登録時の Title。案件名と git の user.name / user.email を含め、
+        SEKIMORE_SIGNING_KEY_COMMENT で上書きでき、旧既定 (…@<hostname>) の既存鍵は名前入りに更新される."""
+        shim, _log = _shims(tmp_path)
+        home = tmp_path / "home"
+        home.mkdir(exist_ok=True)
+        subprocess.run(
+            ["git", "config", "--global", "user.name", "Taro Test"],
+            env={"HOME": str(home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "--global", "user.email", "taro@example.com"],
+            env={"HOME": str(home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+            check=True,
+        )
+        keydir = home / ".ssh" / "sekimore"
+
+        proc, home = _run(tmp_path, shim, extra_env={"SEKIMORE_PROJECT": "case-a"})
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        pub = (keydir / "signing_ed25519.pub").read_text().rstrip("\n")
+        assert pub.endswith(" sekimore-agent-signing: case-a / Taro Test <taro@example.com>"), pub
+        key_part = " ".join(pub.split(" ")[:2])
+        # allowed_signers はコメント抜きの鍵だけを持つ (スペース入りコメントに影響されない)
+        signers = (home / ".config" / "git" / "allowed_signers").read_text()
+        assert key_part in signers and "Taro Test" not in signers
+
+        # 旧既定コメントのままの鍵は、2 回目の実行で名前入りに更新される。鍵 (fingerprint) は不変
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-c",
+                "-C",
+                "sekimore-agent-signing@oldhost",
+                "-P",
+                "",
+                "-f",
+                str(keydir / "signing_ed25519"),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        shim, _log = _shims(tmp_path, valid_token=token)
+        proc, home = _run(tmp_path, shim, extra_env={"SEKIMORE_PROJECT": "case-a"})
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        pub2 = (keydir / "signing_ed25519.pub").read_text().rstrip("\n")
+        assert pub2.endswith(" sekimore-agent-signing: case-a / Taro Test <taro@example.com>"), pub2
+        assert " ".join(pub2.split(" ")[:2]) == key_part
+
+        # 明示したコメントが優先。名前入りの既存コメントは触らない (旧既定形式のときだけ更新する)
+        proc, home = _run(
+            tmp_path, shim, extra_env={"SEKIMORE_SIGNING_KEY_COMMENT": "my agent key"}
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (keydir / "signing_ed25519.pub").read_text().rstrip("\n") == pub2
+
+    def it_falls_back_to_hostname_when_no_identity_is_known(tmp_path):
+        shim, _log = _shims(tmp_path)
+        proc, home = _run(tmp_path, shim)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        pub = (home / ".ssh" / "sekimore" / "signing_ed25519.pub").read_text().rstrip("\n")
+        assert re.search(r" sekimore-agent-signing@\S+$", pub), pub
