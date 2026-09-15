@@ -75,6 +75,7 @@ class RelayConfigResponse(BaseModel):
     bootstrap: str = "auto"
     token_ttl: str = "12h"
     allow_delete: bool = False
+    allow_tags: bool = False
     ssh_listen: str = "0.0.0.0:22"
     api_listen: str = "0.0.0.0:8420"
     state_dir: str = "/data/relay"
@@ -185,6 +186,7 @@ def build_config(config: dict) -> RelayConfigResponse:
         bootstrap=str(relay.get("bootstrap", "auto")),
         token_ttl=str(relay.get("token_ttl", "12h")),
         allow_delete=bool(relay.get("allow_delete", False)),
+        allow_tags=bool(relay.get("allow_tags", False)),
         ssh_listen=str(relay.get("ssh_listen", "0.0.0.0:22")),
         api_listen=str(relay.get("api_listen", "0.0.0.0:8420")),
         state_dir=state_dir,
