@@ -572,6 +572,9 @@ esac
         assert f"SEKIMORE_TOKEN={token}" in text
         assert "SEKIMORE_REPO=LibOrg/awesome-lib" in text
         assert "SEKIMORE_GIT_DOMAIN=ghe.example.com" in text
+        # `sekimore` ラッパーの自動更新用
+        assert "SEKIMORE_TOKEN_EXPIRES=2026-01-01T00:00:00Z" in text
+        assert f"SEKIMORE_AGENT_KEY={home}/.ssh/sekimore/id_ed25519.pub" in text
 
         keydir = home / ".ssh" / "sekimore"
         for k in ("id_ed25519", "signing_ed25519"):

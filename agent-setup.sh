@@ -116,9 +116,10 @@ sekimore_relay_setup() {
   local xtrace=0
   case $- in *x*) xtrace=1 ;; esac
   set +x
-  local token="" repo="" git_domain="" resp=""
+  local token="" token_expires="" repo="" git_domain="" resp=""
   if [ -r "$env_file" ]; then
     token=$(sed -n 's/^SEKIMORE_TOKEN=//p' "$env_file" | head -1)
+    token_expires=$(sed -n 's/^SEKIMORE_TOKEN_EXPIRES=//p' "$env_file" | head -1)
     repo=$(sed -n 's/^SEKIMORE_REPO=//p' "$env_file" | head -1)
     git_domain=$(sed -n 's/^SEKIMORE_GIT_DOMAIN=//p' "$env_file" | head -1)
   fi
@@ -133,6 +134,7 @@ sekimore_relay_setup() {
       resp=$(curl -sS -m 10 -X POST -H 'Content-Type: application/json' \
                -d "{\"public_key\":\"$pub\",\"label\":\"$(hostname)\"}" "$endpoint/bootstrap" 2>/dev/null) || resp=""
       token=$(printf '%s' "$resp" | grep -o 'skm_[0-9a-f]\{64\}' | head -1)
+      token_expires=$(printf '%s' "$resp" | grep -o '"token_expires":"[^"]*"' | cut -d'"' -f4)
       if [ -n "$token" ]; then
         echo "[agent] relay: registered the disposable key and received a project token"
         if [ -z "$repo" ]; then
@@ -161,13 +163,16 @@ sekimore_relay_setup() {
     echo "SEKIMORE_GIT_DOMAIN=$git_domain"
     if [ -n "$repo" ]; then echo "SEKIMORE_REPO=$repo"; fi
     if [ -n "$token" ]; then echo "SEKIMORE_TOKEN=$token"; fi
+    # 以下 2 つは `sekimore` ラッパーの自動更新用 (期限切れなら bootstrap をやり直す)
+    if [ -n "$token_expires" ]; then echo "SEKIMORE_TOKEN_EXPIRES=$token_expires"; fi
+    echo "SEKIMORE_AGENT_KEY=$keydir/id_ed25519.pub"
   } > "$tmp"
   chmod 600 "$tmp"
   chown "$own" "$tmp"
   mv -f "$tmp" "$env_file"
   local token_note="(NO token)"
   if [ -n "$token" ]; then token_note="(token issued)"; fi
-  unset token resp
+  unset token token_expires resp
   if [ "$xtrace" = 1 ]; then set -x; fi
 
   # ---- known_hosts: 関所のホスト鍵を <git_domain> として登録 (置換なので鍵が変わっても追従) ----
