@@ -928,15 +928,26 @@ mod tests {
     #[tokio::test]
     async fn ci_requires_ci_read() {
         // pr:read だけでは ci は叩けない
-        let p = Project::new("case-a").with_repo("Org/Repo", Mode::ReadOnly, &[]).grant("pr:read");
+        let p = Project::new("case-a")
+            .with_repo("Org/Repo", Mode::ReadOnly, &[])
+            .grant("pr:read");
         let auth = p.authorize("Org/Repo", Resource::Pr, Action::Read).unwrap();
-        assert!(matches!(gh().ci_jobs(&auth, 1).await, Err(GhError::Denied(_))));
-        // ci:read があれば証明は通り、上流トークン段階まで進む
-        let p = Project::new("case-a").with_repo("Org/Repo", Mode::ReadOnly, &[]).grant("ci:read");
-        let auth = p.authorize("Org/Repo", Resource::Ci, Action::Read).unwrap();
-        assert!(matches!(gh().ci_jobs(&auth, 1).await, Err(GhError::Token(_))));
         assert!(matches!(
-            gh().ci_job_log(&auth, 99, "test", "failure", 100, None).await,
+            gh().ci_jobs(&auth, 1).await,
+            Err(GhError::Denied(_))
+        ));
+        // ci:read があれば証明は通り、上流トークン段階まで進む
+        let p = Project::new("case-a")
+            .with_repo("Org/Repo", Mode::ReadOnly, &[])
+            .grant("ci:read");
+        let auth = p.authorize("Org/Repo", Resource::Ci, Action::Read).unwrap();
+        assert!(matches!(
+            gh().ci_jobs(&auth, 1).await,
+            Err(GhError::Token(_))
+        ));
+        assert!(matches!(
+            gh().ci_job_log(&auth, 99, "test", "failure", 100, None)
+                .await,
             Err(GhError::Token(_))
         ));
     }
