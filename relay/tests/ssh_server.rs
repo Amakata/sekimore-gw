@@ -89,6 +89,7 @@ async fn start(project: Project) -> Server {
         audit: audit.clone(),
         limits: Limits::default(),
         allow_delete: false,
+        allow_tags: false,
     });
     let server = SshServer::new(
         server_config(host_key, Duration::from_secs(30)),
