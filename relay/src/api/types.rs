@@ -45,6 +45,11 @@ pub struct ApiRequest {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub job_id: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
+    pub run_id: u64,
+    /// タグ名 / ブランチ名 / SHA (ci runs)
+    #[serde(default, rename = "ref", skip_serializing_if = "String::is_empty")]
+    pub git_ref: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub window: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<u64>,

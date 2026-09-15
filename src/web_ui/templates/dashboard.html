@@ -1145,6 +1145,7 @@
                         relayBadge(cfg.bootstrap_disabled ? 'OFF' : 'ON', cfg.bootstrap_disabled ? 'badge-blocked' : 'badge-allowed')),
                     relayKV('Token TTL', cfg.token_ttl),
                     relayKV('Allow delete (refs)', cfg.allow_delete ? 'yes' : 'no'),
+                    relayKV('Allow tags (push)', cfg.allow_tags ? 'yes' : 'no'),
                     relayKV('State dir', cfg.state_dir),
                 ].join('');
 
