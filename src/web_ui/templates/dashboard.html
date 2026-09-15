@@ -1150,7 +1150,7 @@
 
                 const allPerms = ['issue:assign', 'issue:close', 'issue:comment', 'issue:create', 'issue:label',
                     'pr:close', 'pr:comment', 'pr:create', 'pr:merge', 'pr:read', 'pr:review',
-                    'project:add_item', 'project:read', 'project:update_item', 'repo:read'];
+                    'project:add_item', 'project:read', 'project:update_item', 'repo:read', 'ci:read'];
                 const granted = new Set(cfg.permissions);
                 cfg.permissions.forEach(p => allPerms.includes(p) || allPerms.push(p));
                 document.getElementById('relay-permissions').innerHTML = allPerms.map(p =>

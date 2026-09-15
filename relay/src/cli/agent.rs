@@ -26,6 +26,11 @@ pub enum AgentCmd {
         #[command(subcommand)]
         cmd: IssueCmd,
     },
+    /// CI (GitHub Actions) の状態とログ
+    Ci {
+        #[command(subcommand)]
+        cmd: CiCmd,
+    },
     /// Projects v2 操作（関所が GraphQL を組み立てる）
     Project {
         #[command(subcommand)]
@@ -86,6 +91,33 @@ pub enum PrCmd {
         #[arg(long)]
         number: u64,
         /// JSON をそのまま出す（既定は 1 行サマリ + チェック一覧）
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CiCmd {
+    /// PR の最新 run のジョブ一覧 (どれが失敗したか、job_id)
+    Jobs {
+        #[arg(long)]
+        number: u64,
+    },
+    /// ジョブのログを末尾から表示する。--before でさらに前へ遡る
+    Log {
+        /// PR 番号 (失敗ジョブを自動選択)。--job-id 指定時は不要
+        #[arg(long)]
+        number: Option<u64>,
+        /// ジョブ ID を直接指定 (ci jobs で得る)
+        #[arg(long)]
+        job_id: Option<u64>,
+        /// 表示行数 (末尾から。既定 200)
+        #[arg(long, default_value = "200")]
+        window: u64,
+        /// この行番号より前を表示 (前ページの start を渡す)
+        #[arg(long)]
+        before: Option<u64>,
+        /// JSON をそのまま出す
         #[arg(long)]
         json: bool,
     },
@@ -305,6 +337,39 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 return Ok(if resp.ok { 0 } else { 1 });
             }
         },
+        AgentCmd::Ci { cmd } => match cmd {
+            CiCmd::Jobs { number } => {
+                req.number = number;
+                "/ci/jobs"
+            }
+            CiCmd::Log {
+                number,
+                job_id,
+                window,
+                before,
+                json,
+            } => {
+                if let Some(n) = number {
+                    req.number = n;
+                }
+                if let Some(j) = job_id {
+                    req.job_id = j;
+                }
+                req.window = window;
+                req.before = before;
+                let resp = client.call("/ci/log", &req).await?;
+                if !resp.ok {
+                    eprintln!("sekimore: {}", resp.error.unwrap_or_default());
+                    return Ok(1);
+                }
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&resp.raw)?);
+                } else {
+                    print_ci_log(&resp);
+                }
+                return Ok(0);
+            }
+        },
         AgentCmd::Issue { cmd } => match cmd {
             IssueCmd::Create {
                 title,
@@ -393,6 +458,39 @@ fn print_pr_status(resp: &ApiResponse) {
             };
             println!("  {mark} {state:<12} {name}");
         }
+    }
+}
+
+/// `ci log` の人間向け表示。raw に CiLogPage の JSON が入っている。
+fn print_ci_log(resp: &ApiResponse) {
+    let Some(raw) = &resp.raw else { return };
+    let g = |k: &str| raw.get(k);
+    let name = g("job_name").and_then(|v| v.as_str()).unwrap_or("");
+    let concl = g("conclusion").and_then(|v| v.as_str()).unwrap_or("");
+    let total = g("total_lines").and_then(|v| v.as_u64()).unwrap_or(0);
+    let start = g("start").and_then(|v| v.as_u64()).unwrap_or(0);
+    let end = g("end").and_then(|v| v.as_u64()).unwrap_or(0);
+    let job_id = g("job_id").and_then(|v| v.as_u64()).unwrap_or(0);
+    let hdr = if name.is_empty() {
+        format!("== job {job_id} lines {start}..{end} / {total}")
+    } else {
+        format!("== {name} [{concl}] lines {start}..{end} / {total}")
+    };
+    eprintln!("{hdr}");
+    if let Some(lines) = g("lines").and_then(|v| v.as_array()) {
+        for l in lines {
+            if let Some(s) = l.as_str() {
+                println!("{s}");
+            }
+        }
+    }
+    if g("has_more_before")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        eprintln!(
+            "-- more above. next: sekimore ci log --job-id {job_id} --before {start} --window <n>"
+        );
     }
 }
 

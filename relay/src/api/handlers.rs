@@ -56,6 +56,8 @@ pub async fn dispatch(
         "/pr/merge" => pr_merge(ctx, req).await,
         "/pr/close" => pr_close(ctx, req).await,
         "/pr/status" => pr_status(ctx, req).await,
+        "/ci/jobs" => ci_jobs(ctx, req).await,
+        "/ci/log" => ci_log(ctx, req).await,
         "/issue/create" => issue_create(ctx, req).await,
         "/issue/comment" => issue_comment(ctx, req).await,
         "/issue/close" => issue_close(ctx, req).await,
@@ -198,6 +200,73 @@ async fn pr_status(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
         number: Some(st.number),
         raw: Some(raw),
         message: Some(msg),
+        ..Default::default()
+    })
+}
+
+async fn ci_jobs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    need(req.number != 0, "number is required")?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Ci, Action::Read)?;
+    let jobs = gh(ctx)?.ci_jobs(&auth, req.number).await?;
+    let raw = serde_json::to_value(&jobs).unwrap_or(serde_json::Value::Null);
+    let msg = jobs
+        .iter()
+        .map(|j| {
+            let st = if j.conclusion.is_empty() {
+                j.status.as_str()
+            } else {
+                j.conclusion.as_str()
+            };
+            format!("{} [{}] job_id={}", j.name, st, j.id)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(ApiResponse {
+        ok: true,
+        raw: Some(raw),
+        message: Some(if msg.is_empty() {
+            "no CI jobs for this PR".into()
+        } else {
+            msg
+        }),
+        ..Default::default()
+    })
+}
+
+async fn ci_log(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Ci, Action::Read)?;
+    let window = if req.window == 0 {
+        200
+    } else {
+        req.window as usize
+    };
+    let before = req.before.map(|b| b as usize);
+    // job_id 指定が無ければ、PR の失敗ジョブ (無ければ最後のジョブ) を自動選択
+    let (job_id, name, concl) = if req.job_id != 0 {
+        (req.job_id, String::new(), String::new())
+    } else {
+        need(req.number != 0, "number or job_id is required")?;
+        let jobs = gh(ctx)?.ci_jobs(&auth, req.number).await?;
+        let pick = jobs
+            .iter()
+            .find(|j| j.conclusion == "failure")
+            .or_else(|| jobs.last())
+            .ok_or_else(|| ApiError::bad_request("no CI jobs for this PR"))?;
+        (pick.id, pick.name.clone(), pick.conclusion.clone())
+    };
+    let page = gh(ctx)?
+        .ci_job_log(&auth, job_id, &name, &concl, window, before)
+        .await?;
+    let raw = serde_json::to_value(&page).unwrap_or(serde_json::Value::Null);
+    Ok(ApiResponse {
+        ok: true,
+        raw: Some(raw),
         ..Default::default()
     })
 }

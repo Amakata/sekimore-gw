@@ -133,6 +133,8 @@ sekimore whoami                                 # = sekimore-relay agent whoami�
 sekimore-relay agent pr create --head sekimore/main-abc1234 --base main --title T
 sekimore-relay agent issue create --title T --labels bug     # ラベル付きは issue:label も要る
 sekimore pr status --number 12                   # PR の CI チェックが通ったか（pr:read）。--json で機械可読
+sekimore ci jobs --number 12                     # 最新 run のジョブ一覧（どれが失敗したか / job_id）（ci:read）
+sekimore ci log  --number 12                     # 失敗ジョブのログを末尾から。--before <start> でさらに前へ、--window で行数
 sekimore-relay agent project add-item --project-id P --content-id C
 ```
 
