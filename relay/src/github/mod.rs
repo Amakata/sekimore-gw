@@ -30,6 +30,8 @@ use upstream_token::{TokenError, UpstreamTokenStore};
 
 pub const API_VERSION: &str = "2022-11-28";
 const RESPONSE_CAP: usize = 1 << 20;
+/// CI ログは大きい。関所側で末尾を切って返すが、取得上限は 16 MiB とする。
+const CI_LOG_CAP: usize = 16 << 20;
 
 #[derive(Debug)]
 pub enum GhError {
@@ -204,7 +206,34 @@ impl GitHub {
         let out: Vec<PrResult> = self.rest("GET", &path, None).await?;
         Ok(out.into_iter().next())
     }
+}
 
+/// CI ログの 1 ページ。末尾からのウィンドウ。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CiLogPage {
+    pub job_id: u64,
+    pub job_name: String,
+    pub conclusion: String,
+    /// このジョブのログ総行数
+    pub total_lines: usize,
+    /// 返している範囲 [start, end)（0 始まり、行番号）
+    pub start: usize,
+    pub end: usize,
+    pub lines: Vec<String>,
+    /// さらに前 (古い方) があるか。あれば --before start で遡れる
+    pub has_more_before: bool,
+}
+
+/// PR の CI ジョブ一覧（どれが失敗したか）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CiJob {
+    pub id: u64,
+    pub name: String,
+    pub status: String,     // queued / in_progress / completed
+    pub conclusion: String, // success / failure / "" (未完)
+}
+
+impl GitHub {
     /// PR の状態と CI チェックを集計する。check-runs（GitHub Actions 等）と commit statuses（外部 CI）の両方を見る。
     pub async fn pull_request_status(
         &self,
@@ -301,6 +330,111 @@ impl GitHub {
             mergeable,
             checks,
             rollup,
+        })
+    }
+    /// PR の最新コミットに紐づく最新の Actions run のジョブ一覧。失敗ジョブの job_id を得るのに使う。
+    pub async fn ci_jobs(&self, auth: &Authorized<'_>, number: u64) -> Result<Vec<CiJob>, GhError> {
+        auth.ensure(Resource::Ci, Action::Read)?;
+        let repo = auth.repo();
+        let pr: Value = self
+            .rest("GET", &format!("/repos/{repo}/pulls/{number}"), None)
+            .await?;
+        let head_sha = pr
+            .pointer("/head/sha")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if head_sha.is_empty() {
+            return Ok(Vec::new());
+        }
+        let runs: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{repo}/actions/runs?head_sha={head_sha}&per_page=100"),
+                None,
+            )
+            .await?;
+        let mut latest_run: Option<(u64, String)> = None;
+        if let Some(arr) = runs.get("workflow_runs").and_then(Value::as_array) {
+            for r in arr {
+                let id = r.get("id").and_then(Value::as_u64).unwrap_or(0);
+                let created = r
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                if id != 0 && latest_run.as_ref().is_none_or(|(_, c)| created > *c) {
+                    latest_run = Some((id, created));
+                }
+            }
+        }
+        let Some((run_id, _)) = latest_run else {
+            return Ok(Vec::new());
+        };
+        let jobs: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"),
+                None,
+            )
+            .await?;
+        let mut out = Vec::new();
+        if let Some(arr) = jobs.get("jobs").and_then(Value::as_array) {
+            for j in arr {
+                out.push(CiJob {
+                    id: j.get("id").and_then(Value::as_u64).unwrap_or(0),
+                    name: j
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    status: j
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    conclusion: j
+                        .get("conclusion")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// ジョブのログの 1 ページ (末尾から window 行、before より前)。before=None は末尾から。
+    /// GitHub の job logs はプレーンテキスト全体を返すので、関所側で行に切って窓を返す。
+    pub async fn ci_job_log(
+        &self,
+        auth: &Authorized<'_>,
+        job_id: u64,
+        job_name: &str,
+        conclusion: &str,
+        window: usize,
+        before: Option<usize>,
+    ) -> Result<CiLogPage, GhError> {
+        auth.ensure(Resource::Ci, Action::Read)?;
+        let repo = auth.repo();
+        let text = self
+            .rest_text("GET", &format!("/repos/{repo}/actions/jobs/{job_id}/logs"))
+            .await?;
+        let all: Vec<&str> = text.lines().collect();
+        let total = all.len();
+        let window = window.clamp(1, 2000);
+        let end = before.unwrap_or(total).min(total);
+        let start = end.saturating_sub(window);
+        let lines = all[start..end].iter().map(|s| s.to_string()).collect();
+        Ok(CiLogPage {
+            job_id,
+            job_name: job_name.to_string(),
+            conclusion: conclusion.to_string(),
+            total_lines: total,
+            start,
+            end,
+            lines,
+            has_more_before: start > 0,
         })
     }
 
@@ -575,6 +709,41 @@ impl GitHub {
         self.send(req, method, path).await
     }
 
+    /// プレーンテキストを返すエンドポイント (Actions のジョブログ等)。リダイレクトは reqwest が追う。
+    async fn rest_text(&self, method: &str, path: &str) -> Result<String, GhError> {
+        let token = self.tokens.token()?;
+        let m = reqwest::Method::from_bytes(method.as_bytes())
+            .map_err(|e| GhError::Parse(e.to_string()))?;
+        let req = self
+            .http
+            .request(m, self.api_url(path))
+            .bearer_auth(&token)
+            .header(reqwest::header::USER_AGENT, http::USER_AGENT)
+            .header("X-GitHub-Api-Version", API_VERSION);
+        let resp = req.send().await?;
+        let status = resp.status().as_u16();
+        let body = read_limited(resp, CI_LOG_CAP).await?;
+        let audit_path = path.split('?').next().unwrap_or(path);
+        self.audit.log(
+            "api_call",
+            Actor::System,
+            &[
+                ("method", method),
+                ("path", audit_path),
+                ("status", &status.to_string()),
+            ],
+        );
+        if status >= 400 {
+            return Err(GhError::Status {
+                method: method.to_string(),
+                path: audit_path.to_string(),
+                status,
+                body: truncate(&body),
+            });
+        }
+        Ok(String::from_utf8_lossy(&body).into_owned())
+    }
+
     async fn graphql(&self, query: &str, variables: Value) -> Result<Value, GhError> {
         let token = self.tokens.token()?;
         let req = self
@@ -754,6 +923,40 @@ mod tests {
         assert_eq!(rollup_state(&[mk("in_progress"), mk("failure")]), "failure");
         assert_eq!(rollup_state(&[mk("success"), mk("timed_out")]), "failure");
         assert_eq!(rollup_state(&[mk("neutral"), mk("cancelled")]), "failure");
+    }
+
+    #[tokio::test]
+    async fn ci_requires_ci_read() {
+        // pr:read だけでは ci は叩けない
+        let p = Project::new("case-a")
+            .with_repo("Org/Repo", Mode::ReadOnly, &[])
+            .grant("pr:read");
+        let auth = p.authorize("Org/Repo", Resource::Pr, Action::Read).unwrap();
+        assert!(matches!(
+            gh().ci_jobs(&auth, 1).await,
+            Err(GhError::Denied(_))
+        ));
+        // ci:read があれば証明は通り、上流トークン段階まで進む
+        let p = Project::new("case-a")
+            .with_repo("Org/Repo", Mode::ReadOnly, &[])
+            .grant("ci:read");
+        let auth = p.authorize("Org/Repo", Resource::Ci, Action::Read).unwrap();
+        assert!(matches!(
+            gh().ci_jobs(&auth, 1).await,
+            Err(GhError::Token(_))
+        ));
+        assert!(matches!(
+            gh().ci_job_log(&auth, 99, "test", "failure", 100, None)
+                .await,
+            Err(GhError::Token(_))
+        ));
+    }
+
+    #[test]
+    fn ci_read_is_a_valid_permission() {
+        use crate::policy::parse_permission;
+        assert!(parse_permission("ci:read").is_ok());
+        assert!(crate::policy::all_permission_keys().contains(&"ci:read".to_string()));
     }
 
     #[test]

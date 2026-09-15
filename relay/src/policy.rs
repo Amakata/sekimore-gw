@@ -22,6 +22,7 @@ pub enum Resource {
     Issue,
     Project,
     Repo,
+    Ci,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -45,6 +46,7 @@ impl Resource {
             Resource::Issue => "issue",
             Resource::Project => "project",
             Resource::Repo => "repo",
+            Resource::Ci => "ci",
         }
     }
     /// そのリソースに存在するアクション。設定の typo を弾く。
@@ -55,13 +57,15 @@ impl Resource {
             Resource::Issue => &[Create, Comment, Close, Label, Assign],
             Resource::Project => &[Read, AddItem, UpdateItem],
             Resource::Repo => &[Read],
+            Resource::Ci => &[Read],
         }
     }
-    pub const ALL: [Resource; 4] = [
+    pub const ALL: [Resource; 5] = [
         Resource::Pr,
         Resource::Issue,
         Resource::Project,
         Resource::Repo,
+        Resource::Ci,
     ];
 }
 
@@ -93,9 +97,10 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "issue" => Resource::Issue,
         "project" => Resource::Project,
         "repo" => Resource::Repo,
+        "ci" => Resource::Ci,
         other => {
             return Err(format!(
-                "unknown resource {other:?} (known: issue, pr, project, repo)"
+                "unknown resource {other:?} (known: ci, issue, pr, project, repo)"
             ))
         }
     };
@@ -684,6 +689,6 @@ mod tests {
         assert!(parse_permission("prcreate").is_err());
         assert!(Project::try_new("x", vec![], &["pr:delete".to_string()]).is_err());
         assert!(Project::try_new("x", vec![RepoPolicy::new("nope", Mode::ReadOnly)], &[]).is_err());
-        assert_eq!(all_permission_keys().len(), 15); // pr:read 追加 (0.1.3)
+        assert_eq!(all_permission_keys().len(), 16); // pr:read (0.1.3) + ci:read (0.1.5)
     }
 }

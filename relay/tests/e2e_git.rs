@@ -185,6 +185,7 @@ async fn setup(grants: &[&str]) -> E2e {
             ..Limits::default()
         },
         allow_delete: false,
+        allow_tags: false,
     });
     let server = SshServer::new(
         server_config(host_key, Duration::from_secs(120)),
