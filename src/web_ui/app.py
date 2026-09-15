@@ -1228,12 +1228,6 @@ async def broadcast_log(log_entry: LogEntry) -> None:
     await manager.broadcast(log_entry.model_dump())
 
 
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8080)
-
-
 # ---- Relay（中継関所）タブ: /data/relay を読むだけ（変更系は sekimore-relay CLI のみ） ----
 from . import relay_view  # noqa: E402
 
@@ -1267,3 +1261,9 @@ async def get_relay_audit(limit: int = 100, kind: str = "all") -> list[relay_vie
     if kind not in ("all", "allowed", "blocked"):
         kind = "all"
     return relay_view.read_audit(_relay_state_dir(), limit=limit, kind=kind)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8080)
