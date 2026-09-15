@@ -40,9 +40,9 @@ services:
       - ./config/squid/squid.conf.template:/etc/squid/squid.conf.template:ro
       # Mount data directory (persistent storage for database)
       - gateway-data:/data
-      # relay 使用時: 依頼者の ssh-agent socket を置いた「ディレクトリ」をマウントする（socket のパスは
-      # セッション毎に変わるので固定ディレクトリを介する）。docs: doc/sekimore-gw/design/relay.md
-      # - ${SEKIMORE_AGENT_SOCK_DIR:?dir containing agent.sock}:/ssh-agent:ro
+      # relay 使用時: 依頼者の ssh-agent socket をマウントする。Docker Desktop (Mac) はホストの agent を
+      # /run/host-services/ssh-auth.sock に転送している。Vagrant VM では固定パスに socket を用意する。docs: relay/README.md
+      # - ${SEKIMORE_AGENT_SOCK:-/run/host-services/ssh-auth.sock}:/ssh-agent/agent.sock:ro
     env_file:
       - .env
     environment:

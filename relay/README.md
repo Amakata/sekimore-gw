@@ -1,3 +1,4 @@
+| post-create の「依頼者の ssh-agent が転送されています」が `env -u SSH_AUTH_SOCK code` でも消えない | macOS の `code` は `open` 経由で本体を起動するので launchd の `SSH_AUTH_SOCK` を継ぐ（VS Code が起動中なら既存インスタンスが開く） | VS Code を Cmd+Q で完全終了してから `mise run vscode`（launchd の変数を外して本体を直接起動する）。`mise run vscode:check` で確認 |
 # sekimore-relay
 
 AI エージェントの **git 操作（SSH）と GitHub API 操作を案件単位のポリシーで中継する関所**。
@@ -49,22 +50,21 @@ relay:
 
 ### 2. 依頼者の ssh-agent を関所に渡す
 
-relay は上流 git に **依頼者の ssh-agent** で認証する（鍵は Mac から出ない）。socket のパスはセッション毎に変わるので、
-socket を置いた **ディレクトリ** を固定パスでマウントする。
+relay は上流 git に **依頼者の ssh-agent** で認証する（鍵は Mac から出ない）。
 
 ```yaml
 # docker-compose.yml の sekimore-gw
     volumes:
-      - ${SEKIMORE_AGENT_SOCK_DIR}:/ssh-agent:ro     # 例: /home/vagrant/.ssh-agent（中に agent.sock）
+      - ${SEKIMORE_AGENT_SOCK:-/run/host-services/ssh-auth.sock}:/ssh-agent/agent.sock:ro
     environment:
       - SSH_AUTH_SOCK=/ssh-agent/agent.sock
 ```
 
-VM 側で固定パスに socket を用意する例（Mac から）:
-
-```bash
-ssh -N -o StreamLocalBindUnlink=yes -R /home/vagrant/.ssh-agent/agent.sock:$SSH_AUTH_SOCK <vm>
-```
+- **Docker Desktop（Mac）**: 既定値のままでよい。Docker Desktop がホストの agent を VM 内の `/run/host-services/ssh-auth.sock` に転送している
+  （Mac 側で `ssh-add -l` に鍵が出ていること）
+- **Vagrant VM**: 固定パスに socket を用意して `SEKIMORE_AGENT_SOCK` に書く。例（Mac から）:
+  `ssh -N -o StreamLocalBindUnlink=yes -R /home/vagrant/.ssh-agent/agent.sock:$SSH_AUTH_SOCK <vm>`。
+  転送を張り直したら `docker compose up -d --force-recreate sekimore-gw`
 
 ### 3. 再起動して確認する
 
@@ -81,6 +81,7 @@ docker compose exec sekimore-gw sekimore-relay check                 # ポリシ
 
 ```bash
 docker compose exec sekimore-gw sekimore-relay login
+# (sgw-devcontainer-base の sample / Dev Containers 構成なら: mise run gw:login)
 #   Open: https://github.com/login/device
 #   Code: XXXX-XXXX          ← ブラウザで承認（組織の承認申請は発生しない）
 ```
@@ -99,11 +100,13 @@ docker compose exec sekimore-gw sekimore-relay login
 
 - 使い捨て認証鍵 `~/.ssh/sekimore/id_ed25519` と AI 専用署名鍵 `~/.ssh/sekimore/signing_ed25519` を生成（既にあれば再利用）
 - `POST /bootstrap` で公開鍵を登録し案件トークンを受け取る（既存トークンが有効なら再発行しない）
-- `/etc/sekimore-agent/env` に `SEKIMORE_IP` `SEKIMORE_ENDPOINT` `SEKIMORE_TOKEN` `SEKIMORE_REPO` `SEKIMORE_GIT_DOMAIN`（0600、vscode 所有）
+- `/etc/sekimore-agent/env` に `SEKIMORE_IP` `SEKIMORE_ENDPOINT` `SEKIMORE_TOKEN` `SEKIMORE_TOKEN_EXPIRES` `SEKIMORE_AGENT_KEY` `SEKIMORE_REPO` `SEKIMORE_GIT_DOMAIN`（0600、vscode 所有）。
+  `sekimore` ラッパー（base）はこのファイルを環境変数より優先して読み、期限切れなら `agent bootstrap` で取り直して書き換える
 - `~/.ssh/known_hosts` に関所のホスト鍵を `github.com` として登録、`~/.ssh/config` に `Host github.com → 使い捨て鍵`
 - `git config --global gpg.format ssh / user.signingkey / commit.gpgsign true`。**署名鍵の公開鍵は GitHub に「Signing Key」として手で登録する**（ログに表示される）
+  署名鍵のコメント（GitHub 登録時の Title になる）は既定で `sekimore-agent-signing: <案件名> / <git user.name> <user.email>`。`SEKIMORE_PROJECT` と `SEKIMORE_SIGNING_KEY_COMMENT` で調整でき、旧形式 `…@<hostname>` の既存鍵は名前入りに更新される（鍵は不変）
 
-環境変数で調整: `SEKIMORE_BOOTSTRAP=manual`（登録・発行を操作者に任せる）、`SEKIMORE_AGENT_USER` / `SEKIMORE_KEY_DIR` / `SEKIMORE_AGENT_ENV_FILE`。
+環境変数で調整: `SEKIMORE_BOOTSTRAP=manual`（登録・発行を操作者に任せる）、`SEKIMORE_AGENT_USER` / `SEKIMORE_KEY_DIR` / `SEKIMORE_AGENT_ENV_FILE`、`SEKIMORE_PROJECT` / `SEKIMORE_SIGNING_KEY_COMMENT`（署名鍵のコメント）。
 
 `bootstrap: manual` のときは操作者が gateway 内で `sekimore-relay add-key "<公開鍵行>"` と `sekimore-relay token` を実行し、
 トークンを `/etc/sekimore-agent/env` の `SEKIMORE_TOKEN` に入れる。
@@ -137,6 +140,10 @@ sekimore-relay agent project add-item --project-id P --content-id C
 
 ## 運用（操作者）
 
+sekimore-gw の Web UI（host の http://localhost:8090）の **Relay タブ**で、設定・権限・トークン・アクセス履歴・ブロック履歴を閲覧できる（閲覧のみ。変更は下の CLI）。
+
+Dev Containers 構成（sgw-devcontainer-base の sample）ではこれらは `mise run gw:tokens` / `gw:revoke-project` / `gw:audit` / `gw -- <args>` として用意してある。
+
 ```bash
 docker compose exec sekimore-gw sekimore-relay tokens                    # 発行済みトークン（ラベル / 期限 / 使用回数 / 状態）
 docker compose exec sekimore-gw sekimore-relay revoke --label skm_xxxxxxxx
@@ -150,16 +157,22 @@ docker compose exec sekimore-gw tail -f /data/relay/audit.jsonl          # 全�
 `/data/relay`（gateway-data ボリューム、0700）: `host_key` `authorized_keys` `known_hosts` `tokens.json`（ハッシュのみ）
 `upstream_token` `audit.jsonl` `bootstrap.disabled`。AI コンテナからは見えない。
 
+トークンの回転と掃除（0.1.3）: 同じ agent 鍵からの再 bootstrap（コンテナ再作成、期限切れ後の自動更新）は、その鍵に発行済みの
+有効トークンを失効させてから新しく発行する（鍵 1 本につき有効トークンは 1 つ。監査 `bootstrap_ok` の `revoked_previous`）。
+期限切れから 7 日過ぎたレコードは書き込み時に落とすので `tokens.json` は肥大化しない（恒久的な記録は `audit.jsonl`）。
+
 ## 困ったとき
 
 | 症状 | 意味 | 対処 |
 |---|---|---|
-| `sekimore: SSH_AUTH_SOCK is not set in the gateway container` | 関所に agent socket が渡っていない | 手順 2 のマウントと環境変数。`sekimore-relay check` の ssh-agent 行 |
+| `sekimore: SSH_AUTH_SOCK is not set in the gateway container` | 関所に agent socket が渡っていない | 手順 2 のマウントと環境変数。`sekimore-relay check` の ssh-agent 行。Docker Desktop なら Mac 側の `ssh-add -l` に鍵があるか |
 | `sekimore: ssh-agent socket … does not exist` / `cannot connect` | 転送セッションが切れた / 権限 | Mac からの転送を張り直す。EACCES なら socket の所有者と userns-remap |
 | `sekimore: known_hosts … has no entry for github.com` | 上流のホスト鍵が無い | `sekimore-relay login`（`/meta` から生成）か `ssh-keyscan` |
 | `sekimore: repository "X" is not in project "P"` | 案件外 | `relay.project.repos` に追加する（意図した拒否なら何もしない） |
 | `sekimore: push to refs/heads/main is not allowed` | 名前空間外への直接 push | `refs/for/main` で PR にする。必要なら `repos[].push` に glob を足す |
-| `Permission denied (publickey)`（関所から） | エージェントの鍵が未登録 | `agent bootstrap` または操作者の `add-key`。`bootstrap.disabled` の有無 |
+| `Permission denied (publickey)`（関所から） | エージェントの鍵が未登録（0.1.3 からバナーは出さない。理由は監査の `ssh_auth_denied`） | `agent bootstrap` または操作者の `add-key`。`bootstrap.disabled` の有無 |
+| `! [remote rejected] … (sekimore: push to … is not allowed)` | ポリシーで拒否した push（0.1.3 から report-status の `ng` で返す。以前は切断して "remote end hung up" だった） | メッセージの案内どおり（`refs/for/<base>`、`repos[].push`、`allow_delete`） |
+| `sekimore: denied: token expired at …` | 案件トークンの期限切れ（`token_ttl`、既定 12h） | `sekimore` ラッパー（base 0.2.1）が自動で bootstrap をやり直す。古い環境は `sudo sekimore-agent-setup.sh` |
 | `no upstream token … run sekimore-relay login` | device flow 未実施 / logout 後 | `sekimore-relay login` |
 | `git ls-remote` が無言で止まる | DNS は関所を向いたが INPUT で落ちている | `iptables-legacy -S INPUT` に `--dport 22` があるか。無ければ relay 未起動（`[relay]` の起動ログと `needs-relay` の終了コード） |
 | `https://github.com/…` が失敗 | `relay.https: reject`、または上流到達不可 | 既定の `passthrough` に戻す。audit の `https_failed` の reason |
