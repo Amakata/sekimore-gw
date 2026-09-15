@@ -230,3 +230,37 @@ def describe_relay_api():
         assert (
             'id="tab-relay"' in html and "switchTab('relay')" in html and "/api/relay/audit" in html
         )
+
+
+def describe_relay_route_registration_order():
+    """/api/relay/* が __main__ ブロック (uvicorn.run) より前で登録されること.
+
+    バグ: relay エンドポイントを app.py 末尾 (if __name__ == '__main__': uvicorn.run(app) の後) に
+    追記していたため、`python -m src.web_ui.app` で起動すると uvicorn.run の時点で app に relay ルートが
+    まだ無く、実プロセスが 404 を返していた (import 経由のテストでは登録済みに見えて検出できなかった)。
+    """
+
+    def it_defines_relay_routes_before_the_main_block():
+        src = (Path(__file__).parents[2] / "src" / "web_ui" / "app.py").read_text()
+        main_pos = src.index('if __name__ == "__main__":')
+        for route in (
+            "/api/relay/config",
+            "/api/relay/stats",
+            "/api/relay/tokens",
+            "/api/relay/audit",
+        ):
+            pos = src.index(f'"{route}"')
+            assert pos < main_pos, (
+                f"{route} は __main__ ブロックより前で定義すること (実プロセスで 404 になる)"
+            )
+
+    def it_registers_relay_routes_on_the_app():
+        from src.web_ui.app import app
+
+        paths = {r.path for r in app.routes}
+        assert {
+            "/api/relay/config",
+            "/api/relay/stats",
+            "/api/relay/tokens",
+            "/api/relay/audit",
+        } <= paths
