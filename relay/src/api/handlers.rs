@@ -56,6 +56,7 @@ pub async fn dispatch(
         "/pr/merge" => pr_merge(ctx, req).await,
         "/pr/close" => pr_close(ctx, req).await,
         "/pr/status" => pr_status(ctx, req).await,
+        "/ci/runs" => ci_runs(ctx, req).await,
         "/ci/jobs" => ci_jobs(ctx, req).await,
         "/ci/log" => ci_log(ctx, req).await,
         "/issue/create" => issue_create(ctx, req).await,
@@ -204,13 +205,58 @@ async fn pr_status(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
     })
 }
 
-async fn ci_jobs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+async fn ci_runs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need(!req.repo.is_empty(), "repo is required")?;
-    need(req.number != 0, "number is required")?;
+    need(
+        !req.git_ref.is_empty(),
+        "ref (tag / branch / sha) is required",
+    )?;
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Ci, Action::Read)?;
-    let jobs = gh(ctx)?.ci_jobs(&auth, req.number).await?;
+    let runs = gh(ctx)?.ci_runs(&auth, &req.git_ref).await?;
+    let raw = serde_json::to_value(&runs).unwrap_or(serde_json::Value::Null);
+    let msg = runs
+        .iter()
+        .map(|r| {
+            let st = if r.conclusion.is_empty() {
+                r.status.as_str()
+            } else {
+                r.conclusion.as_str()
+            };
+            format!(
+                "{} [{}] event={} run_id={} {}",
+                r.name, st, r.event, r.id, r.created_at
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(ApiResponse {
+        ok: true,
+        raw: Some(raw),
+        message: Some(if msg.is_empty() {
+            format!("no workflow runs for ref {}", req.git_ref)
+        } else {
+            msg
+        }),
+        ..Default::default()
+    })
+}
+
+async fn ci_jobs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    need(
+        req.number != 0 || req.run_id != 0,
+        "number or run_id is required",
+    )?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Ci, Action::Read)?;
+    let jobs = if req.run_id != 0 {
+        gh(ctx)?.ci_jobs_for_run(&auth, req.run_id).await?
+    } else {
+        gh(ctx)?.ci_jobs(&auth, req.number).await?
+    };
     let raw = serde_json::to_value(&jobs).unwrap_or(serde_json::Value::Null);
     let msg = jobs
         .iter()
@@ -251,8 +297,15 @@ async fn ci_log(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiEr
     let (job_id, name, concl) = if req.job_id != 0 {
         (req.job_id, String::new(), String::new())
     } else {
-        need(req.number != 0, "number or job_id is required")?;
-        let jobs = gh(ctx)?.ci_jobs(&auth, req.number).await?;
+        need(
+            req.number != 0 || req.run_id != 0,
+            "number, run_id or job_id is required",
+        )?;
+        let jobs = if req.run_id != 0 {
+            gh(ctx)?.ci_jobs_for_run(&auth, req.run_id).await?
+        } else {
+            gh(ctx)?.ci_jobs(&auth, req.number).await?
+        };
         let pick = jobs
             .iter()
             .find(|j| j.conclusion == "failure")

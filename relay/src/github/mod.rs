@@ -224,6 +224,21 @@ pub struct CiLogPage {
     pub has_more_before: bool,
 }
 
+/// ある ref (タグ / ブランチ / SHA) に紐づく Actions の run。タグ push で走る Docker Publish 等は PR に紐づかないので、
+/// PR 番号ではなく ref から辿る。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CiRun {
+    pub id: u64,
+    pub name: String,       // workflow 名
+    pub event: String,      // push / pull_request / workflow_dispatch …
+    pub status: String,     // queued / in_progress / completed
+    pub conclusion: String, // success / failure / "" (未完)
+    pub head_sha: String,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
 /// PR の CI ジョブ一覧（どれが失敗したか）。
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CiJob {
@@ -332,6 +347,90 @@ impl GitHub {
             rollup,
         })
     }
+    /// ref (タグ名 / ブランチ名 / SHA) を SHA に解決する。`GET /repos/{repo}/commits/{ref}` は 3 種類とも受ける。
+    async fn resolve_sha(&self, repo: &str, git_ref: &str) -> Result<String, GhError> {
+        let c: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{repo}/commits/{}", url_escape(git_ref)),
+                None,
+            )
+            .await?;
+        c.get("sha")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| GhError::Parse(format!("no sha for ref {git_ref:?}")))
+    }
+
+    /// ref に紐づく Actions の run 一覧（新しい順）。タグ push の Docker Publish など PR に紐づかない run を見るのに使う。
+    pub async fn ci_runs(
+        &self,
+        auth: &Authorized<'_>,
+        git_ref: &str,
+    ) -> Result<Vec<CiRun>, GhError> {
+        auth.ensure(Resource::Ci, Action::Read)?;
+        let repo = auth.repo();
+        let sha = self.resolve_sha(repo, git_ref).await?;
+        let runs: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{repo}/actions/runs?head_sha={sha}&per_page=100"),
+                None,
+            )
+            .await?;
+        let mut out: Vec<CiRun> = Vec::new();
+        if let Some(arr) = runs.get("workflow_runs").and_then(Value::as_array) {
+            for r in arr {
+                let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                out.push(CiRun {
+                    id: r.get("id").and_then(Value::as_u64).unwrap_or(0),
+                    name: s("name"),
+                    event: s("event"),
+                    status: s("status"),
+                    conclusion: s("conclusion"),
+                    head_sha: s("head_sha"),
+                    created_at: s("created_at"),
+                    url: r
+                        .get("html_url")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                });
+            }
+        }
+        out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(out)
+    }
+
+    /// run のジョブ一覧。
+    pub async fn ci_jobs_for_run(
+        &self,
+        auth: &Authorized<'_>,
+        run_id: u64,
+    ) -> Result<Vec<CiJob>, GhError> {
+        auth.ensure(Resource::Ci, Action::Read)?;
+        let repo = auth.repo();
+        let jobs: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"),
+                None,
+            )
+            .await?;
+        let mut out = Vec::new();
+        if let Some(arr) = jobs.get("jobs").and_then(Value::as_array) {
+            for j in arr {
+                let s = |k: &str| j.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                out.push(CiJob {
+                    id: j.get("id").and_then(Value::as_u64).unwrap_or(0),
+                    name: s("name"),
+                    status: s("status"),
+                    conclusion: s("conclusion"),
+                });
+            }
+        }
+        Ok(out)
+    }
+
     /// PR の最新コミットに紐づく最新の Actions run のジョブ一覧。失敗ジョブの job_id を得るのに使う。
     pub async fn ci_jobs(&self, auth: &Authorized<'_>, number: u64) -> Result<Vec<CiJob>, GhError> {
         auth.ensure(Resource::Ci, Action::Read)?;
@@ -347,61 +446,11 @@ impl GitHub {
         if head_sha.is_empty() {
             return Ok(Vec::new());
         }
-        let runs: Value = self
-            .rest(
-                "GET",
-                &format!("/repos/{repo}/actions/runs?head_sha={head_sha}&per_page=100"),
-                None,
-            )
-            .await?;
-        let mut latest_run: Option<(u64, String)> = None;
-        if let Some(arr) = runs.get("workflow_runs").and_then(Value::as_array) {
-            for r in arr {
-                let id = r.get("id").and_then(Value::as_u64).unwrap_or(0);
-                let created = r
-                    .get("created_at")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                if id != 0 && latest_run.as_ref().is_none_or(|(_, c)| created > *c) {
-                    latest_run = Some((id, created));
-                }
-            }
-        }
-        let Some((run_id, _)) = latest_run else {
+        let runs = self.ci_runs(auth, &head_sha).await?;
+        let Some(latest) = runs.first() else {
             return Ok(Vec::new());
         };
-        let jobs: Value = self
-            .rest(
-                "GET",
-                &format!("/repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"),
-                None,
-            )
-            .await?;
-        let mut out = Vec::new();
-        if let Some(arr) = jobs.get("jobs").and_then(Value::as_array) {
-            for j in arr {
-                out.push(CiJob {
-                    id: j.get("id").and_then(Value::as_u64).unwrap_or(0),
-                    name: j
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    status: j
-                        .get("status")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    conclusion: j
-                        .get("conclusion")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                });
-            }
-        }
-        Ok(out)
+        self.ci_jobs_for_run(auth, latest.id).await
     }
 
     /// ジョブのログの 1 ページ (末尾から window 行、before より前)。before=None は末尾から。
@@ -949,6 +998,24 @@ mod tests {
             gh().ci_job_log(&auth, 99, "test", "failure", 100, None)
                 .await,
             Err(GhError::Token(_))
+        ));
+        // ref / run_id 経路も同じ証明で、上流トークン段階まで進む
+        assert!(matches!(
+            gh().ci_runs(&auth, "v0.1.6").await,
+            Err(GhError::Token(_))
+        ));
+        assert!(matches!(
+            gh().ci_jobs_for_run(&auth, 1).await,
+            Err(GhError::Token(_))
+        ));
+        // pr:read だけの証明では拒否
+        let p = Project::new("case-a")
+            .with_repo("Org/Repo", Mode::ReadOnly, &[])
+            .grant("pr:read");
+        let auth = p.authorize("Org/Repo", Resource::Pr, Action::Read).unwrap();
+        assert!(matches!(
+            gh().ci_runs(&auth, "main").await,
+            Err(GhError::Denied(_))
         ));
     }
 

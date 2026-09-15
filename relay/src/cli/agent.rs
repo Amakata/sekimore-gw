@@ -98,16 +98,27 @@ pub enum PrCmd {
 
 #[derive(Subcommand, Debug)]
 pub enum CiCmd {
-    /// PR の最新 run のジョブ一覧 (どれが失敗したか、job_id)
+    /// ref (タグ / ブランチ / SHA) に紐づく workflow run 一覧 (タグ push の Docker Publish 等、PR に紐づかない run 用)
+    Runs {
+        /// タグ名 / ブランチ名 / SHA (例: v0.1.6, main)
+        #[arg(long = "ref")]
+        git_ref: String,
+    },
+    /// run のジョブ一覧 (どれが失敗したか、job_id)。--number (PR の最新 run) か --run-id (ci runs で得る)
     Jobs {
         #[arg(long)]
-        number: u64,
+        number: Option<u64>,
+        #[arg(long)]
+        run_id: Option<u64>,
     },
     /// ジョブのログを末尾から表示する。--before でさらに前へ遡る
     Log {
-        /// PR 番号 (失敗ジョブを自動選択)。--job-id 指定時は不要
+        /// PR 番号 (最新 run の失敗ジョブを自動選択)
         #[arg(long)]
         number: Option<u64>,
+        /// run ID (ci runs で得る。その run の失敗ジョブを自動選択)
+        #[arg(long)]
+        run_id: Option<u64>,
         /// ジョブ ID を直接指定 (ci jobs で得る)
         #[arg(long)]
         job_id: Option<u64>,
@@ -338,12 +349,22 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
             }
         },
         AgentCmd::Ci { cmd } => match cmd {
-            CiCmd::Jobs { number } => {
-                req.number = number;
+            CiCmd::Runs { git_ref } => {
+                req.git_ref = git_ref;
+                "/ci/runs"
+            }
+            CiCmd::Jobs { number, run_id } => {
+                if number.is_none() && run_id.is_none() {
+                    eprintln!("sekimore: ci jobs needs --number <pr> or --run-id <run>");
+                    return Ok(2);
+                }
+                req.number = number.unwrap_or(0);
+                req.run_id = run_id.unwrap_or(0);
                 "/ci/jobs"
             }
             CiCmd::Log {
                 number,
+                run_id,
                 job_id,
                 window,
                 before,
@@ -351,6 +372,9 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
             } => {
                 if let Some(n) = number {
                     req.number = n;
+                }
+                if let Some(r) = run_id {
+                    req.run_id = r;
                 }
                 if let Some(j) = job_id {
                     req.job_id = j;
