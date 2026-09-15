@@ -24,8 +24,6 @@ use crate::fsutil::atomic_write;
 use crate::git::{handle_exec, GitContext, GitIo};
 use authorized_keys::{fingerprint, AuthorizedKeys};
 
-pub const BANNER: &str =
-    "sekimore-relay: only registered agent keys are accepted (register via POST /bootstrap or `sekimore-relay add-key`)\n";
 pub const GIT_USER: &str = "git";
 
 /// ホスト鍵を読む。無ければ ed25519 を生成して 0600 で保存する。
@@ -205,7 +203,9 @@ impl Handler for ClientHandler {
     }
 
     async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
-        Ok(Some(BANNER.to_string()))
+        // バナーは認証の前に一律で送られ、登録済み鍵での接続にも毎回出て邪魔なので出さない。
+        // 未登録鍵の理由は監査 (ssh_auth_denied) と agent-setup の案内、README の表で伝える
+        Ok(None)
     }
 
     async fn channel_open_session(
@@ -424,10 +424,17 @@ impl Handler for ClientHandler {
 
     async fn tcpip_forward(
         &mut self,
-        _addr: &str,
-        _port: &mut u32,
+        addr: &str,
+        port: &mut u32,
         _session: &mut Session,
     ) -> Result<bool, Self::Error> {
+        // remote port forwarding (-R) も受けない。拒否は監査に残す
+        self.server.audit.deny(
+            "ssh_request_rejected",
+            Actor::Agent,
+            "tcpip-forward (remote port forwarding) not allowed",
+            &[("peer", &self.peer), ("bind", &format!("{addr}:{port}"))],
+        );
         Ok(false)
     }
 }

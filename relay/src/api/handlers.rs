@@ -351,8 +351,15 @@ pub async fn bootstrap(
         });
     }
     let body = read_body(req, ctx.body_cap).await?;
-    let breq: BootstrapRequest = serde_json::from_slice(&body)
-        .map_err(|e| ApiError::bad_request(format!("invalid JSON: {e}")))?;
+    let breq: BootstrapRequest = serde_json::from_slice(&body).map_err(|e| {
+        ctx.audit.deny(
+            "bootstrap_denied",
+            Actor::Agent,
+            &format!("invalid JSON: {e}"),
+            &[("peer", peer_ip)],
+        );
+        ApiError::bad_request(format!("invalid JSON: {e}"))
+    })?;
     let added = ctx.keys.add(&breq.public_key).map_err(|e| {
         ctx.audit.deny(
             "bootstrap_denied",
@@ -366,9 +373,11 @@ pub async fn bootstrap(
         Added::New { fingerprint } => (fingerprint, true),
         Added::AlreadyPresent { fingerprint } => (fingerprint, false),
     };
+    // 同じ鍵からの再 bootstrap（コンテナ再作成など）は前のトークンを失効させる: 鍵 1 本につき有効トークンは 1 つ
+    let revoked_previous = ctx.tokens.revoke_by_fingerprint(&fingerprint).unwrap_or(0);
     let (token, rec) = ctx
         .tokens
-        .issue(&ctx.project.name, ctx.token_ttl)
+        .issue_for(&ctx.project.name, ctx.token_ttl, Some(&fingerprint))
         .map_err(|e| ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("cannot issue token: {e}"),
@@ -381,6 +390,7 @@ pub async fn bootstrap(
             ("fingerprint", &fingerprint),
             ("key_added", if is_new { "true" } else { "false" }),
             ("token_label", &rec.label),
+            ("revoked_previous", &revoked_previous.to_string()),
             ("client_label", &label),
             ("peer", peer_ip),
         ],

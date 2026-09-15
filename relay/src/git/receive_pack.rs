@@ -19,7 +19,7 @@ use super::{copy_touch, exit_code_of, GitContext, GitIo, RelayOutcome, UpstreamP
 use crate::audit::Actor;
 use crate::github::GhError;
 use crate::pktline::{
-    caps_contain, encode_commands, parse_receive_pack, validate_ref_name, CommandLine,
+    caps_contain, encode_commands, encode_into, parse_receive_pack, validate_ref_name, CommandLine,
     CommandSection, Frame, PktReader, RefUpdate,
 };
 use crate::policy::{Denied, GitAuthorized, Project};
@@ -354,6 +354,20 @@ pub async fn relay_receive_pack(
                 &msg,
                 &[("repo", auth.repo()), ("project", auth.project())],
             );
+            if report_status {
+                // client は report-status を待っているので、切断ではなく `ng` で拒否を返す
+                // （git は "! [remote rejected] … (reason)" と表示し、"remote end hung up" にならない）。
+                // client は commands の直後に pack を送り始めるので、読み捨てないと window が詰まって report を読めない
+                let report = reject_report(&section, &msg, sideband);
+                let (stdin, _leftover) = cl_reader.into_parts();
+                let _ = io.stdout.write_all(&report).await;
+                let _ = io.stdout.flush().await;
+                let _ = tokio::time::timeout(
+                    ctx.limits.idle_timeout,
+                    tokio::io::copy(stdin, &mut tokio::io::sink()),
+                )
+                .await;
+            }
             return fail("policy");
         }
     };
@@ -543,6 +557,34 @@ pub async fn relay_receive_pack(
         bytes_out,
         note: None,
     }
+}
+
+/// ポリシーで拒否した push への report-status: `unpack ok` + 全 ref に `ng <ref> <reason>`。
+/// side-band-64k を要求されていれば band 1 で包む（1 pkt ずつ。理由が長くても上限を超えない）。
+fn reject_report(section: &CommandSection<'_>, reason: &str, sideband: bool) -> Vec<u8> {
+    let reason = reason.replace(['\n', '\r'], " ");
+    let mut inner: Vec<Vec<u8>> = vec![b"unpack ok\n".to_vec()];
+    for u in section.updates() {
+        inner.push(format!("ng {} {}\n", u.name, reason).into_bytes());
+    }
+    let mut out = Vec::new();
+    if sideband {
+        for line in inner {
+            let mut pkt = Vec::new();
+            let _ = encode_into(&mut pkt, &line);
+            let mut band = vec![1u8];
+            band.extend_from_slice(&pkt);
+            let _ = encode_into(&mut out, &band);
+        }
+        let _ = encode_into(&mut out, b"\x010000");
+        out.extend_from_slice(b"0000");
+    } else {
+        for line in inner {
+            let _ = encode_into(&mut out, &line);
+        }
+        out.extend_from_slice(b"0000");
+    }
+    out
 }
 
 /// stderr だけを借りて報告する（client 側リーダが stdin を借りている間に使う）。

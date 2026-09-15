@@ -49,7 +49,11 @@ pub fn is_local_ip(ip: IpAddr) -> bool {
 impl Passthrough {
     pub async fn connect_upstream(&self) -> std::io::Result<TcpStream> {
         if let Some(px) = &self.proxy {
-            return http_connect_tunnel(px, &self.upstream, self.port).await;
+            return http_connect_tunnel(px, &self.upstream, self.port)
+                .await
+                .map_err(|e| {
+                    std::io::Error::new(e.kind(), format!("via upstream proxy {}: {e}", px.url))
+                });
         }
         let addrs = tokio::net::lookup_host((self.upstream.as_str(), self.port)).await?;
         let mut last: Option<std::io::Error> = None;
