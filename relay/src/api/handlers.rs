@@ -55,6 +55,7 @@ pub async fn dispatch(
         "/pr/review" => pr_review(ctx, req).await,
         "/pr/merge" => pr_merge(ctx, req).await,
         "/pr/close" => pr_close(ctx, req).await,
+        "/pr/status" => pr_status(ctx, req).await,
         "/issue/create" => issue_create(ctx, req).await,
         "/issue/comment" => issue_comment(ctx, req).await,
         "/issue/close" => issue_close(ctx, req).await,
@@ -173,6 +174,32 @@ async fn pr_close(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Api
         .authorize(&req.repo, Resource::Pr, Action::Close)?;
     gh(ctx)?.close_pull_request(&auth, req.number).await?;
     Ok(ApiResponse::default())
+}
+
+async fn pr_status(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    need(req.number != 0, "number is required")?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Pr, Action::Read)?;
+    let st = gh(ctx)?.pull_request_status(&auth, req.number).await?;
+    let raw = serde_json::to_value(&st).unwrap_or(serde_json::Value::Null);
+    let n = st.checks.len();
+    let msg = format!(
+        "PR #{} [{}{}] checks: {} ({} total)",
+        st.number,
+        st.state,
+        if st.merged { ", merged" } else { "" },
+        st.rollup,
+        n
+    );
+    Ok(ApiResponse {
+        ok: true,
+        number: Some(st.number),
+        raw: Some(raw),
+        message: Some(msg),
+        ..Default::default()
+    })
 }
 
 // ---- Issue ----

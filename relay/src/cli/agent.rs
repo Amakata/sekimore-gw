@@ -81,6 +81,14 @@ pub enum PrCmd {
         #[arg(long)]
         number: u64,
     },
+    /// PR の状態と CI チェックを表示する
+    Status {
+        #[arg(long)]
+        number: u64,
+        /// JSON をそのまま出す（既定は 1 行サマリ + チェック一覧）
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -286,6 +294,16 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 req.number = number;
                 "/pr/close"
             }
+            PrCmd::Status { number, json } => {
+                req.number = number;
+                let resp = client.call("/pr/status", &req).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&resp.raw)?);
+                } else {
+                    print_pr_status(&resp);
+                }
+                return Ok(if resp.ok { 0 } else { 1 });
+            }
         },
         AgentCmd::Issue { cmd } => match cmd {
             IssueCmd::Create {
@@ -356,6 +374,26 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
     }
     print_response(&resp);
     Ok(0)
+}
+
+/// `pr status` の人間向け表示。raw に PrStatus の JSON が入っている。
+fn print_pr_status(resp: &ApiResponse) {
+    if let Some(m) = &resp.message {
+        println!("{m}");
+    }
+    let Some(raw) = &resp.raw else { return };
+    if let Some(checks) = raw.get("checks").and_then(|v| v.as_array()) {
+        for c in checks {
+            let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let state = c.get("state").and_then(|v| v.as_str()).unwrap_or("?");
+            let mark = match state {
+                "success" | "neutral" | "skipped" => "✓",
+                "pending" | "queued" | "in_progress" | "expected" => "…",
+                _ => "✗",
+            };
+            println!("  {mark} {state:<12} {name}");
+        }
+    }
 }
 
 pub fn print_response(resp: &ApiResponse) {

@@ -19,7 +19,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use url::Url;
 
@@ -96,6 +96,30 @@ pub struct PrResult {
     pub html_url: String,
     #[serde(default)]
     pub node_id: String,
+}
+
+/// PR の CI チェック 1 件（check-run または commit status を正規化した形）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CheckItem {
+    pub name: String,
+    /// success / failure / pending / neutral / skipped / … （GitHub の conclusion / state をそのまま）
+    pub state: String,
+    pub source: String, // "check-run" | "status"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// PR とそのチェックの集計。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PrStatus {
+    pub number: u64,
+    pub head_sha: String,
+    pub state: String, // open / closed
+    pub merged: bool,
+    pub mergeable: Option<bool>,
+    pub checks: Vec<CheckItem>,
+    /// 全チェックの総合。success / failure / pending / none
+    pub rollup: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -179,6 +203,105 @@ impl GitHub {
         );
         let out: Vec<PrResult> = self.rest("GET", &path, None).await?;
         Ok(out.into_iter().next())
+    }
+
+    /// PR の状態と CI チェックを集計する。check-runs（GitHub Actions 等）と commit statuses（外部 CI）の両方を見る。
+    pub async fn pull_request_status(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+    ) -> Result<PrStatus, GhError> {
+        auth.ensure(Resource::Pr, Action::Read)?;
+        let repo = auth.repo();
+        let pr: Value = self
+            .rest("GET", &format!("/repos/{repo}/pulls/{number}"), None)
+            .await?;
+        let head_sha = pr
+            .pointer("/head/sha")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let state = pr
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let merged = pr.get("merged").and_then(Value::as_bool).unwrap_or(false);
+        let mergeable = pr.get("mergeable").and_then(Value::as_bool);
+
+        let mut checks: Vec<CheckItem> = Vec::new();
+        if !head_sha.is_empty() {
+            // check-runs（GitHub Actions / Checks API）
+            let runs: Value = self
+                .rest(
+                    "GET",
+                    &format!("/repos/{repo}/commits/{head_sha}/check-runs?per_page=100"),
+                    None,
+                )
+                .await?;
+            if let Some(arr) = runs.get("check_runs").and_then(Value::as_array) {
+                for r in arr {
+                    let name = r
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    // 完了していれば conclusion、実行中なら status（queued / in_progress）を pending 扱いに
+                    let state = match r.get("conclusion").and_then(Value::as_str) {
+                        Some(c) if !c.is_empty() => c.to_string(),
+                        _ => "pending".to_string(),
+                    };
+                    checks.push(CheckItem {
+                        name,
+                        state,
+                        source: "check-run".into(),
+                        url: r
+                            .get("html_url")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    });
+                }
+            }
+            // commit statuses（Travis 等の古い Status API。context 単位で最新だけ）
+            let st: Value = self
+                .rest(
+                    "GET",
+                    &format!("/repos/{repo}/commits/{head_sha}/status"),
+                    None,
+                )
+                .await?;
+            if let Some(arr) = st.get("statuses").and_then(Value::as_array) {
+                for s in arr {
+                    checks.push(CheckItem {
+                        name: s
+                            .get("context")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        state: s
+                            .get("state")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        source: "status".into(),
+                        url: s
+                            .get("target_url")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    });
+                }
+            }
+        }
+        let rollup = rollup_state(&checks);
+        Ok(PrStatus {
+            number,
+            head_sha,
+            state,
+            merged,
+            mergeable,
+            checks,
+            rollup,
+        })
     }
 
     pub async fn comment_pull_request(
@@ -511,6 +634,28 @@ impl GitHub {
     }
 }
 
+/// チェック集合の総合判定。1 つでも失敗系なら failure、pending があれば pending、
+/// 全部 success/neutral/skipped なら success、チェックが無ければ none。
+fn rollup_state(checks: &[CheckItem]) -> String {
+    if checks.is_empty() {
+        return "none".to_string();
+    }
+    let mut pending = false;
+    for c in checks {
+        match c.state.as_str() {
+            "success" | "neutral" | "skipped" => {}
+            "pending" | "queued" | "in_progress" | "expected" => pending = true,
+            // failure / error / cancelled / timed_out / action_required / stale / startup_failure …
+            _ => return "failure".to_string(),
+        }
+    }
+    if pending {
+        "pending".to_string()
+    } else {
+        "success".to_string()
+    }
+}
+
 fn url_escape(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
@@ -568,6 +713,54 @@ mod tests {
             g.create_pull_request(&auth, "h", "main", "t", "").await,
             Err(GhError::Token(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn pr_status_requires_pr_read() {
+        // pr:create だけでは pr status は叩けない（Read の証明が要る）。上流にも出ない
+        let p = Project::new("case-a")
+            .with_repo("Org/Repo", Mode::ReadWrite, &[])
+            .grant("pr:create");
+        let auth = p
+            .authorize("Org/Repo", Resource::Pr, Action::Create)
+            .unwrap();
+        assert!(matches!(
+            gh().pull_request_status(&auth, 1).await,
+            Err(GhError::Denied(_))
+        ));
+        // pr:read を付ければ証明は通り、上流トークンが無い段階まで進む
+        let p = Project::new("case-a")
+            .with_repo("Org/Repo", Mode::ReadOnly, &[])
+            .grant("pr:read");
+        let auth = p.authorize("Org/Repo", Resource::Pr, Action::Read).unwrap();
+        assert!(matches!(
+            gh().pull_request_status(&auth, 1).await,
+            Err(GhError::Token(_))
+        ));
+    }
+
+    #[test]
+    fn rollup_prioritises_failure_then_pending() {
+        let mk = |state: &str| CheckItem {
+            name: "c".into(),
+            state: state.into(),
+            source: "check-run".into(),
+            url: None,
+        };
+        assert_eq!(rollup_state(&[]), "none");
+        assert_eq!(rollup_state(&[mk("success"), mk("skipped")]), "success");
+        assert_eq!(rollup_state(&[mk("success"), mk("in_progress")]), "pending");
+        // failure は pending より優先（1 つでも壊れていれば failure）
+        assert_eq!(rollup_state(&[mk("in_progress"), mk("failure")]), "failure");
+        assert_eq!(rollup_state(&[mk("success"), mk("timed_out")]), "failure");
+        assert_eq!(rollup_state(&[mk("neutral"), mk("cancelled")]), "failure");
+    }
+
+    #[test]
+    fn pr_read_is_a_valid_permission() {
+        use crate::policy::parse_permission;
+        assert!(parse_permission("pr:read").is_ok());
+        assert!(crate::policy::all_permission_keys().contains(&"pr:read".to_string()));
     }
 
     #[test]

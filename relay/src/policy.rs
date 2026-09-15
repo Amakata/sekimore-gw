@@ -51,7 +51,7 @@ impl Resource {
     pub fn valid_actions(&self) -> &'static [Action] {
         use Action::*;
         match self {
-            Resource::Pr => &[Create, Comment, Review, Merge, Close],
+            Resource::Pr => &[Create, Comment, Review, Merge, Close, Read],
             Resource::Issue => &[Create, Comment, Close, Label, Assign],
             Resource::Project => &[Read, AddItem, UpdateItem],
             Resource::Repo => &[Read],
@@ -684,6 +684,6 @@ mod tests {
         assert!(parse_permission("prcreate").is_err());
         assert!(Project::try_new("x", vec![], &["pr:delete".to_string()]).is_err());
         assert!(Project::try_new("x", vec![RepoPolicy::new("nope", Mode::ReadOnly)], &[]).is_err());
-        assert_eq!(all_permission_keys().len(), 14);
+        assert_eq!(all_permission_keys().len(), 15); // pr:read 追加 (0.1.3)
     }
 }

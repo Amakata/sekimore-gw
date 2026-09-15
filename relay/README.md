@@ -132,6 +132,7 @@ git push origin HEAD:refs/heads/sekimore/x      # 自分の名前空間 sekimore
 sekimore whoami                                 # = sekimore-relay agent whoami（ラッパーが /etc/sekimore-agent/env を読む）
 sekimore-relay agent pr create --head sekimore/main-abc1234 --base main --title T
 sekimore-relay agent issue create --title T --labels bug     # ラベル付きは issue:label も要る
+sekimore pr status --number 12                   # PR の CI チェックが通ったか（pr:read）。--json で機械可読
 sekimore-relay agent project add-item --project-id P --content-id C
 ```
 
@@ -175,7 +176,8 @@ docker compose exec sekimore-gw tail -f /data/relay/audit.jsonl          # 全�
 | `sekimore: denied: token expired at …` | 案件トークンの期限切れ（`token_ttl`、既定 12h） | `sekimore` ラッパー（base 0.2.1）が自動で bootstrap をやり直す。古い環境は `sudo sekimore-agent-setup.sh` |
 | `no upstream token … run sekimore-relay login` | device flow 未実施 / logout 後 | `sekimore-relay login` |
 | `git ls-remote` が無言で止まる | DNS は関所を向いたが INPUT で落ちている | `iptables-legacy -S INPUT` に `--dport 22` があるか。無ければ relay 未起動（`[relay]` の起動ログと `needs-relay` の終了コード） |
-| `https://github.com/…` が失敗 | `relay.https: reject`、または上流到達不可 | 既定の `passthrough` に戻す。audit の `https_failed` の reason |
+| `https://github.com/…` が失敗 | `relay.https: reject`、上流到達不可、または HTTPS 認証を塞いでいる（下記） | 既定の `passthrough` に戻す。audit の `https_failed` の reason |
+| `https://github.com/…` の push/clone で `could not read Username … terminal prompts disabled` | relay 構成が HTTPS 経由の認証を塞いでいる（依頼者の GitHub 認証が関所を迂回するのを防ぐため。VS Code の credential helper と GIT_ASKPASS を無効化）。意図した挙動 | `git@github.com:` の SSH（関所経由）を使う。どうしても HTTPS が要るなら `SEKIMORE_ALLOW_CREDENTIAL_HELPER=1`（非推奨） |
 
 ## 開発
 
