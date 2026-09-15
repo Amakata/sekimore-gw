@@ -233,6 +233,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
         }
     );
     println!("allow_delete: {}", r.relay.allow_delete);
+    println!("allow_tags:   {}", r.relay.allow_tags);
     if let Some(px) = &r.proxy {
         println!("proxy:        {}", px.url);
     }

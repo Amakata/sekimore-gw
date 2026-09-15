@@ -171,6 +171,7 @@ docker compose exec sekimore-gw tail -f /data/relay/audit.jsonl          # 全�
 | `sekimore: known_hosts … has no entry for github.com` | 上流のホスト鍵が無い | `sekimore-relay login`（`/meta` から生成）か `ssh-keyscan` |
 | `sekimore: repository "X" is not in project "P"` | 案件外 | `relay.project.repos` に追加する（意図した拒否なら何もしない） |
 | `sekimore: push to refs/heads/main is not allowed` | 名前空間外への直接 push | `refs/for/main` で PR にする。必要なら `repos[].push` に glob を足す |
+| `sekimore: tags cannot be pushed (set relay.allow_tags: true …)` | タグの push は既定拒否 | AI にリリースタグまで打たせる案件なら `relay.allow_tags: true`（再起動が要る） |
 | `Permission denied (publickey)`（関所から） | エージェントの鍵が未登録（0.1.3 からバナーは出さない。理由は監査の `ssh_auth_denied`） | `agent bootstrap` または操作者の `add-key`。`bootstrap.disabled` の有無 |
 | `! [remote rejected] … (sekimore: push to … is not allowed)` | ポリシーで拒否した push（0.1.3 から report-status の `ng` で返す。以前は切断して "remote end hung up" だった） | メッセージの案内どおり（`refs/for/<base>`、`repos[].push`、`allow_delete`） |
 | `sekimore: denied: token expired at …` | 案件トークンの期限切れ（`token_ttl`、既定 12h） | `sekimore` ラッパー（base 0.2.1）が自動で bootstrap をやり直す。古い環境は `sudo sekimore-agent-setup.sh` |

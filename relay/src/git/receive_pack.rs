@@ -109,6 +109,7 @@ pub fn plan_push(
     section: &CommandSection<'_>,
     adv: &HashMap<String, String>,
     allow_delete: bool,
+    allow_tags: bool,
 ) -> Result<PushPlan, Denied> {
     let policy = auth.policy();
     let mut commands = Vec::new();
@@ -180,9 +181,22 @@ pub fn plan_push(
                 name: u.name.to_string(),
             });
         } else if u.name.starts_with("refs/tags/") {
-            return Err(Denied::RefNotAllowed {
+            if u.is_delete() && !allow_delete {
+                return Err(Denied::DeleteNotAllowed {
+                    name: u.name.to_string(),
+                });
+            }
+            if !allow_tags {
+                return Err(Denied::RefNotAllowed {
+                    name: u.name.to_string(),
+                    reason:
+                        "tags cannot be pushed (set relay.allow_tags: true to allow release tags)",
+                });
+            }
+            commands.push(OwnedCommand::Update {
+                old: u.old.to_string(),
+                new: u.new.to_string(),
                 name: u.name.to_string(),
-                reason: "tags cannot be pushed through the relay",
             });
         } else {
             return Err(Denied::RefNotAllowed {
@@ -341,7 +355,14 @@ pub async fn relay_receive_pack(
     let push_options =
         caps_contain(client_caps, "push-options") && caps_contain(&server_caps, "push-options");
 
-    let plan = match plan_push(&ctx.project, auth, &section, &adv, ctx.allow_delete) {
+    let plan = match plan_push(
+        &ctx.project,
+        auth,
+        &section,
+        &adv,
+        ctx.allow_delete,
+        ctx.allow_tags,
+    ) {
         Ok(p) => p,
         Err(d) => {
             let _ = proc.child.start_kill();
@@ -752,13 +773,22 @@ mod tests {
     }
 
     fn plan(lines: &[String], adv: &HashMap<String, String>) -> Result<PushPlan, Denied> {
+        plan_opts(lines, adv, false, false)
+    }
+
+    fn plan_opts(
+        lines: &[String],
+        adv: &HashMap<String, String>,
+        allow_delete: bool,
+        allow_tags: bool,
+    ) -> Result<PushPlan, Denied> {
         let p = project();
         let auth = p
             .authorize_git(GitVerb::ReceivePack, "LibOrg/awesome-lib.git")
             .unwrap();
         let data = section_of(lines);
         let sec = parse_receive_pack(&data).unwrap();
-        plan_push(&p, &auth, &sec, adv, false)
+        plan_push(&p, &auth, &sec, adv, allow_delete, allow_tags)
     }
 
     #[test]
@@ -834,7 +864,7 @@ mod tests {
         let data = section_of(&[format!("{ZERO} {SHA} refs/for/main")]);
         let sec = parse_receive_pack(&data).unwrap();
         assert!(matches!(
-            plan_push(&p, &auth, &sec, &HashMap::new(), false),
+            plan_push(&p, &auth, &sec, &HashMap::new(), false, false),
             Err(Denied::NotPermitted {
                 resource: "pr",
                 action: "create"
@@ -857,10 +887,28 @@ mod tests {
         .unwrap();
         assert!(pl.prs.is_empty());
         assert_eq!(pl.commands.len(), 1);
-        // tag と削除は拒否
+        // tag と削除は既定拒否
         assert!(matches!(
             plan(&[format!("{ZERO} {SHA} refs/tags/v1")], &HashMap::new()),
             Err(Denied::RefNotAllowed { .. })
+        ));
+        // allow_tags: true なら tag の push を許可、削除は allow_delete 次第
+        let pl = plan_opts(
+            &[format!("{ZERO} {SHA} refs/tags/v1")],
+            &HashMap::new(),
+            false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(pl.commands.len(), 1);
+        assert!(matches!(
+            plan_opts(
+                &[format!("{SHA} {ZERO} refs/tags/v1")],
+                &HashMap::new(),
+                false,
+                true
+            ),
+            Err(Denied::DeleteNotAllowed { .. })
         ));
         assert!(matches!(
             plan(

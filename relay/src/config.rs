@@ -192,6 +192,9 @@ pub struct RelayConfig {
     pub ca_file: Option<PathBuf>,
     #[serde(default)]
     pub allow_delete: bool,
+    /// タグの push を許可する（既定は拒否。AI にリリースタグまで打たせる案件だけ true）
+    #[serde(default)]
+    pub allow_tags: bool,
     #[serde(default = "d_bootstrap")]
     pub bootstrap: BootstrapMode,
     #[serde(default)]
