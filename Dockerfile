@@ -12,14 +12,21 @@ COPY relay/rust-toolchain.toml ./
 RUN CHANNEL="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" \
     && rustup toolchain install "$CHANNEL" --profile minimal --component rustfmt --component clippy \
     && rustup target add --toolchain "$CHANNEL" x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-COPY relay/Cargo.toml relay/Cargo.lock ./
-COPY relay/src ./src
 RUN case "$TARGETARCH" in \
-      amd64) T=x86_64-unknown-linux-musl ;; \
-      arm64) T=aarch64-unknown-linux-musl ;; \
+      amd64) echo x86_64-unknown-linux-musl > /tmp/t ;; \
+      arm64) echo aarch64-unknown-linux-musl > /tmp/t ;; \
       *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
-    esac \
-    && cargo zigbuild --release --locked --target "$T" \
+    esac
+# 依存だけ先にコンパイルする層 (Cargo.toml/lock だけで、src はダミー)。src 変更でこの層は無効化されない
+COPY relay/Cargo.toml relay/Cargo.lock ./
+RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
+    && cargo zigbuild --release --locked --target "$(cat /tmp/t)" || true \
+    && rm -rf src
+# 本ソースをコピーして本ビルド (依存は上でキャッシュ済み)。ダミーの成果物は消して確実に本体を再ビルド
+COPY relay/src ./src
+RUN T="$(cat /tmp/t)" \
+    && rm -f "target/$T/release/deps/sekimore_relay"* "target/$T/release/sekimore-relay" 2>/dev/null || true; \
+    cargo zigbuild --release --locked --target "$T" \
     && install -m 0755 "target/$T/release/sekimore-relay" /sekimore-relay
 
 # ---- gateway ----
