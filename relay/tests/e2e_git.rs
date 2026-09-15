@@ -394,6 +394,9 @@ async fn policy_denials_are_explicit_and_leave_upstream_untouched() {
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success(), "{args:?} must fail:\n{err}");
         assert!(err.contains(want), "{args:?}: {err}");
+        // 切断ではなく report-status の ng で返すので、git は remote rejected と表示し "hung up" にならない
+        assert!(err.contains("[remote rejected]"), "{args:?}: {err}");
+        assert!(!err.contains("hung up"), "{args:?}: {err}");
     }
     // 削除は既定拒否
     e.ok(&work, &["push", "origin", "HEAD:refs/heads/sekimore/x"]);

@@ -20,6 +20,9 @@ use sha2::{Digest, Sha256};
 use crate::fsutil::{atomic_write, read_optional, FlockGuard};
 
 pub const TOKEN_PREFIX: &str = "skm_";
+/// 期限切れ後もこの期間はレコードを残す（`tokens` で最近の失効を確認できる）。過ぎたら保存時に落とす。
+/// 永続的な記録は audit.jsonl が持つので、ストアに残す意味は一覧性だけ。
+pub const RETENTION_AFTER_EXPIRY: Duration = Duration::from_secs(7 * 24 * 3600);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TokenRecord {
@@ -36,6 +39,9 @@ pub struct TokenRecord {
     pub use_count: u64,
     #[serde(default)]
     pub revoked: bool,
+    /// 発行のきっかけになった agent 鍵の fingerprint（bootstrap 経由のみ。手動 `token` は None）
+    #[serde(default)]
+    pub fingerprint: Option<String>,
 }
 
 impl TokenRecord {
@@ -85,6 +91,12 @@ pub struct TokenStore {
     path: PathBuf,
 }
 
+/// 期限切れから RETENTION_AFTER_EXPIRY を過ぎたレコードを落とす（失効済みでも同じ基準。書き込み時に呼ぶ）。
+fn prune(f: &mut StoreFile, now: SystemTime) {
+    f.records
+        .retain(|_, rec| now <= rec.expires_at + RETENTION_AFTER_EXPIRY);
+}
+
 fn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
@@ -115,6 +127,16 @@ impl TokenStore {
 
     /// 発行。平文は戻り値でのみ返し、保存しない。
     pub fn issue(&self, project: &str, ttl: Duration) -> std::io::Result<(String, TokenRecord)> {
+        self.issue_for(project, ttl, None)
+    }
+
+    /// 発行（bootstrap 用: どの agent 鍵に渡したかを記録する）。
+    pub fn issue_for(
+        &self,
+        project: &str,
+        ttl: Duration,
+        fingerprint: Option<&str>,
+    ) -> std::io::Result<(String, TokenRecord)> {
         let mut buf = [0u8; 32];
         getrandom::fill(&mut buf).map_err(|e| std::io::Error::other(format!("getrandom: {e}")))?;
         let token = format!("{TOKEN_PREFIX}{}", hex::encode(buf));
@@ -128,12 +150,35 @@ impl TokenStore {
             last_used: None,
             use_count: 0,
             revoked: false,
+            fingerprint: fingerprint.map(str::to_string),
         };
         let _g = FlockGuard::lock(&self.path)?;
         let mut f = self.load()?;
+        prune(&mut f, now);
         f.records.insert(hash, rec.clone());
         self.save(&f)?;
         Ok((token, rec))
+    }
+
+    /// 同じ agent 鍵に発行した有効なトークンを全て失効させる（再 bootstrap 時のローテーション）。件数を返す。
+    pub fn revoke_by_fingerprint(&self, fingerprint: &str) -> std::io::Result<usize> {
+        let _g = FlockGuard::lock(&self.path)?;
+        let mut f = self.load()?;
+        let now = SystemTime::now();
+        let mut n = 0;
+        for rec in f.records.values_mut() {
+            if rec.fingerprint.as_deref() == Some(fingerprint)
+                && !rec.revoked
+                && now <= rec.expires_at
+            {
+                rec.revoked = true;
+                n += 1;
+            }
+        }
+        if n > 0 {
+            self.save(&f)?;
+        }
+        Ok(n)
     }
 
     /// 検証。使用実績も記録する（監査のため。保存失敗でも検証結果は返す）。
@@ -168,6 +213,7 @@ impl TokenStore {
             }
         }
         if found {
+            prune(&mut f, SystemTime::now());
             self.save(&f)?;
         }
         Ok(found)
@@ -185,6 +231,7 @@ impl TokenStore {
             }
         }
         if n > 0 {
+            prune(&mut f, SystemTime::now());
             self.save(&f)?;
         }
         Ok(n)
@@ -310,5 +357,59 @@ mod tests {
             h.join().unwrap();
         }
         assert_eq!(TokenStore::new(&path).list().unwrap().len(), 80);
+    }
+    #[test]
+    fn rebootstrap_rotates_tokens_of_the_same_key() {
+        let (_d, s) = store();
+        let (old_plain, old) = s
+            .issue_for("case-a", Duration::from_secs(3600), Some("SHA256:k1"))
+            .unwrap();
+        let (other_plain, _) = s
+            .issue_for("case-a", Duration::from_secs(3600), Some("SHA256:k2"))
+            .unwrap();
+        let (manual_plain, _) = s.issue("case-a", Duration::from_secs(3600)).unwrap();
+        assert_eq!(s.revoke_by_fingerprint("SHA256:k1").unwrap(), 1);
+        assert!(matches!(s.verify(&old_plain), Err(VerifyError::Revoked)));
+        // 別の鍵と手動発行は影響を受けない
+        assert!(s.verify(&other_plain).is_ok());
+        assert!(s.verify(&manual_plain).is_ok());
+        assert_eq!(s.revoke_by_fingerprint("SHA256:k1").unwrap(), 0);
+        assert_eq!(
+            s.list()
+                .unwrap()
+                .iter()
+                .filter(|r| r.label == old.label)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn long_expired_records_are_pruned_on_write() {
+        let (_d, s) = store();
+        let (_, recent) = s.issue("case-a", Duration::ZERO).unwrap(); // 期限切れ直後: 残る
+        let mut f = s.load().unwrap();
+        let mut old = recent.clone();
+        old.label = "skm_00000000".into();
+        old.expires_at = SystemTime::now() - RETENTION_AFTER_EXPIRY - Duration::from_secs(60);
+        f.records.insert("f".repeat(64), old);
+        s.save(&f).unwrap();
+        assert_eq!(s.list().unwrap().len(), 2);
+        // 次の書き込みで 7 日超のものだけ消える
+        s.issue("case-a", Duration::from_secs(60)).unwrap();
+        let labels: Vec<String> = s.list().unwrap().into_iter().map(|r| r.label).collect();
+        assert_eq!(labels.len(), 2);
+        assert!(labels.contains(&recent.label) && !labels.contains(&"skm_00000000".to_string()));
+    }
+
+    #[test]
+    fn old_store_without_fingerprint_field_loads() {
+        let (d, s) = store();
+        let text = r#"{"records":{"aaaa":{"label":"skm_aaaaaaaa","project":"p","issued_at":"2026-01-01T00:00:00Z","expires_at":"2099-01-01T00:00:00Z"}}}"#;
+        std::fs::write(d.path().join("tokens.json"), text).unwrap();
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list[0].fingerprint.is_none());
+        assert_eq!(s.revoke_by_fingerprint("SHA256:x").unwrap(), 0);
     }
 }

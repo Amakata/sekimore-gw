@@ -22,7 +22,47 @@ set -ex
 #   SEKIMORE_BOOTSTRAP       auto (既定) | manual  — manual なら鍵登録もトークン取得もせず、操作者に任せる
 #   SEKIMORE_GIT_DOMAIN      relay に向けたドメイン (既定は /bootstrap の応答、無ければ github.com)
 #   SEKIMORE_RELAY_API_PORT / SEKIMORE_RELAY_SSH_PORT  (既定 8420 / 22)
+#   SEKIMORE_SIGNING_KEY_COMMENT  署名鍵のコメント (GitHub 登録時の Title)。既定は "sekimore-agent-signing: <SEKIMORE_PROJECT> / <git user.name> <user.email>"
+#   SEKIMORE_PROJECT         上の案件名 (compose から渡す。無ければ省略)
 # ---------------------------------------------------------------------------
+# 署名鍵を用意する。$1 = 鍵ディレクトリ、$2 = コメント。無ければ生成、旧既定コメントのままなら更新 (fingerprint は変わらない)
+sekimore_ensure_signing_key() {
+  local keydir=$1 comment=$2 current
+  if [ ! -f "$keydir/signing_ed25519" ]; then
+    ssh-keygen -q -t ed25519 -N '' -C "$comment" -f "$keydir/signing_ed25519"
+    return 0
+  fi
+  current=$(cut -d' ' -f3- "$keydir/signing_ed25519.pub" 2>/dev/null || true)
+  if [ -n "${SEKIMORE_SIGNING_KEY_COMMENT:-}" ]; then
+    # 操作者が明示したコメントは既存鍵にも反映する (違うときだけ書き換え。鍵は不変)
+    if [ "$current" != "$comment" ]; then
+      ssh-keygen -q -c -C "$comment" -P '' -f "$keydir/signing_ed25519" >/dev/null 2>&1 || true
+    fi
+  elif [ "${current#sekimore-agent-signing@}" != "$current" ] && [ "${comment#sekimore-agent-signing@}" = "$comment" ]; then
+    # 旧既定 (…@<hostname>) のままなら名前入りに更新する
+    ssh-keygen -q -c -C "$comment" -P '' -f "$keydir/signing_ed25519" >/dev/null 2>&1 || true
+  fi
+}
+
+
+# 署名鍵のコメントを組む。$1 = 対象ユーザーの HOME (git の global 設定を読む)
+sekimore_signing_key_comment() {
+  if [ -n "${SEKIMORE_SIGNING_KEY_COMMENT:-}" ]; then printf '%s' "$SEKIMORE_SIGNING_KEY_COMMENT"; return 0; fi
+  local home=$1 name email project
+  name=$(HOME=$home git config --global --get user.name 2>/dev/null || true)
+  email=$(HOME=$home git config --global --get user.email 2>/dev/null || true)
+  project=${SEKIMORE_PROJECT:-}
+  local who="" c="sekimore-agent-signing"
+  if [ -n "$name" ]; then who=$name; fi
+  if [ -n "$email" ]; then who="${who:+$who }<$email>"; fi
+  if [ -n "$project" ] && [ -n "$who" ]; then c="$c: $project / $who"
+  elif [ -n "$project" ]; then c="$c: $project"
+  elif [ -n "$who" ]; then c="$c: $who"
+  else c="$c@$(hostname)"
+  fi
+  printf '%s' "$c"
+}
+
 sekimore_relay_setup() {
   local gw=$1
   local api_port=${SEKIMORE_RELAY_API_PORT:-8420}
@@ -65,9 +105,9 @@ sekimore_relay_setup() {
   if [ ! -f "$keydir/id_ed25519" ]; then
     ssh-keygen -q -t ed25519 -N '' -C "sekimore-agent@$(hostname)" -f "$keydir/id_ed25519"
   fi
-  if [ ! -f "$keydir/signing_ed25519" ]; then
-    ssh-keygen -q -t ed25519 -N '' -C "sekimore-agent-signing@$(hostname)" -f "$keydir/signing_ed25519"
-  fi
+  # 署名鍵のコメントは GitHub に Signing Key として登録するときの Title になるので、誰の・どの案件の AI 鍵か分かる形にする
+  # (sekimore_signing_key_comment)。既存の鍵が旧既定 "sekimore-agent-signing@<hostname>" のままなら名前入りに更新する (鍵は不変)
+  sekimore_ensure_signing_key "$keydir" "$(sekimore_signing_key_comment "$home")"
   chown -R "$own" "$keydir"
   chmod 600 "$keydir/id_ed25519" "$keydir/signing_ed25519"
   chmod 644 "$keydir/id_ed25519.pub" "$keydir/signing_ed25519.pub"
@@ -76,9 +116,10 @@ sekimore_relay_setup() {
   local xtrace=0
   case $- in *x*) xtrace=1 ;; esac
   set +x
-  local token="" repo="" git_domain="" resp=""
+  local token="" token_expires="" repo="" git_domain="" resp=""
   if [ -r "$env_file" ]; then
     token=$(sed -n 's/^SEKIMORE_TOKEN=//p' "$env_file" | head -1)
+    token_expires=$(sed -n 's/^SEKIMORE_TOKEN_EXPIRES=//p' "$env_file" | head -1)
     repo=$(sed -n 's/^SEKIMORE_REPO=//p' "$env_file" | head -1)
     git_domain=$(sed -n 's/^SEKIMORE_GIT_DOMAIN=//p' "$env_file" | head -1)
   fi
@@ -93,6 +134,7 @@ sekimore_relay_setup() {
       resp=$(curl -sS -m 10 -X POST -H 'Content-Type: application/json' \
                -d "{\"public_key\":\"$pub\",\"label\":\"$(hostname)\"}" "$endpoint/bootstrap" 2>/dev/null) || resp=""
       token=$(printf '%s' "$resp" | grep -o 'skm_[0-9a-f]\{64\}' | head -1)
+      token_expires=$(printf '%s' "$resp" | grep -o '"token_expires":"[^"]*"' | cut -d'"' -f4)
       if [ -n "$token" ]; then
         echo "[agent] relay: registered the disposable key and received a project token"
         if [ -z "$repo" ]; then
@@ -121,13 +163,16 @@ sekimore_relay_setup() {
     echo "SEKIMORE_GIT_DOMAIN=$git_domain"
     if [ -n "$repo" ]; then echo "SEKIMORE_REPO=$repo"; fi
     if [ -n "$token" ]; then echo "SEKIMORE_TOKEN=$token"; fi
+    # 以下 2 つは `sekimore` ラッパーの自動更新用 (期限切れなら bootstrap をやり直す)
+    if [ -n "$token_expires" ]; then echo "SEKIMORE_TOKEN_EXPIRES=$token_expires"; fi
+    echo "SEKIMORE_AGENT_KEY=$keydir/id_ed25519.pub"
   } > "$tmp"
   chmod 600 "$tmp"
   chown "$own" "$tmp"
   mv -f "$tmp" "$env_file"
   local token_note="(NO token)"
   if [ -n "$token" ]; then token_note="(token issued)"; fi
-  unset token resp
+  unset token token_expires resp
   if [ "$xtrace" = 1 ]; then set -x; fi
 
   # ---- known_hosts: 関所のホスト鍵を <git_domain> として登録 (置換なので鍵が変わっても追従) ----

@@ -324,6 +324,7 @@
             <button class="tab" onclick="switchTab('ignored')">Ignored Domains</button>
             <button class="tab" onclick="switchTab('blocked-ips')">Blocked IPs</button>
             <button class="tab" onclick="switchTab('config')">Config</button>
+            <button class="tab" onclick="switchTab('relay')">Relay</button>
         </div>
 
         <!-- Dashboard タブ -->
@@ -497,6 +498,72 @@
                 <div class="empty-state">読み込み中...</div>
             </div>
         </div>
+        <div id="tab-relay" class="tab-content">
+            <h2 style="color: #58a6ff; margin-bottom: 20px;">中継関所（Relay）</h2>
+            <div class="controls">
+                <button onclick="loadRelay()">Refresh</button>
+                <span id="relay-disabled-note" style="color: #8b949e; font-size: 13px; display: none;">
+                    config.yml に <code>domain_handlers: { &lt;domain&gt;: { handler: git-relay } }</code> が無いので relay は動いていません
+                </span>
+            </div>
+
+            <div class="stats" style="margin-bottom: 30px;">
+                <div class="stat-card">
+                    <div class="stat-value" id="relay-stat-allowed">-</div>
+                    <div class="stat-label">Relay Allowed (24h)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="relay-stat-blocked">-</div>
+                    <div class="stat-label">Relay Blocked (24h)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="relay-stat-tokens">-</div>
+                    <div class="stat-label">Active Tokens</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="relay-stat-keys">-</div>
+                    <div class="stat-label">Registered Agent Keys</div>
+                </div>
+            </div>
+
+            <h3 style="color: #e6edf3; margin-bottom: 15px;">Relay Settings</h3>
+            <div class="domain-list" id="relay-config-list">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Permissions（API、既定拒否）</h3>
+            <div class="domain-list" id="relay-permissions">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Repositories（案件）</h3>
+            <div class="domain-list" id="relay-repos">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Project Tokens</h3>
+            <div class="domain-list" id="relay-tokens">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Access History（許可された操作、最新 100 件）</h3>
+            <div class="logs-container" id="relay-access" style="max-height: 400px;">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Block History（拒否された操作、最新 100 件）</h3>
+            <div class="logs-container" id="relay-blocks" style="max-height: 400px;">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+
+            <h3 style="color: #e6edf3; margin: 25px 0 15px;">State Files（/data/relay、有無のみ）</h3>
+            <div class="domain-list" id="relay-state-files">
+                <div class="empty-state">読み込み中...</div>
+            </div>
+            <p style="color: #8b949e; font-size: 12px; margin-top: 15px;">
+                この画面は閲覧のみ。トークンの失効や鍵の登録は gateway 内の <code>sekimore-relay</code> CLI（tokens / revoke / revoke-project / add-key / bootstrap disable）で行う。
+            </p>
+        </div>
     </div>
 
     <script>
@@ -655,6 +722,8 @@
                 loadBlockedIPs();
             } else if (tabName === 'config') {
                 loadConfig();
+            } else if (tabName === 'relay') {
+                loadRelay();
             }
         }
 
@@ -991,6 +1060,142 @@
             return div.innerHTML;
         }
 
+        // ---- Relay タブ ----
+        function relayBadge(text, cls) {
+            return `<span class="badge ${cls}">${escapeHtml(String(text))}</span>`;
+        }
+        function relayKV(label, value, badge) {
+            return `
+                <div class="domain-item">
+                    <div><span style="color: #8b949e; font-size: 13px;">${escapeHtml(label)}</span></div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="color: #e6edf3; font-family: 'SF Mono', Monaco, monospace; font-size: 14px;">${escapeHtml(String(value))}</span>
+                        ${badge || ''}
+                    </div>
+                </div>`;
+        }
+        function relayTime(ts) {
+            return ts ? new Date(ts * 1000).toLocaleString('ja-JP') : '-';
+        }
+        function renderRelayLog(containerId, entries, emptyText) {
+            const el = document.getElementById(containerId);
+            if (!entries.length) {
+                el.innerHTML = `<div class="empty-state">${escapeHtml(emptyText)}</div>`;
+                return;
+            }
+            const compColor = { GIT: '#58a6ff', API: '#d29922', SSH: '#c9d1d9', HTTPS: '#a371f7', BOOTSTRAP: '#3fb950', SYSTEM: '#8b949e', RELAY: '#8b949e' };
+            el.innerHTML = entries.map(e => {
+                const logClass = e.action === 'ALLOWED' ? 'log-allowed' : (e.action === 'BLOCKED' ? 'log-blocked' : 'log-ignored');
+                const actionClass = e.action === 'ALLOWED' ? 'action-allowed' : (e.action === 'BLOCKED' ? 'action-blocked' : 'action-ignored');
+                const emoji = e.action === 'ALLOWED' ? '✅' : (e.action === 'BLOCKED' ? '❌' : 'ℹ️');
+                const color = compColor[e.component] || '#8b949e';
+                const what = [e.verb, e.path, e.repo].filter(Boolean).join(' ');
+                return `
+                    <div class="log-entry ${logClass}">
+                        <span class="log-time">${escapeHtml(relayTime(e.timestamp))}</span>
+                        <span style="background: rgba(139, 148, 158, 0.15); color: ${color}; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 8px;">${escapeHtml(e.component)}</span>
+                        <span class="log-action ${actionClass}">${emoji} ${escapeHtml(e.event)}</span>
+                        ${e.peer ? `<span class="log-ip" style="color: #8b949e;">from ${escapeHtml(e.peer)}</span>` : ''}
+                        ${what ? `<span class="log-domain">${escapeHtml(what)}</span>` : ''}
+                        ${e.label ? `<span class="log-ip">${escapeHtml(e.label)}</span>` : ''}
+                        ${e.reason ? `<span style="color: #f85149; margin-left: 8px;">(${escapeHtml(e.reason)})</span>` : ''}
+                        ${e.detail ? `<span style="color: #8b949e; margin-left: 8px; font-size: 11px;">${escapeHtml(e.detail)}</span>` : ''}
+                    </div>`;
+            }).join('');
+        }
+
+        async function loadRelay() {
+            const ids = ['relay-config-list', 'relay-permissions', 'relay-repos', 'relay-tokens', 'relay-state-files'];
+            try {
+                const [cfgRes, statsRes, tokRes, accRes, blkRes] = await Promise.all([
+                    fetch('/api/relay/config'),
+                    fetch('/api/relay/stats'),
+                    fetch('/api/relay/tokens'),
+                    fetch('/api/relay/audit?kind=allowed&limit=100'),
+                    fetch('/api/relay/audit?kind=blocked&limit=100'),
+                ]);
+                const cfg = await cfgRes.json();
+                const stats = await statsRes.json();
+                const tokens = await tokRes.json();
+                const access = await accRes.json();
+                const blocks = await blkRes.json();
+
+                document.getElementById('relay-disabled-note').style.display = cfg.enabled ? 'none' : 'inline';
+                document.getElementById('relay-stat-allowed').textContent = cfg.enabled ? stats.allowed : '-';
+                document.getElementById('relay-stat-blocked').textContent = cfg.enabled ? stats.blocked : '-';
+                document.getElementById('relay-stat-tokens').textContent = cfg.enabled ? `${stats.tokens_active} / ${stats.tokens_total}` : '-';
+                document.getElementById('relay-stat-keys').textContent = cfg.enabled ? stats.keys : '-';
+
+                if (!cfg.enabled) {
+                    ids.forEach(id => { document.getElementById(id).innerHTML = '<div class="empty-state">relay は無効です</div>'; });
+                    renderRelayLog('relay-access', [], 'relay は無効です');
+                    renderRelayLog('relay-blocks', [], 'relay は無効です');
+                    return;
+                }
+
+                document.getElementById('relay-config-list').innerHTML = [
+                    relayKV('Status', 'Enabled', relayBadge('ON', 'badge-allowed')),
+                    relayKV('Domain (git-relay)', cfg.domain),
+                    relayKV('Upstream', cfg.upstream),
+                    relayKV('Project', cfg.project || '-'),
+                    relayKV('SSH listen', cfg.ssh_listen),
+                    relayKV('API listen', cfg.api_listen),
+                    relayKV('HTTPS (443)', cfg.https, relayBadge(cfg.https, cfg.https === 'passthrough' ? 'badge-allowed' : 'badge-blocked')),
+                    relayKV('Bootstrap', cfg.bootstrap_disabled ? `${cfg.bootstrap} (disabled by kill-switch)` : cfg.bootstrap,
+                        relayBadge(cfg.bootstrap_disabled ? 'OFF' : 'ON', cfg.bootstrap_disabled ? 'badge-blocked' : 'badge-allowed')),
+                    relayKV('Token TTL', cfg.token_ttl),
+                    relayKV('Allow delete (refs)', cfg.allow_delete ? 'yes' : 'no'),
+                    relayKV('State dir', cfg.state_dir),
+                ].join('');
+
+                const allPerms = ['issue:assign', 'issue:close', 'issue:comment', 'issue:create', 'issue:label',
+                    'pr:close', 'pr:comment', 'pr:create', 'pr:merge', 'pr:read', 'pr:review',
+                    'project:add_item', 'project:read', 'project:update_item', 'repo:read'];
+                const granted = new Set(cfg.permissions);
+                cfg.permissions.forEach(p => allPerms.includes(p) || allPerms.push(p));
+                document.getElementById('relay-permissions').innerHTML = allPerms.map(p =>
+                    relayKV(p, granted.has(p) ? 'allowed' : 'denied', relayBadge(granted.has(p) ? 'ALLOW' : 'DENY', granted.has(p) ? 'badge-allowed' : 'badge-blocked-default'))
+                ).join('');
+
+                document.getElementById('relay-repos').innerHTML = cfg.repos.length ? cfg.repos.map(r => `
+                    <div class="domain-item">
+                        <div>
+                            <span class="domain-name">${escapeHtml(r.name)}</span>
+                            <div class="domain-stats" style="margin-top: 4px;">
+                                <span class="domain-stat">PR bases: <strong>${escapeHtml(r.bases.join(', ') || '-')}</strong></span>
+                                <span class="domain-stat">direct push: <strong>${escapeHtml(r.push.join(', ') || '-')}</strong></span>
+                            </div>
+                        </div>
+                        <div>${relayBadge(r.mode, r.mode === 'read-write' ? 'badge-mixed' : 'badge-ignored')}</div>
+                    </div>`).join('') : '<div class="empty-state">リポジトリが設定されていません（全て案件外として拒否）</div>';
+
+                document.getElementById('relay-tokens').innerHTML = tokens.length ? tokens.map(t => `
+                    <div class="domain-item">
+                        <div>
+                            <span class="domain-name" style="font-family: 'SF Mono', Monaco, monospace;">${escapeHtml(t.label)}</span>
+                            <div class="domain-stats" style="margin-top: 4px;">
+                                <span class="domain-stat">issued: <strong>${escapeHtml(relayTime(t.issued_at))}</strong></span>
+                                <span class="domain-stat">expires: <strong>${escapeHtml(relayTime(t.expires_at))}</strong></span>
+                                <span class="domain-stat">last used: <strong>${escapeHtml(relayTime(t.last_used))}</strong></span>
+                                <span class="domain-stat">uses: <strong>${t.use_count}</strong></span>
+                            </div>
+                        </div>
+                        <div>${relayBadge(t.state, t.state === 'active' ? 'badge-allowed' : (t.state === 'revoked' ? 'badge-blocked' : 'badge-ignored'))}</div>
+                    </div>`).join('') : '<div class="empty-state">トークンはまだ発行されていません</div>';
+
+                renderRelayLog('relay-access', access, '許可された操作はまだありません');
+                renderRelayLog('relay-blocks', blocks, '拒否された操作はありません');
+
+                document.getElementById('relay-state-files').innerHTML = cfg.state_files.map(f =>
+                    relayKV(f.name, f.count !== null && f.count !== undefined ? `${f.count} entries` : (f.present ? 'present' : 'missing'),
+                        relayBadge(f.present ? 'OK' : 'MISSING', f.present ? 'badge-allowed' : 'badge-blocked'))
+                ).join('');
+            } catch (error) {
+                console.error('Failed to load relay:', error);
+                ids.forEach(id => { document.getElementById(id).innerHTML = '<div class="empty-state">エラー: relay 情報の読み込みに失敗しました</div>'; });
+            }
+        }
+
         // ゲートウェイ情報を読み込み
         async function loadGatewayInfo() {
             try {
@@ -1027,6 +1232,7 @@
 
         // 定期的に統計を更新
         setInterval(refreshStats, 10000);
+        setInterval(() => { if (document.getElementById('tab-relay').classList.contains('active')) loadRelay(); }, 10000);
     </script>
 </body>
 </html>

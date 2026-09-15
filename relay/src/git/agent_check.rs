@@ -28,7 +28,7 @@ impl fmt::Display for AgentError {
             AgentError::Unset => write!(
                 f,
                 "SSH_AUTH_SOCK is not set in the gateway container; mount the operator's agent socket \
-                 (compose: volumes ${{SEKIMORE_AGENT_SOCK_DIR}}:/ssh-agent:ro, environment SSH_AUTH_SOCK=/ssh-agent/agent.sock)"
+                 (compose: volumes ${{SEKIMORE_AGENT_SOCK:-/run/host-services/ssh-auth.sock}}:/ssh-agent/agent.sock:ro, environment SSH_AUTH_SOCK=/ssh-agent/agent.sock)"
             ),
             AgentError::Missing(p) => write!(
                 f,

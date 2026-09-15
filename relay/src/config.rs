@@ -42,6 +42,10 @@ fn default_handler() -> HandlerKind {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProxyConfig {
+    /// Squid が有効か。Python 側は `enabled` が真のときだけ `upstream_proxy` を使うので、relay も揃える
+    /// （sample の config には `enabled: false` のまま `upstream_proxy: proxy.example.com:…` のプレースホルダが残っている）
+    #[serde(default)]
+    pub enabled: bool,
     pub upstream_proxy: Option<String>,
     #[serde(default)]
     pub upstream_proxy_tls: bool,
@@ -462,6 +466,9 @@ pub struct ProxySpec {
 }
 
 fn resolve_proxy(p: &ProxyConfig) -> Result<Option<ProxySpec>, ConfigError> {
+    if !p.enabled {
+        return Ok(None);
+    }
     let Some(hp) = p
         .upstream_proxy
         .as_deref()
@@ -653,6 +660,15 @@ mod tests {
             p(bad_mode).unwrap().resolve(),
             Err(ConfigError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn proxy_placeholder_is_ignored_unless_enabled() {
+        // 実機の config.yml には enabled: false のまま upstream_proxy のプレースホルダが残っている
+        let text = "domain_handlers:\n  github.com: { handler: git-relay }\nproxy:\n  enabled: false\n  upstream_proxy: proxy.example.com:3129\nrelay:\n  project: { name: x }\n";
+        assert!(p(text).unwrap().resolve().unwrap().proxy.is_none());
+        let text = "domain_handlers:\n  github.com: { handler: git-relay }\nproxy:\n  upstream_proxy: proxy.example.com:3129\nrelay:\n  project: { name: x }\n";
+        assert!(p(text).unwrap().resolve().unwrap().proxy.is_none());
     }
 
     #[test]

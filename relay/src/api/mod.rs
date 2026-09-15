@@ -213,6 +213,12 @@ pub async fn handle(
 
     // ---- 認証 ----
     let Some(token) = bearer_token(&req) else {
+        ctx.audit.deny(
+            "token_denied",
+            Actor::Agent,
+            "missing token",
+            &[("path", &path), ("peer", &peer_ip)],
+        );
         return error_response(
             StatusCode::UNAUTHORIZED,
             "missing token (Authorization: Bearer skm_...)",
