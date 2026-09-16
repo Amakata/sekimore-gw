@@ -570,7 +570,14 @@
         let ws = null;
         const maxLogs = 100;
 
-        // WebSocket接続
+        // WebSocket接続（0.2.3: サーバは snapshot / logs(配列) を送る。1 件でも即時、多ければまとめて届く）
+        let staleWhileHidden = false;
+        let statsTimer = null;
+        function scheduleStatsRefresh() {
+            // ログ 1 件ごとに /api/stats を叩かない。新着があった後、最短 3 秒に 1 回
+            if (statsTimer) return;
+            statsTimer = setTimeout(() => { statsTimer = null; refreshStats(); }, 3000);
+        }
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -583,9 +590,17 @@
             };
 
             ws.onmessage = (event) => {
-                const log = JSON.parse(event.data);
-                addLogEntry(log);
-                refreshStats();
+                const msg = JSON.parse(event.data);
+                if (msg && msg.type === 'snapshot') {
+                    renderLogs(msg.entries || [], true);
+                    staleWhileHidden = false;
+                } else if (msg && msg.type === 'logs') {
+                    if (document.hidden) { staleWhileHidden = true; return; }  // 戻ったら resync で最新から描き直す
+                    renderLogs(msg.entries || [], false);
+                } else if (msg && msg.component) {
+                    renderLogs([msg], false);  // 旧サーバ（1 件ずつ）との互換
+                }
+                scheduleStatsRefresh();
             };
 
             ws.onclose = () => {
@@ -600,16 +615,35 @@
                 console.error('WebSocket error:', error);
             };
         }
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && staleWhileHidden && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'resync' }));
+            }
+        });
 
-        // ログエントリを追加
-        function addLogEntry(log) {
+        // ログを描画する。entries は時刻の昇順。replace なら全置換（snapshot）、そうでなければ先頭に追加
+        function renderLogs(entries, replace) {
             const logsDiv = document.getElementById('logs');
-
-            // 初回メッセージを削除
-            if (logsDiv.children.length === 1 && logsDiv.children[0].textContent.includes('Connecting')) {
+            if (replace || (logsDiv.children.length === 1 && logsDiv.children[0].textContent.includes('Connecting'))) {
                 logsDiv.innerHTML = '';
             }
+            if (!entries.length) {
+                if (replace) logsDiv.innerHTML = '<div class="empty-state">ログはまだありません</div>';
+                return;
+            }
+            const fragment = document.createDocumentFragment();
+            // 新しいものが上に来るように、昇順の配列を後ろから積む
+            for (let i = entries.length - 1; i >= 0; i--) {
+                fragment.appendChild(buildLogEntry(entries[i]));
+            }
+            logsDiv.insertBefore(fragment, logsDiv.firstChild);
+            while (logsDiv.children.length > maxLogs) {
+                logsDiv.removeChild(logsDiv.lastChild);
+            }
+        }
 
+        // ログ 1 件の要素を作る
+        function buildLogEntry(log) {
             const entry = document.createElement('div');
             let logClass = 'log-blocked';
             if (log.action === 'ALLOWED') logClass = 'log-allowed';
@@ -635,20 +669,13 @@
             entry.innerHTML = `
                 <span class="log-time">${time}</span>
                 ${componentBadge}
-                <span class="log-action ${actionClass}">${emoji} ${log.action}</span>
-                ${log.src_ip ? `<span class="log-ip" style="color: #8b949e;">from ${log.src_ip}</span>` : ''}
-                ${log.domain ? `<span class="log-domain">${log.domain}</span>` : ''}
-                ${log.dst_ip ? `<span class="log-ip">→ ${log.dst_ip}${log.dst_port ? ':' + log.dst_port : ''}</span>` : ''}
-                ${log.reason ? `<span style="color: #8b949e; margin-left: 8px;">(${log.reason})</span>` : ''}
+                <span class="log-action ${actionClass}">${emoji} ${escapeHtml(log.action || '')}</span>
+                ${log.src_ip ? `<span class="log-ip" style="color: #8b949e;">from ${escapeHtml(log.src_ip)}</span>` : ''}
+                ${log.domain ? `<span class="log-domain">${escapeHtml(log.domain)}</span>` : ''}
+                ${log.dst_ip ? `<span class="log-ip">→ ${escapeHtml(log.dst_ip)}${log.dst_port ? ':' + escapeHtml(String(log.dst_port)) : ''}</span>` : ''}
+                ${log.reason ? `<span style="color: #8b949e; margin-left: 8px;">(${escapeHtml(log.reason)})</span>` : ''}
             `;
-
-            // 先頭に追加
-            logsDiv.insertBefore(entry, logsDiv.firstChild);
-
-            // 最大件数を超えたら削除
-            while (logsDiv.children.length > maxLogs) {
-                logsDiv.removeChild(logsDiv.lastChild);
-            }
+            return entry;
         }
 
         // 統計情報を更新
@@ -1154,8 +1181,12 @@
                     relayKV('API listen', cfg.api_listen),
                     relayKV('HTTPS (443)', cfg.https, relayBadge(cfg.https, cfg.https === 'passthrough' ? 'badge-allowed' : 'badge-blocked')),
                     // 0.2.2: 送信上限（持ち出し対策）。宛先ごとの値は上流行 / https-relay 行に
-                    relayKV('HTTPS upload cap (default, per connection)', relayCap(cfg.https_max_upload_bytes),
-                        relayBadge(cfg.https_max_upload_bytes === -1 ? 'UNLIMITED' : 'CAPPED', cfg.https_max_upload_bytes === -1 ? 'badge-blocked' : 'badge-allowed')),
+                    relayKV('HTTPS upload cap (per connection)',
+                        (cfg.upstreams || []).length === 1
+                            ? `${cfg.upstreams[0].domain}: ${relayCap(cfg.upstreams[0].max_upload_bytes)}${cfg.upstreams[0].max_upload_bytes !== cfg.https_max_upload_bytes ? ` (default ${relayCap(cfg.https_max_upload_bytes)})` : ''}`
+                            : `default ${relayCap(cfg.https_max_upload_bytes)} (per upstream below)`,
+                        relayBadge(((cfg.upstreams || []).length === 1 ? cfg.upstreams[0].max_upload_bytes : cfg.https_max_upload_bytes) === -1 ? 'UNLIMITED' : 'CAPPED',
+                            ((cfg.upstreams || []).length === 1 ? cfg.upstreams[0].max_upload_bytes : cfg.https_max_upload_bytes) === -1 ? 'badge-blocked' : 'badge-allowed')),
                     relayKV('Large uploads / capped (24h)', `${stats.large_uploads ?? 0} / ${stats.upload_capped ?? 0}`,
                         relayBadge((stats.large_uploads || stats.upload_capped) ? 'CHECK' : 'OK', (stats.large_uploads || stats.upload_capped) ? 'badge-blocked' : 'badge-allowed')),
                     ...((cfg.https_relays || []).map(t =>

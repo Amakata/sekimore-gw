@@ -28,7 +28,8 @@ A security gateway designed for AI agent environments running in Docker. Provide
 
 - **Web UI**: Real-time monitoring dashboard on port 8080
 - **Packet Logging**: NFLOG-based firewall logging with ulogd2
-- **SQLite Database**: Persistent storage for access logs and statistics
+- **SQLite Database**: Persistent storage for access logs and statistics (WAL, indexed; records are kept until an operator prunes them)
+- **Maintenance CLI** (0.2.3): `python -m src.maint db-stats | db-prune --before-days N --yes | db-reset --yes | db-vacuum` inside the gateway container. Safe while the gateway is running. The relay audit (`/data/relay/audit.jsonl`) is separate and untouched. Dev Containers setups expose these as `mise run gw:db-stats` / `gw:db-prune` / `gw:db-reset`
 
 ### Optional Components
 
@@ -278,6 +279,12 @@ Requirements and design live in the workspace repository (`doc/sekimore-gw/requi
 - Verify `config/config.yml` has allowed domains
 - Check Web UI for blocked requests
 - View firewall logs: `docker logs sekimore-gw`
+
+### Web UI is slow or the database is large
+
+- `docker compose exec sekimore-gw python -m src.maint db-stats` shows row counts, time range, indexes and `journal_mode` (should be `wal` since 0.2.3)
+- Records are never deleted automatically. To trim: `python -m src.maint db-prune --before-days 90 --yes --vacuum`; to start over: `python -m src.maint db-reset --yes`
+- Both work while the gateway is running; DNS / firewall / proxy keep recording afterwards
 
 ### Host-side firewall not working
 
