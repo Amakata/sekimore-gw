@@ -59,6 +59,19 @@ class RelayRepo(BaseModel):
     tags: list[str] = []  # push を許すタグ glob（空 = 拒否）
     delete: bool = False
     permissions: list[str] = []  # 実効権限 = (案件 allow ∪ repo allow) − (案件 deny ∪ repo deny)
+    host: str = ""  # 0.2.0: 上流ドメイン（`host/Org/Repo` の host。省略時は既定上流）
+
+
+class RelayUpstream(BaseModel):
+    """0.2.0: git-relay ドメイン 1 つ分（上流）。一覧の先頭が既定上流."""
+
+    domain: str
+    upstream: str
+    ssh_port: int
+    default: bool = False
+    api_base: str = ""
+    token_present: bool = False
+    known_hosts_count: int | None = None
 
 
 class RelayStateFile(BaseModel):
@@ -86,6 +99,7 @@ class RelayConfigResponse(BaseModel):
     state_dir: str = "/data/relay"
     permissions: list[str] = []
     repos: list[RelayRepo] = []
+    upstreams: list[RelayUpstream] = []  # 0.2.0: 先頭が既定上流
     state_files: list[RelayStateFile] = []
     bootstrap_disabled: bool = False
 
@@ -141,15 +155,83 @@ def parse_ts(value: Any) -> float | None:
     return ts
 
 
-def _git_relay_domain(config: dict) -> str | None:
+def _port_of(listen: Any, default: int) -> int:
+    try:
+        return int(str(listen).rsplit(":", 1)[-1])
+    except (ValueError, IndexError):
+        return default
+
+
+def _git_relay_upstreams(config: dict) -> list[dict[str, Any]]:
+    """git-relay の上流一覧（relay/src/config.rs の resolve_upstreams と同じ規則。先頭が既定）.
+
+    既定上流 = `default: true` → 無ければ `ssh_port` を省いたもの → 無ければ辞書順の先頭。
+    既定上流は relay.ssh_listen / relay.upstream / <state_dir>/{upstream_token,known_hosts} を使い、
+    他は `ssh_port` で listen し、state は <state_dir>/upstreams/<host>/ に置く。
+    """
     handlers = config.get("domain_handlers") or {}
-    if not isinstance(handlers, dict):
-        return None
+    relay = config.get("relay") or {}
+    if not isinstance(handlers, dict) or not isinstance(relay, dict):
+        return []
+    specs: dict[str, dict] = {}
     for domain, spec in handlers.items():
-        handler = (spec or {}).get("handler") if isinstance(spec, dict) else None
-        if handler == "git-relay":
-            return str(domain).strip().rstrip(".").lower()
-    return None
+        spec = spec if isinstance(spec, dict) else {}
+        if spec.get("handler") == "git-relay":
+            specs[str(domain).strip().rstrip(".").lower()] = spec
+    if not specs:
+        return []
+    domains = sorted(specs)
+    explicit = [d for d in domains if specs[d].get("default")]
+    no_port = [d for d in domains if specs[d].get("ssh_port") is None]
+    if explicit:
+        default = explicit[0]
+    elif len(no_port) == 1:
+        default = no_port[0]
+    else:
+        default = domains[0]
+    listen_port = _port_of(relay.get("ssh_listen", "0.0.0.0:22"), 22)
+    state_dir = Path(str(relay.get("state_dir", "/data/relay")))
+    out: list[dict[str, Any]] = []
+    for d in domains:
+        spec = specs[d]
+        is_default = d == default
+        host = spec.get("upstream") or (relay.get("upstream") if is_default else None) or d
+        host = str(host).strip().lower()
+        port = spec.get("ssh_port")
+        try:
+            port = int(port) if port is not None else listen_port
+        except (TypeError, ValueError):
+            port = listen_port
+        if is_default and relay.get("api_base"):
+            api_base = str(relay["api_base"])
+        elif host == "github.com":
+            api_base = "https://api.github.com"
+        else:
+            api_base = f"https://{host}/api/v3"
+        if is_default:
+            token_path, kh_path = state_dir / "upstream_token", state_dir / "known_hosts"
+        else:
+            token_path = state_dir / "upstreams" / host / "upstream_token"
+            kh_path = state_dir / "upstreams" / host / "known_hosts"
+        out.append(
+            {
+                "domain": d,
+                "upstream": host,
+                "ssh_port": port,
+                "default": is_default,
+                "api_base": api_base,
+                "token_path": token_path,
+                "known_hosts_path": kh_path,
+            }
+        )
+    out.sort(key=lambda u: not u["default"])
+    return out
+
+
+def _git_relay_domain(config: dict) -> str | None:
+    """既定上流のドメイン（git-relay が無ければ None）."""
+    ups = _git_relay_upstreams(config)
+    return ups[0]["domain"] if ups else None
 
 
 def _perm_spec(v: Any) -> tuple[list[str], list[str]]:
@@ -171,7 +253,8 @@ def _count_lines(path: Path) -> int:
 
 def build_config(config: dict) -> RelayConfigResponse:
     """config.yml の relay 部分を表示用に整える（Rust が所有するキーもそのまま読む）."""
-    domain = _git_relay_domain(config)
+    upstreams = _git_relay_upstreams(config)
+    domain = upstreams[0]["domain"] if upstreams else None
     relay = config.get("relay") or {}
     if not isinstance(relay, dict):
         relay = {}
@@ -191,9 +274,16 @@ def build_config(config: dict) -> RelayConfigResponse:
             continue
         r_allow, r_deny = _perm_spec(r.get("permissions"))
         effective = sorted((set(p_allow) | set(r_allow)) - (set(p_deny) | set(r_deny)))
+        # 0.2.0: `host/Org/Repo` は上流を明示。`Org/Repo` は既定上流
+        name = str(r["name"]).strip().lstrip("/")
+        host = domain or ""
+        parts = name.split("/")
+        if len(parts) == 3 and "." in parts[0]:
+            host, name = parts[0].lower(), "/".join(parts[1:])
         repos.append(
             RelayRepo(
-                name=str(r["name"]),
+                name=name,
+                host=host,
                 mode=str(r.get("mode", "read-only")),
                 bases=[str(b) for b in (r.get("bases") or [])],
                 push=[str(p) for p in r["push"]] if r.get("push") is not None else default_push,
@@ -206,7 +296,7 @@ def build_config(config: dict) -> RelayConfigResponse:
     resp = RelayConfigResponse(
         enabled=domain is not None,
         domain=domain,
-        upstream=str(relay.get("upstream") or domain) if domain else None,
+        upstream=upstreams[0]["upstream"] if upstreams else None,
         project=str(project.get("name")) if project.get("name") else None,
         https=str(relay.get("https", "passthrough")),
         bootstrap=str(relay.get("bootstrap", "auto")),
@@ -224,20 +314,40 @@ def build_config(config: dict) -> RelayConfigResponse:
     if resp.enabled:
         sd = Path(state_dir)
         files = []
-        for name in (
+        names = [
             "host_key",
             "authorized_keys",
             "known_hosts",
             "upstream_token",
             "tokens.json",
             "audit.jsonl",
-        ):
+        ]
+        # 0.2.0: 既定以外の上流の state は upstreams/<host>/ にある
+        for u in upstreams:
+            if not u["default"]:
+                names.append(f"upstreams/{u['upstream']}/upstream_token")
+                names.append(f"upstreams/{u['upstream']}/known_hosts")
+        for name in names:
             p = sd / name
             count = None
-            if name in ("authorized_keys", "known_hosts") and p.exists():
+            if name.endswith(("authorized_keys", "known_hosts")) and p.exists():
                 count = _count_lines(p)
             files.append(RelayStateFile(name=name, present=p.exists(), count=count))
         resp.state_files = files
+        resp.upstreams = [
+            RelayUpstream(
+                domain=u["domain"],
+                upstream=u["upstream"],
+                ssh_port=u["ssh_port"],
+                default=u["default"],
+                api_base=u["api_base"],
+                token_present=u["token_path"].exists(),
+                known_hosts_count=_count_lines(u["known_hosts_path"])
+                if u["known_hosts_path"].exists()
+                else None,
+            )
+            for u in upstreams
+        ]
         resp.bootstrap_disabled = (sd / "bootstrap.disabled").exists()
     return resp
 

@@ -129,6 +129,7 @@ def describe_relay_api():
         assert data["repos"] == [
             {
                 "name": "Org/App",
+                "host": "github.com",
                 "mode": "read-write",
                 "bases": ["main"],
                 "push": ["sekimore/*"],
@@ -138,6 +139,7 @@ def describe_relay_api():
             },
             {
                 "name": "Org/Lib",
+                "host": "github.com",
                 "mode": "read-only",
                 "bases": [],
                 "push": ["sekimore/*"],
@@ -325,3 +327,72 @@ relay:
         # Old: list は allow の追加 (置換ではない)、delete は repo 指定 true
         assert repos["Org/Old"]["permissions"] == ["ci:read", "pr:create", "pr:read"]
         assert repos["Org/Old"]["delete"] is True
+
+
+def describe_multi_upstream():
+    """0.2.0: 複数の git-relay ドメイン (ポートで分ける)。既定上流、上流ごとの state、repo の host."""
+
+    config_text = """
+domain_handlers:
+  github.com: {handler: git-relay}
+  ghe.example.com: {handler: git-relay, ssh_port: 2222}
+relay:
+  state_dir: "{state_dir}"
+  project:
+    name: case-m
+    permissions: [pr:create]
+    repos:
+      - {name: Org/App, mode: read-write, bases: [main]}
+      - {name: ghe.example.com/Corp/Internal, mode: read-write, bases: [main]}
+"""
+
+    def it_lists_upstreams_default_first_with_per_upstream_state(tmp_path):
+        state = tmp_path / "relay"
+        (state / "upstreams" / "ghe.example.com").mkdir(parents=True)
+        (state / "upstream_token").write_text("gho_x")
+        (state / "upstreams" / "ghe.example.com" / "known_hosts").write_text(
+            "[ghe.example.com]:22 ssh-ed25519 AAAA\n"
+        )
+        cfg = tmp_path / "config.yml"
+        cfg.write_text(config_text.replace("{state_dir}", str(state)))
+        with patch("src.web_ui.app.CONFIG_PATH", str(cfg)):
+            from src.web_ui.app import app
+
+            data = TestClient(app).get("/api/relay/config").json()
+        assert data["enabled"] is True
+        # 0.1.x のフィールドは既定上流 (ssh_port を省いた github.com) を指す
+        assert data["domain"] == "github.com" and data["upstream"] == "github.com"
+        ups = data["upstreams"]
+        assert [u["domain"] for u in ups] == ["github.com", "ghe.example.com"]
+        assert ups[0]["default"] is True and ups[0]["ssh_port"] == 22
+        assert ups[0]["token_present"] is True and ups[0]["api_base"] == "https://api.github.com"
+        assert ups[1]["default"] is False and ups[1]["ssh_port"] == 2222
+        assert ups[1]["token_present"] is False and ups[1]["known_hosts_count"] == 1
+        assert ups[1]["api_base"] == "https://ghe.example.com/api/v3"
+        repos = {r["name"]: r for r in data["repos"]}
+        assert repos["Org/App"]["host"] == "github.com"
+        assert repos["Corp/Internal"]["host"] == "ghe.example.com"
+        files = {f["name"]: f for f in data["state_files"]}
+        assert files["upstreams/ghe.example.com/upstream_token"]["present"] is False
+        assert files["upstreams/ghe.example.com/known_hosts"]["count"] == 1
+        # 秘密 (上流トークンの中身) は応答に出ない
+        assert "gho_x" not in json.dumps(data)
+
+    def it_picks_default_true_when_every_entry_has_an_ssh_port(tmp_path):
+        text = config_text.replace(
+            "github.com: {handler: git-relay}", "github.com: {handler: git-relay, ssh_port: 2201}"
+        ).replace(
+            "ghe.example.com: {handler: git-relay, ssh_port: 2222}",
+            "ghe.example.com: {handler: git-relay, ssh_port: 2222, default: true}",
+        )
+        cfg = tmp_path / "config.yml"
+        cfg.write_text(text.replace("{state_dir}", str(tmp_path / "relay")))
+        with patch("src.web_ui.app.CONFIG_PATH", str(cfg)):
+            from src.web_ui.app import app
+
+            data = TestClient(app).get("/api/relay/config").json()
+        assert data["domain"] == "ghe.example.com"
+        assert [u["domain"] for u in data["upstreams"]] == ["ghe.example.com", "github.com"]
+        assert data["upstreams"][0]["ssh_port"] == 2222
+        # host 無しの repo は既定上流 (ghe.example.com) のもの
+        assert {r["name"]: r["host"] for r in data["repos"]}["Org/App"] == "ghe.example.com"
