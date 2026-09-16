@@ -63,6 +63,68 @@ sekimore_signing_key_comment() {
   printf '%s' "$c"
 }
 
+# AI エージェント向けの使い方 (sekimore guide) を、各ツールが自動で読む場所に置く。
+#   Claude Code: <home>/.claude/skills/sekimore-relay/SKILL.md (関連する作業のときに読み込まれる)
+#   Codex CLI:   <home>/.codex/AGENTS.md のマーカー付きブロック (常に読まれるので要点 + guide への誘導)
+# 他のツールは `sekimore guide` の出力をその規約の場所に置けばよい。
+# SEKIMORE_AGENT_INSTRUCTIONS=claude,codex (既定) / none で無効。冪等 (再実行で置き換える)。
+sekimore_agent_instructions() {
+  local home=$1 own=$2
+  local targets=${SEKIMORE_AGENT_INSTRUCTIONS:-claude,codex}
+  if [ "$targets" = none ] || [ -z "$targets" ]; then return 0; fi
+  if ! command -v sekimore-relay >/dev/null 2>&1; then
+    echo "[agent] relay: sekimore-relay not found; skipping agent instructions"
+    return 0
+  fi
+  local guide
+  guide=$(sekimore-relay agent guide 2>/dev/null) || guide=""
+  if [ -z "$guide" ]; then
+    echo "[agent] relay: sekimore-relay agent guide is not available (old CLI); skipping agent instructions"
+    return 0
+  fi
+  local version
+  version=$(sekimore-relay --version 2>/dev/null | awk '{print $2}')
+  case ",$targets," in
+    *,claude,*)
+      local skill_dir="$home/.claude/skills/sekimore-relay"
+      install -d -m 755 "$skill_dir"
+      {
+        echo "---"
+        echo "name: sekimore-relay"
+        echo "description: この環境の git push / PR 作成 / CI 確認 / Issue / GitHub API は sekimore-relay (関所) を経由する。git push、PR、CI の確認、GitHub 操作の前に読む。sekimore-relay ${version:-unknown}"
+        echo "---"
+        echo
+        printf '%s\n' "$guide"
+      } > "$skill_dir/SKILL.md.tmp.$$"
+      mv -f "$skill_dir/SKILL.md.tmp.$$" "$skill_dir/SKILL.md"
+      chown -R "$own" "$home/.claude/skills" 2>/dev/null || true
+      echo "[agent] relay: wrote Claude Code skill $skill_dir/SKILL.md"
+      ;;
+  esac
+  case ",$targets," in
+    *,codex,*)
+      local codex_dir="$home/.codex" agents="$home/.codex/AGENTS.md"
+      install -d -m 755 "$codex_dir"
+      touch "$agents"
+      local tmpa="$agents.tmp.$$"
+      awk '/^<!-- >>> sekimore-relay >>> -->/{skip=1} /^<!-- <<< sekimore-relay <<< -->/{skip=0; next} !skip' "$agents" > "$tmpa"
+      {
+        echo "<!-- >>> sekimore-relay >>> -->"
+        echo "## sekimore-relay (git / GitHub は関所経由)"
+        echo
+        echo "この環境の git push、PR、CI 確認、GitHub API は sekimore-relay (関所) を経由する。作業を始める前に \`sekimore guide\` を実行して使い方を読むこと。"
+        echo "要点: push 先は \`HEAD:refs/heads/sekimore/<topic>\` (PR は \`sekimore pr create\`) か \`HEAD:refs/for/<base>\`。main への直接 push・タグ・削除・HTTPS git は拒否される。"
+        echo "権限と repo は \`sekimore whoami\`。拒否理由は stderr の \`sekimore: …\` を読む。依頼者の資格情報はこの環境に無い。回避を試みない。"
+        echo "<!-- <<< sekimore-relay <<< -->"
+      } >> "$tmpa"
+      mv -f "$tmpa" "$agents"
+      chown -R "$own" "$codex_dir" 2>/dev/null || true
+      echo "[agent] relay: wrote Codex instructions block in $agents"
+      ;;
+  esac
+  return 0
+}
+
 sekimore_relay_setup() {
   local gw=$1
   local api_port=${SEKIMORE_RELAY_API_PORT:-8420}
@@ -267,6 +329,9 @@ sekimore_relay_setup() {
   fi
   chown "$own" "$signers"
   if [ -f "$home/.gitconfig" ]; then chown "$own" "$home/.gitconfig"; fi
+
+  # ---- AI エージェント向けの使い方を各ツールの場所に置く (Claude Code skill / Codex AGENTS.md) ----
+  sekimore_agent_instructions "$home" "$own" || echo "[agent] relay: WARNING: could not write agent instructions"
 
   echo "[agent] relay: ready — git via $git_domains → $gw, API $endpoint, env $env_file $token_note"
   echo "[agent] relay: commits are signed with $keydir/signing_ed25519.pub"
