@@ -4,9 +4,9 @@ AI エージェントの git 操作（SSH）と GitHub API 操作を、案件単
 sekimore-gw のイメージに同梱され、`config.yml` に `handler: git-relay` があるときだけ起動します。
 無ければ何も変わりません。
 
-- 要件: `doc/sekimore-gw/requirements/04-relay.md`（workspace リポジトリ）
-- 設計と各版の変更点: `doc/sekimore-gw/design/relay.md`
-- エージェント側の自動化（agent-setup / devcontainer base）: `doc/sgw-devcontainer-base/design/sekimore-relay-agent.md`
+- 変更履歴: [CHANGELOG.md](CHANGELOG.md)
+- 要件と設計（workspace リポジトリ）: [requirements/04-relay.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sekimore-gw/requirements/04-relay.md)、[design/relay.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sekimore-gw/design/relay.md)
+- エージェント側の自動化（agent-setup / devcontainer base）: [design/sekimore-relay-agent.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sgw-devcontainer-base/design/sekimore-relay-agent.md)
 
 ## 全体像
 
@@ -282,4 +282,5 @@ glibc 世代に依存しないので、devcontainer base イメージへ `COPY -
 
 ## 変更履歴
 
-版ごとの変更点と設計判断は `doc/sekimore-gw/design/relay.md` の各版の節にあります。
+[CHANGELOG.md](CHANGELOG.md) にあります。設計判断の詳細は workspace リポジトリの
+[design/relay.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sekimore-gw/design/relay.md) を参照してください。
