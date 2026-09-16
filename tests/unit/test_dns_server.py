@@ -1201,6 +1201,19 @@ def describe_domain_handler_resolution():
         await s.mapping.db.close()
 
     @pytest.mark.asyncio
+    async def it_redirects_the_same_way_under_the_github_handler_name():
+        """0.2.6 renamed the handler to `github`; the redirect must not depend on the spelling."""
+        for name in ("github", "git-relay"):
+            s = await _server({"github.com": name}, allowed=["github.com"])
+            r = await _query(s, "github.com")
+            assert r.header.rcode == 0, name
+            assert len(r.rr) == 1, name
+            assert str(r.rr[0].rdata) == "172.22.0.2", f"{name} must answer the relay IP"
+            assert r.rr[0].ttl == 60, name
+            s.firewall_manager.setup_domain.assert_not_called()
+            await s.mapping.db.close()
+
+    @pytest.mark.asyncio
     async def it_redirects_https_relay_domain_to_gateway_ip_too():
         # 0.2.2: https-relay also returns the relay IP and keeps the real IP out of the ipset
         s = await _server({"ghcr.io": "https-relay"}, allowed=["ghcr.io"])

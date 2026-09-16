@@ -2,6 +2,10 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.7 (2026-09-16. Fixes the DNS redirect under the new handler name)
+
+- DNS: `handler: github` now redirects to the relay, as `git-relay` always did. 0.2.6 renamed the handler and updated the config layer, but `dns_server.py` still compared against the old spelling alone, so a domain written the new way resolved to its real address and never reached the relay. Both spellings are accepted there now, with a test that asserts they behave identically. Anyone who kept writing `git-relay` was unaffected
+
 ## 0.2.6 (2026-09-16. Releases from the agent, and the handler is named after the forge)
 
 - `sekimore release create --tag vX.Y.Z [--title T] [--notes "…" | --notes-file F] [--generate-notes] [--draft] [--prerelease]`, `sekimore release view --tag vX.Y.Z`, `sekimore release list [--limit N]`. The endpoints are `/release/create`, `/release/view`, `/release/list`
