@@ -286,7 +286,7 @@ def describe_relay_route_registration_order():
 def describe_per_repo_policy():
     """0.1.9: 案件既定 + repo 差分 (deny が勝つ)、tags glob、delete、旧 relay.allow_* の畳み込み."""
 
-    CONFIG = """
+    config_text = """
 domain_handlers:
   github.com: {handler: git-relay}
 relay:
@@ -304,7 +304,7 @@ relay:
 
     def it_computes_effective_permissions_tags_and_delete(tmp_path):
         cfg = tmp_path / "config.yml"
-        cfg.write_text(CONFIG.replace("{state_dir}", str(tmp_path / "relay")))
+        cfg.write_text(config_text.replace("{state_dir}", str(tmp_path / "relay")))
         with patch("src.web_ui.app.CONFIG_PATH", str(cfg)):
             from src.web_ui.app import app
 
