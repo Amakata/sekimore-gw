@@ -352,4 +352,4 @@ Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 
 ## Version
 
-0.2.4. The relay has its own changelog in [relay/CHANGELOG.md](relay/CHANGELOG.md).
+0.2.5. The relay has its own changelog in [relay/CHANGELOG.md](relay/CHANGELOG.md).
