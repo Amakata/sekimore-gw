@@ -1,4 +1,4 @@
-# 共有 fixture: git-relay handler 有り。Python テストと relay（Rust）テストの双方が読む。
+# Shared fixture: with a git-relay handler. Read by both the Python tests and the Rust relay tests.
 name: fixture-with-relay
 allow_domains:
   - pypi.org

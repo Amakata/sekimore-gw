@@ -1,20 +1,21 @@
-//! 案件ポリシー。
+//! Project policy.
 //!
-//! ここが Rust で書く一番の理由。
+//! This module is the main reason the relay is written in Rust.
 //!
-//! Go 版では `FindRepo` の戻り値を無視して上流を叩くコードが書けてしまう。
-//! 検査漏れが型で防げないので、レビューとテストで担保するしかない。
-//! この構成では **権限制御の全責任が関所にある**ので、それは弱い。
+//! In the Go version nothing stopped you from ignoring the return value of `FindRepo` and calling
+//! upstream anyway. A missing check could not be caught by the type system, so it had to be caught by
+//! review and tests instead - too weak when **the relay carries the whole responsibility for access
+//! control**.
 //!
-//! Rust では「検査済み」を型にできる:
-//!   - 上流を叩く関数は `Authorized<'_>`（API）/ `GitAuthorized<'_>`（git）しか受け取らない
-//!   - これらはポリシー検査を通した時だけ作られる
-//!   - つまり **検査を忘れるとコンパイルが通らない**
+//! In Rust "already checked" can be a type:
+//!   - Functions that call upstream only accept `Authorized<'_>` (API) or `GitAuthorized<'_>` (git)
+//!   - Those are only constructed by passing the policy check
+//!   - So **forgetting the check does not compile**
 
 use std::collections::HashSet;
 use std::fmt;
 
-// ---- リソース × アクション ----
+// ---- resources x actions ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Resource {
@@ -49,7 +50,7 @@ impl Resource {
             Resource::Ci => "ci",
         }
     }
-    /// そのリソースに存在するアクション。設定の typo を弾く。
+    /// The actions that exist for this resource. Used to reject typos in the config.
     pub fn valid_actions(&self) -> &'static [Action] {
         use Action::*;
         match self {
@@ -86,8 +87,8 @@ impl Action {
     }
 }
 
-/// "pr:create" 形式のパース。Go 版では文字列キーだったので
-/// "pr:delete" のような存在しない組み合わせも黙って通った。
+/// Parses the "pr:create" form. The Go version used bare string keys, so a combination that does not
+/// exist, such as "pr:delete", was silently accepted.
 pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
     let (r, a) = s
         .split_once(':')
@@ -127,7 +128,7 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
     Ok((resource, action))
 }
 
-/// 一覧表示用: 全ての有効な "resource:action"。
+/// Every valid "resource:action", for listings.
 pub fn all_permission_keys() -> Vec<String> {
     let mut v = Vec::new();
     for r in Resource::ALL {
@@ -139,7 +140,7 @@ pub fn all_permission_keys() -> Vec<String> {
     v
 }
 
-// ---- git の動詞 ----
+// ---- git verbs ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GitVerb {
@@ -154,7 +155,7 @@ impl GitVerb {
             GitVerb::ReceivePack => "git-receive-pack",
         }
     }
-    /// `git <subcommand>` 形式（テスト用ローカル上流で使う）。
+    /// The `git <subcommand>` form, used by the local upstream in tests.
     pub fn as_subcommand(&self) -> &'static str {
         match self {
             GitVerb::UploadPack => "upload-pack",
@@ -166,7 +167,7 @@ impl GitVerb {
     }
 }
 
-// ---- リポジトリと案件 ----
+// ---- repositories and projects ----
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -190,24 +191,24 @@ impl Mode {
     }
 }
 
-/// 直接 push を既定で許すブランチ glob。エージェントの名前空間。
+/// Branch globs that direct pushes are allowed to by default: the agent's own namespace.
 pub const DEFAULT_PUSH_GLOBS: &[&str] = &["sekimore/*"];
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RepoPolicy {
     pub full_name: String,
-    /// 0.2.0: どの上流（git-relay ドメイン）のリポジトリか。空 = 案件の既定上流
+    /// 0.2.0: which upstream (git-relay domain) this repository lives on. Empty = the project's default upstream
     pub host: String,
     pub mode: Mode,
-    /// PR の base として許可するブランチ。空 = 全て
+    /// Branches allowed as the base of a PR. Empty = any
     pub bases: Vec<String>,
-    /// 直接 push を許可するブランチ glob（`refs/heads/` を除いた名前に対して）
+    /// Branch globs that direct pushes are allowed to, matched against the name with `refs/heads/` stripped
     pub push: Vec<String>,
-    /// push を許可するタグ glob（`refs/tags/` を除いた名前に対して）。空 = 拒否
+    /// Tag globs that pushes are allowed to, matched against the name with `refs/tags/` stripped. Empty = denied
     pub tags: Vec<String>,
-    /// ブランチ / タグの削除を許すか
+    /// Whether deleting branches and tags is allowed
     pub delete: bool,
-    /// 案件既定への差分: 追加で許す権限 / 消す権限（deny はどの階層でも勝つ）
+    /// Delta on top of the project defaults: permissions to add, and permissions to remove (a deny wins at any layer)
     pub allow: Vec<String>,
     pub deny: Vec<String>,
 }
@@ -226,14 +227,14 @@ impl RepoPolicy {
             deny: Vec::new(),
         }
     }
-    /// `refs/tags/<tag>` の push を許すか。
+    /// Whether pushing `refs/tags/<tag>` is allowed.
     pub fn allows_tag(&self, tag: &str) -> bool {
         self.tags.iter().any(|g| glob_match(g, tag))
     }
     pub fn allows_base(&self, branch: &str) -> bool {
         self.bases.is_empty() || self.bases.iter().any(|b| b == branch)
     }
-    /// `refs/heads/<branch>` への直接 push を許すか。
+    /// Whether a direct push to `refs/heads/<branch>` is allowed.
     pub fn allows_push(&self, branch: &str) -> bool {
         self.push.iter().any(|g| glob_match(g, branch))
     }
@@ -242,7 +243,7 @@ impl RepoPolicy {
     }
 }
 
-/// 最小 glob: `*` は任意の列（`/` を含む）、`?` は 1 文字。それ以外は完全一致。
+/// Minimal glob: `*` matches any sequence, `/` included, and `?` matches one character. Everything else is literal.
 pub fn glob_match(pattern: &str, text: &str) -> bool {
     fn rec(p: &[u8], t: &[u8]) -> bool {
         match (p.first(), t.first()) {
@@ -256,39 +257,39 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     rec(pattern.as_bytes(), text.as_bytes())
 }
 
-/// 隔離単位 = 案件。
+/// The unit of isolation: a project.
 #[derive(Debug, Clone)]
 pub struct Project {
     pub name: String,
     pub repos: Vec<RepoPolicy>,
-    /// 案件の既定で許す権限
+    /// Permissions the project allows by default
     perms: HashSet<(Resource, Action)>,
-    /// 案件の既定で消す権限（repo の allow より優先）
+    /// Permissions the project denies by default; these beat a repo's allow
     denies: HashSet<(Resource, Action)>,
-    /// 0.2.0: `host` を書かない repo / `Org/Repo` だけの指定が指す上流ドメイン。空なら「唯一の上流」
+    /// 0.2.0: the upstream domain a repo without a `host`, or a bare `Org/Repo`, refers to. Empty means there is only one upstream
     default_host: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Denied {
-    /// 案件に含まれないリポジトリ
+    /// Repository is not part of the project
     RepoNotInProject { repo: String, project: String },
-    /// read-only リポジトリへの書き込み
+    /// Write to a read-only repository
     RepoReadOnly { repo: String, project: String },
-    /// 許可されていない base ブランチ
+    /// Base branch is not allowed
     BaseNotAllowed { branch: String },
-    /// ポリシーで許可されていない操作 (既定拒否)
+    /// Operation is not allowed by policy (denied by default)
     NotPermitted {
         resource: &'static str,
         action: &'static str,
     },
-    /// git-upload-pack / git-receive-pack 以外
+    /// Anything other than git-upload-pack / git-receive-pack
     UnsupportedCommand { cmdline: String },
-    /// 名前空間やブランチ制限で拒否された ref
+    /// Ref rejected by the namespace or branch restrictions
     RefNotAllowed { name: String, reason: &'static str },
-    /// 削除は既定拒否
+    /// Deletion is denied by default
     DeleteNotAllowed { name: String },
-    /// ref 名として不正
+    /// Not a valid ref name
     InvalidRef { name: String, reason: &'static str },
 }
 
@@ -323,7 +324,7 @@ impl fmt::Display for Denied {
 impl std::error::Error for Denied {}
 
 impl Denied {
-    /// 監査ログ用の短い種別。
+    /// Short kind for the audit log.
     pub fn kind(&self) -> &'static str {
         match self {
             Denied::RepoNotInProject { .. } => "repo_not_in_project",
@@ -338,10 +339,10 @@ impl Denied {
     }
 }
 
-/// **API 操作の検査を通した証明書**。
+/// **Proof that an API operation passed the policy check.**
 ///
-/// このライフタイム付きの型は `Project::authorize` からしか作れない。
-/// 上流 API を叩く関数はこれを要求するので、検査漏れがコンパイルエラーになる。
+/// This lifetime-bound type can only be constructed by `Project::authorize`. Functions that call the
+/// upstream API demand one, so a missing check is a compile error.
 #[derive(Debug, PartialEq)]
 pub struct Authorized<'p> {
     repo: &'p RepoPolicy,
@@ -360,12 +361,12 @@ impl<'p> Authorized<'p> {
     pub fn policy(&self) -> &'p RepoPolicy {
         self.repo
     }
-    /// 監査ログ用。何が許可されたかを記録できる。
+    /// For the audit log: what exactly was allowed.
     pub fn permission(&self) -> (&'static str, &'static str) {
         (self.resource.as_str(), self.action.as_str())
     }
-    /// 上流呼び出し側が「正しい種類の証明」を受け取ったことを確認する。
-    /// （`pr:create` の証明で `pr:merge` を叩くようなプログラミングミスを実行時に止める）
+    /// Lets the upstream caller confirm it got the right kind of proof, stopping a programming mistake
+    /// such as calling `pr:merge` with a `pr:create` proof at runtime.
     pub fn ensure(&self, resource: Resource, action: Action) -> Result<(), Denied> {
         if self.resource == resource && self.action == action {
             Ok(())
@@ -378,7 +379,7 @@ impl<'p> Authorized<'p> {
     }
 }
 
-/// **git 経路の検査を通した証明書**。`Project::authorize_git` からしか作れない。
+/// **Proof that a git operation passed the policy check.** Only `Project::authorize_git` can construct one.
 #[derive(Debug, PartialEq)]
 pub struct GitAuthorized<'p> {
     repo: &'p RepoPolicy,
@@ -412,14 +413,14 @@ impl Project {
         }
     }
 
-    /// 0.2.0: 既定上流のドメイン。`host` が空の repo はこの上流のものとして扱う。
+    /// 0.2.0: the domain of the default upstream. A repo with an empty `host` is treated as living there.
     pub fn set_default_host(&mut self, host: &str) {
         self.default_host = host.trim().to_ascii_lowercase();
     }
     pub fn default_host(&self) -> &str {
         &self.default_host
     }
-    /// repo の実効 host（空なら既定上流）。
+    /// A repo's effective host, falling back to the default upstream when empty.
     pub fn host_of<'a>(&'a self, repo: &'a RepoPolicy) -> &'a str {
         if repo.host.is_empty() {
             &self.default_host
@@ -428,7 +429,7 @@ impl Project {
         }
     }
 
-    /// 設定から組み立てる。権限名の typo はここで弾く。
+    /// Builds a project from the config. A typo in a permission name is rejected here.
     pub fn try_new(
         name: impl Into<String>,
         repos: Vec<RepoPolicy>,
@@ -437,7 +438,7 @@ impl Project {
         Self::try_new_rules(name, repos, permissions, &[])
     }
 
-    /// 案件既定の allow / deny と、各 repo の差分（allow / deny）を検証して組み立てる。
+    /// Builds a project, validating the project-wide allow / deny and each repo's allow / deny delta.
     pub fn try_new_rules(
         name: impl Into<String>,
         repos: Vec<RepoPolicy>,
@@ -508,12 +509,12 @@ impl Project {
         self
     }
 
-    /// 案件既定として許されているか（repo の差分は見ない）。
+    /// Whether the project defaults allow this, ignoring any per-repo delta.
     pub fn is_granted(&self, resource: Resource, action: Action) -> bool {
         self.perms.contains(&(resource, action)) && !self.denies.contains(&(resource, action))
     }
 
-    /// repo に対する実効権限: (案件 allow ∪ repo allow) − (案件 deny ∪ repo deny)。deny が勝つ。
+    /// Effective permissions for a repo: (project allow ∪ repo allow) − (project deny ∪ repo deny). A deny wins.
     pub fn effective(&self, repo: &RepoPolicy) -> HashSet<(Resource, Action)> {
         let mut set = self.perms.clone();
         for s in &repo.allow {
@@ -532,7 +533,7 @@ impl Project {
         set
     }
 
-    /// 実効権限を "resource:action" の一覧で（check / Web UI 用）。
+    /// The effective permissions as a list of "resource:action", for `check` and the Web UI.
     pub fn effective_keys(&self, repo: &RepoPolicy) -> Vec<String> {
         let mut v: Vec<String> = self
             .effective(repo)
@@ -543,7 +544,8 @@ impl Project {
         v
     }
 
-    /// どこか（案件既定か、いずれかの repo）で許されている権限か。案件外 repo への応答を一定にするための粗い判定。
+    /// Whether the permission is allowed anywhere, in the project defaults or on any repo. A coarse check that
+    /// keeps the response uniform for repositories outside the project.
     fn granted_anywhere(&self, resource: Resource, action: Action) -> bool {
         if self.is_granted(resource, action) {
             return true;
@@ -553,10 +555,11 @@ impl Project {
             .any(|r| self.effective(r).contains(&(resource, action)))
     }
 
-    /// 案件に含まれるリポジトリを探す。含まれなければ拒否 = 案件外への到達を拒否する唯一の防壁。
+    /// Looks up a repository in the project. Anything else is denied - this is the only barrier that keeps
+    /// requests from reaching outside the project.
     ///
-    /// API 経路用。`host/Org/Repo` なら host で絞り、`Org/Repo` なら
-    /// 一意ならそれ、複数の上流にあれば既定上流のもの（無ければ拒否）。
+    /// For the API path. `host/Org/Repo` narrows by host; a bare `Org/Repo` resolves to the single match, or,
+    /// if the name exists on several upstreams, to the one on the default upstream (denied if there is none).
     pub fn find_repo(&self, path: &str) -> Result<&RepoPolicy, Denied> {
         let want = path.trim_start_matches('/').trim_end_matches(".git");
         let (host, name) = crate::config::split_repo_host(want);
@@ -582,7 +585,7 @@ impl Project {
         if hits.next().is_none() {
             return Ok(first);
         }
-        // 同名が複数の上流にある: 既定上流のものだけ `Org/Repo` で指せる
+        // the name exists on several upstreams: only the one on the default upstream can be named as a bare `Org/Repo`
         self.repos
             .iter()
             .find(|r| {
@@ -592,8 +595,8 @@ impl Project {
             .ok_or_else(denied)
     }
 
-    /// SSH 経路用（0.2.0）。接続を受けたポートで上流 `host` が決まっているので、
-    /// その上流のリポジトリだけを探す。`host/Org/Repo` 表記は受けない（exec にはパスしか来ない）。
+    /// For the SSH path (0.2.0). The listening port already fixes the upstream `host`, so only that upstream's
+    /// repositories are searched. The `host/Org/Repo` form is not accepted, since the exec request carries only a path.
     pub fn find_repo_on(&self, host: &str, path: &str) -> Result<&RepoPolicy, Denied> {
         let want = path.trim_start_matches('/').trim_end_matches(".git");
         self.repos
@@ -607,42 +610,42 @@ impl Project {
             })
     }
 
-    /// API 操作の唯一の入口。ここを通らないと `Authorized` は存在しない。
+    /// The only entry point for API operations: without going through here an `Authorized` cannot exist.
     ///
-    /// 書き込み系アクションなら read-only 判定も自動で行う。
+    /// Write actions are checked against read-only mode automatically.
     pub fn authorize(
         &self,
         repo: &str,
         resource: Resource,
         action: Action,
     ) -> Result<Authorized<'_>, Denied> {
-        // 1. 粗い既定拒否（案件外リポジトリでも、まず「許可されていない操作」として落ちる = 情報を漏らさない）
+        // 1. coarse default deny: even a repository outside the project fails first as "operation not allowed", leaking nothing
         if !self.granted_anywhere(resource, action) {
             return Err(Denied::NotPermitted {
                 resource: resource.as_str(),
                 action: action.as_str(),
             });
         }
-        // 2. 案件に含まれるリポジトリか
+        // 2. is the repository part of the project?
         let found = self.find_repo(repo)?;
         self.authorize_found(found, resource, action)
     }
 
-    /// 見つかった repo に対する 3.〜4. の検査（`authorize` と `authorize_pr_for` が共有）。
+    /// Steps 3 and 4 against a repo that has already been found; shared by `authorize` and `authorize_pr_for`.
     fn authorize_found<'p>(
         &'p self,
         found: &'p RepoPolicy,
         resource: Resource,
         action: Action,
     ) -> Result<Authorized<'p>, Denied> {
-        // 3. その repo の実効権限（案件既定 + repo allow − deny。deny が勝つ）
+        // 3. the repo's effective permissions (project defaults + repo allow − deny; a deny wins)
         if !self.effective(found).contains(&(resource, action)) {
             return Err(Denied::NotPermitted {
                 resource: resource.as_str(),
                 action: action.as_str(),
             });
         }
-        // 4. 書き込み系なら read-write が必要
+        // 4. a write action needs read-write
         if is_write(action) && found.mode == Mode::ReadOnly {
             return Err(Denied::RepoReadOnly {
                 repo: found.full_name.clone(),
@@ -657,7 +660,7 @@ impl Project {
         })
     }
 
-    /// PR 作成のように base ブランチの検査も要る場合。
+    /// For operations such as creating a PR, where the base branch must be checked too.
     pub fn authorize_pr(&self, repo: &str, base: &str) -> Result<Authorized<'_>, Denied> {
         let auth = self.authorize(repo, Resource::Pr, Action::Create)?;
         if !auth.repo.allows_base(base) {
@@ -668,8 +671,8 @@ impl Project {
         Ok(auth)
     }
 
-    /// git 経路で既に見つかっている repo（`GitAuthorized`）に対する PR 作成の証明。
-    /// 同名 repo が別上流にあっても取り違えない（0.2.0）。
+    /// A PR-creation proof for a repo already resolved on the git path (`GitAuthorized`), so a same-named
+    /// repo on another upstream cannot be mistaken for it (0.2.0).
     pub fn authorize_pr_for<'p>(
         &'p self,
         git: &GitAuthorized<'p>,
@@ -690,8 +693,8 @@ impl Project {
         Ok(auth)
     }
 
-    /// git 経路の唯一の入口。receive-pack は read-write を要求する。
-    /// 上流が 1 つのとき（テスト等）。複数上流では `authorize_git_on`。
+    /// The only entry point for the git path; receive-pack requires read-write.
+    /// For a single upstream, as in tests. With several upstreams use `authorize_git_on`.
     pub fn authorize_git(
         &self,
         verb: GitVerb,
@@ -701,8 +704,8 @@ impl Project {
         self.authorize_git_found(found, verb)
     }
 
-    /// git 経路（0.2.0）: 接続ポートで決まった上流 `host` のリポジトリだけを対象にする。
-    /// `host` が空なら上流を区別しない（`authorize_git` と同じ）。
+    /// The git path (0.2.0): considers only repositories on the upstream `host` fixed by the listening port.
+    /// An empty `host` does not distinguish upstreams, matching `authorize_git`.
     pub fn authorize_git_on(
         &self,
         host: &str,
@@ -735,7 +738,7 @@ impl Project {
         })
     }
 
-    /// 案件既定の権限（allow − deny）。
+    /// The project's default permissions (allow − deny).
     pub fn granted(&self) -> Vec<String> {
         let mut v: Vec<String> = self
             .perms
@@ -745,7 +748,7 @@ impl Project {
         v.sort();
         v
     }
-    /// 案件既定の deny。
+    /// The project's default denies.
     pub fn denied(&self) -> Vec<String> {
         let mut v: Vec<String> = self
             .denies
@@ -795,7 +798,7 @@ mod tests {
                 project: "case-a".into()
             })
         );
-        // 同じ ORG の別リポジトリも拒否
+        // another repository in the same org is denied too
         assert!(p
             .authorize("LibOrg/other", Resource::Issue, Action::Create)
             .is_err());
@@ -824,14 +827,14 @@ mod tests {
         )
         .unwrap();
         p.set_default_host("github.com");
-        // 同じ (host, name) の重複は拒否
+        // a duplicate (host, name) pair is rejected
         let mut dup = RepoPolicy::new("LibOrg/awesome-lib", Mode::ReadOnly);
         dup.host = "github.com".into();
         let mut dup2 = RepoPolicy::new("LibOrg/awesome-lib", Mode::ReadOnly);
         dup2.host = "github.com".into();
         assert!(Project::try_new("d", vec![dup, dup2], &[]).is_err());
 
-        // API: host 無しは既定上流、host 付きはその上流
+        // API: without a host it is the default upstream, with one it is that upstream
         assert_eq!(
             p.find_repo("LibOrg/awesome-lib").unwrap().host,
             "github.com"
@@ -848,7 +851,7 @@ mod tests {
         );
         assert!(p.find_repo("github.com/Corp/internal").is_err());
         assert!(p.find_repo("other.example.com/LibOrg/awesome-lib").is_err());
-        // SSH: 接続を受けた上流に絞る。read-only は GHES 側だけ
+        // SSH: narrowed to the upstream the connection came in on; only the GHES side is read-only
         assert!(p
             .authorize_git_on(
                 "ghe.example.com",
@@ -863,15 +866,15 @@ mod tests {
             p.authorize_git_on("github.com", GitVerb::UploadPack, "Corp/internal"),
             Err(Denied::RepoNotInProject { .. })
         ));
-        // 空 host = 上流を区別しない（単一上流のテスト互換）
+        // an empty host does not distinguish upstreams, for compatibility with single-upstream tests
         assert!(p
             .authorize_git_on("", GitVerb::UploadPack, "Corp/internal")
             .is_ok());
-        // GitAuthorized から PR 証明を取ると同じ repo を指す
+        // a PR proof derived from a GitAuthorized points at the same repo
         let g = p
             .authorize_git_on("ghe.example.com", GitVerb::UploadPack, "LibOrg/awesome-lib")
             .unwrap();
-        // read-only なので PR 作成は拒否（取り違えて github.com 側の read-write を見ない）
+        // read-only, so creating a PR is denied; the read-write repo on github.com is not picked up by mistake
         assert!(matches!(
             p.authorize_pr_for(&g, "main"),
             Err(Denied::RepoReadOnly { .. })
@@ -910,7 +913,7 @@ mod tests {
                 project: "case-a".into()
             })
         );
-        // read は通る (project:read を許可しているので)
+        // read goes through, since project:read is granted
         assert!(p
             .authorize("VendorOrg/reference-impl", Resource::Project, Action::Read)
             .is_ok());
@@ -919,7 +922,7 @@ mod tests {
     #[test]
     fn default_deny() {
         let p = case_a();
-        // pr:comment は許可していない
+        // pr:comment is not granted
         assert_eq!(
             p.authorize("LibOrg/awesome-lib", Resource::Pr, Action::Comment),
             Err(Denied::NotPermitted {
@@ -927,8 +930,8 @@ mod tests {
                 action: "comment"
             })
         );
-        // 順序も重要: 権限判定が先なので、案件外リポジトリでも
-        // まず「許可されていない操作」として落ちる (情報を漏らさない)
+        // the order matters too: the permission check runs first, so even a repository outside the
+        // project fails as "operation not allowed", leaking nothing
         assert_eq!(
             p.authorize("Attacker/evil", Resource::Pr, Action::Merge),
             Err(Denied::NotPermitted {
@@ -1006,14 +1009,14 @@ mod tests {
             &["issue:label".into()],
         )
         .unwrap();
-        // 案件既定
+        // project defaults
         assert_eq!(p.granted(), vec!["ci:read", "pr:create", "pr:read"]);
         assert_eq!(p.denied(), vec!["issue:label"]);
-        // App: 既定どおり
+        // App: the defaults apply
         assert!(p.authorize("Org/App", Resource::Pr, Action::Create).is_ok());
         assert!(p.authorize("Org/App", Resource::Ci, Action::Read).is_ok());
         assert!(p.authorize("Org/App", Resource::Pr, Action::Merge).is_err());
-        // Lib: allow で pr:merge が増え、repo deny で ci:read が消え、案件 deny の issue:label は allow しても勝てない
+        // Lib: allow adds pr:merge, the repo deny removes ci:read, and the project deny on issue:label cannot be overridden by an allow
         assert!(p.authorize("Org/Lib", Resource::Pr, Action::Merge).is_ok());
         assert!(matches!(
             p.authorize("Org/Lib", Resource::Ci, Action::Read),
@@ -1027,7 +1030,7 @@ mod tests {
             p.effective_keys(&p.repos[1]),
             vec!["pr:create", "pr:merge", "pr:read"]
         );
-        // 案件外 repo: どこかで許されている操作なら RepoNotInProject、どこでも許されていなければ NotPermitted (情報を漏らさない)
+        // repo outside the project: RepoNotInProject if the operation is allowed somewhere, NotPermitted if it is allowed nowhere (leaking nothing)
         assert!(matches!(
             p.authorize("Other/Repo", Resource::Pr, Action::Merge),
             Err(Denied::RepoNotInProject { .. })
@@ -1036,7 +1039,7 @@ mod tests {
             p.authorize("Other/Repo", Resource::Pr, Action::Close),
             Err(Denied::NotPermitted { .. })
         ));
-        // repo の allow / deny も typo は起動時に弾く
+        // typos in a repo's allow / deny are rejected at startup too
         let mut bad = RepoPolicy::new("Org/Bad", Mode::ReadOnly);
         bad.allow = vec!["pr:delete".into()];
         assert!(Project::try_new_rules("x", vec![bad], &[], &[]).is_err());
@@ -1045,7 +1048,7 @@ mod tests {
     #[test]
     fn tags_glob_per_repo() {
         let mut r = RepoPolicy::new("Org/App", Mode::ReadWrite);
-        assert!(!r.allows_tag("v1.0.0")); // 既定は拒否
+        assert!(!r.allows_tag("v1.0.0")); // denied by default
         r.tags = vec!["v*".into(), "release-?".into()];
         assert!(r.allows_tag("v1.0.0") && r.allows_tag("release-1"));
         assert!(!r.allows_tag("release-10") && !r.allows_tag("nightly"));
@@ -1056,10 +1059,10 @@ mod tests {
     #[test]
     fn invalid_permission_specs_are_rejected() {
         assert!(parse_permission("pr:create").is_ok());
-        // Go 版では文字列キーだったので通ってしまった組み合わせ
+        // combinations the Go version accepted because its keys were plain strings
         assert!(parse_permission("pr:delete").is_err());
         assert!(parse_permission("workflow:run").is_err());
-        assert!(parse_permission("repo:merge").is_err()); // 存在しない組み合わせ
+        assert!(parse_permission("repo:merge").is_err()); // combination does not exist
         assert!(parse_permission("prcreate").is_err());
         assert!(Project::try_new("x", vec![], &["pr:delete".to_string()]).is_err());
         assert!(Project::try_new("x", vec![RepoPolicy::new("nope", Mode::ReadOnly)], &[]).is_err());

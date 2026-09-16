@@ -372,7 +372,7 @@ def describe_config_endpoint():
         assert response.status_code == 200
         data = response.json()
         assert data["proxy"]["has_upstream_auth"] is True
-        # パスワードは返さないことを確認
+        # Confirm the password is not returned
         assert "upstream_proxy_password" not in data["proxy"]
         assert "upstream_proxy_username" not in data["proxy"]
 
@@ -406,7 +406,7 @@ def describe_config_endpoint():
         assert response.status_code == 200
         data = response.json()
 
-        # Squid設定
+        # Squid configuration
         assert data["squid"]["available"] is True
         assert "http_port 3128" in data["squid"]["config_text"]
 

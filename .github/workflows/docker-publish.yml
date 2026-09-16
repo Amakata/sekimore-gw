@@ -11,8 +11,9 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # アーキごとに「その CPU のネイティブランナー」でビルドし、digest だけを push する。
-  # arm64 を QEMU で回さないので大幅に速い (以前は 1 ジョブで両アーキ、arm64 が QEMU で ~10 分)。
+  # Build each architecture on a runner native to that CPU and push only the digest.
+  # Much faster, since arm64 no longer goes through QEMU (it used to be one job for both
+  # architectures, with arm64 taking ~10 min under QEMU).
   build:
     strategy:
       fail-fast: false
@@ -22,7 +23,7 @@ jobs:
             runner: ubuntu-latest
             arch: amd64
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm      # GitHub ホストのネイティブ arm64 (public repo は無料)
+            runner: ubuntu-24.04-arm      # GitHub-hosted native arm64 (free for public repos)
             arch: arm64
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -31,8 +32,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # Docker の参照はリポジトリ名が小文字でなければならない (github.repository は Amakata/… と大文字を含む)。
-      # metadata-action のタグは自動で小文字化されるが、push-by-digest の name= と merge の REPO は自前なので明示的に小文字化する
+      # Docker references require a lowercase repository name (github.repository contains uppercase, e.g. Amakata/...).
+      # metadata-action lowercases its tags automatically, but the push-by-digest name= and the REPO in merge are ours, so lowercase them explicitly
       - name: Lowercase image name
         run: echo "IMAGE_LC=${IMAGE_NAME,,}" >> "$GITHUB_ENV"
 
@@ -52,16 +53,17 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          # attestation (provenance) の unknown/unknown マニフェストを作らない (base と揃える)
+          # Do not emit the unknown/unknown attestation (provenance) manifest (matches base)
           provenance: false
-          # マニフェストは付けず digest だけ push。タグ付けは merge ジョブでまとめて行う
+          # Push only the digest, no manifest. Tagging happens all together in the merge job
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_LC }},push-by-digest=true,name-canonical=true,push=true
-          # キャッシュはアーキごとに分ける (scope) と汚染しない
+          # Keeping a separate cache scope per architecture avoids polluting it
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
-      # digest は job outputs ではなく artifact で渡す。matrix の各 instance は同じ outputs マップに書くので、
-      # 片方が設定しないキーが空文字で上書きされ得る (完了順に依存して digest が消える)。artifact なら確実
+      # Pass the digest as an artifact rather than through job outputs: every matrix instance writes to the
+      # same outputs map, so a key one of them does not set can be overwritten with an empty string (losing a
+      # digest, depending on completion order). An artifact is reliable
       - name: Export digest
         run: |
           mkdir -p /tmp/digests
@@ -76,7 +78,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # 2 つの digest を 1 つのマルチアーキ・マニフェストにまとめてタグを付ける
+  # Combine the two digests into a single multi-arch manifest and tag it
   merge:
     needs: build
     runs-on: ubuntu-latest
@@ -84,8 +86,8 @@ jobs:
       contents: read
       packages: write
     steps:
-      # smoke test が tests/fixtures/*.yml を bind mount するので merge ジョブにも checkout が要る
-      # (無いと存在しないパスの mount が空ディレクトリになり、needs-relay が 2 を返して test rc が落ちる)
+      # The smoke test bind-mounts tests/fixtures/*.yml, so the merge job needs a checkout too
+      # (without it, mounting a nonexistent path yields an empty directory, needs-relay returns 2 and the rc check fails)
       - uses: actions/checkout@v6
 
       - name: Lowercase image name
@@ -124,9 +126,9 @@ jobs:
         run: |
           set -eu
           REPO="${REGISTRY}/${IMAGE_LC}"
-          # digest はファイル名 (sha256 の hex) として届く。2 アーキ分が揃っていること
+          # Digests arrive as file names (the sha256 hex). Both architectures must be present
           n=$(ls | wc -l); test "$n" -eq 2 || { echo "expected 2 digests, got $n"; ls; exit 1; }
-          # メタデータの各タグ (改行区切り) に対し、全 digest を束ねた manifest を作成
+          # For each metadata tag (newline-separated), create a manifest combining every digest
           echo "${{ steps.meta.outputs.tags }}" | while read -r TAG; do
             [ -n "$TAG" ] || continue
             # shellcheck disable=SC2046

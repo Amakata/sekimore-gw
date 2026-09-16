@@ -1,16 +1,18 @@
-"""運用コマンド: ログ DB（SQLite）の状態確認・削除・リセット（0.2.3）.
+"""Operational commands: inspect, prune and reset the log DB (SQLite) (0.2.3).
 
-記録は既定で削除しない（永続化）。増えても遅くならないように索引と WAL を使う。
-掃除やリセットは操作者がこのコマンドを明示的に打ったときだけ行う。稼働中の gateway に対して実行してよい
-（WAL なので書き込みと衝突しない。削除後も DNS / firewall / proxy の記録はそのまま続く）。
+Records are kept by default; indexes and WAL keep things fast as the database grows.
+Pruning and resetting happen only when an operator runs this command explicitly. It is
+safe to run against a live gateway (WAL means it does not collide with writers, and DNS
+/ firewall / proxy recording continues after a delete).
 
     python -m src.maint db-stats [--json]
     python -m src.maint db-prune --before-days 90 --yes [--vacuum]
     python -m src.maint db-reset --yes
     python -m src.maint db-vacuum
 
-Dev Containers 構成では mise の gw:db-stats / gw:db-prune / gw:db-reset から呼ぶ。
-relay の監査（/data/relay/audit.jsonl）は別ファイルなので、ここでは触らない。
+In the Dev Containers setup these are invoked through mise as gw:db-stats / gw:db-prune
+/ gw:db-reset. The relay audit log (/data/relay/audit.jsonl) is a separate file and is
+left alone here.
 """
 
 from __future__ import annotations
@@ -27,15 +29,16 @@ from typing import Any
 
 from . import i18n
 
-# ログを溜めるテーブル（記録系）。cache_stats は DNS キャッシュの統計で、reset のときだけ空にする
+# Tables that accumulate log records. cache_stats holds DNS cache statistics and is
+# cleared only on reset.
 LOG_TABLES = ("dns_queries", "firewall_blocks", "proxy_logs")
 RESET_ONLY_TABLES = ("cache_stats",)
 
 
 def default_db_path(config_path: str = "/etc/sekimore/config.yml") -> str:
-    """config.yml の database_path（無ければ /data/security_gateway.db）."""
+    """Return database_path from config.yml, or /data/security_gateway.db."""
     try:
-        import yaml  # 実行時にだけ要る
+        import yaml  # only needed at runtime
 
         with open(config_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
@@ -74,7 +77,7 @@ def _fmt_bytes(n: float) -> str:
 
 
 def stats(db_path: str) -> dict[str, Any]:
-    """件数・期間・ファイルサイズ・journal_mode・索引."""
+    """Row counts, time ranges, file size, journal_mode and indexes."""
     out: dict[str, Any] = {"db_path": db_path, "exists": os.path.exists(db_path), "tables": {}}
     if not out["exists"]:
         return out
@@ -103,7 +106,7 @@ def stats(db_path: str) -> dict[str, Any]:
 
 
 def prune(db_path: str, before_days: float, vacuum: bool = False) -> dict[str, int]:
-    """before_days 日より古い記録を LOG_TABLES から削除する（明示操作）."""
+    """Delete records older than before_days from LOG_TABLES (explicit operation)."""
     if before_days <= 0:
         raise ValueError("--before-days must be positive")
     cutoff = time.time() - before_days * 86400
@@ -122,7 +125,10 @@ def prune(db_path: str, before_days: float, vacuum: bool = False) -> dict[str, i
 
 
 def reset(db_path: str) -> dict[str, int]:
-    """記録を全て消して VACUUM する（明示操作）。テーブルと索引は残るので gateway は動き続ける."""
+    """Delete every record and VACUUM (explicit operation).
+
+    Tables and indexes survive, so the gateway keeps running.
+    """
     deleted: dict[str, int] = {}
     conn = _connect(db_path)
     try:
@@ -137,7 +143,7 @@ def reset(db_path: str) -> dict[str, int]:
 
 
 def vacuum(db_path: str) -> tuple[int, int]:
-    """VACUUM してファイルサイズの前後を返す."""
+    """VACUUM and return the file size before and after."""
     before = os.path.getsize(db_path)
     conn = _connect(db_path)
     try:

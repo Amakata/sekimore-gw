@@ -1,6 +1,6 @@
-//! SSH サーバ（russh）。公開鍵認証のみ、`session` チャネルの `exec` のみを受け付ける。
+//! SSH server (russh). Public-key authentication only, and only `exec` on a `session` channel.
 //!
-//! russh への依存はこのモジュールに閉じる。git の処理は `git::handle_exec` に `GitIo` で渡す。
+//! The dependency on russh stays confined to this module. Git work is handed to `git::handle_exec` via `GitIo`.
 
 pub mod authorized_keys;
 
@@ -26,7 +26,7 @@ use authorized_keys::{fingerprint, AuthorizedKeys};
 
 pub const GIT_USER: &str = "git";
 
-/// ホスト鍵を読む。無ければ ed25519 を生成して 0600 で保存する。
+/// Loads the host key, generating an ed25519 key and saving it with mode 0600 if there is none.
 pub fn load_or_create_host_key(path: &Path) -> anyhow::Result<PrivateKey> {
     match std::fs::read(path) {
         Ok(bytes) => PrivateKey::from_openssh(&bytes)
@@ -89,7 +89,7 @@ impl SshServer {
         })
     }
 
-    /// 0.2.0: 複数の listener（上流ごと）で russh 設定・authorized_keys・セッション上限を共有する。
+    /// 0.2.0: share the russh config, authorized_keys and session limit across several listeners (one per upstream).
     pub fn shared(
         config: Arc<russh::server::Config>,
         ctx: Arc<GitContext>,
@@ -106,7 +106,7 @@ impl SshServer {
         })
     }
 
-    /// accept ループ。接続ごとに russh のセッションを spawn する。
+    /// Accept loop. Spawns a russh session per connection.
     pub async fn run(self: Arc<Self>, listener: TcpListener) -> anyhow::Result<()> {
         loop {
             let (stream, peer) = listener.accept().await.context("ssh accept")?;
@@ -171,7 +171,7 @@ impl Handler for ClientHandler {
         user: &str,
         key: &PublicKey,
     ) -> Result<Auth, Self::Error> {
-        // 署名のラウンドトリップ前に弾く（未登録鍵は即拒否）。ssh は手持ちの鍵を順に提示するので、拒否も監査に残す
+        // Reject before the signature round trip (an unregistered key is denied outright). ssh offers keys one by one, so denials are audited too
         if self.accepts(user, key) {
             Ok(Auth::Accept)
         } else {
@@ -220,8 +220,8 @@ impl Handler for ClientHandler {
     }
 
     async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
-        // バナーは認証の前に一律で送られ、登録済み鍵での接続にも毎回出て邪魔なので出さない。
-        // 未登録鍵の理由は監査 (ssh_auth_denied) と agent-setup の案内、README の表で伝える
+        // The banner would be sent unconditionally before authentication, showing up on every connection with a registered key, so we skip it.
+        // Unregistered keys learn the reason from the audit log (ssh_auth_denied), the agent-setup guidance and the README table
         Ok(None)
     }
 
@@ -353,7 +353,7 @@ impl Handler for ClientHandler {
         _value: &str,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // GIT_PROTOCOL 等は受けない → クライアントは v0 にフォールバックする
+        // GIT_PROTOCOL and friends are not accepted → the client falls back to v0
         session.channel_failure(id)?;
         Ok(())
     }
@@ -435,7 +435,7 @@ impl Handler for ClientHandler {
         _id: ChannelId,
         _session: &mut Session,
     ) -> Result<bool, Self::Error> {
-        // サーバ側 agent forwarding は受けない（brief §4）
+        // Server-side agent forwarding is not accepted (brief §4)
         Ok(false)
     }
 
@@ -445,7 +445,7 @@ impl Handler for ClientHandler {
         port: &mut u32,
         _session: &mut Session,
     ) -> Result<bool, Self::Error> {
-        // remote port forwarding (-R) も受けない。拒否は監査に残す
+        // Remote port forwarding (-R) is not accepted either. The denial is audited
         self.server.audit.deny(
             "ssh_request_rejected",
             Actor::Agent,

@@ -1,7 +1,7 @@
-//! OAuth 2.0 Device Authorization Grant の自前実装。
+//! Our own implementation of the OAuth 2.0 Device Authorization Grant.
 //!
-//! `gh` CLI を経由しないので、トークンが gh のキーチェーンや設定ファイルに残らない。
-//! 人間がブラウザで承認する前提。組織の承認申請は発生しない。
+//! It does not go through the `gh` CLI, so no token is left behind in gh's keychain or config files.
+//! A human approves it in a browser; no organization approval request is involved.
 
 use std::time::Duration;
 
@@ -52,7 +52,7 @@ pub enum Poll {
 }
 
 impl DeviceFlow {
-    /// `upstream` は `github.com` または GHES ホスト。ログイン URL はそのホストの `/login/...`。
+    /// `upstream` is `github.com` or a GHES host; the login URL is that host's `/login/...`.
     pub fn new(
         upstream: &str,
         client_id: &str,
@@ -74,7 +74,7 @@ impl DeviceFlow {
         })
     }
 
-    /// テスト用にベース URL を差し替える。
+    /// Override the base URL, for tests.
     pub fn with_base(mut self, base: Url) -> Self {
         self.base = base;
         self
@@ -142,7 +142,7 @@ impl DeviceFlow {
         })
     }
 
-    /// device flow を実行してアクセストークンと scope を返す。`prompt(user_code, url)` で人間に案内する。
+    /// Run the device flow and return the access token and its scopes. `prompt(user_code, url)` walks the human through it.
     pub async fn authenticate(
         &self,
         prompt: impl Fn(&str, &str),

@@ -1,4 +1,4 @@
-//! device flow の自前実装を偽 OAuth サーバで検証する。
+//! Exercise the hand-rolled device flow against a fake OAuth server.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,7 +13,7 @@ use sekimore_relay::github::device_flow::{DeviceFlow, Poll};
 use tokio::net::TcpListener;
 use url::Url;
 
-/// `/login/oauth/access_token` の応答列を順に返す偽サーバ。
+/// A fake server that replays the given `/login/oauth/access_token` responses in order.
 async fn fake_oauth(responses: Vec<serde_json::Value>) -> (Url, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -113,7 +113,7 @@ async fn access_denied_and_expired() {
     let err = flow(base).authenticate(|_, _| {}).await.unwrap_err();
     assert!(err.to_string().contains("denied"), "{err}");
 
-    let (base, _) = fake_oauth(vec![]).await; // 空 → expired_token
+    let (base, _) = fake_oauth(vec![]).await; // Empty queue → expired_token
     let err = flow(base).authenticate(|_, _| {}).await.unwrap_err();
     assert!(err.to_string().contains("expired"), "{err}");
 }

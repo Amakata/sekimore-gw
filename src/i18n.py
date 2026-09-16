@@ -1,13 +1,16 @@
-"""言語リソース（0.2.4）.
+"""Language resources (0.2.4).
 
-`src/locales/<lang>.json` にフラットなキーで文言を持つ。既定は英語（`en`）。
-足りないキーは英語に落ちる。追加言語はファイルを 1 つ足すだけ。
+Strings live in `src/locales/<lang>.json` under flat keys. The default is English
+(`en`); missing keys fall back to English. Adding a language means adding one file.
 
-- Web UI: `/api/i18n` が言語を決めて辞書を返し、dashboard が `data-i18n` と `tr()` で当てる
-  （順序: `?lang=` → cookie `sekimore_lang` → `config.yml` の `ui.language`（`auto` 以外なら固定）→ `Accept-Language` → en）
-- CLI（`python -m src.maint`）: `SEKIMORE_LANG` → `LC_ALL` → `LC_MESSAGES` → `LANG` → en
+- Web UI: `/api/i18n` resolves the language and returns the dictionary; the dashboard
+  applies it via `data-i18n` and `tr()`
+  (order: `?lang=` -> cookie `sekimore_lang` -> `ui.language` in `config.yml` (pinned
+  unless `auto`) -> `Accept-Language` -> en)
+- CLI (`python -m src.maint`): `SEKIMORE_LANG` -> `LC_ALL` -> `LC_MESSAGES` -> `LANG` -> en
 
-拒否理由（relay が stderr に出す `sekimore: …`）と監査ログは英語のまま固定する（機械照合と AI の可読性のため）。
+Denial reasons (the `sekimore: ...` lines the relay writes to stderr) and audit logs
+stay in English, so they remain machine-matchable and readable to AI agents.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ _TAG_RE = re.compile(r"^\s*([A-Za-z]{2,3})(?:[-_]([A-Za-z]{2,4}))?")
 
 
 def normalize(tag: str | None) -> str | None:
-    """`ja` / `ja-JP` / `ja_JP.UTF-8` → `ja`。対応外や空なら None."""
+    """Map `ja` / `ja-JP` / `ja_JP.UTF-8` to `ja`; None if empty or unsupported."""
     if not tag:
         return None
     m = _TAG_RE.match(str(tag))
@@ -39,7 +42,7 @@ def normalize(tag: str | None) -> str | None:
 
 
 def from_accept_language(header: str | None) -> str | None:
-    """Accept-Language を q 値の高い順に見て、最初に対応している言語."""
+    """Return the first supported language in Accept-Language, highest q first."""
     if not header:
         return None
     items: list[tuple[float, int, str]] = []
@@ -70,7 +73,7 @@ def resolve_lang(
     accept_language: str | None = None,
     configured: str | None = "auto",
 ) -> str:
-    """Web UI の言語を決める（順序は module docstring）."""
+    """Resolve the Web UI language (see the module docstring for the order)."""
     for candidate in (explicit, cookie):
         lang = normalize(candidate)
         if lang:
@@ -83,7 +86,7 @@ def resolve_lang(
 
 
 def env_lang(environ: dict[str, str] | None = None) -> str:
-    """CLI の言語（環境変数から）."""
+    """Resolve the CLI language from environment variables."""
     env = os.environ if environ is None else environ
     for var in ("SEKIMORE_LANG", "LC_ALL", "LC_MESSAGES", "LANG"):
         value = env.get(var)
@@ -106,7 +109,7 @@ def _load(lang: str) -> dict[str, str]:
 
 
 def strings(lang: str | None) -> dict[str, str]:
-    """`lang` の辞書（英語をベースに上書き）."""
+    """Return the dictionary for `lang`, layered over the English base."""
     lang = normalize(lang) or DEFAULT
     merged = dict(_load(DEFAULT))
     if lang != DEFAULT:
@@ -115,7 +118,7 @@ def strings(lang: str | None) -> dict[str, str]:
 
 
 def t(key: str, lang: str | None = None, **vars: Any) -> str:
-    """文言を返す。無いキーはキーそのまま。`{name}` を vars で埋める."""
+    """Return a string; an unknown key returns itself. `{name}` is filled from vars."""
     text = strings(lang).get(key, key)
     for name, value in vars.items():
         text = text.replace("{" + name + "}", str(value))

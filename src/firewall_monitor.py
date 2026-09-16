@@ -1,4 +1,4 @@
-"""iptablesログ監視モジュール - ブロックされた通信の記録."""
+"""iptables log monitor - records blocked traffic."""
 
 import asyncio
 import re
@@ -10,22 +10,22 @@ from .logger import ComponentType, log_error, log_system_event
 
 
 class FirewallMonitor:
-    """iptablesログを監視してブロックされた通信を記録."""
+    """Watches the iptables log and records blocked traffic."""
 
     def __init__(self, db_path: str):
-        """初期化.
+        """Initialize the monitor.
 
         Args:
-            db_path: SQLiteデータベースパス
+            db_path: Path to the SQLite database
         """
         self.db_path = db_path
         self.db: aiosqlite.Connection | None = None
         self.running = False
 
     async def init_db(self) -> None:
-        """データベース初期化."""
+        """Initialize the database."""
         self.db = await aiosqlite.connect(self.db_path)
-        # 0.2.3: WAL（DNSMapping と同じ DB。設定は冪等）と busy_timeout
+        # 0.2.3: WAL (same DB as DNSMapping; applying these is idempotent) and busy_timeout
         for pragma in (
             "PRAGMA journal_mode=WAL",
             "PRAGMA synchronous=NORMAL",
@@ -60,13 +60,13 @@ class FirewallMonitor:
     async def record_block(
         self, src_ip: str, dst_ip: str, dst_port: int | None, protocol: str
     ) -> None:
-        """ブロックされた通信を記録.
+        """Record a blocked connection.
 
         Args:
-            src_ip: 送信元IP
-            dst_ip: 宛先IP
-            dst_port: 宛先ポート
-            protocol: プロトコル（TCP/UDP/ICMP）
+            src_ip: Source IP
+            dst_ip: Destination IP
+            dst_port: Destination port
+            protocol: Protocol (TCP/UDP/ICMP)
         """
         if self.db is None:
             return
@@ -90,22 +90,22 @@ class FirewallMonitor:
         )
 
     def parse_iptables_log(self, log_line: str) -> dict | None:
-        """iptablesログ行をパース.
+        """Parse an iptables log line.
 
         Args:
-            log_line: iptablesログ行
+            log_line: iptables log line
 
         Returns:
-            パースされた情報（辞書）、またはNone
+            Dict of parsed fields, or None if the line does not match
         """
-        # iptablesログのフォーマット例:
+        # Example iptables log format:
         # [FIREWALL-BLOCK] IN=eth0 OUT=eth1 SRC=172.20.0.5 DST=8.8.8.8 ... PROTO=TCP SPT=54321 DPT=53
 
         if "[FIREWALL-BLOCK]" not in log_line:
             return None
 
         try:
-            # 正規表現でパース
+            # Pull out the fields with regexes
             src_match = re.search(r"SRC=([0-9\.]+)", log_line)
             dst_match = re.search(r"DST=([0-9\.]+)", log_line)
             proto_match = re.search(r"PROTO=(\w+)", log_line)
@@ -125,10 +125,10 @@ class FirewallMonitor:
             return None
 
     async def monitor_ulog_file(self) -> None:
-        """ulogdログファイルを監視（Docker環境用）.
+        """Monitor the ulogd log file (used in the Docker environment).
 
-        ulogd2がiptables ULOGターゲットから受け取ったパケット情報を
-        /var/log/ulog/firewall.logに記録。このファイルをtail -fで監視。
+        ulogd2 writes the packet details it receives from the iptables ULOG
+        target to /var/log/ulog/firewall.log; this follows that file with tail -f.
         """
         log_system_event("Starting firewall monitor (ulogd file mode)")
         self.running = True
@@ -137,12 +137,12 @@ class FirewallMonitor:
 
         while self.running:
             try:
-                # tail -f で継続的にログファイルを監視
+                # Follow the log file continuously with tail -f
                 process = await asyncio.create_subprocess_exec(
                     "tail",
-                    "-F",  # ファイルが存在しなくても待機、rotate対応
+                    "-F",  # Wait for the file if missing, and survive rotation
                     "-n",
-                    "0",  # 既存行はスキップ、新規行のみ
+                    "0",  # Skip existing lines, only read new ones
                     log_file,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -150,7 +150,7 @@ class FirewallMonitor:
 
                 log_system_event(f"Monitoring ulogd file: {log_file}")
 
-                # 非同期で行を読み取り
+                # Read lines asynchronously
                 while self.running and process.returncode is None:
                     try:
                         if process.stdout is None:
@@ -160,7 +160,7 @@ class FirewallMonitor:
                         if line_bytes:
                             line = line_bytes.decode("utf-8", errors="ignore").strip()
 
-                            # iptablesログをパース
+                            # Parse the iptables log line
                             parsed = self.parse_iptables_log(line)
                             if parsed:
                                 await self.record_block(
@@ -171,13 +171,13 @@ class FirewallMonitor:
                                 )
 
                     except TimeoutError:
-                        # タイムアウトは正常（新しいログがない）
+                        # A timeout is normal: no new log lines
                         continue
                     except Exception as e:
                         log_error(ComponentType.FIREWALL, f"Error reading ulog: {e}")
                         await asyncio.sleep(1)
 
-                # プロセス終了処理
+                # Shut the process down
                 if process.returncode is None:
                     process.terminate()
                     await process.wait()
@@ -190,12 +190,12 @@ class FirewallMonitor:
                 await asyncio.sleep(10)
 
     async def start(self) -> None:
-        """監視を開始."""
+        """Start monitoring."""
         await self.init_db()
         await self.monitor_ulog_file()
 
     async def stop(self) -> None:
-        """監視を停止."""
+        """Stop monitoring."""
         self.running = False
         if self.db:
             await self.db.close()

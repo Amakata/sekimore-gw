@@ -1,4 +1,4 @@
-"""オーケストレータ - DNS、IP管理、ファイアウォールの3層統合."""
+"""Orchestrator - ties together the DNS, IP management and firewall layers."""
 
 import asyncio
 import contextlib
@@ -25,14 +25,14 @@ from .proxy_monitor import ProxyMonitor
 
 
 class ConfigFileEventHandler(FileSystemEventHandler):
-    """設定ファイル変更を監視するイベントハンドラー."""
+    """Event handler that watches the configuration file for changes."""
 
     def __init__(self, orchestrator: "SecurityGatewayOrchestrator", config_path: Path):
-        """初期化.
+        """Initialize.
 
         Args:
-            orchestrator: オーケストレーターインスタンス
-            config_path: 監視する設定ファイルパス
+            orchestrator: The orchestrator instance
+            config_path: Path of the configuration file to watch
         """
         self.orchestrator = orchestrator
         self.config_path = config_path
@@ -40,32 +40,31 @@ class ConfigFileEventHandler(FileSystemEventHandler):
         self._last_reload_time = 0.0
 
     def on_modified(self, event: FileSystemEvent) -> None:
-        """ファイル変更時のイベントハンドラー.
+        """Handle a file modification event.
 
         Args:
-            event: ファイルシステムイベント
+            event: The filesystem event
         """
-        # ディレクトリの変更は無視
+        # Ignore directory changes
         if event.is_directory:
             return
 
-        # 監視対象のconfig.ymlのみ処理
+        # Only handle the config.yml we are watching
         if Path(str(event.src_path)).resolve() != self.config_path.resolve():
             return
 
-        # 短時間に複数回トリガーされるのを防ぐ（デバウンス）
+        # Debounce, so a burst of events triggers only one reload
         current_time = time.time()
         with self._reload_lock:
-            if current_time - self._last_reload_time < 1.0:  # 1秒以内は無視
+            if current_time - self._last_reload_time < 1.0:  # ignore within 1 second
                 return
             self._last_reload_time = current_time
 
         log_system_event("Configuration file modified, reloading...")
 
-        # 非同期メソッドを同期的に実行
-        # watchdogは同期スレッドで動作するため、asyncio.run()を使用
+        # Run the async method synchronously: watchdog calls us from a plain thread.
         try:
-            # 新しいイベントループを作成して実行
+            # Create a fresh event loop and run on it
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
@@ -81,7 +80,7 @@ class ConfigFileEventHandler(FileSystemEventHandler):
 
 
 def _domain_handlers_of(config: object) -> dict[str, str]:
-    """config.domain_handlers を {domain: handler 名} に平坦化する（Mock 設定にも耐える）."""
+    """Flatten config.domain_handlers into {domain: handler name}, tolerating mock configs."""
     handlers = getattr(config, "domain_handlers", None)
     if not isinstance(handlers, dict):
         return {}
@@ -94,7 +93,7 @@ def _domain_handlers_of(config: object) -> dict[str, str]:
 
 
 def _relay_ports_of(config: object) -> list[int]:
-    """relay のために INPUT で開けるポート（git-relay 無しなら空）."""
+    """Ports to open in INPUT for the relay; empty when git-relay is not configured."""
     fn = getattr(config, "relay_input_ports", None)
     ports = fn() if callable(fn) else []
     if not isinstance(ports, list):
@@ -103,7 +102,7 @@ def _relay_ports_of(config: object) -> list[int]:
 
 
 def _allowed_ports_of(config: object) -> list[int]:
-    """許可ドメイン / 許可 IP へ通す宛先ポート（network.allowed_ports。無ければ空 = 全ポート）."""
+    """Destination ports allowed towards allowed domains / IPs (network.allowed_ports; empty = every port)."""
     network = getattr(config, "network", None)
     ports = getattr(network, "allowed_ports", None)
     if not isinstance(ports, list):
@@ -112,10 +111,11 @@ def _allowed_ports_of(config: object) -> list[int]:
 
 
 def _relay_settings_changed(old: object, new: object) -> bool:
-    """domain_handlers / relay / network.allowed_ports に差分があるか（再起動が必要な変更）.
+    """Whether domain_handlers / relay / network.allowed_ports differ, i.e. a restart is needed.
 
-    0.2.0: handler の ssh_port（INPUT で開けるポート）が変わった場合も再起動が必要。
-    0.2.2: network.allowed_ports（FORWARD の宛先ポート）も起動時に決まるので同じ扱い。
+    0.2.0: a changed handler ssh_port (the port opened in INPUT) also needs a restart.
+    0.2.2: network.allowed_ports (the FORWARD destination ports) is likewise fixed at
+    startup, so it is treated the same way.
     """
     return (
         _domain_handlers_of(old) != _domain_handlers_of(new)
@@ -126,21 +126,22 @@ def _relay_settings_changed(old: object, new: object) -> bool:
 
 
 class SecurityGatewayOrchestrator:
-    """セキュリティゲートウェイ統合管理."""
+    """Top-level management of the security gateway."""
 
     @staticmethod
     def _detect_network_interfaces_from_docker_api() -> tuple[str, str, str, str, str, str] | None:
-        """Docker API経由でネットワークインターフェースを動的検出（poc1方式）.
+        """Detect the network interfaces through the Docker API (the poc1 approach).
 
-        環境変数からPROJECT_NAME, INTERNAL_NETWORK_NAME, INTERNET_NETWORK_NAMEを取得し、
-        Docker APIでコンテナのIPアドレスを取得、インターフェースを判別する。
+        Reads PROJECT_NAME, INTERNAL_NETWORK_NAME and INTERNET_NETWORK_NAME from the
+        environment, looks up the container's IP addresses via the Docker API, and works
+        out which interface is which.
 
         Returns:
-            (internet_interface, internal_interface, internal_ip, internet_ip, internet_gw, internal_subnet)のタプル
-            検出できない場合はNone
+            A tuple of (internet_interface, internal_interface, internal_ip, internet_ip,
+            internet_gw, internal_subnet), or None if detection fails
         """
         try:
-            # 環境変数取得
+            # Environment variables
             project_name = os.getenv("PROJECT_NAME")
             internal_network_name = os.getenv("INTERNAL_NETWORK_NAME", "internal-net")
             internet_network_name = os.getenv("INTERNET_NETWORK_NAME", "internet")
@@ -149,10 +150,10 @@ class SecurityGatewayOrchestrator:
                 log_system_event("PROJECT_NAME not set, falling back to static subnet detection")
                 return None
 
-            # インターフェース準備待ち
+            # Wait for the interfaces to come up
             time.sleep(2)
 
-            # コンテナID取得
+            # Container ID
             container_id = subprocess.run(
                 ["hostname"],
                 capture_output=True,
@@ -167,11 +168,11 @@ class SecurityGatewayOrchestrator:
                 project_name=project_name,
             )
 
-            # ネットワーク完全名構築
+            # Build the fully qualified network names
             internal_network_full = f"{project_name}_{internal_network_name}"
             internet_network_full = f"{project_name}_{internet_network_name}"
 
-            # Docker APIでIPアドレス取得
+            # IP addresses from the Docker API
             inspect_result = subprocess.run(
                 ["docker", "inspect", container_id],
                 capture_output=True,
@@ -185,7 +186,7 @@ class SecurityGatewayOrchestrator:
 
             internal_network_info = networks.get(internal_network_full, {})
             internal_ip = internal_network_info.get("IPAddress")
-            internal_prefix_len = internal_network_info.get("IPPrefixLen", 16)  # デフォルト16
+            internal_prefix_len = internal_network_info.get("IPPrefixLen", 16)  # default 16
 
             internet_ip = networks.get(internet_network_full, {}).get("IPAddress")
 
@@ -203,13 +204,13 @@ class SecurityGatewayOrchestrator:
                 )
                 return None
 
-            # internal_ipとprefix_lenからサブネットを計算
+            # Derive the subnet from internal_ip and prefix_len
             internal_network = ipaddress.ip_network(
                 f"{internal_ip}/{internal_prefix_len}", strict=False
             )
             internal_subnet = str(internal_network)
 
-            # IPからインターフェース判別
+            # Identify the interfaces by IP
             internal_if = None
             internet_if = None
 
@@ -234,7 +235,7 @@ class SecurityGatewayOrchestrator:
                 )
                 return None
 
-            # インターネット側ゲートウェイIP算出（.1）
+            # Derive the internet-side gateway IP (.1)
             internet_gw = ".".join(internet_ip.split(".")[:-1]) + ".1"
 
             log_system_event(
@@ -265,24 +266,24 @@ class SecurityGatewayOrchestrator:
 
     @staticmethod
     def _setup_default_route(internet_gw: str, internet_if: str) -> bool:
-        """デフォルトルートを設定.
+        """Set the default route.
 
         Args:
-            internet_gw: インターネット側ゲートウェイIP
-            internet_if: インターネット側インターフェース
+            internet_gw: Internet-side gateway IP
+            internet_if: Internet-side interface
 
         Returns:
-            成功した場合True
+            True on success
         """
         try:
-            # 既存のデフォルトルート削除
+            # Drop the existing default route
             subprocess.run(
                 ["ip", "route", "del", "default"],
                 capture_output=True,
                 timeout=5,
             )
 
-            # 新しいデフォルトルート追加
+            # Add the new default route
             subprocess.run(
                 ["ip", "route", "add", "default", "via", internet_gw, "dev", internet_if],
                 capture_output=True,
@@ -313,16 +314,16 @@ class SecurityGatewayOrchestrator:
 
     @staticmethod
     def _detect_network_interfaces(lan_subnets: list[str]) -> tuple[str, str, str]:
-        """ネットワークインターフェースを自動検出.
+        """Auto-detect the network interfaces.
 
-        lan_subnetsに含まれるIPを持つインターフェース = LAN側
-        それ以外 = WAN側
+        An interface whose IP falls inside lan_subnets is the LAN side; anything else is
+        the WAN side.
 
         Args:
-            lan_subnets: LAN側ネットワークサブネット（例: ["10.100.0.0/16"]）
+            lan_subnets: LAN-side network subnets (e.g. ["10.100.0.0/16"])
 
         Returns:
-            (wan_interface, lan_interface, lan_ip)のタプル
+            A tuple of (wan_interface, lan_interface, lan_ip)
         """
         try:
             result = subprocess.run(
@@ -337,23 +338,23 @@ class SecurityGatewayOrchestrator:
             wan_if = None
             lan_ip = None
 
-            # インターフェース名とIPを解析
+            # Parse interface names and IPs
             current_if = None
             for line in result.stdout.split("\n"):
-                # インターフェース行: "2: eth0@if194: <BROADCAST,MULTICAST,UP,LOWER_UP>..."
+                # Interface line: "2: eth0@if194: <BROADCAST,MULTICAST,UP,LOWER_UP>..."
                 if ":" in line and "<" in line:
                     parts = line.split(":")
                     if len(parts) >= 2:
-                        # eth0@if194 → eth0 (peer interface indexを除去)
+                        # eth0@if194 -> eth0 (strip the peer interface index)
                         if_name = parts[1].strip()
                         current_if = if_name.split("@")[0]
 
-                # IP行: "    inet 10.100.0.2/16 brd ... scope global eth0"
+                # IP line: "    inet 10.100.0.2/16 brd ... scope global eth0"
                 elif "inet " in line and "scope global" in line and current_if:
                     ip_with_prefix = line.strip().split()[1]
                     ip_str = ip_with_prefix.split("/")[0]
 
-                    # lan_subnetsに含まれるかチェック
+                    # Check whether it falls inside lan_subnets
                     ip_addr = ipaddress.ip_address(ip_str)
                     is_lan_net = False
 
@@ -361,7 +362,7 @@ class SecurityGatewayOrchestrator:
                         subnet = ipaddress.ip_network(subnet_str)
                         if ip_addr in subnet:
                             is_lan_net = True
-                            # 最初に見つかったLAN側インターフェースのみ使用
+                            # Use only the first LAN interface found
                             if lan_if is None:
                                 lan_if = current_if
                                 lan_ip = ip_str
@@ -372,7 +373,7 @@ class SecurityGatewayOrchestrator:
                                     subnet=subnet_str,
                                 )
                             else:
-                                # 複数のLAN側インターフェースが検出された場合は警告
+                                # Warn when more than one LAN interface is detected
                                 log_system_event(
                                     "Multiple LAN interfaces detected, using first one",
                                     first_interface=lan_if,
@@ -382,8 +383,8 @@ class SecurityGatewayOrchestrator:
                                 )
                             break
 
-                    # lan_subnetsに含まれない = WAN側
-                    # 最初に見つかったWAN側インターフェースのみ使用
+                    # Outside lan_subnets means the WAN side; use only the first WAN
+                    # interface found
                     if not is_lan_net and current_if != "lo":
                         if wan_if is None:
                             wan_if = current_if
@@ -393,7 +394,7 @@ class SecurityGatewayOrchestrator:
                                 ip=ip_str,
                             )
                         else:
-                            # 複数のWAN側インターフェースが検出された場合は警告
+                            # Warn when more than one WAN interface is detected
                             log_system_event(
                                 "Multiple WAN interfaces detected, using first one",
                                 first_interface=wan_if,
@@ -413,13 +414,14 @@ class SecurityGatewayOrchestrator:
                 ComponentType.ORCHESTRATOR,
                 f"Interface detection failed: {e}, using defaults",
             )
-            # フォールバック（従来の動作）
-            # lan_subnetsの最初のサブネットから.2のIPアドレスを推測
+            # Fall back to the legacy behaviour: guess the .2 address from the first
+            # subnet in lan_subnets
             default_lan_ip = "10.100.0.2"
             if lan_subnets:
                 try:
                     subnet = ipaddress.ip_network(lan_subnets[0])
-                    # サブネットの2番目のIPアドレスを使用（.0はネットワーク、.1はゲートウェイが一般的）
+                    # Use the second address in the subnet (.0 is the network and .1 is
+                    # conventionally the gateway)
                     default_lan_ip = str(list(subnet.hosts())[0])
                 except Exception:
                     pass
@@ -430,35 +432,35 @@ class SecurityGatewayOrchestrator:
         self,
         config_path: Path | None = None,
     ):
-        """初期化.
+        """Initialize.
 
         Args:
-            config_path: 設定ファイルパス
+            config_path: Path to the configuration file
         """
-        # 設定ファイルパスを保存（リロード用）
+        # Keep the config path around for reloads
         self.config_path = config_path
 
-        # 設定読み込み
+        # Load the configuration
         self.config = load_config(config_path)
 
-        # インターフェース名とLAN側IPアドレスを動的検出
-        # 優先順位: Docker API検出 → 静的サブネット検出
+        # Detect the interface names and the LAN-side IP address, preferring Docker API
+        # detection and falling back to static subnet detection
         docker_api_result = self._detect_network_interfaces_from_docker_api()
 
         if docker_api_result:
-            # Docker API経由での検出成功（poc1方式）
+            # Docker API detection succeeded (the poc1 approach)
             internet_if, internal_if, internal_ip, internet_ip, internet_gw, internal_subnet = (
                 docker_api_result
             )
 
-            # デフォルトルート設定
+            # Set the default route
             self._setup_default_route(internet_gw, internet_if)
 
             # WAN = internet, LAN = internal
             wan_interface = internet_if
             lan_interface = internal_if
             lan_ip = internal_ip
-            # Docker APIで検出したサブネットを使用（config.ymlより優先）
+            # Prefer the subnet detected through the Docker API over config.yml
             detected_lan_subnets = [internal_subnet]
 
             log_system_event(
@@ -469,11 +471,11 @@ class SecurityGatewayOrchestrator:
                 lan_subnet=internal_subnet,
             )
         else:
-            # フォールバック: 静的サブネット検出（従来方式）
+            # Fall back to static subnet detection (the legacy approach)
             wan_interface, lan_interface, lan_ip = self._detect_network_interfaces(
                 self.config.network.lan_subnets
             )
-            # config.ymlのサブネットを使用
+            # Use the subnets from config.yml
             detected_lan_subnets = self.config.network.lan_subnets
 
             log_system_event(
@@ -483,7 +485,7 @@ class SecurityGatewayOrchestrator:
                 lan_ip=lan_ip,
             )
 
-        # コンポーネント初期化
+        # Initialize the components
         self.firewall = FirewallManager(
             wan_interface=wan_interface,
             lan_interface=lan_interface,
@@ -492,17 +494,17 @@ class SecurityGatewayOrchestrator:
         )
         self.ip_manager = StaticIPManager()
 
-        # ブロックドメインのセット
+        # Set of blocked domains
         blocked_domains = set(self.config.block_domains)
 
-        # DNSサーバー（ファイアウォールへの参照を渡して動的登録を可能にする）
-        # 初期化順序: firewall → dns_server（firewallへの参照が必要）
-        # upstream_dns: Docker内蔵DNS（127.0.0.11）固定
-        # port: DNS標準ポート（53）固定
-        # lan_subnets: Docker APIで検出したサブネット、またはconfig.ymlのサブネットを使用
+        # DNS server. It gets a reference to the firewall so it can register rules
+        # dynamically, which is why the firewall is constructed first.
+        # upstream_dns is pinned to Docker's embedded DNS (127.0.0.11) and port to the
+        # standard DNS port (53); lan_subnets comes from Docker API detection, or from
+        # config.yml when that is unavailable.
         self.dns_server = DNSServer(
-            upstream_dns="127.0.0.11",  # Docker内蔵DNS（固定）
-            port=53,  # DNS標準ポート（固定）
+            upstream_dns="127.0.0.11",  # Docker's embedded DNS (fixed)
+            port=53,  # standard DNS port (fixed)
             blocked_domains=blocked_domains,
             allowed_domains=self.config.allow_domains,
             db_path=self.config.database_path,
@@ -512,10 +514,10 @@ class SecurityGatewayOrchestrator:
             domain_handlers=_domain_handlers_of(self.config),
         )
 
-        # ファイアウォールモニター（iptablesログを監視）
+        # Firewall monitor, tailing the iptables log
         self.firewall_monitor = FirewallMonitor(db_path=self.config.database_path)
 
-        # プロキシマネージャー（Squid）
+        # Proxy manager (Squid)
         self.proxy_manager: ProxyManager | None = None
         if self.config.proxy.enabled:
             self.proxy_manager = ProxyManager(
@@ -523,44 +525,44 @@ class SecurityGatewayOrchestrator:
                 cache_size_mb=self.config.proxy.cache_size_mb,
                 upstream_proxy=self.config.proxy.upstream_proxy,
                 upstream_proxy_tls=self.config.proxy.upstream_proxy_tls,
-                upstream_dns="127.0.0.11",  # Docker内蔵DNS（squidはGW内部プロセスのためフィルタリング不要）
+                upstream_dns="127.0.0.11",  # Docker's embedded DNS; squid runs inside the gateway, so it needs no filtering
                 upstream_proxy_username=self.config.proxy.upstream_proxy_username,
                 upstream_proxy_password=self.config.proxy.upstream_proxy_password,
             )
 
-        # プロキシモニター（Squidアクセスログを監視）
+        # Proxy monitor, tailing the Squid access log
         self.proxy_monitor: ProxyMonitor | None = None
         if self.config.proxy.enabled:
             self.proxy_monitor = ProxyMonitor(db_path=self.config.database_path)
 
-        # ファイル監視（config.yml変更時に自動リロード）
+        # File watcher that reloads automatically when config.yml changes
         self.config_observer: Observer | None = None  # type: ignore[valid-type]
-        # 中継関所の listen 確認タスク（git-relay 設定時のみ）
+        # Task checking that the relay is listening (only when git-relay is configured)
         self._relay_check_task: asyncio.Task[bool] | None = None
         if self.config_path:
-            # 設定ファイルのディレクトリを監視
+            # Watch the directory containing the configuration file
             config_dir = Path(self.config_path).parent
             event_handler = ConfigFileEventHandler(self, Path(self.config_path))
             self.config_observer = Observer()
             self.config_observer.schedule(event_handler, str(config_dir), recursive=False)
 
     def _match_allowed_domain(self, domain: str) -> bool:
-        """ドメインが許可リストに含まれるかチェック.
+        """Check whether a domain is on the allow list.
 
         Args:
-            domain: チェックするドメイン
+            domain: The domain to check
 
         Returns:
-            許可されている場合True
+            True when it is allowed
         """
         domain_lower = domain.lower().rstrip(".")
 
         for allowed in self.config.allow_domains:
-            # 完全一致
+            # Exact match
             if allowed == domain_lower:
                 return True
 
-            # ワイルドカード一致
+            # Wildcard match
             if allowed.startswith("*."):
                 suffix = allowed[2:]
                 if domain_lower.endswith(suffix):
@@ -570,30 +572,30 @@ class SecurityGatewayOrchestrator:
                 if domain_lower.endswith(suffix):
                     return True
 
-            # fnmatch対応（より柔軟なパターンマッチング）
+            # fnmatch, for more flexible patterns
             if fnmatch.fnmatch(domain_lower, allowed):
                 return True
 
         return False
 
     async def apply_domain_rule(self, domain: str, action: str = "allow") -> bool:
-        """単一ドメインルールを3層すべてに適用.
+        """Apply a single domain rule across all three layers.
 
         Args:
-            domain: ドメイン名
-            action: 'allow' または 'block'
+            domain: The domain name
+            action: 'allow' or 'block'
 
         Returns:
-            成功した場合True
+            True on success
         """
         if action == "block":
-            # ブロックリストに追加
+            # Add it to the block list
             self.dns_server.blocked_domains.add(domain)
             log_system_event("Domain blocked", domain=domain)
             return True
 
-        # 許可ドメイン処理
-        # 1. DNSでドメインを解決
+        # Allowed domain
+        # 1. Resolve the domain over DNS
         result = await self.dns_server._resolve_domain(domain, "A")
 
         if not result:
@@ -605,7 +607,7 @@ class SecurityGatewayOrchestrator:
 
         ips, ttl = result
 
-        # 2. IPv4アドレスのみをフィルタリング（ipsetはfamily inetでIPv4専用）
+        # 2. Keep only IPv4 addresses (the ipset uses family inet, IPv4 only)
         ipv4_ips = []
         for ip in ips:
             try:
@@ -623,7 +625,7 @@ class SecurityGatewayOrchestrator:
             )
             return False
 
-        # 3. iptables/ipsetルールを設定（IPv4のみ）
+        # 3. Set up the iptables/ipset rules (IPv4 only)
         if not self.firewall.setup_domain(domain, ipv4_ips):
             log_error(
                 ComponentType.ORCHESTRATOR,
@@ -641,7 +643,10 @@ class SecurityGatewayOrchestrator:
         return True
 
     async def _warn_if_relay_not_listening(self, port: int, delay: float = 10.0) -> bool:
-        """relay が listen しているか（ss -tln）。していなければ ERROR。agents の connection refused を無言にしない."""
+        """Check with `ss -tln` that the relay is listening; log an ERROR if not.
+
+        Otherwise agents would hit a silent connection refused.
+        """
         await asyncio.sleep(delay)
         try:
             result = subprocess.run(["ss", "-tln"], capture_output=True, text=True, check=False)
@@ -658,19 +663,19 @@ class SecurityGatewayOrchestrator:
         return listening
 
     async def initialize(self) -> bool:
-        """セキュリティゲートウェイを初期化.
+        """Initialize the security gateway.
 
         Returns:
-            成功した場合True
+            True on success
         """
         log_system_event("Initializing Security Gateway...")
 
-        # 1. ファイアウォール初期化
+        # 1. Initialize the firewall
         if not self.firewall.initialize_firewall():
             log_error(ComponentType.ORCHESTRATOR, "Firewall initialization failed")
             return False
 
-        # 2. 静的IP設定
+        # 2. Configure the static IPs
         if not self.ip_manager.setup_static_ips(
             allow_ips=self.config.allow_ips,
             block_ips=self.config.block_ips,
@@ -678,7 +683,7 @@ class SecurityGatewayOrchestrator:
             log_error(ComponentType.ORCHESTRATOR, "Static IP setup failed")
             return False
 
-        # 3. 静的IPのiptablesルール追加
+        # 3. Add the iptables rules for the static IPs
         if not self.firewall.setup_static_ip_rules(
             allow_ipset_name=self.ip_manager.allow_ipset_name,
             block_ipset_name=self.ip_manager.block_ipset_name,
@@ -686,29 +691,30 @@ class SecurityGatewayOrchestrator:
             log_error(ComponentType.ORCHESTRATOR, "Static IP firewall rules setup failed")
             return False
 
-        # 4. 許可ドメインのルールを適用（.で始まらないドメインのみ）
+        # 4. Apply the rules for allowed domains (only those not starting with ".")
         for domain in self.config.allow_domains:
-            # . で始まるワイルドカードは起動時にスキップ（DNSクエリ時に動的処理）
+            # Wildcards starting with "." are skipped at startup and handled
+            # dynamically when a DNS query arrives
             if not domain.startswith("."):
                 log_system_event(f"Applying domain rule for: {domain}")
                 await self.apply_domain_rule(domain, action="allow")
                 log_system_event(f"Domain rule applied successfully: {domain}")
 
-        # 5. すべてのACCEPTルール設定完了後、ブロックログを有効化
-        # これによりLOGルールが最後に配置され、ブロックされるパケットのみがログされる
+        # 5. Enable block logging once every ACCEPT rule is in place, so the LOG rule
+        # lands last and only blocked packets get logged
         if not self.firewall.enable_block_logging():
             log_error(ComponentType.ORCHESTRATOR, "Failed to enable block logging")
-            # ログ記録は失敗しても続行（ファイアウォール自体は機能する）
+            # Carry on if logging fails; the firewall itself still works
 
-        # 6. Squidプロキシ設定（有効な場合）
+        # 6. Configure the Squid proxy, when enabled
         if self.proxy_manager:
             if not self.proxy_manager.generate_config(self.config.allow_domains):
                 log_error(ComponentType.ORCHESTRATOR, "Failed to generate Squid config")
-                # プロキシ設定失敗は続行（DNS/ファイアウォールは機能する）
+                # Carry on if the proxy config fails; DNS and the firewall still work
             else:
                 log_system_event("Squid proxy config generated")
 
-        # 7. 中継関所: git-relay が設定されているのに relay が listen していなければ ERROR を出す
+        # 7. The relay: log an ERROR when git-relay is configured but nothing is listening
         relay_ports = _relay_ports_of(self.config)
         if relay_ports:
             self._relay_check_task = asyncio.create_task(
@@ -729,34 +735,34 @@ class SecurityGatewayOrchestrator:
         return True
 
     async def start(self) -> None:
-        """セキュリティゲートウェイを起動."""
-        # ログシステム初期化
+        """Start the security gateway."""
+        # Initialize logging
         setup_logging()
 
-        # 初期化
+        # Initialize
         if not await self.initialize():
             log_error(ComponentType.ORCHESTRATOR, "Initialization failed, exiting")
             return
 
-        # Squidプロキシ起動（有効な場合）
+        # Start the Squid proxy, when enabled
         if self.proxy_manager and not self.proxy_manager.start():
             log_error(ComponentType.ORCHESTRATOR, "Failed to start Squid proxy")
-            # プロキシ起動失敗は続行（DNS/ファイアウォールは機能する）
+            # Carry on if the proxy fails to start; DNS and the firewall still work
 
-        # ファイアウォールモニターをバックグラウンドで起動
+        # Start the firewall monitor in the background
         firewall_monitor_task = asyncio.create_task(self.firewall_monitor.start())
 
-        # プロキシモニターをバックグラウンドで起動（有効な場合）
+        # Start the proxy monitor in the background, when enabled
         proxy_monitor_task = None
         if self.proxy_monitor:
             proxy_monitor_task = asyncio.create_task(self.proxy_monitor.start())
 
-        # ファイル監視を開始（config.yml変更時の自動リロード）
+        # Start watching the file, to reload automatically when config.yml changes
         if self.config_observer:
             self.config_observer.start()  # type: ignore[attr-defined]
             log_system_event("Configuration file monitoring started")
 
-        # DNSサーバー起動（メインループ）
+        # Start the DNS server (the main loop)
         try:
             await self.dns_server.start()
         except KeyboardInterrupt:
@@ -764,7 +770,7 @@ class SecurityGatewayOrchestrator:
         except Exception as e:
             log_error(ComponentType.ORCHESTRATOR, f"Fatal error: {e}")
         finally:
-            # モニター停止
+            # Stop the monitors
             await self.firewall_monitor.stop()
             firewall_monitor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -779,45 +785,46 @@ class SecurityGatewayOrchestrator:
             await self.cleanup()
 
     async def cleanup(self) -> None:
-        """リソースをクリーンアップ."""
+        """Release resources."""
         log_system_event("Cleaning up...")
 
-        # ファイル監視停止
+        # Stop the file watcher
         if self.config_observer:
             self.config_observer.stop()  # type: ignore[attr-defined]
             if self.config_observer.is_alive():  # type: ignore[attr-defined]
                 self.config_observer.join()  # type: ignore[attr-defined]
             log_system_event("Configuration file monitoring stopped")
 
-        # DNSサーバー停止
+        # Stop the DNS server
         await self.dns_server.stop()
 
-        # Squidプロキシ停止
+        # Stop the Squid proxy
         if self.proxy_manager:
             self.proxy_manager.stop()
 
-        # ファイアウォールクリーンアップ
+        # Clean up the firewall
         self.firewall.cleanup()
 
-        # 静的IPクリーンアップ
+        # Clean up the static IPs
         self.ip_manager.cleanup()
 
         log_system_event("Cleanup complete")
 
     async def reload_config(self) -> bool:
-        """設定ファイルを再読み込みして差分を反映（ダウンタイムなし）.
+        """Reload the configuration file and apply the differences, without downtime.
 
         Returns:
-            成功した場合True
+            True on success
         """
         try:
             log_system_event("Reloading configuration...")
 
-            # 新しい設定を読み込み
+            # Load the new configuration
             new_config = load_config(self.config_path)
 
-            # domain_handlers / relay は起動時に決まる（relay プロセスと INPUT 規則）。
-            # ここで DNS だけ切り替えると無言ハングを作るので、旧値を維持して再起動を促す
+            # domain_handlers / relay are fixed at startup (the relay process and the
+            # INPUT rules). Switching only DNS here would create a silent hang, so keep
+            # the old values and ask for a restart instead.
             if _relay_settings_changed(self.config, new_config):
                 log_error(
                     ComponentType.ORCHESTRATOR,
@@ -831,7 +838,7 @@ class SecurityGatewayOrchestrator:
                     }
                 )
 
-            # 差分検出
+            # Compute the differences
             old_allow_domains = set(self.config.allow_domains)
             new_allow_domains = set(new_config.allow_domains)
             old_block_domains = set(self.config.block_domains)
@@ -842,23 +849,23 @@ class SecurityGatewayOrchestrator:
             added_block_domains = new_block_domains - old_block_domains
             removed_block_domains = old_block_domains - new_block_domains
 
-            # DNS Server更新
+            # Update the DNS server
             self.dns_server.allowed_domains = new_config.allow_domains
             self.dns_server.blocked_domains = set(new_config.block_domains)
             self.dns_server.ignored_domains = new_config.ignore_domains
 
-            # 削除されたドメインのiptablesルールを削除
+            # Remove the iptables rules for domains that went away
             for domain in removed_allow_domains:
-                if not domain.startswith("."):  # ワイルドカードはスキップ
+                if not domain.startswith("."):  # skip wildcards
                     self.firewall.remove_domain(domain)
 
-            # 追加されたドメインのルールを適用
+            # Apply the rules for newly added domains
             for domain in added_allow_domains:
-                if not domain.startswith("."):  # ワイルドカードはスキップ
-                    # DNSクエリ時に動的に処理されるため、ここでは何もしない
+                if not domain.startswith("."):  # skip wildcards
+                    # Handled dynamically when a DNS query arrives, so nothing to do here
                     pass
 
-            # Squidプロキシ設定更新（有効な場合）
+            # Update the Squid proxy configuration, when enabled
             if self.proxy_manager:
                 if not self.proxy_manager.generate_config(new_config.allow_domains):
                     log_error(ComponentType.ORCHESTRATOR, "Failed to regenerate Squid config")
@@ -867,7 +874,7 @@ class SecurityGatewayOrchestrator:
                     log_error(ComponentType.ORCHESTRATOR, "Failed to reload Squid config")
                     return False
 
-            # 設定を更新
+            # Swap in the new configuration
             self.config = new_config
 
             log_system_event(
@@ -885,24 +892,24 @@ class SecurityGatewayOrchestrator:
             return False
 
     async def restart_services(self) -> bool:
-        """サービスを再起動（数秒のダウンタイムあり）.
+        """Restart the services, with a few seconds of downtime.
 
         Returns:
-            成功した場合True
+            True on success
         """
         try:
             log_system_event("Restarting services...")
 
-            # 1. DNSサーバーを停止
+            # 1. Stop the DNS server
             await self.dns_server.stop()
             log_system_event("DNS server stopped")
 
-            # 2. Proxyを停止（有効な場合）
+            # 2. Stop the proxy, when enabled
             if self.proxy_manager:
                 self.proxy_manager.stop()
                 log_system_event("Proxy stopped")
 
-            # 3. 設定を再読み込み
+            # 3. Reload the configuration
             reloaded = load_config(self.config_path)
             if _relay_settings_changed(self.config, reloaded):
                 log_error(
@@ -918,16 +925,16 @@ class SecurityGatewayOrchestrator:
             self.config = reloaded
             log_system_event("Configuration reloaded")
 
-            # 4. DNS Serverの設定を更新
+            # 4. Update the DNS server settings
             self.dns_server.allowed_domains = self.config.allow_domains
             self.dns_server.blocked_domains = set(self.config.block_domains)
             self.dns_server.ignored_domains = self.config.ignore_domains
 
-            # 5. DNSサーバーを再起動
+            # 5. Restart the DNS server
             await self.dns_server.start()
             log_system_event("DNS server restarted")
 
-            # 6. Proxyを再起動（有効な場合）
+            # 6. Restart the proxy, when enabled
             if self.proxy_manager:
                 if not self.proxy_manager.generate_config(self.config.allow_domains):
                     log_error(ComponentType.ORCHESTRATOR, "Failed to regenerate Squid config")
@@ -946,7 +953,7 @@ class SecurityGatewayOrchestrator:
 
 
 async def main() -> None:
-    """メインエントリーポイント."""
+    """Main entry point."""
     orchestrator = SecurityGatewayOrchestrator()
     await orchestrator.start()
 

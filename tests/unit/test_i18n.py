@@ -1,4 +1,4 @@
-"""ローカライズ（0.2.4）: 言語の決め方、辞書のフォールバック、dashboard のキー整合、/api/i18n、src.maint の言語."""
+"""Localization (0.2.4): language resolution, dictionary fallback, dashboard key coverage, /api/i18n, and src.maint language."""
 
 import re
 from pathlib import Path
@@ -32,10 +32,10 @@ def describe_language_resolution():
         assert i18n.resolve_lang(accept_language="ja,en;q=0.5") == "ja"
         assert (
             i18n.resolve_lang(accept_language="ja", configured="en") == "en"
-        )  # config が固定なら header より優先
+        )  # A pinned config setting beats the header
         assert (
             i18n.resolve_lang(cookie="en", configured="ja") == "en"
-        )  # 利用者の切替 (cookie) は config より優先
+        )  # The user's own choice (cookie) beats the config
         assert i18n.resolve_lang(explicit="ja", cookie="en") == "ja"
         assert i18n.resolve_lang(explicit="xx", cookie="yy", accept_language="zz") == "en"
 
@@ -57,7 +57,7 @@ def describe_dictionaries():
     def it_falls_back_to_english_and_interpolates():
         assert i18n.t("loading", "ja") == "読み込み中..."
         assert i18n.t("loading", "en") == "Loading..."
-        assert i18n.t("loading", "fr") == "Loading..."  # 未対応言語は英語
+        assert i18n.t("loading", "fr") == "Loading..."  # Unsupported languages fall back to English
         assert i18n.t("more_items", "en", n=3) == "...3 more"
         assert i18n.t("no.such.key", "ja") == "no.such.key"
 
@@ -75,8 +75,8 @@ def describe_dictionaries():
         for line in DASHBOARD.read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
             if stripped.startswith(("//", "/*", "*", "<!--")) or "日本語" in stripped:
-                continue  # コメントと言語切替の表示名は対象外
-            code = re.sub(r"\s//.*$", "", line)  # 行末コメントも対象外
+                continue  # Comments and the language-switcher labels are out of scope
+            code = re.sub(r"\s//.*$", "", line)  # Trailing comments are out of scope too
             if jp.search(code):
                 offenders.append(stripped[:100])
         assert offenders == [], offenders
@@ -107,16 +107,16 @@ def describe_i18n_api():
 
     def it_prefers_query_then_cookie_then_config(tmp_path):
         with _client(tmp_path, ui_language="en") as client:
-            # config が en 固定なら header の ja は無視
+            # With the config pinned to en, a ja header is ignored
             assert client.get("/api/i18n", headers={"Accept-Language": "ja"}).json()["lang"] == "en"
-            # 利用者の切替 (cookie) は config より優先
+            # The user's own choice (cookie) beats the config
             client.cookies.set("sekimore_lang", "ja")
             assert client.get("/api/i18n").json()["lang"] == "ja"
-            # ?lang= が最優先
+            # ?lang= wins over everything
             assert client.get("/api/i18n?lang=en").json()["lang"] == "en"
             assert (
                 client.get("/api/i18n?lang=xx").json()["lang"] == "ja"
-            )  # 不正な指定は無視して次へ (cookie)
+            )  # An invalid value is ignored and the next source (cookie) applies
 
     def it_serves_the_dashboard_in_english_by_default(tmp_path):
         with _client(tmp_path) as client:

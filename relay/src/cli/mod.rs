@@ -1,5 +1,8 @@
-//! コマンドライン。操作者向け（gateway 内で `docker compose exec sekimore-gw sekimore-relay …`）と
-//! エージェント向け（devcontainer 内で `sekimore-relay agent …`）。
+//! Command line. Operator-facing (run inside the gateway as `docker compose exec sekimore-gw sekimore-relay …`)
+//! and agent-facing (run inside the devcontainer as `sekimore-relay agent …`).
+//!
+//! 0.2.4: help text is looked up at runtime from `relay/locales/*.json` (see `crate::i18n`). clap's doc comments
+//! are not used because they would be baked in at compile time.
 
 pub mod agent;
 pub mod operator;
@@ -10,19 +13,14 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::config::DEFAULT_CONFIG_PATH;
+use crate::i18n::t;
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "sekimore-relay",
-    version,
-    about = "Policy-enforcing relay for AI agents: git over SSH, GitHub API over HTTP"
-)]
+#[command(name = "sekimore-relay", version, about = t("cli.about"))]
 pub struct Cli {
-    /// 設定ファイル（Python と共有）
-    #[arg(long, global = true, default_value = DEFAULT_CONFIG_PATH, env = "SEKIMORE_CONFIG_PATH")]
+    #[arg(long, global = true, default_value = DEFAULT_CONFIG_PATH, env = "SEKIMORE_CONFIG_PATH", help = t("cli.config"))]
     pub config: PathBuf,
-    /// ログを詳しく（-v info, -vv debug）
-    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    #[arg(short, long, global = true, action = clap::ArgAction::Count, help = t("cli.verbose"))]
     pub verbose: u8,
     #[command(subcommand)]
     pub cmd: Command,
@@ -30,68 +28,65 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// git-relay handler が設定されていれば 0、無ければ 1、設定不正なら 2（entrypoint.sh 用）
+    #[command(about = t("cli.needs_relay"))]
     NeedsRelay,
-    /// SSH（git）と HTTP（API）、443 passthrough を起動する
+    #[command(about = t("cli.serve"))]
     Serve,
-    /// device flow で上流に認証し、トークンと known_hosts を保存する
+    #[command(about = t("cli.login"))]
     Login {
-        /// 対象の上流（git-relay ドメイン）。省略時は既定上流。複数上流のときに使う（0.2.0）
-        #[arg(long)]
+        #[arg(long, help = t("cli.login.upstream"))]
         upstream: Option<String>,
     },
-    /// 上流トークンを削除する
+    #[command(about = t("cli.logout"))]
     Logout {
-        #[arg(long)]
+        #[arg(long, help = t("cli.upstream"))]
         upstream: Option<String>,
     },
-    /// 関所がどの上流 identity として動くか
+    #[command(about = t("cli.whoami"))]
     Whoami {
-        #[arg(long)]
+        #[arg(long, help = t("cli.upstream"))]
         upstream: Option<String>,
     },
-    /// 解決済みポリシーと状態（agent / known_hosts / token / keys）を表示する
+    #[command(about = t("cli.check"))]
     Check,
-    /// 案件トークンを発行する
+    #[command(about = t("cli.token"))]
     Token {
-        /// 有効期間（例: 12h, 30m）。省略時は relay.token_ttl
-        #[arg(long)]
+        #[arg(long, help = t("cli.token.ttl"))]
         ttl: Option<String>,
     },
-    /// 発行済みトークンの一覧
+    #[command(about = t("cli.tokens"))]
     Tokens,
-    /// ラベルを指定してトークンを失効させる（`tokens` で確認）
+    #[command(about = t("cli.revoke"))]
     Revoke {
-        #[arg(long)]
+        #[arg(long, help = t("cli.revoke.label"))]
         label: String,
     },
-    /// 案件の全トークンを失効させる（案件終了時）
+    #[command(about = t("cli.revoke_project"))]
     RevokeProject,
-    /// 使い捨て SSH 鍵の公開鍵を手で登録する（OpenSSH 1 行、または --file）
+    #[command(about = t("cli.add_key"))]
     AddKey {
+        #[arg(help = t("cli.add_key.line"))]
         line: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = t("cli.add_key.file"))]
         file: Option<PathBuf>,
     },
-    /// 上流や ProxyJump 先（踏み台）のホスト鍵を ssh-keyscan で取り、その上流の known_hosts に追記する（fingerprint を表示）
+    #[command(about = t("cli.keyscan"))]
     Keyscan {
-        /// ホスト名または IP
+        #[arg(help = t("cli.keyscan.host"))]
         host: String,
-        #[arg(long, default_value_t = 22)]
+        #[arg(long, default_value_t = 22, help = t("cli.keyscan.port"))]
         port: u16,
-        /// どの上流の known_hosts に入れるか（git-relay ドメイン。省略時は既定上流）
-        #[arg(long)]
+        #[arg(long, help = t("cli.keyscan.upstream"))]
         upstream: Option<String>,
     },
-    /// POST /bootstrap の kill-switch
+    #[command(about = t("cli.bootstrap"))]
     Bootstrap {
         #[command(subcommand)]
         action: BootstrapAction,
     },
-    /// エージェント側 CLI（設定ファイルは読まない。SEKIMORE_ENDPOINT / SEKIMORE_TOKEN / SEKIMORE_REPO）
+    #[command(about = t("cli.agent"))]
     Agent {
-        /// 既定リポジトリ Org/Repo
-        #[arg(long, global = true, env = "SEKIMORE_REPO")]
+        #[arg(long, global = true, env = "SEKIMORE_REPO", help = t("cli.agent.repo"))]
         repo: Option<String>,
         #[command(subcommand)]
         cmd: agent::AgentCmd,
@@ -100,12 +95,15 @@ pub enum Command {
 
 #[derive(Subcommand, Debug)]
 pub enum BootstrapAction {
+    #[command(about = t("cli.bootstrap.disable"))]
     Disable,
+    #[command(about = t("cli.bootstrap.enable"))]
     Enable,
+    #[command(about = t("cli.bootstrap.status"))]
     Status,
 }
 
-/// 実行して終了コードを返す。
+/// Runs the command and returns the exit code.
 pub async fn run(cli: Cli) -> i32 {
     let result: anyhow::Result<i32> = match cli.cmd {
         Command::NeedsRelay => operator::needs_relay(&cli.config),

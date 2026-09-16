@@ -31,7 +31,7 @@ http_port 3128
 # Cache settings
 {CACHE_CONFIG}
 
-# Upstream proxy (企業プロキシ連携)
+# Upstream proxy (for a corporate proxy)
 {UPSTREAM_PROXY_CONFIG}
 
 # Logging

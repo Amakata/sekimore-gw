@@ -1,4 +1,4 @@
-//! HTTP API の要求/応答（エージェント CLI と共有）。gh 互換は目指さない。
+//! HTTP API requests and responses (shared with the agent CLI). gh compatibility is not a goal.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -46,7 +46,7 @@ pub struct ApiRequest {
     pub job_id: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub run_id: u64,
-    /// タグ名 / ブランチ名 / SHA (ci runs)
+    /// Tag name / branch name / SHA (ci runs)
     #[serde(default, rename = "ref", skip_serializing_if = "String::is_empty")]
     pub git_ref: String,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -114,18 +114,18 @@ pub struct BootstrapResponse {
     pub project: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repos: Vec<String>,
-    /// DNS で関所に向けられるドメイン（エージェントは known_hosts / ssh config にこの名前を使う）
+    /// The domain DNS points at the relay (the agent uses this name in known_hosts and its ssh config)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_domain: Option<String>,
-    /// 上流ホスト（表示用）
+    /// Upstream host (for display)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
-    /// 0.2.0: 関所が受ける全 git ドメイン（ドメインごとの SSH ポート）。先頭が既定上流
+    /// 0.2.0: every git domain the relay serves (with each domain's SSH port). The first is the default upstream
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub git_domains: Vec<GitDomain>,
 }
 
-/// 0.2.0: 関所が受ける git ドメイン 1 つ分（agent-setup が `Host <domain>` / `Port` を書くのに使う）。
+/// 0.2.0: one git domain the relay serves (agent-setup uses it to write `Host <domain>` and `Port`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct GitDomain {
     pub domain: String,

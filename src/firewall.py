@@ -1,4 +1,4 @@
-"""ファイアウォール管理モジュール - iptables/ipset動的ルール管理."""
+"""Firewall management - dynamic iptables/ipset rule handling."""
 
 import subprocess
 
@@ -6,7 +6,7 @@ from .logger import ComponentType, log_error, log_system_event
 
 
 class FirewallManager:
-    """iptables/ipsetベースのファイアウォール管理."""
+    """iptables/ipset-based firewall management."""
 
     def __init__(
         self,
@@ -15,42 +15,42 @@ class FirewallManager:
         relay_ports: list[int] | None = None,
         allowed_ports: list[int] | None = None,
     ):
-        """初期化.
+        """Initialize the manager.
 
         Args:
-            wan_interface: WAN側インターフェース（インターネット側、orchestratorで動的検出）
-            lan_interface: LAN側インターフェース（ローカルネットワーク側、orchestratorで動的検出）
-            relay_ports: 中継関所のために lan_if 側 INPUT で開ける TCP ポート（無ければ規則を追加しない）
-            allowed_ports: 許可ドメイン / 許可 IP へ通す宛先 TCP ポート（空なら従来どおり全ポート）
+            wan_interface: WAN-side interface (internet side, detected dynamically by the orchestrator)
+            lan_interface: LAN-side interface (local network side, detected dynamically by the orchestrator)
+            relay_ports: TCP ports to open on lan_if INPUT for the relay (no rules are added if empty)
+            allowed_ports: Destination TCP ports allowed towards allowlisted domains / IPs (empty means all ports, as before)
         """
         self.wan_if = wan_interface
         self.lan_if = lan_interface
         self.relay_ports: list[int] = list(relay_ports or [])
         self.allowed_ports: list[int] = list(allowed_ports or [])
-        self.domain_ipsets: dict[str, str] = {}  # domain -> ipset_name のマッピング
+        self.domain_ipsets: dict[str, str] = {}  # domain -> ipset_name
 
-        # iptables/ipsetコマンド（legacyを使用）
+        # iptables/ipset commands (the legacy variant)
         self.iptables_cmd = "iptables-legacy"
         self.ipset_cmd = "ipset"
 
     def _run_command(self, cmd: list[str]) -> bool:
-        """コマンドを実行.
+        """Run a command.
 
         Args:
-            cmd: コマンドリスト
+            cmd: Command and arguments
 
         Returns:
-            成功した場合True
+            True on success
         """
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
             return True
         except subprocess.CalledProcessError as e:
-            # "already exists" エラーは無視（追加操作で既存ルールがある場合）
+            # Ignore "already exists" errors (an add whose rule is already present)
             if "already" in e.stderr.lower():
                 return True
-            # "does not exist" または "no chain" エラーは削除失敗として扱う
-            # （_remove_block_log_rule()のwhile Trueループを終了させるため）
+            # Treat "does not exist" / "no chain" as a failed delete, so that the
+            # while True loop in _remove_block_log_rule() terminates
             if "exist" in e.stderr.lower() or "no chain" in e.stderr.lower():
                 return False
             log_error(
@@ -63,31 +63,31 @@ class FirewallManager:
             return False
 
     def initialize_firewall(self) -> bool:
-        """ファイアウォールを初期化.
+        """Initialize the firewall.
 
         Returns:
-            成功した場合True
+            True on success
         """
         log_system_event("Initializing firewall...")
 
-        # 1. sysctl 設定は docker-compose.yml の sysctls セクションで設定済み
+        # 1. sysctl settings are already applied by the sysctls section of docker-compose.yml
         # (net.ipv4.ip_forward=1, net.ipv4.conf.*.send_redirects=0)
 
-        # 2. 既存ルールをフラッシュ（Docker DNSのNATルールは保護）
+        # 2. Flush existing rules (Docker DNS NAT rules are preserved)
         self._run_command([self.iptables_cmd, "-F"])
-        # NATテーブルは完全にフラッシュしない（Docker DNSの127.0.0.11リダイレクトルールを保護）
-        # 代わりに、POSTROUTINGチェーンのsekimore管理ルールのみ削除
-        # ⚠️ iptables -t nat -F を実行すると、127.0.0.11へのNATルールが削除される
+        # Never flush the whole NAT table: that would drop Docker DNS's 127.0.0.11
+        # redirect rules. Only sekimore's own POSTROUTING rules are removed.
+        # WARNING: `iptables -t nat -F` deletes the NAT rules for 127.0.0.11.
         self._run_command([self.iptables_cmd, "-X"])
 
-        # 3. デフォルトポリシー設定
-        self._run_command([self.iptables_cmd, "-P", "INPUT", "DROP"])  # 外部からの入力は拒否
-        self._run_command([self.iptables_cmd, "-P", "OUTPUT", "ACCEPT"])  # sekimore自身の出力は許可
+        # 3. Default policies
+        self._run_command([self.iptables_cmd, "-P", "INPUT", "DROP"])  # Reject inbound traffic
+        self._run_command([self.iptables_cmd, "-P", "OUTPUT", "ACCEPT"])  # Allow our own outbound
         self._run_command(
             [self.iptables_cmd, "-P", "FORWARD", "DROP"]
-        )  # フォワードは明示的なルールのみ
+        )  # Forwarding only via explicit rules
 
-        # 4. NAT設定（MASQUERADE）
+        # 4. NAT (MASQUERADE)
         if not self._run_command(
             [
                 self.iptables_cmd,
@@ -103,11 +103,11 @@ class FirewallManager:
         ):
             return False
 
-        # 5. ループバックを許可（INPUT/OUTPUT）
+        # 5. Allow loopback (INPUT/OUTPUT)
         self._run_command([self.iptables_cmd, "-A", "INPUT", "-i", "lo", "-j", "ACCEPT"])
         self._run_command([self.iptables_cmd, "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"])
 
-        # 6. 確立済み接続を許可（INPUT/OUTPUT/FORWARD）
+        # 6. Allow established connections (INPUT/OUTPUT/FORWARD)
         self._run_command(
             [
                 self.iptables_cmd,
@@ -148,8 +148,8 @@ class FirewallManager:
             ]
         )
 
-        # 7. INPUT: sekimore自身へのアクセスを最小限に許可
-        # ICMP (ping) - LAN側からの疎通確認
+        # 7. INPUT: allow only the minimum access to sekimore itself
+        # ICMP (ping) - connectivity checks from the LAN side
         self._run_command(
             [
                 self.iptables_cmd,
@@ -163,7 +163,7 @@ class FirewallManager:
                 "ACCEPT",
             ]
         )
-        # DNS (53/udp) - ai-agentからのDNSクエリ
+        # DNS (53/udp) - DNS queries from ai-agent
         self._run_command(
             [
                 self.iptables_cmd,
@@ -179,7 +179,7 @@ class FirewallManager:
                 "ACCEPT",
             ]
         )
-        # DNS (53/tcp) - ai-agentからのDNS検出（agent-setup.shが /dev/tcp を使用）
+        # DNS (53/tcp) - DNS probing from ai-agent (agent-setup.sh uses /dev/tcp)
         self._run_command(
             [
                 self.iptables_cmd,
@@ -195,7 +195,7 @@ class FirewallManager:
                 "ACCEPT",
             ]
         )
-        # Squid Proxy (3128/tcp) - ai-agentからのHTTP/HTTPSリクエスト
+        # Squid Proxy (3128/tcp) - HTTP/HTTPS requests from ai-agent
         self._run_command(
             [
                 self.iptables_cmd,
@@ -211,8 +211,8 @@ class FirewallManager:
                 "ACCEPT",
             ]
         )
-        # 中継関所（sekimore-relay）- ai-agent からの SSH(git) / HTTP API / 443。lan_if 限定。
-        # relay_ports が空（domain_handlers 無し）ならコマンド列は従来と完全に同じ
+        # The relay (sekimore-relay) - SSH(git) / HTTP API / 443 from ai-agent, on lan_if only.
+        # When relay_ports is empty (no domain_handlers) the command sequence is unchanged.
         for relay_port in self.relay_ports:
             self._run_command(
                 [
@@ -229,7 +229,7 @@ class FirewallManager:
                     "ACCEPT",
                 ]
             )
-        # Web UI (8080/tcp) - 管理者からのアクセス
+        # Web UI (8080/tcp) - administrator access
         self._run_command(
             [
                 self.iptables_cmd,
@@ -244,9 +244,9 @@ class FirewallManager:
             ]
         )
 
-        # 8. OUTPUT: sekimore自身からの必要な通信を許可
-        # Dockerの内蔵DNS (127.0.0.11) - 全ポート許可（動的ポート使用のため）
-        # Docker DNSは実際にはポート53でリスニングせず、ランダムな高ポート（例:51116）を使用
+        # 8. OUTPUT: allow the traffic sekimore itself needs
+        # Docker's built-in DNS (127.0.0.11) - all ports, because the port is dynamic:
+        # Docker DNS does not actually listen on 53 but on a random high port (e.g. 51116)
         self._run_command(
             [
                 self.iptables_cmd,
@@ -258,7 +258,7 @@ class FirewallManager:
                 "ACCEPT",
             ]
         )
-        # 上位DNS (53/udp) - 名前解決
+        # Upstream DNS (53/udp) - name resolution
         self._run_command(
             [
                 self.iptables_cmd,
@@ -272,7 +272,7 @@ class FirewallManager:
                 "ACCEPT",
             ]
         )
-        # HTTP/HTTPS (80/443) - パッケージ取得、上位プロキシ等
+        # HTTP/HTTPS (80/443) - package downloads, upstream proxy, etc.
         self._run_command(
             [
                 self.iptables_cmd,
@@ -299,7 +299,7 @@ class FirewallManager:
                 "ACCEPT",
             ]
         )
-        # 上位プロキシ (3128/8080) - 企業プロキシ接続用
+        # Upstream proxy (3128/8080) - for connecting to a corporate proxy
         self._run_command(
             [
                 self.iptables_cmd,
@@ -335,13 +335,13 @@ class FirewallManager:
         return True
 
     def enable_block_logging(self) -> bool:
-        """ブロックパケットのログ記録を有効化.
+        """Enable logging of blocked packets.
 
-        すべてのACCEPTルール設定後に呼び出すこと。
-        FORWARDチェーンの最後に到達したパケット（=ブロックされるパケット）をログに記録。
+        Call this after all ACCEPT rules are in place. Packets that reach the end of
+        the FORWARD chain (i.e. the ones that get blocked) are logged.
 
         Returns:
-            成功した場合True
+            True on success
         """
         log_system_event("Enabling firewall block logging...")
         result = self._add_block_log_rule()
@@ -354,14 +354,13 @@ class FirewallManager:
         return result
 
     def _add_block_log_rule(self) -> bool:
-        """NFLOGルールを追加（内部ヘルパー）.
+        """Add the NFLOG rule (internal helper).
 
-        ulogd2を使用してユーザースペースでログ記録。
-        Docker環境でもアクセス可能。
-        NFLOGはULOGの後継で、最新カーネルでサポートされている。
+        Logging happens in user space via ulogd2, which also works inside Docker.
+        NFLOG is the successor to ULOG and is supported by current kernels.
 
         Returns:
-            成功した場合True
+            True on success
         """
         return self._run_command(
             [
@@ -378,14 +377,14 @@ class FirewallManager:
         )
 
     def _remove_block_log_rule(self) -> bool:
-        """NFLOGルールを削除（内部ヘルパー）.
+        """Remove the NFLOG rule (internal helper).
 
-        複数のNFLOGルールが存在する場合、すべて削除する。
+        Removes every NFLOG rule if more than one is present.
 
         Returns:
-            成功した場合True（ルールが存在しない場合もTrue）
+            True on success (also True when no rule exists)
         """
-        # NFLOGルールを削除（複数存在する可能性があるため繰り返す）
+        # Loop, since several NFLOG rules may be present
         while True:
             result = self._run_command(
                 [
@@ -400,7 +399,7 @@ class FirewallManager:
                     "[FIREWALL-BLOCK] ",
                 ]
             )
-            # 削除に失敗したら（ルールが存在しない）終了
+            # Stop once the delete fails, meaning no rule is left
             if not result:
                 break
 
@@ -409,11 +408,11 @@ class FirewallManager:
     def _forward_accept_rules(
         self, ipset_name: str, is_lan_only: bool | None, action: str = "-A"
     ) -> list[list[str]]:
-        """ipset 宛の FORWARD ACCEPT 規則を組み立てる.
+        """Build the FORWARD ACCEPT rules targeting an ipset.
 
-        allowed_ports が空なら従来どおり 1 本（全ポート）。指定があれば `-p tcp --dport <port>` を
-        ポートごとに 1 本ずつ。is_lan_only=None は静的 IP 用（インターフェース条件なし）。
-        action は "-A"（追加）か "-D"（削除）。
+        With allowed_ports empty this is a single rule covering all ports, as before;
+        otherwise one `-p tcp --dport <port>` rule per port. is_lan_only=None is for
+        static IPs (no interface match). action is "-A" (add) or "-D" (delete).
         """
         base = [self.iptables_cmd, action, "FORWARD"]
         if is_lan_only is True:
@@ -426,55 +425,57 @@ class FirewallManager:
         return [base + ["-p", "tcp", "--dport", str(port)] + tail for port in self.allowed_ports]
 
     def setup_domain(self, domain: str, ips: list[str]) -> bool:
-        """ドメインに対するipsetとiptablesルールを設定.
+        """Set up the ipset and iptables rules for a domain.
 
         Args:
-            domain: ドメイン名
-            ips: 許可するIPリスト
+            domain: Domain name
+            ips: IPs to allow
 
         Returns:
-            成功した場合True
+            True on success
         """
-        # ipset名を生成（英数字とアンダースコアのみ）
+        # Build the ipset name (alphanumerics and underscores only)
         ipset_name = f"allow_{domain.replace('.', '_').replace('*', 'wildcard')}"
-        ipset_name = ipset_name[:31]  # ipset名は31文字まで
+        ipset_name = ipset_name[:31]  # ipset names are limited to 31 characters
 
-        # LAN専用ドメインか判定（.lanで終わる、またはコンテナ名）
+        # LAN-only domain? (ends in .lan, or is a bare container name)
         is_lan_only = domain.endswith(".lan") or "." not in domain
 
-        # IPv4アドレスのみをフィルタリング
+        # Keep only IPv4 addresses
         ipv4_ips = [ip for ip in ips if ":" not in ip]
 
-        # IPv4アドレスがない場合は既存のipsetを保持（IPv6のみのクエリ結果対策）
+        # With no IPv4 address, keep the existing ipset (guards against IPv6-only answers)
         if not ipv4_ips:
             return True
 
-        # 既存ipsetのルールを削除（重複防止）。allowed_ports があればポートごとの規則を消す
+        # Drop the existing rules for this ipset to avoid duplicates; with allowed_ports
+        # set, that means the per-port rules
         for rule in self._forward_accept_rules(ipset_name, is_lan_only, action="-D"):
             self._run_command(rule)
 
-        # 既存ipsetを削除
+        # Destroy the existing ipset
         self._run_command([self.ipset_cmd, "destroy", ipset_name])
 
-        # ipset作成（hash:ip、IPv4）
+        # Create the ipset (hash:ip, IPv4)
         if not self._run_command(
             [self.ipset_cmd, "create", ipset_name, "hash:ip", "family", "inet"]
         ):
             return False
 
-        # IPv4アドレスを追加
+        # Add the IPv4 addresses
         for ip in ipv4_ips:
             self._run_command([self.ipset_cmd, "add", ipset_name, ip])
 
-        # LOGルールを一時的に削除
+        # Temporarily remove the LOG rule
         self._remove_block_log_rule()
 
-        # iptablesルール追加（インターフェース条件付き。allowed_ports があれば -p tcp --dport ごとに 1 本）
-        # LAN専用トラフィック（sekimore.lan等）は-iのみ、WAN向けは -i と -o 両方
+        # Add the iptables rules, matching on interface (one rule per -p tcp --dport when
+        # allowed_ports is set). LAN-only traffic (sekimore.lan etc.) matches -i only;
+        # WAN-bound traffic matches both -i and -o.
         for rule in self._forward_accept_rules(ipset_name, is_lan_only, action="-A"):
             self._run_command(rule)
 
-        # LOGルールを再追加（ACCEPTルールの後に配置）
+        # Re-add the LOG rule so it sits after the ACCEPT rules
         self._add_block_log_rule()
 
         self.domain_ipsets[domain] = ipset_name
@@ -490,21 +491,21 @@ class FirewallManager:
         return True
 
     def update_domain_ips(self, domain: str, new_ips: list[str]) -> bool:
-        """ドメインのIPリストを更新（TTL期限切れ時など）.
+        """Update a domain's IP list, e.g. when the TTL expires.
 
         Args:
-            domain: ドメイン名
-            new_ips: 新しいIPリスト
+            domain: Domain name
+            new_ips: New IP list
 
         Returns:
-            成功した場合True
+            True on success
         """
         if domain not in self.domain_ipsets:
             return self.setup_domain(domain, new_ips)
 
         ipset_name = self.domain_ipsets[domain]
 
-        # 既存IPを取得
+        # Read back the current members
         try:
             result = subprocess.run(
                 [self.ipset_cmd, "list", ipset_name],
@@ -526,7 +527,7 @@ class FirewallManager:
 
         new_ips_set = set(new_ips)
 
-        # 差分更新
+        # Apply the difference
         ips_to_add = new_ips_set - existing_ips
         ips_to_remove = existing_ips - new_ips_set
 
@@ -547,20 +548,20 @@ class FirewallManager:
         return True
 
     def remove_domain(self, domain: str) -> bool:
-        """ドメインのルールを削除.
+        """Remove a domain's rules.
 
         Args:
-            domain: ドメイン名
+            domain: Domain name
 
         Returns:
-            成功した場合True
+            True on success
         """
         if domain not in self.domain_ipsets:
             return True
 
         ipset_name = self.domain_ipsets[domain]
 
-        # iptablesルール削除
+        # Remove the iptables rules
         if self.allowed_ports:
             is_lan_only = domain.endswith(".lan") or "." not in domain
             for rule in self._forward_accept_rules(ipset_name, is_lan_only, action="-D"):
@@ -581,7 +582,7 @@ class FirewallManager:
                 ]
             )
 
-        # ipset削除
+        # Destroy the ipset
         self._run_command([self.ipset_cmd, "destroy", ipset_name])
 
         del self.domain_ipsets[domain]
@@ -591,16 +592,16 @@ class FirewallManager:
         return True
 
     def setup_static_ip_rules(self, allow_ipset_name: str, block_ipset_name: str) -> bool:
-        """静的IPのiptablesルールを設定.
+        """Set up the iptables rules for static IPs.
 
         Args:
-            allow_ipset_name: 許可IPのipset名
-            block_ipset_name: 拒否IPのipset名
+            allow_ipset_name: ipset name for allowlisted IPs
+            block_ipset_name: ipset name for denied IPs
 
         Returns:
-            成功した場合True
+            True on success
         """
-        # ブロックIPルール（最優先）
+        # Block rule first, so it takes precedence
         self._run_command(
             [
                 self.iptables_cmd,
@@ -617,7 +618,7 @@ class FirewallManager:
             ]
         )
 
-        # 許可IPルール（allowed_ports があればポートごと）
+        # Allow rule (one per port when allowed_ports is set)
         for rule in self._forward_accept_rules(allow_ipset_name, None, action="-A"):
             self._run_command(rule)
 
@@ -637,17 +638,17 @@ class FirewallManager:
         internet_network_name: str = "internet",
         uplink_if: str = "eth0",
     ) -> bool:
-        """ホスト側ファイアウォールルールを設定（poc1方式）.
+        """Set up the host-side firewall rules (the poc1 approach).
 
         Args:
-            internal_ip: sekimoreのinternal側IPアドレス
-            project_name: Docker Composeプロジェクト名
-            internal_network_name: internal側ネットワーク名
-            internet_network_name: internet側ネットワーク名
-            uplink_if: ホスト側アップリンクインターフェース
+            internal_ip: sekimore's IP address on the internal network
+            project_name: Docker Compose project name
+            internal_network_name: Name of the internal network
+            internet_network_name: Name of the internet network
+            uplink_if: Host-side uplink interface
 
         Returns:
-            成功した場合True
+            True on success
         """
         try:
             log_system_event(
@@ -656,11 +657,11 @@ class FirewallManager:
                 project_name=project_name,
             )
 
-            # ネットワーク完全名構築
+            # Build the fully qualified network names
             internal_network_full = f"{project_name}_{internal_network_name}"
             internet_network_full = f"{project_name}_{internet_network_name}"
 
-            # ブリッジインターフェース名を取得
+            # Look up the bridge interface names
             import json
 
             internal_result = subprocess.run(
@@ -685,7 +686,7 @@ class FirewallManager:
             internet_bridge_id = internet_data[0]["Id"][:12]
             br_internet = f"br-{internet_bridge_id}"
 
-            # internetサブネット取得
+            # Get the internet subnet
             internet_subnet = internet_data[0]["IPAM"]["Config"][0]["Subnet"]
 
             log_system_event(
@@ -695,7 +696,7 @@ class FirewallManager:
                 internet_subnet=internet_subnet,
             )
 
-            # iptablesコマンド（ホスト側ではlegacyでない可能性もあるため、両方試す）
+            # The host may not use the legacy iptables, so try both commands
             iptables_cmds = ["iptables", "iptables-legacy"]
 
             for iptables_cmd in iptables_cmds:
@@ -713,9 +714,9 @@ class FirewallManager:
                 log_error(ComponentType.FIREWALL, "No iptables command found on host")
                 return False
 
-            # ホスト側FORWARD制御ルール追加（重複チェック付き）
+            # Host-side FORWARD rules, each preceded by a duplicate check
             host_rules = [
-                # 戻りトラフィック許可（外→内）
+                # Allow return traffic (outside -> inside)
                 [
                     "-C",
                     "FORWARD",
@@ -744,7 +745,7 @@ class FirewallManager:
                     "-j",
                     "ACCEPT",
                 ],
-                # sekimoreから internal→internet は許可
+                # Allow internal -> internet from sekimore
                 [
                     "-C",
                     "FORWARD",
@@ -769,7 +770,7 @@ class FirewallManager:
                     "-j",
                     "ACCEPT",
                 ],
-                # その他 internal→internet は DROP
+                # DROP any other internal -> internet traffic
                 [
                     "-C",
                     "FORWARD",
@@ -790,7 +791,7 @@ class FirewallManager:
                     "-j",
                     "DROP",
                 ],
-                # FORWARD許可（internet subnet → uplink）
+                # Allow forwarding (internet subnet -> uplink)
                 [
                     "-C",
                     "FORWARD",
@@ -811,7 +812,7 @@ class FirewallManager:
                     "-j",
                     "ACCEPT",
                 ],
-                # 戻りトラフィック許可（uplink → internet subnet）
+                # Allow return traffic (uplink -> internet subnet)
                 [
                     "-C",
                     "FORWARD",
@@ -838,7 +839,7 @@ class FirewallManager:
                 ],
             ]
 
-            # DNS Exfiltration対策ルール（sekimore以外のポート53をブロック）
+            # DNS exfiltration guard: block port 53 for everyone but sekimore
             dns_filter_rules = [
                 # UDP/53 LOG
                 [
@@ -990,7 +991,7 @@ class FirewallManager:
                 ],
             ]
 
-            # ホスト側NATルール
+            # Host-side NAT rules
             nat_rules = [
                 [
                     "-t",
@@ -1018,21 +1019,21 @@ class FirewallManager:
                 ],
             ]
 
-            # ルール適用（-Cチェック→-A追加のペアで実行）
+            # Apply the rules in -C check / -A add pairs
             all_rules = host_rules + dns_filter_rules + nat_rules
 
             for i in range(0, len(all_rules), 2):
                 check_rule = all_rules[i]
                 add_rule = all_rules[i + 1]
 
-                # チェック実行
+                # Run the check
                 check_result = subprocess.run(
                     [iptables_cmd] + check_rule,
                     capture_output=True,
                     timeout=5,
                 )
 
-                # 存在しない場合のみ追加
+                # Only add the rule when it is missing
                 if check_result.returncode != 0:
                     subprocess.run(
                         [iptables_cmd] + add_rule,
@@ -1052,14 +1053,14 @@ class FirewallManager:
             return False
 
     def cleanup(self) -> None:
-        """ファイアウォールルールをクリーンアップ."""
-        # すべてのドメインルールを削除
+        """Tear down the firewall rules."""
+        # Remove every domain rule
         for domain in list(self.domain_ipsets.keys()):
             self.remove_domain(domain)
 
-        # iptablesフラッシュ（Docker DNSのNATルールは保護）
+        # Flush iptables (Docker DNS NAT rules are preserved)
         self._run_command([self.iptables_cmd, "-F"])
-        # NATテーブルはフラッシュしない（Docker DNSルールを保護）
+        # Do not flush the NAT table, to preserve the Docker DNS rules
         self._run_command([self.iptables_cmd, "-X"])
 
         log_system_event("Firewall cleaned up")

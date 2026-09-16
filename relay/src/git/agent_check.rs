@@ -1,7 +1,7 @@
-//! ssh-agent への到達性のプリフライト。
+//! Preflight check for reachability of the ssh-agent.
 //!
-//! 上流 ssh を起動する **前** に検査し、`Permission denied (publickey)` という誤解を招くエラーに
-//! なる前に、何が悪いのかを個別に言う（brief §5-i / §5-j）。依存を増やさず agent プロトコルを直接話す。
+//! Checking **before** spawning the upstream ssh lets us say precisely what is wrong instead of surfacing the
+//! misleading `Permission denied (publickey)` (brief §5-i / §5-j). We speak the agent protocol directly rather than adding a dependency.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -56,7 +56,7 @@ impl fmt::Display for AgentError {
 
 impl std::error::Error for AgentError {}
 
-/// agent に REQUEST_IDENTITIES を送り、鍵の数を返す。
+/// Send REQUEST_IDENTITIES to the agent and return the number of keys.
 pub async fn preflight_agent(sock: Option<&Path>) -> Result<usize, AgentError> {
     let sock = sock.ok_or(AgentError::Unset)?;
     if !sock.exists() {
@@ -101,7 +101,7 @@ pub async fn preflight_agent(sock: Option<&Path>) -> Result<usize, AgentError> {
         .map_err(|_| AgentError::Protocol("timed out waiting for the agent".into()))?
 }
 
-/// `SSH_AUTH_SOCK` を読む。
+/// Read `SSH_AUTH_SOCK`.
 pub fn auth_sock_from_env() -> Option<PathBuf> {
     std::env::var_os("SSH_AUTH_SOCK")
         .filter(|s| !s.is_empty())
@@ -130,7 +130,7 @@ mod tests {
                     let mut body = vec![SSH_AGENT_IDENTITIES_ANSWER];
                     body.extend_from_slice(&nkeys.to_be_bytes());
                     for _ in 0..nkeys {
-                        // key blob + comment（中身は見ないので空文字列 2 つ）
+                        // key blob + comment (we never inspect them, so two empty strings)
                         body.extend_from_slice(&0u32.to_be_bytes());
                         body.extend_from_slice(&0u32.to_be_bytes());
                     }
@@ -160,7 +160,7 @@ mod tests {
     async fn refused_when_nothing_listens() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("dead.sock");
-        // socket ファイルだけ作る（listener 無し）
+        // Create only the socket file, with nothing listening on it.
         drop(UnixListener::bind(&p).unwrap());
         let e = preflight_agent(Some(&p)).await.unwrap_err();
         assert!(matches!(e, AgentError::Connect(..)), "{e}");

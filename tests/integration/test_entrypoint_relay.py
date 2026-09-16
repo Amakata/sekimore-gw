@@ -1,4 +1,4 @@
-"""scripts/start-relay.sh の起動判定（needs-relay の終了コード契約）."""
+"""The startup decision in scripts/start-relay.sh (the needs-relay exit code contract)."""
 
 import os
 import subprocess

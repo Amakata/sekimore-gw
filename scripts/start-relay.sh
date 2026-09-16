@@ -1,8 +1,8 @@
 #!/bin/bash
-# sekimore-relay の起動判定。entrypoint.sh からバックグラウンドで呼ばれる。
+# Decides whether to start sekimore-relay. Called in the background from entrypoint.sh.
 #
-#   needs-relay の終了コード: 0 = 起動する / 1 = 不要（domain_handlers に git-relay が無い） / 2 = 設定不正
-#   relay の失敗で gateway を止めない（DNS / firewall は relay 無しでも機能する）。
+#   needs-relay exit codes: 0 = start / 1 = not needed (no git-relay in domain_handlers) / 2 = invalid config
+#   A relay failure never takes down the gateway (DNS / firewall work without the relay).
 BIN=${SEKIMORE_RELAY_BIN:-/usr/local/bin/sekimore-relay}
 CFG=${SEKIMORE_CONFIG_PATH:-/etc/sekimore/config.yml}
 

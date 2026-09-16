@@ -1,58 +1,58 @@
-"""共通定数定義.
+"""Shared constants.
 
-環境変数からオーバーライド可能な設定値を一元管理します。
+Centralizes the settings that can be overridden through environment variables.
 """
 
 import os
 
-# データベースパス
+# Database path
 DB_PATH = os.getenv("SEKIMORE_DB_PATH", "/data/security_gateway.db")
 
-# 設定ファイルパス
+# Configuration file path
 CONFIG_PATH = os.getenv("SEKIMORE_CONFIG_PATH", "/etc/sekimore/config.yml")
 
-# ログファイルパス
+# Log file path
 ULOG_FILE_PATH = os.getenv("SEKIMORE_ULOG_PATH", "/var/log/ulog/syslogemu.log")
 
-# Squid設定パス
+# Squid configuration paths
 SQUID_CONFIG_PATH = os.getenv("SEKIMORE_SQUID_CONFIG", "/etc/squid/squid.conf")
 SQUID_TEMPLATE_PATH = os.getenv("SEKIMORE_SQUID_TEMPLATE", "/etc/squid/squid.conf.template")
 
-# デフォルトネットワーク設定
+# Default network settings
 DEFAULT_LAN_SUBNETS = ["172.20.0.0/16", "192.168.0.0/16", "10.0.0.0/8"]
 
-# DNS設定
+# DNS settings
 DEFAULT_DNS_PORT = int(os.getenv("SEKIMORE_DNS_PORT", "53"))
 DEFAULT_UPSTREAM_DNS = os.getenv("SEKIMORE_UPSTREAM_DNS", "127.0.0.11")
 
-# Web UI設定
+# Web UI settings
 WEB_UI_HOST = os.getenv("SEKIMORE_WEB_HOST", "0.0.0.0")
 WEB_UI_PORT = int(os.getenv("SEKIMORE_WEB_PORT", "8080"))
 
-# キャッシュ設定
+# Cache settings
 DNS_CACHE_ENABLED = os.getenv("SEKIMORE_DNS_CACHE_ENABLED", "true").lower() == "true"
 DNS_CACHE_REFRESH_INTERVAL = int(os.getenv("SEKIMORE_DNS_CACHE_REFRESH", "30"))
 
 
 def get_db_path(override: str | None = None) -> str:
-    """データベースパスを取得.
+    """Return the database path.
 
     Args:
-        override: オーバーライドするパス（テスト用）
+        override: Path to use instead (for tests)
 
     Returns:
-        データベースパス
+        The database path
     """
     return override or DB_PATH
 
 
 def get_config_path(override: str | None = None) -> str:
-    """設定ファイルパスを取得.
+    """Return the configuration file path.
 
     Args:
-        override: オーバーライドするパス（テスト用）
+        override: Path to use instead (for tests)
 
     Returns:
-        設定ファイルパス
+        The configuration file path
     """
     return override or CONFIG_PATH

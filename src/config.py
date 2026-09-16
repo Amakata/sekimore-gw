@@ -1,4 +1,4 @@
-"""設定管理モジュール - config.ymlの読み込みとバリデーション."""
+"""Configuration management - loads and validates config.yml."""
 
 import ipaddress
 import os
@@ -10,42 +10,45 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class DNSConfig(BaseModel):
-    """DNS設定.
+    """DNS settings.
 
-    全ての設定値はコード内で固定（設定ファイルでの変更不可）:
-    - upstream: 127.0.0.11（Docker内蔵DNS）
-    - port: 53（DNS標準ポート）
-    - min_ttl: 60秒
-    - max_ttl: 86400秒（24時間）
+    Every value is hard-coded and cannot be changed from the config file:
+    - upstream: 127.0.0.11 (Docker's embedded DNS)
+    - port: 53 (standard DNS port)
+    - min_ttl: 60 seconds
+    - max_ttl: 86400 seconds (24 hours)
 
-    理由: 誤設定を防止するため（例: 127.0.0.1に変更されるとSquid Proxyが失敗）
+    This prevents misconfiguration; pointing upstream at 127.0.0.1, for example, breaks
+    the Squid proxy.
     """
 
-    pass  # 設定項目なし（全て固定値）
+    pass  # no settings; everything is fixed
 
 
 class ProxyConfig(BaseModel):
-    """プロキシ設定."""
+    """Proxy settings."""
 
-    enabled: bool = Field(default=False, description="プロキシ有効化")
-    port: int = Field(default=3128, description="プロキシポート")
-    cache_enabled: bool = Field(default=True, description="キャッシュ有効化")
-    cache_size_mb: int = Field(default=1000, description="キャッシュサイズ（MB）")
-    upstream_proxy: str | None = Field(default=None, description="上位プロキシ（host:port）")
-    upstream_proxy_tls: bool = Field(default=False, description="上位プロキシへの接続にTLSを使用")
+    enabled: bool = Field(default=False, description="Enable the proxy")
+    port: int = Field(default=3128, description="Proxy port")
+    cache_enabled: bool = Field(default=True, description="Enable caching")
+    cache_size_mb: int = Field(default=1000, description="Cache size in MB")
+    upstream_proxy: str | None = Field(default=None, description="Upstream proxy (host:port)")
+    upstream_proxy_tls: bool = Field(
+        default=False, description="Use TLS to reach the upstream proxy"
+    )
     upstream_proxy_username: str | None = Field(
         default=None,
-        description="上位プロキシ認証ユーザー名（環境変数SEKIMORE_UPSTREAM_PROXY_USERNAMEで上書き可能）",
+        description="Username for the upstream proxy (overridden by SEKIMORE_UPSTREAM_PROXY_USERNAME)",
     )
     upstream_proxy_password: str | None = Field(
         default=None,
-        description="上位プロキシ認証パスワード（環境変数SEKIMORE_UPSTREAM_PROXY_PASSWORDで上書き可能）",
+        description="Password for the upstream proxy (overridden by SEKIMORE_UPSTREAM_PROXY_PASSWORD)",
     )
 
     def model_post_init(self, __context) -> None:
-        """環境変数から認証情報を読み取る."""
-        # 環境変数から上位プロキシ認証情報を読み取り（config.ymlより優先）
-        # SEKIMORE_プレフィックスで名前空間を分離
+        """Read credentials from the environment."""
+        # Upstream proxy credentials from the environment take precedence over
+        # config.yml. The SEKIMORE_ prefix keeps the namespace separate.
         if os.getenv("SEKIMORE_UPSTREAM_PROXY_USERNAME"):
             self.upstream_proxy_username = os.getenv("SEKIMORE_UPSTREAM_PROXY_USERNAME")
         if os.getenv("SEKIMORE_UPSTREAM_PROXY_PASSWORD"):
@@ -53,23 +56,24 @@ class ProxyConfig(BaseModel):
 
 
 class NetworkConfig(BaseModel):
-    """ネットワーク設定."""
+    """Network settings."""
 
     lan_subnets: list[str] = Field(
         default_factory=lambda: ["10.100.0.0/16"],
-        description="LAN側ネットワークサブネット（docker-compose.yml の lan ネットワークと一致）",
+        description="LAN-side subnets (must match the lan network in docker-compose.yml)",
     )
-    # 0.2.2: 許可ドメイン / 許可 IP へ通す宛先 TCP ポート。空なら従来どおり全ポート。
-    # IP 直指定の SSH など、別プロトコルで関所を迂回する経路を塞ぐ（例: [80, 443]）。変更は再起動で反映
+    # 0.2.2: destination TCP ports allowed towards allowed domains / IPs. Empty means
+    # every port, as before. Restricting it (e.g. [80, 443]) closes routes that bypass
+    # the relay over another protocol, such as SSH to a raw IP. Applied on restart.
     allowed_ports: list[int] = Field(
         default_factory=list,
-        description="許可ドメイン・許可 IP へ通す宛先 TCP ポート（空 = 全ポート）。例: [80, 443]",
+        description="Destination TCP ports allowed to the allowed domains and IPs (empty = every port), e.g. [80, 443]",
     )
 
     @field_validator("allowed_ports")
     @classmethod
     def validate_allowed_ports(cls, v: list[int]) -> list[int]:
-        """1〜65535 の整数、重複なし."""
+        """Integers in 1-65535, deduplicated."""
         out: list[int] = []
         for p in v:
             if not isinstance(p, int) or isinstance(p, bool) or not 1 <= p <= 65535:
@@ -80,19 +84,20 @@ class NetworkConfig(BaseModel):
 
 
 class DomainHandlerConfig(BaseModel):
-    """domain_handlers の 1 エントリ（中継関所）."""
+    """A single domain_handlers entry (the relay)."""
 
     handler: Literal["splice", "git-relay", "https-relay", "deny"] = Field(
         default="splice",
         description=(
-            "splice=従来どおり / git-relay=関所の SSH で受ける（DNS は関所 IP）/ "
-            "https-relay=443 だけを関所の passthrough で通す（送信上限を掛ける。0.2.2）/ deny=拒否"
+            "splice = as before / git-relay = taken by the relay's SSH (DNS answers the relay's IP) / "
+            "https-relay = only 443 goes through the relay's passthrough, under an upload cap (0.2.2) / deny = refused"
         ),
     )
-    # 0.2.2: 443 passthrough の送信上限（バイト）。省略時は relay.https_max_upload_bytes、-1 で無制限。relay が読む
+    # 0.2.2: upload cap in bytes for the 443 passthrough. Omitted falls back to
+    # relay.https_max_upload_bytes; -1 means unlimited. Read by the relay.
     max_upload_bytes: int | None = Field(
         default=None,
-        description="443 passthrough で dev → 上流へ送れる 1 接続あたりの上限バイト数。-1 で無制限。省略時は relay の既定",
+        description="Per-connection cap in bytes on what dev may send upstream over the 443 passthrough. -1 for unlimited; omit to use the relay default",
     )
 
     @field_validator("max_upload_bytes")
@@ -105,37 +110,42 @@ class DomainHandlerConfig(BaseModel):
             )
         return v
 
-    # 0.2.0: 複数の git-relay ドメインはポートで分ける（SSH の exec はリポジトリパスしか運ばない）
+    # 0.2.0: multiple git-relay domains are separated by port, because an SSH exec
+    # request carries only the repository path.
     ssh_port: int | None = Field(
         default=None,
         ge=1,
         le=65535,
-        description="git-relay: 関所側 SSH ポート。省略時は relay.ssh_listen のポート（既定上流）",
+        description="git-relay: the relay-side SSH port. Omit it to use the port of relay.ssh_listen (the default upstream)",
     )
     upstream: str | None = Field(
-        default=None, description="git-relay: 上流ホスト。省略時はドメイン名（残りは relay が読む）"
+        default=None,
+        description="git-relay: the upstream host. Omit it to use the domain name (the relay reads the rest)",
     )
 
 
 class RelayConfig(BaseModel):
-    """relay セクションのうち Python が読む部分.
+    """The part of the relay section that Python reads.
 
-    残りのキーは relay バイナリ（Rust）が所有する。Pydantic の既定（未知キー無視）で素通しする。
+    The remaining keys belong to the relay binary (Rust); Pydantic's default of ignoring
+    unknown keys lets them pass through untouched.
     """
 
-    ssh_listen: str = Field(default="0.0.0.0:22", description="関所 SSH の listen アドレス")
-    api_listen: str = Field(default="0.0.0.0:8420", description="関所 HTTP API の listen アドレス")
+    ssh_listen: str = Field(default="0.0.0.0:22", description="Listen address of the relay's SSH")
+    api_listen: str = Field(
+        default="0.0.0.0:8420", description="Listen address of the relay's HTTP API"
+    )
     https_listen: str = Field(
-        default="0.0.0.0:443", description="同一ドメインの 443 を受けるアドレス"
+        default="0.0.0.0:443", description="Address that takes port 443 of the same domain"
     )
     https: Literal["passthrough", "reject"] = Field(
         default="passthrough",
-        description="443 の扱い（passthrough=実 upstream へ素通し / reject=即切断）",
+        description="What to do with 443 (passthrough = pass it to the real upstream unchanged / reject = drop it immediately)",
     )
 
 
 def _port_of(listen: str, default: int) -> int:
-    """'host:port' からポートを取り出す."""
+    """Extract the port from a 'host:port' string."""
     try:
         return int(str(listen).rsplit(":", 1)[-1])
     except (ValueError, IndexError):
@@ -143,46 +153,46 @@ def _port_of(listen: str, default: int) -> int:
 
 
 class UIConfig(BaseModel):
-    """Web UI の設定（0.2.4）."""
+    """Web UI settings (0.2.4)."""
 
     language: Literal["auto", "en", "ja"] = Field(
         default="auto",
-        description="Web UI の言語。auto=ブラウザの Accept-Language（利用者が切り替えれば cookie が優先）/ en / ja",
+        description="Web UI language. auto = the browser's Accept-Language (a choice made in the UI wins via a cookie) / en / ja",
     )
 
 
 class Config(BaseModel):
-    """AI Security Gateway 設定."""
+    """AI Security Gateway configuration."""
 
-    # ゲートウェイ情報
-    name: str | None = Field(default=None, description="ゲートウェイ名称")
-    description: str | None = Field(default=None, description="ゲートウェイ説明")
+    # Gateway metadata
+    name: str | None = Field(default=None, description="Gateway name")
+    description: str | None = Field(default=None, description="Gateway description")
 
-    # ドメインフィルタリング
-    allow_domains: list[str] = Field(default_factory=list, description="許可ドメインリスト")
-    block_domains: list[str] = Field(default_factory=list, description="拒否ドメインリスト")
+    # Domain filtering
+    allow_domains: list[str] = Field(default_factory=list, description="Allowed domains")
+    block_domains: list[str] = Field(default_factory=list, description="Blocked domains")
     ignore_domains: list[str] = Field(
-        default_factory=list, description="無視ドメインリスト（UI非表示）"
+        default_factory=list, description="Ignored domains (hidden from the UI)"
     )
 
-    # IPフィルタリング
-    allow_ips: list[str] = Field(default_factory=list, description="許可IPリスト")
-    block_ips: list[str] = Field(default_factory=list, description="拒否IPリスト")
+    # IP filtering
+    allow_ips: list[str] = Field(default_factory=list, description="Allowed IPs")
+    block_ips: list[str] = Field(default_factory=list, description="Blocked IPs")
 
-    # コンポーネント設定
+    # Component settings
     dns: DNSConfig = Field(default_factory=DNSConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
 
-    # データベース
+    # Database
     database_path: str = Field(
-        default="/data/security_gateway.db", description="SQLiteデータベースパス"
+        default="/data/security_gateway.db", description="Path of the SQLite database"
     )
 
-    # 中継関所（relay）。無ければ既存挙動は不変（doc/sekimore-gw/requirements/04-relay.md）
+    # The relay. Absent, behaviour is unchanged (see relay/README.md).
     domain_handlers: dict[str, DomainHandlerConfig] = Field(
         default_factory=dict,
-        description="ドメイン別 handler（git-relay / deny / splice）。完全一致 FQDN",
+        description="Per-domain handler (git-relay / deny / splice). An exact FQDN",
     )
     relay: RelayConfig = Field(default_factory=RelayConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
@@ -190,7 +200,7 @@ class Config(BaseModel):
     @field_validator("domain_handlers", mode="before")
     @classmethod
     def normalize_domain_handlers(cls, v: Any) -> Any:
-        """キーを正規化（lower、末尾 . 除去）し、ワイルドカード・空・重複を拒否する."""
+        """Normalize keys (lowercase, strip trailing dot); reject wildcards, empties and duplicates."""
         if v is None:
             return {}
         if not isinstance(v, dict):
@@ -212,10 +222,11 @@ class Config(BaseModel):
 
     @model_validator(mode="after")
     def validate_git_relay_ports(self) -> "Config":
-        """複数の git-relay ドメインは別々の SSH ポートで受ける（0.2.0）.
+        """Every git-relay domain listens on its own SSH port (0.2.0).
 
-        SSH の exec はリポジトリパスしか運ばないので、上流はポートで区別する。
-        ssh_port を省いたエントリは relay.ssh_listen のポート（既定上流）になり、1 つまで。
+        An SSH exec request carries only the repository path, so upstreams are told apart
+        by port. An entry without ssh_port falls back to the relay.ssh_listen port (the
+        default upstream), and only one entry may do so.
         """
         if self.https_relay_domains() and not self.git_relay_domains():
             raise ValueError(
@@ -234,7 +245,7 @@ class Config(BaseModel):
         return self
 
     def git_relay_ssh_ports(self) -> dict[str, int]:
-        """git-relay ドメイン → 関所側 SSH ポート（ssh_port 省略時は relay.ssh_listen のポート）."""
+        """Map each git-relay domain to its relay SSH port (relay.ssh_listen when ssh_port is omitted)."""
         default_port = _port_of(self.relay.ssh_listen, 22)
         return {
             d: (h.ssh_port if h.ssh_port is not None else default_port)
@@ -243,25 +254,26 @@ class Config(BaseModel):
         }
 
     def git_relay_domains(self) -> list[str]:
-        """handler が git-relay のドメイン."""
+        """Domains whose handler is git-relay."""
         return [d for d, h in self.domain_handlers.items() if h.handler == "git-relay"]
 
     def https_relay_domains(self) -> list[str]:
-        """handler が https-relay のドメイン（0.2.2。443 だけ関所を通す）."""
+        """Domains whose handler is https-relay (0.2.2; only 443 goes through the relay)."""
         return [d for d, h in self.domain_handlers.items() if h.handler == "https-relay"]
 
     def relay_domains(self) -> list[str]:
-        """DNS で関所 IP を返すドメイン（git-relay + https-relay）."""
+        """Domains for which DNS answers with the relay IP (git-relay + https-relay)."""
         return self.git_relay_domains() + self.https_relay_domains()
 
     def has_git_relay(self) -> bool:
         return bool(self.git_relay_domains())
 
     def relay_input_ports(self) -> list[int]:
-        """relay のために lan_if 側 INPUT で開けるポート。git-relay が無ければ空.
+        """Ports opened in INPUT on lan_if for the relay; empty when git-relay is unused.
 
-        443 は https の設定に関係なく開ける（reject でも relay が受けて即切断する。
-        INPUT で落とすと無言タイムアウトになる）。
+        443 is opened regardless of the https setting: even in reject mode the relay
+        accepts the connection and closes it immediately, whereas dropping it in INPUT
+        would leave the client hanging until it times out.
         """
         if not self.has_git_relay():
             return []
@@ -278,10 +290,10 @@ class Config(BaseModel):
     @field_validator("allow_ips", "block_ips")
     @classmethod
     def validate_ip_entries(cls, v: list[str]) -> list[str]:
-        """IPエントリーのバリデーション（単一IP、CIDR、レンジ）."""
+        """Validate IP entries (single IP, CIDR or range)."""
         for entry in v:
             if "-" in entry:
-                # IPレンジ形式: 192.168.1.1-192.168.1.10
+                # IP range form: 192.168.1.1-192.168.1.10
                 start_ip_str, end_ip_str = entry.split("-", 1)
                 try:
                     ipaddress.ip_address(start_ip_str.strip())
@@ -289,13 +301,13 @@ class Config(BaseModel):
                 except ValueError as e:
                     raise ValueError(f"Invalid IP range: {entry}") from e
             elif "/" in entry:
-                # CIDR形式: 192.168.1.0/24
+                # CIDR form: 192.168.1.0/24
                 try:
                     ipaddress.ip_network(entry, strict=False)
                 except ValueError as e:
                     raise ValueError(f"Invalid CIDR notation: {entry}") from e
             else:
-                # 単一IP: 192.168.1.1
+                # Single IP: 192.168.1.1
                 try:
                     ipaddress.ip_address(entry)
                 except ValueError as e:
@@ -304,7 +316,7 @@ class Config(BaseModel):
 
     @classmethod
     def from_yaml(cls, path: Path) -> "Config":
-        """YAMLファイルから設定を読み込む."""
+        """Load the configuration from a YAML file."""
         if not path.exists():
             raise FileNotFoundError(f"Config file not found: {path}")
 
@@ -317,25 +329,25 @@ class Config(BaseModel):
         return cls(**data)
 
     def to_yaml(self, path: Path) -> None:
-        """設定をYAMLファイルに書き込む."""
+        """Write the configuration to a YAML file."""
         with open(path, "w", encoding="utf-8") as f:
             yaml.dump(self.model_dump(), f, default_flow_style=False, allow_unicode=True)
 
 
 def load_config(config_path: Path | None = None) -> Config:
-    """設定ファイルを読み込む.
+    """Load the configuration file.
 
     Args:
-        config_path: 設定ファイルパス（未指定時は環境変数またはデフォルトパス）
+        config_path: Path to the config file (falls back to the default path)
 
     Returns:
-        Config: 読み込んだ設定
+        Config: The loaded configuration
     """
     if config_path is None:
         config_path = Path("/etc/sekimore/config.yml")
 
     if not config_path.exists():
-        # デフォルト設定で初期化
+        # Fall back to the defaults
         return Config()
 
     return Config.from_yaml(config_path)

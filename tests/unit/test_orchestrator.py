@@ -1055,7 +1055,7 @@ database_path: /tmp/test.db
 
 
 def describe_relay_wiring():
-    """domain_handlers / relay_ports の受け渡しと reload 時の扱い."""
+    """Passing domain_handlers / relay_ports through, and how they are handled on reload."""
 
     @patch("src.orchestrator.load_config")
     @patch(
@@ -1187,7 +1187,7 @@ relay:
 
 
 def describe_relay_settings_change_detection():
-    """0.2.0: handler の ssh_port が変わっても「再起動が必要」と判定する (INPUT のポートが変わる)."""
+    """0.2.0: a change to a handler's ssh_port also counts as "restart required" (the INPUT port changes)."""
 
     def it_detects_ssh_port_changes():
         from src.config import Config

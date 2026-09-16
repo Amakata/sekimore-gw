@@ -1,7 +1,7 @@
-//! 上流（device flow）トークンの保管。
+//! Storage for the upstream (device flow) token.
 //!
-//! Mac の Keychain は使えない（関所は VM 内のコンテナ）。当面はコンテナ内ボリュームのファイル（0600）。
-//! 「使うときだけ取り出し、TTL で破棄する」メモリキャッシュを前に置く（ssh-agent の -t と同じ発想）。
+//! The Mac Keychain is unavailable (the relay is a container inside a VM), so for now the token lives in a 0600 file on a container volume.
+//! In front of it sits an in-memory cache that loads the token only when needed and drops it after a TTL, in the spirit of ssh-agent's -t.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -23,7 +23,7 @@ pub struct StoredToken {
 
 #[derive(Debug)]
 pub enum TokenError {
-    /// トークンが無い。操作者への案内文を含む
+    /// No token available; carries instructions for the operator
     Missing(String),
     Io(std::io::Error),
 }
@@ -88,7 +88,7 @@ impl UpstreamTokenStore {
         }
     }
 
-    /// キャッシュ → ファイルの順で取得。無ければ操作者向けの案内付きエラー。
+    /// Look in the cache, then the file. If neither has a token, return an error with instructions for the operator.
     pub fn token(&self) -> Result<String, TokenError> {
         {
             let mut c = self.cache.lock().unwrap_or_else(|e| e.into_inner());
@@ -110,7 +110,7 @@ impl UpstreamTokenStore {
         Ok(st.token)
     }
 
-    /// メモリ上のトークンを破棄する（ファイルには残す）。
+    /// Drop the in-memory token, leaving the one on disk in place.
     pub fn forget(&self) {
         *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }

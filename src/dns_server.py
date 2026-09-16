@@ -1,4 +1,4 @@
-"""DNSサーバーモジュール - ドメイン解決とIP-ドメインマッピング記録."""
+"""DNS server - resolves domains and records the IP-to-domain mapping."""
 
 import asyncio
 import contextlib
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class DNSCacheEntry:
-    """DNSキャッシュエントリ."""
+    """A DNS cache entry."""
 
     domain: str
     ips: list[str]
@@ -32,23 +32,23 @@ class DNSCacheEntry:
 
 
 class DNSCache:
-    """TTLベースのDNSキャッシュ."""
+    """TTL-based DNS cache."""
 
     def __init__(self):
-        """初期化."""
+        """Initialize the cache."""
         self._cache: dict[str, DNSCacheEntry] = {}
         self._cache_hits = 0
         self._cache_misses = 0
 
     def get(self, domain: str, query_type: str = "A") -> list[str] | None:
-        """キャッシュから取得.
+        """Look up an entry in the cache.
 
         Args:
-            domain: ドメイン名
-            query_type: クエリタイプ（A, AAAA）
+            domain: Domain name
+            query_type: Query type (A, AAAA)
 
         Returns:
-            IPリスト（キャッシュミス時はNone）
+            List of IPs, or None on a cache miss
         """
         cache_key = f"{domain}:{query_type}"
         entry = self._cache.get(cache_key)
@@ -57,9 +57,9 @@ class DNSCache:
             self._cache_misses += 1
             return None
 
-        # TTL期限切れチェック
+        # Has the TTL expired?
         if time.time() >= entry.expiry:
-            # 期限切れエントリを削除
+            # Drop the expired entry
             del self._cache[cache_key]
             self._cache_misses += 1
             return None
@@ -74,13 +74,13 @@ class DNSCache:
         return entry.ips
 
     def put(self, domain: str, ips: list[str], ttl: int, query_type: str = "A") -> None:
-        """キャッシュに追加.
+        """Store an entry in the cache.
 
         Args:
-            domain: ドメイン名
-            ips: IPリスト
-            ttl: TTL値（秒）
-            query_type: クエリタイプ（A, AAAA）
+            domain: Domain name
+            ips: List of IPs
+            ttl: TTL in seconds
+            query_type: Query type (A, AAAA)
         """
         cache_key = f"{domain}:{query_type}"
         expiry = time.time() + ttl
@@ -102,10 +102,10 @@ class DNSCache:
         )
 
     def get_expired_entries(self) -> list[DNSCacheEntry]:
-        """期限切れエントリのリストを取得.
+        """Collect the expired entries, removing them from the cache.
 
         Returns:
-            期限切れエントリリスト
+            The expired entries
         """
         now = time.time()
         expired = []
@@ -118,13 +118,13 @@ class DNSCache:
         return expired
 
     def get_expiring_soon_entries(self, threshold_seconds: int = 60) -> list[DNSCacheEntry]:
-        """まもなく期限切れになるエントリのリストを取得.
+        """Collect the entries that are about to expire.
 
         Args:
-            threshold_seconds: 期限切れまでの秒数閾値
+            threshold_seconds: How many seconds ahead of expiry to look
 
         Returns:
-            まもなく期限切れになるエントリリスト
+            The entries expiring within the threshold
         """
         now = time.time()
         expiring = []
@@ -137,10 +137,10 @@ class DNSCache:
         return expiring
 
     def get_stats(self) -> dict[str, int]:
-        """キャッシュ統計を取得.
+        """Return the cache statistics.
 
         Returns:
-            統計情報
+            Statistics for the cache
         """
         return {
             "size": len(self._cache),
@@ -154,13 +154,13 @@ class DNSCache:
         }
 
     def clear(self) -> None:
-        """キャッシュをクリア."""
+        """Clear the cache."""
         self._cache.clear()
         log_system_event("DNS cache cleared")
 
 
 async def _apply_pragmas(db: "aiosqlite.Connection") -> None:
-    """WAL + synchronous=NORMAL + busy_timeout。失敗しても起動は止めない（読み取り専用 FS 等）."""
+    """Apply WAL + synchronous=NORMAL + busy_timeout; failures (read-only FS, etc.) are not fatal."""
     for pragma in (
         "PRAGMA journal_mode=WAL",
         "PRAGMA synchronous=NORMAL",
@@ -169,27 +169,28 @@ async def _apply_pragmas(db: "aiosqlite.Connection") -> None:
         try:
             cursor = await db.execute(pragma)
             await cursor.close()
-        except Exception as e:  # pragma: no cover - 環境依存
+        except Exception as e:  # pragma: no cover - environment dependent
             log_error(ComponentType.DNS, f"{pragma} failed: {e}")
 
 
 class DNSMapping:
-    """DNS解決結果のマッピング管理."""
+    """Stores the mapping produced by DNS resolution."""
 
     def __init__(self, db_path: str):
-        """初期化.
+        """Initialize the mapping store.
 
         Args:
-            db_path: SQLiteデータベースパス
+            db_path: Path to the SQLite database
         """
         self.db_path = db_path
         self.db: aiosqlite.Connection | None = None
 
     async def init_db(self) -> None:
-        """データベース初期化."""
+        """Initialize the database."""
         self.db = await aiosqlite.connect(self.db_path)
-        # 0.2.3: 書き込み（クエリごとの commit）と Web UI の読み取りが待ち合わないように WAL。
-        # synchronous=NORMAL は WAL では十分安全（電源断で直近の数トランザクションだけ失う可能性）
+        # 0.2.3: WAL so that writes (one commit per query) and Web UI reads do not block
+        # each other. synchronous=NORMAL is safe enough under WAL: a power loss can only
+        # cost the last few transactions.
         await _apply_pragmas(self.db)
         await self.db.execute(
             """
@@ -214,7 +215,8 @@ class DNSMapping:
             CREATE INDEX IF NOT EXISTS idx_query_domain ON dns_queries(query_domain)
             """
         )
-        # 0.2.3: Web UI の「新着」「直近 24h の集計」「最新 N 件」が全表走査にならないように
+        # 0.2.3: keep the Web UI's "new arrivals", "last 24h summary" and "latest N"
+        # queries off a full table scan
         await self.db.execute(
             "CREATE INDEX IF NOT EXISTS idx_dns_timestamp ON dns_queries(timestamp)"
         )
@@ -233,15 +235,15 @@ class DNSMapping:
         query_type: str = "A",
         status: str = "allowed",
     ) -> None:
-        """DNS クエリを記録.
+        """Record a DNS query.
 
         Args:
-            client_ip: クライアントIP
-            domain: クエリドメイン
-            ips: 解決されたIPリスト
-            ttl: TTL値
-            query_type: クエリタイプ（A, AAAA等）
-            status: ステータス（'allowed' or 'blocked'）
+            client_ip: Client IP
+            domain: Queried domain
+            ips: Resolved IPs
+            ttl: TTL value
+            query_type: Query type (A, AAAA, etc.)
+            status: Status ('allowed' or 'blocked')
         """
         if self.db is None:
             return
@@ -259,18 +261,18 @@ class DNSMapping:
         await self.db.commit()
 
     async def lookup_ip(self, ip: str) -> list[dict[str, str]]:
-        """IPからドメインを逆引き.
+        """Reverse-look up the domains seen for an IP.
 
         Args:
-            ip: 検索するIP
+            ip: IP to look up
 
         Returns:
-            ドメイン情報のリスト
+            Matching domain records
         """
         if self.db is None:
             return []
 
-        # 過去1時間以内のクエリを検索
+        # Only consider queries from the last hour
         one_hour_ago = time.time() - 3600
 
         cursor = await self.db.execute(
@@ -298,13 +300,13 @@ class DNSMapping:
         return results
 
     async def close(self) -> None:
-        """データベース接続をクローズ."""
+        """Close the database connection."""
         if self.db:
             await self.db.close()
 
 
 class DNSServer:
-    """DNSサーバー（UDP/53）."""
+    """DNS server (UDP/53)."""
 
     def __init__(
         self,
@@ -320,26 +322,27 @@ class DNSServer:
         ignored_domains: list[str] | None = None,
         domain_handlers: dict[str, str] | None = None,
     ):
-        """初期化.
+        """Initialize the server.
 
         Args:
-            upstream_dns: 上位DNSサーバー
-                デフォルト: 127.0.0.11（Docker内蔵DNS）
-                理由: 外部ドメイン（pypi.org等）とDockerサービス名（sekimore等）の両方を解決可能
-                    socket.getaddrinfo()経由でシステムリゾルバーを使用するため、
-                    Docker DNSのNAT DNAT/SNAT機能により動的ポートリダイレクトが機能する
-            port: DNSリスニングポート
-                デフォルト: 53（DNS標準ポート）
-                理由: クライアント（ai-agent等）は標準ポート53でDNSクエリを送信するため
-            blocked_domains: ブロックドメインセット
-            allowed_domains: 許可ドメインリスト（ワイルドカード対応）
-            db_path: データベースパス
-            firewall_manager: ファイアウォールマネージャー（動的登録用）
-            cache_enabled: DNSキャッシュ有効化
-            cache_refresh_interval: キャッシュ更新チェック間隔（秒）
-            lan_subnets: LAN側ネットワークサブネット（バインドIP検出用）
-            ignored_domains: 無視ドメインリスト（UI非表示、DNSは正常解決）
-            domain_handlers: ドメイン別 handler（git-relay / deny / splice）。完全一致 FQDN → handler 名
+            upstream_dns: Upstream DNS server
+                Default: 127.0.0.11 (Docker's built-in DNS)
+                Rationale: it resolves both external domains (pypi.org etc.) and Docker
+                    service names (sekimore etc.). Resolution goes through the system
+                    resolver via socket.getaddrinfo(), so Docker DNS's NAT DNAT/SNAT
+                    handles the dynamic port redirection.
+            port: Port the DNS server listens on
+                Default: 53 (the standard DNS port)
+                Rationale: clients (ai-agent etc.) send their DNS queries to port 53.
+            blocked_domains: Set of blocked domains
+            allowed_domains: Domain allowlist (wildcards supported)
+            db_path: Database path
+            firewall_manager: Firewall manager, used for dynamic registration
+            cache_enabled: Whether the DNS cache is enabled
+            cache_refresh_interval: How often to check for cache refreshes, in seconds
+            lan_subnets: LAN-side subnets, used to detect the bind IP
+            ignored_domains: Domains to ignore (hidden in the UI, but resolved normally)
+            domain_handlers: Per-domain handler (git-relay / deny / splice); exact FQDN -> handler name
         """
         self.upstream_dns = upstream_dns or constants.DEFAULT_UPSTREAM_DNS
         self.port = port or constants.DEFAULT_DNS_PORT
@@ -352,11 +355,11 @@ class DNSServer:
         self.running = False
         self.lan_subnets = lan_subnets or constants.DEFAULT_LAN_SUBNETS
         self.ignored_domains = ignored_domains or []
-        # 中継関所: git-relay のドメインには関所自身の IP を返す（doc/sekimore-gw/design/relay.md）
+        # The relay: git-relay domains resolve to the relay's own IP (see relay/README.md)
         self.domain_handlers: dict[str, str] = dict(domain_handlers or {})
         self._relay_ip_warned = False
 
-        # DNSキャッシュ
+        # DNS cache
         self.cache_enabled = (
             cache_enabled if cache_enabled is not None else constants.DNS_CACHE_ENABLED
         )
@@ -364,17 +367,17 @@ class DNSServer:
         self.cache_refresh_interval = cache_refresh_interval or constants.DNS_CACHE_REFRESH_INTERVAL
         self._cache_refresh_task: asyncio.Task | None = None
 
-        # sekimore-gw自身の名前解決用（internal-net側IPを返すため）
+        # Used to resolve sekimore-gw's own hostname to its internal-net IP
         self.gateway_hostname: str | None = None
         self.gateway_ip: str | None = None
 
     def _handler_for(self, domain: str) -> str | None:
-        """domain_handlers の handler（完全一致）。無ければ None."""
+        """Return the exact-match handler from domain_handlers, or None."""
         handlers = getattr(self, "domain_handlers", None) or {}
         return handlers.get(domain.lower().rstrip("."))
 
     def _is_self_query(self, client_ip: str) -> bool:
-        """送信元が関所自身（internal-net IP / loopback）か。自己参照ループの除外."""
+        """Is the query from the relay itself (internal-net IP / loopback)? Avoids a self-referential loop."""
         return (
             client_ip == getattr(self, "gateway_ip", None)
             or client_ip.startswith("127.")
@@ -382,13 +385,13 @@ class DNSServer:
         )
 
     def _detect_dns_bind_ip(self) -> str:
-        """DNSサービスを提供するネットワークのIPアドレスを自動検出.
+        """Detect the IP address of the network the DNS service is served on.
 
         Returns:
-            検出されたIPアドレス（検出失敗時は0.0.0.0）
+            The detected IP address, or 0.0.0.0 if detection fails
         """
         try:
-            # 全インターフェースのIPアドレスを取得
+            # List the IP addresses of every interface
             result = subprocess.run(
                 ["ip", "-4", "addr", "show"],
                 capture_output=True,
@@ -397,14 +400,14 @@ class DNSServer:
                 timeout=5,
             )
 
-            # lan_subnetsに含まれるIPアドレスを検索
+            # Find an address that falls inside one of lan_subnets
             for line in result.stdout.split("\n"):
                 if "inet " in line and "scope global" in line:
                     # inet 10.100.0.2/16 brd ... scope global eth0
                     ip_with_prefix = line.strip().split()[1]
                     ip_str = ip_with_prefix.split("/")[0]
 
-                    # lan_subnetsのいずれかに含まれるかチェック
+                    # Is it in any of lan_subnets?
                     ip_addr = ipaddress.ip_address(ip_str)
                     for subnet_str in self.lan_subnets:
                         subnet = ipaddress.ip_network(subnet_str)
@@ -423,53 +426,53 @@ class DNSServer:
             "DNS bind IP detection failed, using 0.0.0.0",
             subnets=",".join(self.lan_subnets),
         )
-        return "0.0.0.0"  # フォールバック
+        return "0.0.0.0"  # Fallback
 
     def _is_allowed(self, domain: str) -> bool:
-        """ドメインが許可リストに含まれるか確認.
+        """Check whether a domain is on the allowlist.
 
         Args:
-            domain: チェックするドメイン
+            domain: Domain to check
 
         Returns:
-            許可されている場合True
+            True if allowed
         """
         domain_lower = domain.lower().rstrip(".")
 
         for allowed in self.allowed_domains:
-            # 完全一致
+            # Exact match
             if allowed == domain_lower:
                 return True
 
-            # .example.com 形式のワイルドカード
-            # .pythonhosted.org は files.pythonhosted.org, cdn.pythonhosted.org などにマッチ
+            # Wildcard entries written as .example.com;
+            # .pythonhosted.org matches files.pythonhosted.org, cdn.pythonhosted.org, etc.
             if allowed.startswith("."):
-                # ドメインが .example.com または *.example.com にマッチするか
+                # Does the domain match .example.com or *.example.com?
                 suffix = allowed  # .pythonhosted.org
                 if domain_lower.endswith(suffix) or domain_lower.endswith(suffix[1:]):
-                    # files.pythonhosted.org → endswith(".pythonhosted.org") → True
-                    # pythonhosted.org → endswith("pythonhosted.org") → True
+                    # files.pythonhosted.org -> endswith(".pythonhosted.org") -> True
+                    # pythonhosted.org -> endswith("pythonhosted.org") -> True
                     return True
 
         return False
 
     def _is_ignored(self, domain: str) -> bool:
-        """ドメインが無視リストに含まれるか確認.
+        """Check whether a domain is on the ignore list.
 
         Args:
-            domain: チェックするドメイン
+            domain: Domain to check
 
         Returns:
-            無視対象の場合True
+            True if the domain should be ignored
         """
         domain_lower = domain.lower().rstrip(".")
 
         for ignored in self.ignored_domains:
-            # 完全一致
+            # Exact match
             if ignored == domain_lower:
                 return True
 
-            # .example.com 形式のワイルドカード
+            # Wildcard entries written as .example.com
             if ignored.startswith("."):
                 suffix = ignored
                 if domain_lower.endswith(suffix) or domain_lower.endswith(suffix[1:]):
@@ -478,21 +481,21 @@ class DNSServer:
         return False
 
     def _is_blocked(self, domain: str) -> bool:
-        """ドメインがブロックリストに含まれるか確認.
+        """Check whether a domain is on the blocklist.
 
         Args:
-            domain: チェックするドメイン
+            domain: Domain to check
 
         Returns:
-            ブロックされている場合True
+            True if blocked
         """
         domain_lower = domain.lower().rstrip(".")
 
-        # 完全一致チェック
+        # Exact match
         if domain_lower in self.blocked_domains:
             return True
 
-        # .example.com 形式のワイルドカード
+        # Wildcard entries written as .example.com
         for blocked in self.blocked_domains:
             if blocked.startswith("."):
                 suffix = blocked
@@ -504,32 +507,32 @@ class DNSServer:
     async def _resolve_domain(
         self, domain: str, query_type: str = "A"
     ) -> tuple[list[str], int] | None:
-        """ドメインを解決.
+        """Resolve a domain.
 
         Args:
-            domain: 解決するドメイン
-            query_type: クエリタイプ（A, AAAA）
+            domain: Domain to resolve
+            query_type: Query type (A, AAAA)
 
         Returns:
-            (IPリスト, TTL値)のタプル（解決失敗時はNone）
+            A (list of IPs, TTL) tuple, or None if resolution fails
         """
-        # キャッシュチェック
+        # Check the cache first
         if self.cache_enabled and self.cache:
             cached_ips = self.cache.get(domain, query_type)
             if cached_ips is not None:
-                # キャッシュヒット：TTLは元の値を返す（キャッシュエントリから取得）
+                # Cache hit: report the original TTL stored on the entry
                 cache_key = f"{domain}:{query_type}"
                 entry = self.cache._cache.get(cache_key)
                 ttl = entry.ttl if entry else 300
                 return (cached_ips, ttl)
 
-        # キャッシュミス：上位DNSに問い合わせ
+        # Cache miss: ask the upstream DNS
         try:
-            # Docker内蔵DNS (127.0.0.11) の場合はシステムresolverを使用
+            # For Docker's built-in DNS (127.0.0.11), go through the system resolver
             if self.upstream_dns == "127.0.0.11":
                 loop = asyncio.get_event_loop()
 
-                # socket.getaddrinfo()はシステムのresolverを使用（127.0.0.11経由で動作）
+                # socket.getaddrinfo() uses the system resolver, which goes via 127.0.0.11.
                 # AF_INET=IPv4, AF_INET6=IPv6
                 family = socket.AF_INET if query_type == "A" else socket.AF_INET6
 
@@ -537,11 +540,11 @@ class DNSServer:
                     None, socket.getaddrinfo, domain, None, family, socket.SOCK_STREAM
                 )
 
-                # IPアドレスを抽出（重複除去）
+                # Extract the addresses, de-duplicated
                 ips: list[str] = list({str(addr[4][0]) for addr in addrinfo})
 
-                # Docker DNSはTTL情報を返さないため、デフォルト値を使用
-                ttl = 300  # 5分
+                # Docker DNS does not report a TTL, so use a default
+                ttl = 300  # 5 minutes
 
                 log_system_event(
                     "DNS resolved via system resolver (127.0.0.11)",
@@ -551,15 +554,15 @@ class DNSServer:
                     ip_count=str(len(ips)),
                 )
             else:
-                # 通常のDNSサーバー（8.8.8.8等）の場合はdnspythonを使用
+                # For a regular DNS server (8.8.8.8 etc.), use dnspython
                 loop = asyncio.get_event_loop()
                 answers = await loop.run_in_executor(
                     None, self.resolver.resolve, domain, query_type
                 )
 
-                # IPアドレスとTTL値を取得
+                # Pull out the addresses and the TTL
                 ips = [str(rdata) for rdata in answers]
-                # answersの最初のRRsetからTTL取得（通常すべて同じTTL）
+                # Take the TTL from the first RRset (they are normally all the same)
                 ttl = int(answers.rrset.ttl) if answers.rrset else 300
 
                 log_system_event(
@@ -570,7 +573,7 @@ class DNSServer:
                     ip_count=str(len(ips)),
                 )
 
-            # キャッシュに保存
+            # Store in the cache
             if self.cache_enabled and self.cache:
                 self.cache.put(domain, ips, ttl, query_type)
 
@@ -584,14 +587,14 @@ class DNSServer:
             return None
 
     async def handle_query(self, data: bytes, client_addr: tuple[str, int]) -> bytes:
-        """DNS クエリを処理.
+        """Handle a DNS query.
 
         Args:
-            data: クエリデータ
-            client_addr: クライアントアドレス
+            data: Query bytes
+            client_addr: Client address
 
         Returns:
-            レスポンスデータ
+            Response bytes
         """
         request = DNSRecord.parse(data)
         reply = request.reply()
@@ -599,16 +602,16 @@ class DNSServer:
         query_name = str(request.q.qname).rstrip(".")
         query_type = QTYPE[request.q.qtype]
 
-        # ブロックリストチェック
+        # Blocklist check
         if self._is_blocked(query_name):
-            # NXDOMAINを返す
+            # Answer with NXDOMAIN
             log_system_event(
                 "DNS query blocked (blocklist)",
                 domain=query_name,
                 client_ip=client_addr[0],
             )
 
-            # ブロックされたクエリをデータベースに記録
+            # Record the blocked query in the database
             await self.mapping.record_query(
                 client_ip=client_addr[0],
                 domain=query_name,
@@ -621,9 +624,9 @@ class DNSServer:
             reply.header.rcode = 3  # NXDOMAIN
             return reply.pack()  # type: ignore[no-any-return]
 
-        # 無視リストチェック（blockの次、allowの前）
-        # DNS応答はNXDOMAIN（ブロックと同じ）だが、status='ignored'で記録
-        # allow_domainsへの追加は不要
+        # Ignore-list check, after the blocklist and before the allowlist.
+        # The DNS answer is NXDOMAIN, same as a block, but it is recorded as
+        # status='ignored' and the domain need not be in allow_domains.
         if self._is_ignored(query_name):
             log_system_event(
                 "DNS query ignored",
@@ -643,9 +646,9 @@ class DNSServer:
             reply.header.rcode = 3  # NXDOMAIN
             return reply.pack()  # type: ignore[no-any-return]
 
-        # sekimore-gw自身の名前解決（internal-net側IPを返す）
-        # allowlistチェックより前に実行することで、allow_domainsに含まれていなくても解決可能
-        # これにより、upstream DNS (127.0.0.11) がinternet側IPを返す問題を回避
+        # Resolve sekimore-gw's own hostname to its internal-net IP. Doing this before the
+        # allowlist check means it resolves even when it is not in allow_domains, and avoids
+        # the upstream DNS (127.0.0.11) answering with the internet-side IP.
         if self.gateway_hostname and self.gateway_ip and query_name == self.gateway_hostname:
             if query_type == "A":
                 reply.add_answer(
@@ -653,7 +656,7 @@ class DNSServer:
                         rname=request.q.qname,
                         rtype=QTYPE.A,
                         rdata=A(self.gateway_ip),
-                        ttl=60,  # 短いTTL（動的に変わる可能性を考慮）
+                        ttl=60,  # Short TTL, since the address can change
                     )
                 )
 
@@ -664,7 +667,7 @@ class DNSServer:
                     gateway_ip=self.gateway_ip,
                 )
 
-                # マッピング記録
+                # Record the mapping
                 await self.mapping.record_query(
                     client_ip=client_addr[0],
                     domain=query_name,
@@ -674,12 +677,12 @@ class DNSServer:
                 )
 
                 return reply.pack()  # type: ignore[no-any-return]
-            # AAAA (IPv6) クエリの場合は、upstream DNSに問い合わせない（IPv4のみサポート）
+            # Never forward AAAA (IPv6) queries upstream: only IPv4 is supported
             elif query_type == "AAAA":
-                # 空のレスポンスを返す（IPv6アドレスなし）
+                # Answer with an empty response (no IPv6 address)
                 return reply.pack()  # type: ignore[no-any-return]
 
-        # 中継関所（domain_handlers）。allowlist より先、block / ignore / 自ホスト名より後
+        # The relay (domain_handlers): before the allowlist, after block / ignore / own hostname
         handler = self._handler_for(query_name)
         if handler == "deny":
             log_system_event(
@@ -697,11 +700,12 @@ class DNSServer:
             )
             reply.header.rcode = 3  # NXDOMAIN
             return reply.pack()  # type: ignore[no-any-return]
-        # 0.2.2: https-relay（443 だけ関所を通す）も同じく関所 IP を返す。実 IP は ipset に入れない
+        # 0.2.2: https-relay (only 443 goes through the relay) also answers with the relay IP;
+        # the real IP is never added to the ipset
         if handler in ("git-relay", "https-relay") and not self._is_self_query(client_addr[0]):
             gateway_ip = getattr(self, "gateway_ip", None)
             if not gateway_ip or gateway_ip == "0.0.0.0":
-                # 関所 IP が未検出なら従来経路にフォールバック（0.0.0.0 を返さない）
+                # Fall back to normal resolution when the relay IP is unknown, rather than answering 0.0.0.0
                 if not getattr(self, "_relay_ip_warned", False):
                     log_error(
                         ComponentType.DNS,
@@ -724,7 +728,7 @@ class DNSServer:
                     client_ip=client_addr[0],
                     gateway_ip=gateway_ip,
                 )
-                # 実 IP は ipset に入れない（setup_domain を呼ばない）。記録は allowed
+                # Do not add the real IP to the ipset (no setup_domain call); record it as allowed
                 await self.mapping.record_query(
                     client_ip=client_addr[0],
                     domain=query_name,
@@ -745,16 +749,16 @@ class DNSServer:
                 )
                 return reply.pack()  # type: ignore[no-any-return]
 
-        # ホワイトリストチェック（allow_domains にないドメインをブロック）
+        # Allowlist check: block anything not in allow_domains
         if not self._is_allowed(query_name):
-            # NXDOMAINを返す
+            # Answer with NXDOMAIN
             log_system_event(
                 "DNS query blocked (not in allowlist)",
                 domain=query_name,
                 client_ip=client_addr[0],
             )
 
-            # ブロックされたクエリをデータベースに記録
+            # Record the blocked query in the database
             await self.mapping.record_query(
                 client_ip=client_addr[0],
                 domain=query_name,
@@ -767,14 +771,14 @@ class DNSServer:
             reply.header.rcode = 3  # NXDOMAIN
             return reply.pack()  # type: ignore[no-any-return]
 
-        # 上位DNSに問い合わせ（許可リストにある場合のみ）
+        # Ask the upstream DNS (only for allowlisted domains)
         if query_type in ["A", "AAAA"]:
             result = await self._resolve_domain(query_name, query_type)
 
             if result:
                 ips, ttl = result
 
-                # レスポンスに追加（実際のTTL値を使用）
+                # Add the answers, using the real TTL
                 for ip in ips:
                     if query_type == "A":
                         reply.add_answer(
@@ -795,7 +799,7 @@ class DNSServer:
                             )
                         )
 
-                # マッピング記録（実際のTTL値を使用）
+                # Record the mapping, using the real TTL
                 await self.mapping.record_query(
                     client_ip=client_addr[0],
                     domain=query_name,
@@ -804,7 +808,7 @@ class DNSServer:
                     query_type=query_type,
                 )
 
-                # 許可ドメインにマッチする場合、ファイアウォールに動的登録
+                # For an allowlisted domain, register the IPs with the firewall
                 if self._is_allowed(query_name) and self.firewall_manager:
                     self.firewall_manager.setup_domain(query_name, ips)
                     log_system_event(
@@ -813,7 +817,7 @@ class DNSServer:
                         ip_count=str(len(ips)),
                     )
 
-                # ログ出力（実際のTTL値を使用）
+                # Log the query, using the real TTL
                 log_dns_query(
                     client_ip=client_addr[0],
                     query_domain=query_name,
@@ -824,7 +828,7 @@ class DNSServer:
         return reply.pack()  # type: ignore[no-any-return]
 
     async def _save_cache_stats_to_db(self) -> None:
-        """キャッシュ統計をデータベースに保存."""
+        """Persist the cache statistics to the database."""
         if not self.cache_enabled or not self.cache:
             return
 
@@ -832,7 +836,7 @@ class DNSServer:
 
         try:
             db = await aiosqlite.connect(self.mapping.db_path)
-            # cache_statsテーブルを作成（存在しない場合）
+            # Create the cache_stats table if it does not exist
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS cache_stats (
@@ -846,7 +850,7 @@ class DNSServer:
                 """
             )
 
-            # 既存のレコードを削除して最新の統計を挿入
+            # Replace the existing row with the latest statistics
             await db.execute("DELETE FROM cache_stats")
             await db.execute(
                 """
@@ -861,9 +865,10 @@ class DNSServer:
             log_error(ComponentType.DNS, f"Failed to save cache stats to DB: {e}")
 
     async def _cache_refresh_worker(self) -> None:
-        """キャッシュリフレッシュワーカー（バックグラウンドタスク）.
+        """Background worker that refreshes the cache.
 
-        TTL期限が近いエントリを事前に更新し、IP変更があればファイアウォールルールを更新する。
+        It re-resolves entries whose TTL is about to expire and updates the firewall
+        rules whenever the IPs have changed.
         """
         if not self.cache_enabled or not self.cache:
             return
@@ -874,15 +879,15 @@ class DNSServer:
             try:
                 await asyncio.sleep(self.cache_refresh_interval)
 
-                # キャッシュ統計をDBに保存
+                # Persist the cache statistics
                 await self._save_cache_stats_to_db()
 
-                # まもなく期限切れになるエントリを取得（60秒以内）
+                # Entries expiring within the next 60 seconds
                 expiring = self.cache.get_expiring_soon_entries(threshold_seconds=60)
 
                 for entry in expiring:
                     try:
-                        # 再解決
+                        # Re-resolve
                         result = await self._resolve_domain(entry.domain, entry.query_type)
 
                         if result:
@@ -890,7 +895,7 @@ class DNSServer:
                             old_ips = set(entry.ips)
                             new_ips_set = set(new_ips)
 
-                            # IP変更検出
+                            # The IPs changed
                             if old_ips != new_ips_set:
                                 log_system_event(
                                     "DNS cache entry IP changed",
@@ -899,9 +904,9 @@ class DNSServer:
                                     new_ips=",".join(sorted(new_ips_set)),
                                 )
 
-                                # ファイアウォールルール更新
+                                # Update the firewall rules
                                 if self.firewall_manager and self._is_allowed(entry.domain):
-                                    # 古いIPのルールを削除して新しいIPを追加
+                                    # Drop the rules for the old IPs and add the new ones
                                     self.firewall_manager.setup_domain(entry.domain, new_ips)
                                     log_system_event(
                                         "Firewall rules updated due to IP change",
@@ -929,30 +934,30 @@ class DNSServer:
         log_system_event("DNS cache refresh worker stopped")
 
     def get_cache_stats(self) -> dict[str, int] | None:
-        """キャッシュ統計を取得.
+        """Return the cache statistics.
 
         Returns:
-            キャッシュ統計（キャッシュ無効時はNone）
+            The cache statistics, or None when the cache is disabled
         """
         if self.cache_enabled and self.cache:
             return self.cache.get_stats()
         return None
 
     async def _handle_tcp_connections(self, tcp_sock: socket.socket) -> None:
-        """TCP接続を処理.
+        """Accept and dispatch TCP connections.
 
         Args:
-            tcp_sock: TCPソケット
+            tcp_sock: Listening TCP socket
         """
         loop = asyncio.get_event_loop()
 
         while self.running:
             try:
-                # TCP接続を受け入れ
+                # Accept a TCP connection
                 client_sock, client_addr = await loop.sock_accept(tcp_sock)
                 client_sock.setblocking(False)
 
-                # TCP DNSクエリ処理タスクを起動
+                # Start a task to handle the TCP DNS query
                 asyncio.create_task(self._handle_tcp_client(client_sock, client_addr))
 
             except asyncio.CancelledError:
@@ -961,31 +966,31 @@ class DNSServer:
                 log_error(ComponentType.DNS, f"Error accepting TCP connection: {e}")
 
     async def _handle_tcp_client(self, client_sock: socket.socket, client_addr: tuple) -> None:
-        """TCP DNSクエリを処理.
+        """Handle a TCP DNS query.
 
         Args:
-            client_sock: クライアントソケット
-            client_addr: クライアントアドレス
+            client_sock: Client socket
+            client_addr: Client address
         """
         loop = asyncio.get_event_loop()
 
         try:
-            # RFC 1035: TCP DNSクエリは2バイトの長さ + メッセージ
+            # RFC 1035: a TCP DNS query is a 2-byte length followed by the message
             length_data = await loop.sock_recv(client_sock, 2)
             if len(length_data) < 2:
                 return
 
             query_length = int.from_bytes(length_data, byteorder="big")
 
-            # DNSクエリを受信
+            # Read the DNS query
             query_data = await loop.sock_recv(client_sock, query_length)
             if len(query_data) < query_length:
                 return
 
-            # DNSクエリを処理
+            # Handle the DNS query
             response = await self.handle_query(query_data, client_addr)
 
-            # RFC 1035: TCP DNSレスポンスも2バイトの長さ + メッセージ
+            # RFC 1035: a TCP DNS response is likewise a 2-byte length plus the message
             response_length = len(response).to_bytes(2, byteorder="big")
             await loop.sock_sendall(client_sock, response_length + response)
 
@@ -995,28 +1000,28 @@ class DNSServer:
             client_sock.close()
 
     async def start(self) -> None:
-        """DNSサーバーを起動."""
+        """Start the DNS server."""
         await self.mapping.init_db()
 
         loop = asyncio.get_event_loop()
 
-        # DNSバインドIPを動的に検出
+        # Detect the DNS bind IP dynamically
         bind_ip = self._detect_dns_bind_ip()
 
-        # sekimore-gw自身の名前解決用にホスト名とIPを保存
-        # これにより、upstream DNS (127.0.0.11) が internet側IPを返す問題を回避
+        # Remember our own hostname and IP so we can answer queries for sekimore-gw
+        # ourselves, instead of the upstream DNS (127.0.0.11) returning the internet-side IP
         import os
 
         self.gateway_hostname = os.getenv("HOSTNAME", "sekimore-gw")
-        self.gateway_ip = bind_ip  # internal-net側のIP
+        self.gateway_ip = bind_ip  # The internal-net IP
 
-        # UDPソケット作成
+        # Create the UDP socket
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         udp_sock.bind((bind_ip, self.port))
         udp_sock.setblocking(False)
 
-        # TCPソケット作成（agent-setup.shの検出用）
+        # Create the TCP socket (used by agent-setup.sh for detection)
         tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         tcp_sock.bind((bind_ip, self.port))
@@ -1034,14 +1039,14 @@ class DNSServer:
 
         self.running = True
 
-        # キャッシュリフレッシュワーカーを起動
+        # Start the cache refresh worker
         if self.cache_enabled:
             self._cache_refresh_task = asyncio.create_task(self._cache_refresh_worker())
 
-        # TCP接続ハンドラタスクを起動
+        # Start the TCP connection handler task
         tcp_task = asyncio.create_task(self._handle_tcp_connections(tcp_sock))
 
-        # UDPリスナーループ
+        # UDP listener loop
         while self.running:
             try:
                 data, addr = await loop.sock_recvfrom(udp_sock, 512)
@@ -1050,16 +1055,16 @@ class DNSServer:
             except Exception as e:
                 log_error(ComponentType.DNS, f"Error handling query: {e}")
 
-        # TCP taskをキャンセル
+        # Cancel the TCP task
         tcp_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await tcp_task
 
     async def stop(self) -> None:
-        """DNSサーバーを停止."""
+        """Stop the DNS server."""
         self.running = False
 
-        # キャッシュリフレッシュワーカーを停止
+        # Stop the cache refresh worker
         if self._cache_refresh_task:
             self._cache_refresh_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

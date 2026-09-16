@@ -1,7 +1,7 @@
-//! エージェント側 CLI が話しかける関所の HTTP 面（平文、internal-net 内のみ）。
+//! The relay's HTTP surface, which the agent-side CLI talks to (plaintext, reachable only from internal-net).
 //!
-//! 共通処理: トークン検証 → 案件一致 → JSON → ハンドラ（`Authorized` を得て `GitHub` に渡す）。
-//! `/bootstrap` だけは認証なし（使い捨て鍵の登録 + 案件トークンの発行）。
+//! Shared pipeline: verify the token → match the project → parse JSON → dispatch to a handler (which gets an `Authorized` to pass to `GitHub`).
+//! `/bootstrap` is the only unauthenticated endpoint (it registers a disposable key and issues a project token).
 
 pub mod handlers;
 pub mod types;
@@ -34,7 +34,7 @@ use types::{ApiRequest, ApiResponse};
 pub struct ApiContext {
     pub project: Project,
     pub tokens: TokenStore,
-    /// 上流ごとの GitHub client（キー = git-relay ドメイン）。0.2.0 で複数化
+    /// GitHub client per upstream (keyed by git-relay domain). Became a map in 0.2.0
     pub githubs: HashMap<String, Arc<GitHub>>,
     pub audit: Arc<Audit>,
     pub keys: Arc<AuthorizedKeys>,
@@ -43,17 +43,17 @@ pub struct ApiContext {
     pub token_ttl: Duration,
     pub body_cap: usize,
     pub rate: Mutex<VecDeque<Instant>>,
-    /// git-relay のドメインと上流（/bootstrap の応答でエージェントに伝える）。既定上流
+    /// The git-relay domain and its upstream (reported to the agent in the `/bootstrap` response). The default upstream
     pub git_domain: String,
     pub upstream: String,
-    /// 0.2.0: 全 git ドメイン（先頭が既定）
+    /// 0.2.0: every git domain (the first is the default)
     pub git_domains: Vec<types::GitDomain>,
 }
 
 pub const BOOTSTRAP_RATE_PER_MINUTE: usize = 10;
 
 impl ApiContext {
-    /// `/bootstrap` の簡易レート制限（1 分あたり N 回、全体）。
+    /// Simple rate limit for `/bootstrap` (N requests per minute, across all callers).
     pub fn bootstrap_rate_ok(&self) -> bool {
         let mut q = self.rate.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
@@ -71,7 +71,7 @@ impl ApiContext {
     }
 }
 
-/// ハンドラのエラー。HTTP ステータスと JSON の error を持つ。
+/// A handler error, carrying an HTTP status and the JSON error message.
 #[derive(Debug)]
 pub struct ApiError {
     pub status: StatusCode,
@@ -180,7 +180,7 @@ async fn read_body(req: Request<Incoming>, cap: usize) -> Result<Bytes, ApiError
     }
 }
 
-/// 1 リクエストの処理。
+/// Handles one request.
 pub async fn handle(
     ctx: Arc<ApiContext>,
     req: Request<Incoming>,
@@ -214,7 +214,7 @@ pub async fn handle(
         };
     }
 
-    // ---- 認証 ----
+    // ---- Authentication ----
     let Some(token) = bearer_token(&req) else {
         ctx.audit.deny(
             "token_denied",
@@ -244,7 +244,7 @@ pub async fn handle(
             return error_response(status, &reason);
         }
     };
-    // 案件トークンは自分の案件しか触れない
+    // A project token can only touch its own project
     if rec.project != ctx.project.name {
         ctx.audit.deny(
             "token_wrong_project",
@@ -275,7 +275,7 @@ pub async fn handle(
         }
     };
 
-    // リポジトリが案件に含まれるか（Projects は repo 省略可）
+    // Check the repository belongs to the project (Projects may omit the repo)
     if !apireq.repo.is_empty() {
         if let Err(d) = ctx.project.find_repo(&apireq.repo) {
             ctx.audit.deny(

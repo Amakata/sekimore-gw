@@ -63,12 +63,15 @@ proxy:
   upstream_proxy_password: null           # Upstream proxy password (env var recommended)
 
 # Network Configuration
-# Web UI の言語 (0.2.4〜)。auto = ブラウザの Accept-Language (画面の切替は cookie で優先)。en / ja で固定も可
+# Web UI language (0.2.4+). auto = follow the browser's Accept-Language; a choice made in the
+# UI is remembered in a cookie and wins over this. Set en or ja to pin it.
+# CLI tools follow the environment instead: SEKIMORE_LANG, LC_ALL, LC_MESSAGES, LANG (default en).
+# Denial messages and the audit log stay English whatever this is set to.
 # ui:
 #   language: auto
 
 network:
-  # allowed_ports: [80, 443]     # 0.2.2〜 許可ドメイン / 許可 IP へ通す宛先 TCP ポート。空 (既定) は全ポート = 従来どおり
+  # allowed_ports: [80, 443]     # 0.2.2+ destination TCP ports allowed to the allowed domains / IPs. Empty (the default) means every port, as before
   # LAN-side network subnets
   # IMPORTANT: For sekimore-gw, this setting is primarily informational.
   # Network detection is performed dynamically via Docker API (see orchestrator.py).
@@ -79,37 +82,37 @@ network:
 # Database Path
 database_path: "/data/security_gateway.db"
 
-# ---- 中継関所（sekimore-relay）。省略時は relay は起動せず、既存挙動は不変 ----
-# git@github.com:Org/Repo.git を関所の SSH(22) で受け、案件単位のポリシーで上流へ中継する。
-# 詳細: doc/sekimore-gw/requirements/04-relay.md, doc/sekimore-gw/design/relay.md
+# ---- the relay (sekimore-relay). Omit this and the relay does not start; nothing else changes ----
+# Takes git@github.com:Org/Repo.git on the relay's SSH port (22) and forwards it upstream under the
+# project's policy. See relay/README.md for the details.
 # domain_handlers:
 #   github.com:
-#     handler: git-relay          # 完全一致 FQDN（splice / deny も指定可）
-#   # ghe.example.com:            # 0.2.0〜 複数の上流も可。2 つ目以降は別の SSH ポートで受ける
-#   #   handler: git-relay        #   (repos の name は ghe.example.com/Org/Repo で上流を明示、
-#   #   ssh_port: 2222            #    または下の project.upstreams.<domain>.repos に書く)
-#   #   ssh_options: [ProxyJump=bastion.example.com]   # 0.2.1〜 上流 ssh に -o で渡す (踏み台 / ProxyCommand)。踏み台の鍵は sekimore-relay keyscan
-#   #   api_base: https://ghe.example.com/api/v3       # 0.2.1〜 upstream を転送先にしたときの API base
-#   # ghcr.io:                    # 0.2.2〜 https-relay: 443 だけを関所の passthrough で通し、送信上限を宛先ごとに掛ける
+#     handler: git-relay          # an exact FQDN (splice and deny work here too)
+#   # ghe.example.com:            # 0.2.0+ several upstreams; each extra one listens on its own SSH port
+#   #   handler: git-relay        #   (name the upstream in repos as ghe.example.com/Org/Repo,
+#   #   ssh_port: 2222            #    or list it under project.upstreams.<domain>.repos below)
+#   #   ssh_options: [ProxyJump=bastion.example.com]   # 0.2.1+ passed to the upstream ssh with -o (bastion / ProxyCommand). Get the bastion's key with sekimore-relay keyscan
+#   #   api_base: https://ghe.example.com/api/v3       # 0.2.1+ API base when upstream points somewhere else
+#   # ghcr.io:                    # 0.2.2+ https-relay: only 443 goes through the relay's passthrough, with a per-destination upload cap
 #   #   handler: https-relay
-#   #   max_upload_bytes: -1      #   自分で image を push する宛先は無制限、省略時は relay.https_max_upload_bytes
+#   #   max_upload_bytes: -1      #   unlimited for a destination you push images to; omit it to use relay.https_max_upload_bytes
 # relay:
-#   https: passthrough            # 同一ドメインの 443: passthrough | reject
-#   https_max_upload_bytes: 1048576   # 0.2.2〜 443 passthrough で dev → 上流へ送れる 1 接続あたりの上限 (持ち出し対策)。-1 で無制限
-#   bootstrap: auto               # 使い捨て鍵の登録 + 案件トークン発行を POST /bootstrap で自動化: auto | manual
+#   https: passthrough            # port 443 of the same domain: passthrough | reject
+#   https_max_upload_bytes: 1048576   # 0.2.2+ per-connection cap on what dev may send upstream over the 443 passthrough (an exfiltration control). -1 for unlimited
+#   bootstrap: auto               # register the disposable key and issue the project token via POST /bootstrap: auto | manual
 #   token_ttl: 12h
 #   project:
 #     name: case-a
 #     repos:
 #       - name: Org/Repo
 #         mode: read-write        # read-only | read-write
-#         bases: [main]           # PR の base として許可するブランチ。直接 push は既定で sekimore/* のみ
-#     # upstreams:                # 0.2.1〜 上流ごとの層 (案件既定と repo の間)。permissions は差分、push/tags/delete はその上流の既定
+#         bases: [main]           # branches allowed as a PR base. Direct pushes go to sekimore/* only, by default
+#     # upstreams:                # 0.2.1+ a per-upstream layer between the project defaults and the repos. permissions are a diff; push/tags/delete are that upstream's defaults
 #     #   ghe.example.com:
 #     #     permissions: { allow: [pr:create], deny: [pr:merge] }
 #     #     repos:
 #     #       - { name: Corp/Internal, mode: read-write, bases: [main] }
-#     permissions: [pr:create, issue:create]   # リソース:アクション。書かないものは拒否。{allow: [...], deny: [...]} でも
-#     tags: []                                  # push を許すタグ glob の既定 (空 = 拒否)。repos[].tags で repo ごとに上書き
-#     delete: false                             # ブランチ / タグ削除の既定。repos[].delete で上書き
-#     # repos[] には mode / bases / push / tags / delete / permissions ({allow, deny} = 案件既定への差分。deny が勝つ) を書ける
+#     permissions: [pr:create, issue:create]   # resource:action. Anything not listed is denied. {allow: [...], deny: [...]} also works
+#     tags: []                                  # default globs of tags that may be pushed (empty = denied). Override per repo with repos[].tags
+#     delete: false                             # default for deleting branches and tags. Override with repos[].delete
+#     # repos[] takes mode / bases / push / tags / delete / permissions ({allow, deny}, a diff against the project defaults; deny wins)

@@ -1,8 +1,8 @@
-//! 上流 HTTPS クライアントの組み立て。
+//! Construction of the upstream HTTPS client.
 //!
-//! `reqwest` は既定で rustls を使い **OS の証明書ストアを見ない**。企業 MITM プロキシ配下では TLS 検証で落ちる。
-//! そのため: native roots（`rustls-tls-native-roots`）+ `SSL_CERT_FILE` + `relay.ca_file` の PEM を明示的に信頼し、
-//! `config.yml` の `proxy.upstream_proxy` があればそれを使う。
+//! By default `reqwest` uses rustls and **ignores the OS certificate store**, so TLS verification fails behind a corporate MITM proxy.
+//! We therefore explicitly trust native roots (`rustls-tls-native-roots`) plus the PEM bundles from `SSL_CERT_FILE` and `relay.ca_file`,
+//! and use `proxy.upstream_proxy` from `config.yml` when it is set.
 
 use std::path::Path;
 use std::time::Duration;
@@ -36,7 +36,7 @@ pub fn build_client(opts: &HttpOptions<'_>) -> anyhow::Result<reqwest::Client> {
         .timeout(opts.timeout)
         .connect_timeout(Duration::from_secs(20));
 
-    // SSL_CERT_FILE（rustls-native-certs も見るが、明示しておく）と relay.ca_file
+    // SSL_CERT_FILE (rustls-native-certs picks it up too, but be explicit) and relay.ca_file
     let mut bundles: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(p) = std::env::var("SSL_CERT_FILE") {
         if !p.trim().is_empty() {
@@ -66,7 +66,7 @@ pub fn build_client(opts: &HttpOptions<'_>) -> anyhow::Result<reqwest::Client> {
     b.build().context("build http client")
 }
 
-/// レスポンス本文を上限付きで読む（巨大応答でメモリを食わない）。
+/// Read a response body up to a cap, so a huge response cannot eat memory.
 pub async fn read_limited(resp: reqwest::Response, cap: usize) -> reqwest::Result<Vec<u8>> {
     let mut resp = resp;
     let mut out = Vec::new();
@@ -80,7 +80,7 @@ pub async fn read_limited(resp: reqwest::Response, cap: usize) -> reqwest::Resul
     Ok(out)
 }
 
-/// エラーメッセージ用に本文を短く切る。
+/// Shorten a body for use in an error message.
 pub fn truncate(b: &[u8]) -> String {
     let s = String::from_utf8_lossy(b);
     if s.len() > 200 {

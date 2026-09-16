@@ -1,79 +1,81 @@
-# sekimore-relay 変更履歴
+# sekimore-relay changelog
 
-各版の設計判断と詳細は workspace リポジトリの
-[doc/sekimore-gw/design/relay.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sekimore-gw/design/relay.md) にあります。
+*[日本語版](CHANGELOG.ja.md)*
 
-## 0.2.4（未リリース。ローカライズ）
+## 0.2.4 (unreleased. Localization)
 
-- Web UI: 文言を `src/locales/{en,ja}.json` に移し、既定を英語に。言語は `?lang=` → cookie（画面の切替）→ `config.yml` の `ui.language`（`auto` / `en` / `ja`）→ ブラウザの `Accept-Language` → 英語の順で決める。`/api/i18n`
-- `python -m src.maint`: `--help` とメッセージを `SEKIMORE_LANG` / `LC_ALL` / `LC_MESSAGES` / `LANG` で切替（既定は英語）
-- 拒否理由（`sekimore: …`）と監査ログは英語のまま固定
+- Web UI: strings moved into `src/locales/{en,ja}.json`, English by default. The language is resolved in this order: `?lang=` → cookie (the in-page switcher) → `ui.language` in `config.yml` (`auto` / `en` / `ja`) → the browser's `Accept-Language` → English. New `/api/i18n`
+- `python -m src.maint`: `--help` and all messages follow `SEKIMORE_LANG` / `LC_ALL` / `LC_MESSAGES` / `LANG` (English by default)
+- Rust CLI: `--help` and operator-facing output moved into `relay/locales/{en,ja}.json` and selected at runtime from `SEKIMORE_LANG` / `LC_ALL` / `LC_MESSAGES` / `LANG` (English by default). A missing key falls back to English, then to the key name
+- `sekimore guide --lang en|ja`: the guide is now `relay/share/agent-guide.en.md` and `agent-guide.ja.md` (the English one is the full text, not a summary). What agent-setup writes into the skill and `AGENTS.md` is English by default (`SEKIMORE_GUIDE_LANG`)
+- README and CHANGELOG are English-primary; the Japanese versions are `README.ja.md` and `CHANGELOG.ja.md`
+- Denial reasons (`sekimore: …`) and the audit log stay English
 
-## 0.2.3（2026-09-16。sekimore-gw 本体の性能と運用。relay 本体の変更なし）
+## 0.2.3 (2026-09-16. Performance and operations in sekimore-gw itself. No change to the relay)
 
-- Web UI: WebSocket は接続ごとの全表走査をやめ、1 本のポーラが rowid カーソルで新着だけを読んで 1 メッセージ（配列）で配信。1 件でも即時、多ければまとめて届く。接続時と非表示から戻ったときは最新 50 件の snapshot。ログ 1 件ごとの `/api/stats` 取得をやめ、新着後 3 秒に 1 回に
-- SQLite: `journal_mode=WAL` / `synchronous=NORMAL` / `busy_timeout`、`dns_queries(timestamp)` と `(status, timestamp)` の索引。記録は削除しない（永続化）
-- `python -m src.maint db-stats | db-prune | db-reset | db-vacuum`（操作者が明示的に実行）。Dev Containers の `mise run gw:db-*`
-- Relay タブ: 単一上流でもその上流の送信上限を表示
+- Web UI: the WebSocket no longer scans the whole table per connection. A single poller walks a rowid cursor, reads only what is new, and ships it as one message (an array) — immediate for a single row, batched when there are many. On connect and when a hidden tab comes back, a snapshot of the latest 50. `/api/stats` is no longer fetched per log line, but at most once every 3 seconds after new rows
+- SQLite: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout`, plus indexes on `dns_queries(timestamp)` and `(status, timestamp)`. Records are never deleted (they persist)
+- `python -m src.maint db-stats | db-prune | db-reset | db-vacuum`, run explicitly by the operator. `mise run gw:db-*` under Dev Containers
+- Relay tab: show the upload cap of the upstream even when there is only one
 
-## 0.2.2（2026-09-16）
+## 0.2.2 (2026-09-16)
 
-- 持ち出し対策: 443 passthrough に dev → 上流の送信上限（`relay.https_max_upload_bytes`、既定 1 MiB、`-1` で無制限）。超えた接続は切断して監査 `https_upload_capped`
-- `handler: https-relay`: 443 だけを関所の passthrough で通し、宛先ごとに `max_upload_bytes` を掛ける（自分で image を push する宛先は `-1`）
-- `network.allowed_ports`（sekimore-gw 本体）: 許可ドメイン / 許可 IP へ通す宛先ポートを絞る。未設定は従来どおり全ポート
-- Web UI: 宛先ごとの上限、1 MiB 以上を送った passthrough 接続に LARGE UPLOAD、24 時間の件数（大きな送信 / 上限超過）
-- `sekimore guide`: AI エージェント向けの使い方（CLI に埋め込み）。agent-setup が Claude Code の skill と Codex CLI の `AGENTS.md` ブロックとして置く（`SEKIMORE_AGENT_INSTRUCTIONS`）
+- Exfiltration controls: an upload cap on dev → upstream traffic through the 443 passthrough (`relay.https_max_upload_bytes`, 1 MiB by default, `-1` for unlimited). A connection that exceeds it is cut and audited as `https_upload_capped`
+- `handler: https-relay`: pass only 443 through the relay's passthrough and apply a per-destination `max_upload_bytes` (`-1` for destinations you push images to)
+- `network.allowed_ports` (sekimore-gw itself): restrict which destination ports reach allowed domains and IPs. Unset behaves as before — all ports
+- Web UI: the per-destination cap, a LARGE UPLOAD marker on passthrough connections that sent 1 MiB or more, and 24-hour counts (large uploads / cap hits)
+- `sekimore guide`: usage written for AI agents, embedded in the CLI. agent-setup installs it as a Claude Code skill and as a block in Codex CLI's `AGENTS.md` (`SEKIMORE_AGENT_INSTRUCTIONS`)
 
-## 0.2.1（2026-09-16）
+## 0.2.1 (2026-09-16)
 
-- `project.upstreams.<domain>`: 案件既定と repo の間に上流ごとの層（`permissions` の差分、`push` / `tags` / `delete` の既定、`repos`）
-- `domain_handlers.<domain>.ssh_options` / `relay.ssh_options`: 上流 ssh に `-o` で渡す（踏み台の `ProxyJump=` など）。関所が強制するオプションは上書き不可
-- `domain_handlers.<domain>.api_base` / `graphql_base`: 上流ごとの API の宛先
-- `sekimore-relay keyscan`: 上流や踏み台のホスト鍵を fingerprint 表示付きで known_hosts に追加
-- Web UI: 上流ごとの `ssh_options` と `api_base`。orchestrator は `ssh_port` の変更も再起動要と判定
+- `project.upstreams.<domain>`: a per-upstream layer between the project defaults and the repos (a `permissions` delta, defaults for `push` / `tags` / `delete`, and `repos`)
+- `domain_handlers.<domain>.ssh_options` / `relay.ssh_options`: passed to the upstream ssh as `-o` (a bastion's `ProxyJump=`, for example). Options the relay enforces cannot be overridden
+- `domain_handlers.<domain>.api_base` / `graphql_base`: per-upstream API endpoints
+- `sekimore-relay keyscan`: add an upstream's or bastion's host key to known_hosts, printing its fingerprint
+- Web UI: per-upstream `ssh_options` and `api_base`. The orchestrator now treats a change to `ssh_port` as requiring a restart
 
-## 0.2.0（2026-09-16）
+## 0.2.0 (2026-09-16)
 
-- 複数上流: `domain_handlers` に git-relay を複数書ける。上流ごとに別ポートで listen し、接続を受けたポートで上流を決める
-- `repos[].name` に `host/Org/Repo`。SSH 経路は接続を受けた上流の repo だけを探す
-- 443 passthrough は TLS の SNI で上流を選ぶ
-- `login` / `logout` / `whoami --upstream`。既定以外の上流の state は `/data/relay/upstreams/<host>/`
-- `/bootstrap` が `git_domains` を返し、agent-setup が上流ごとに `Host` ブロックと known_hosts を書く
-- Web UI Relay タブに上流の一覧
+- Multiple upstreams: `domain_handlers` may list git-relay more than once. The relay listens on a separate port per upstream and picks the upstream from the port the connection arrived on
+- `repos[].name` accepts `host/Org/Repo`. The SSH path only looks at repos belonging to the upstream the connection arrived on
+- The 443 passthrough picks the upstream from the TLS SNI
+- `login` / `logout` / `whoami --upstream`. State for non-default upstreams lives in `/data/relay/upstreams/<host>/`
+- `/bootstrap` returns `git_domains`, and agent-setup writes a `Host` block and known_hosts entry per upstream
+- The Web UI Relay tab lists the upstreams
 
-## 0.1.9（2026-09-16）
+## 0.1.9 (2026-09-16)
 
-- 権限を `project` 配下に集約: `permissions` は `[…]` か `{allow, deny}`（deny が勝つ）、`push` / `tags`（glob）/ `delete`
-- `repos[]` で `tags` / `delete` / `permissions`（差分）を上書き
-- 旧 `relay.allow_tags` / `relay.allow_delete` は非推奨（読めば既定に畳み込んで警告）
+- Permissions consolidated under `project`: `permissions` is either `[…]` or `{allow, deny}` (deny wins), plus `push`, `tags` (globs) and `delete`
+- `repos[]` can override `tags`, `delete` and `permissions` (as a delta)
+- The old `relay.allow_tags` / `relay.allow_delete` are deprecated (still read, folded into the defaults with a warning)
 
-## 0.1.8（2026-09-16）
+## 0.1.8 (2026-09-16)
 
-- `ci jobs --number` が PR の全 workflow run を集約
-- Docker Publish の `provenance: false`
+- `ci jobs --number` aggregates every workflow run of a PR
+- `provenance: false` for Docker Publish
 
-## 0.1.7（2026-09-16）
+## 0.1.7 (2026-09-16)
 
-- `ci runs --ref <tag|branch|sha>`、`ci jobs` / `ci log` の `--run-id`
-- Docker Publish をアーキごとの native runner で並列化（0.1.6 は公開に失敗し欠番）
+- `ci runs --ref <tag|branch|sha>`, and `--run-id` for `ci jobs` / `ci log`
+- Docker Publish parallelized across native runners per architecture (0.1.6 failed to publish and was skipped)
 
-## 0.1.5（2026-09-15）
+## 0.1.5 (2026-09-15)
 
 - `relay.allow_tags`
-- `ci:read`: `ci jobs` / `ci log`（GitHub Actions の失敗ログを末尾から）
+- `ci:read`: `ci jobs` / `ci log` (GitHub Actions failure logs, read from the end)
 
-## 0.1.4（2026-09-15）
+## 0.1.4 (2026-09-15)
 
-- Web UI Relay タブの API が実プロセスで 404 になる問題を修正
+- Fix the Web UI Relay tab's API returning 404 in the real process
 
-## 0.1.3（2026-09-15）
+## 0.1.3 (2026-09-15)
 
-- `proxy.enabled` を見る。認証バナーの廃止。拒否した push を report-status の `ng` で返す
-- 監査の抜け（tcpip-forward、Authorization 無し、不正 body）を記録
-- 同じ鍵での再 bootstrap は前のトークンを失効。期限切れ 7 日後にレコードを掃除
-- Web UI Relay タブ。署名鍵のコメントに案件名と利用者名
-- `pr status`（`pr:read`）。HTTPS git の credential helper と GIT_ASKPASS を dev 側で無効化（依頼者の認証の迂回を防ぐ）
+- Honour `proxy.enabled`. Drop the authentication banner. Report a denied push through report-status as `ng`
+- Close audit gaps (tcpip-forward, missing Authorization, malformed bodies)
+- Re-bootstrapping with the same key revokes the previous token. Token records are swept 7 days after expiry
+- Web UI Relay tab. The signing key comment carries the project name and the user name
+- `pr status` (`pr:read`). Disable the credential helper and GIT_ASKPASS for HTTPS git on the dev side (so the operator's credentials cannot bypass the relay)
 
-## 0.1.0 〜 0.1.2（2026-09-08 〜 13）
+## 0.1.0 – 0.1.2 (2026-09-08 – 13)
 
-- 初版。SSH（git）と GitHub API の中継、案件ポリシー、`refs/for/<base>` から PR 作成、bootstrap、443 passthrough、devcontainer base への同梱
+- First release. Relaying SSH (git) and the GitHub API, project policy, PR creation from `refs/for/<base>`, bootstrap, the 443 passthrough, and bundling into the devcontainer base

@@ -1,4 +1,4 @@
-//! `git-upload-pack`（clone / fetch / pull）: 双方向の素通し。解釈しない。
+//! `git-upload-pack` (clone / fetch / pull): passed through unchanged in both directions, never interpreted.
 
 use tokio::io::AsyncWriteExt;
 
@@ -13,7 +13,7 @@ pub async fn relay_upload_pack(
     wd.touch();
     let stderr_task = proc.stderr.take().map(|mut es| {
         let w = wd.clone();
-        // 上流の stderr は素通し（relay 自身の行は "sekimore: " 接頭辞で区別できる）
+        // Upstream stderr is passed through unchanged; the relay's own lines are told apart by the "sekimore: " prefix.
         async move {
             let mut sink = Vec::new();
             let r = copy_touch(&mut es, &mut sink, &w, false).await;

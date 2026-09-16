@@ -1,8 +1,10 @@
-//! `/etc/sekimore/config.yml` の読み込み。Python（sekimore-gw）と同じファイルを共有する。
+//! Loading of `/etc/sekimore/config.yml`, the same file the Python side (sekimore-gw) reads.
 //!
-//! - トップレベルは寛容（未知キー無視、`handler` の未知値も無視）: Python 側の拡張を壊さない
-//! - `relay:` 配下は relay が所有するので厳格（未知キー = typo = エラー）
-//! - `git-relay` handler は 1 ドメインのみ（SSH の exec 要求はリポジトリパスしか運ばない）
+//! - The top level is lenient - unknown keys, and unknown `handler` values, are ignored - so that
+//!   extensions on the Python side keep working
+//! - Everything under `relay:` is owned by the relay, so it is strict: an unknown key is a typo and an error
+//! - Only one domain may use the `git-relay` handler, because an SSH exec request carries only the
+//!   repository path
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -16,7 +18,7 @@ use url::Url;
 use crate::policy::{Mode, Project, RepoPolicy, DEFAULT_PUSH_GLOBS};
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/sekimore/config.yml";
-/// GitHub CLI の public client id。device flow は client secret を必要としない。
+/// The GitHub CLI's public client id. The device flow needs no client secret.
 pub const DEFAULT_OAUTH_CLIENT_ID: &str = "178c6fc778ccc68e1d6a";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -24,10 +26,10 @@ pub const DEFAULT_OAUTH_CLIENT_ID: &str = "178c6fc778ccc68e1d6a";
 pub enum HandlerKind {
     Splice,
     GitRelay,
-    /// 0.2.2: 443 だけを関所の passthrough で通す（送信上限を掛けたいドメイン用）。SSH / API は無い
+    /// 0.2.2: pass only 443 through the relay's passthrough, for domains that need an upload cap. No SSH or API
     HttpsRelay,
     Deny,
-    /// Python 側が将来足す種類。relay は関知しない
+    /// Kinds the Python side may add later; the relay ignores them
     #[serde(other)]
     Other,
 }
@@ -36,33 +38,37 @@ pub enum HandlerKind {
 pub struct DomainHandler {
     #[serde(default = "default_handler")]
     pub handler: HandlerKind,
-    /// 0.2.0: この上流を受ける関所側 SSH ポート。省略時は `relay.ssh_listen` のポート（既定上流用）。
-    /// 2 つ目以降の git-relay ドメインは別ポートが必須（SSH の exec にホスト名が無いのでポートで区別する）
+    /// 0.2.0: the relay-side SSH port that serves this upstream. Defaults to the port of `relay.ssh_listen`,
+    /// which belongs to the default upstream. Every git-relay domain after the first needs its own port,
+    /// because an SSH exec request has no hostname and the port is the only thing that distinguishes them
     #[serde(default)]
     pub ssh_port: Option<u16>,
-    /// 0.2.0: 上流ホスト。省略時はドメイン名（GHES の API は `https://<upstream>/api/v3` に派生）
+    /// 0.2.0: the upstream host, defaulting to the domain name. For GHES the API is derived as `https://<upstream>/api/v3`
     #[serde(default)]
     pub upstream: Option<String>,
-    /// 0.2.0: 上流の SSH ポート。省略時は `relay.upstream_ssh_port`
+    /// 0.2.0: the upstream's SSH port. Defaults to `relay.upstream_ssh_port`
     #[serde(default)]
     pub upstream_ssh_port: Option<u16>,
-    /// 0.2.0: device flow の OAuth client id。省略時は `relay.oauth_client_id`（GHES では別 app になる）
+    /// 0.2.0: the OAuth client id for the device flow. Defaults to `relay.oauth_client_id`; GHES uses a different app
     #[serde(default)]
     pub oauth_client_id: Option<String>,
-    /// 0.2.0: 既定上流にする（`Org/Repo` と書いた repo はこの上流）。省略時は `ssh_port` を省いたもの、無ければ辞書順の先頭
+    /// 0.2.0: make this the default upstream, the one a repo written as a bare `Org/Repo` belongs to. If unset,
+    /// the entry without an `ssh_port` wins, and failing that the first in lexicographic order
     #[serde(default)]
     pub default: bool,
-    /// 0.2.1: 上流 ssh に `-o` で渡すオプション（`ProxyJump=bastion` など）。この上流だけに効く。
-    /// 関所が強制する BatchMode / StrictHostKeyChecking / UserKnownHostsFile 等は上書きできない
+    /// 0.2.1: options passed to the upstream ssh with `-o`, such as `ProxyJump=bastion`. They apply to this
+    /// upstream only, and cannot override what the relay enforces (BatchMode, StrictHostKeyChecking,
+    /// UserKnownHostsFile and so on)
     #[serde(default)]
     pub ssh_options: Vec<String>,
-    /// 0.2.1: この上流の REST / GraphQL の base URL（省略時は `upstream` から派生。既定上流は `relay.api_base` も見る）
+    /// 0.2.1: this upstream's REST / GraphQL base URLs. Derived from `upstream` when unset; the default upstream also honours `relay.api_base`
     #[serde(default)]
     pub api_base: Option<Url>,
     #[serde(default)]
     pub graphql_base: Option<Url>,
-    /// 0.2.2: 443 passthrough で dev → 上流へ送れる 1 接続あたりの上限バイト数（git-relay / https-relay）。
-    /// 省略時は `relay.https_max_upload_bytes`。`-1` で無制限。`0` は設定エラー
+    /// 0.2.2: the per-connection byte cap on what dev may send upstream through the 443 passthrough
+    /// (git-relay and https-relay alike). Defaults to `relay.https_max_upload_bytes`; `-1` means unlimited
+    /// and `0` is a configuration error
     #[serde(default)]
     pub max_upload_bytes: Option<i64>,
 }
@@ -90,8 +96,9 @@ impl Default for DomainHandler {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProxyConfig {
-    /// Squid が有効か。Python 側は `enabled` が真のときだけ `upstream_proxy` を使うので、relay も揃える
-    /// （sample の config には `enabled: false` のまま `upstream_proxy: proxy.example.com:…` のプレースホルダが残っている）
+    /// Whether Squid is enabled. The Python side only uses `upstream_proxy` when `enabled` is true, and the
+    /// relay matches that (the sample config leaves an `upstream_proxy: proxy.example.com:…` placeholder in
+    /// place with `enabled: false`)
     #[serde(default)]
     pub enabled: bool,
     pub upstream_proxy: Option<String>,
@@ -101,7 +108,7 @@ pub struct ProxyConfig {
     pub upstream_proxy_password: Option<String>,
 }
 
-/// トップレベル。Python が所有するキーは読み飛ばす。
+/// The top level. Keys owned by Python are skipped.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct GatewayConfig {
     #[serde(default)]
@@ -187,9 +194,9 @@ impl Default for Limits {
     }
 }
 
-/// API 権限の書き方。`[pr:create, …]`（allow だけ）か `{allow: […], deny: […]}`。
-/// repo 側に書けば案件既定への差分になり、**deny はどの階層に書いても勝つ**（GitHub の rulesets が
-/// write 権限より優先して制限をかけるのと同じ向き）。
+/// How API permissions are written: either `[pr:create, …]`, which is allow-only, or `{allow: […], deny: […]}`.
+/// Written on a repo it becomes a delta on the project defaults, and **a deny wins at whatever layer it is
+/// written** - the same direction as GitHub rulesets, which restrict even where write permission is granted.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum PermissionSpec {
@@ -230,27 +237,27 @@ pub struct RepoConfig {
     pub mode: String,
     #[serde(default)]
     pub bases: Vec<String>,
-    /// 直接 push を許すブランチ glob。省略時は案件の `push`（既定 `sekimore/*`）
+    /// Branch globs that direct pushes are allowed to. Defaults to the project's `push`, itself `sekimore/*`
     pub push: Option<Vec<String>>,
-    /// push を許すタグの glob（`refs/tags/` を除いた名前）。省略時は案件の `tags`。`[]` は拒否
+    /// Tag globs that pushes are allowed to, matched against the name with `refs/tags/` stripped. Defaults to the project's `tags`; `[]` denies everything
     pub tags: Option<Vec<String>>,
-    /// ブランチ / タグの削除を許すか。省略時は案件の `delete`
+    /// Whether deleting branches and tags is allowed. Defaults to the project's `delete`
     pub delete: Option<bool>,
-    /// 案件既定への差分（allow を足す / deny で消す）。list なら allow の追加
+    /// Delta on the project defaults: allow adds, deny removes. A plain list means additional allows
     pub permissions: Option<PermissionSpec>,
 }
 
-/// 0.2.1: `project.upstreams.<domain>`。その上流の repo に共通の既定と差分。
+/// 0.2.1: `project.upstreams.<domain>` - defaults and deltas shared by every repo on that upstream.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpstreamPolicyConfig {
-    /// 案件既定への差分（allow を足す / deny で消す）。list なら allow の追加。repo の差分より先に適用される
+    /// Delta on the project defaults: allow adds, deny removes. A plain list means additional allows. Applied before the repo's own delta
     pub permissions: Option<PermissionSpec>,
-    /// この上流の repo の既定（省略時は案件既定）
+    /// Defaults for repos on this upstream, falling back to the project defaults
     pub push: Option<Vec<String>>,
     pub tags: Option<Vec<String>>,
     pub delete: Option<bool>,
-    /// この上流の repo。`Org/Repo` で書く（host 付きは不要。書いた場合はこの上流と一致しなければエラー）
+    /// Repos on this upstream, written as `Org/Repo`. A host prefix is unnecessary, and if given it must match this upstream
     #[serde(default)]
     pub repos: Vec<RepoConfig>,
 }
@@ -261,24 +268,25 @@ pub struct ProjectConfig {
     pub name: String,
     #[serde(default)]
     pub repos: Vec<RepoConfig>,
-    /// 0.2.1: 上流（git-relay ドメイン）ごとの層。案件既定と repo の間に入り、
-    /// `permissions` は加算 / deny、`push` / `tags` / `delete` はその上流の repo の既定、`repos` はその上流の repo
+    /// 0.2.1: a per-upstream (git-relay domain) layer that sits between the project defaults and the repos.
+    /// `permissions` adds and denies, `push` / `tags` / `delete` are the defaults for repos on that upstream,
+    /// and `repos` are the repos on it
     #[serde(default)]
     pub upstreams: BTreeMap<String, UpstreamPolicyConfig>,
-    /// 案件の既定権限。`[…]` か `{allow, deny}`
+    /// The project's default permissions, written as `[…]` or `{allow, deny}`
     #[serde(default)]
     pub permissions: PermissionSpec,
-    /// 直接 push を許すブランチ glob の既定（省略時 `sekimore/*`）
+    /// Default branch globs that direct pushes are allowed to; `sekimore/*` when unset
     pub push: Option<Vec<String>>,
-    /// push を許すタグ glob の既定（省略時 = 拒否）
+    /// Default tag globs that pushes are allowed to; denied when unset
     #[serde(default)]
     pub tags: Vec<String>,
-    /// ブランチ / タグ削除の既定（省略時 false）
+    /// Default for deleting branches and tags; false when unset
     #[serde(default)]
     pub delete: bool,
 }
 
-/// `relay:` セクション。relay が所有するので未知キーはエラー。
+/// The `relay:` section. It is owned by the relay, so an unknown key is an error.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RelayConfig {
@@ -290,21 +298,22 @@ pub struct RelayConfig {
     pub https_listen: SocketAddr,
     #[serde(default = "d_https")]
     pub https: HttpsMode,
-    /// 0.2.2: 443 passthrough で dev → 上流へ送れる 1 接続あたりの上限バイト数の既定（ダウンロードは数えない）。
-    /// 超えたら切断して監査 `https_upload_capped`。`-1` で無制限、既定 1 MiB。handler の `max_upload_bytes` で上書き。
-    /// 攻撃的プロンプトで持ち込まれた資格情報による HTTPS push（持ち出し）を止めるための上限で、
-    /// 通常の GET / API 呼び出しの送信量ははるかに小さい
+    /// 0.2.2: the default per-connection byte cap on what dev may send upstream through the 443 passthrough;
+    /// downloads are not counted. Exceeding it drops the connection and audits `https_upload_capped`.
+    /// `-1` means unlimited, the default is 1 MiB, and a handler's `max_upload_bytes` overrides it.
+    /// The cap exists to stop exfiltration over HTTPS with credentials smuggled in by a hostile prompt;
+    /// ordinary GET and API calls send far less than this
     #[serde(default = "d_https_max_upload")]
     pub https_max_upload_bytes: i64,
     #[serde(default = "d_state_dir")]
     pub state_dir: PathBuf,
-    /// 上流ホスト。省略時は git-relay ドメイン
+    /// The upstream host. Defaults to the git-relay domain
     pub upstream: Option<String>,
     #[serde(default = "d_upstream_ssh_port")]
     pub upstream_ssh_port: u16,
-    /// 上流 ssh に `-F` で渡す設定ファイル（ProxyCommand 等）。既定 /dev/null
+    /// Config file passed to the upstream ssh with `-F`, for things like ProxyCommand. Defaults to /dev/null
     pub ssh_config: Option<PathBuf>,
-    /// 0.2.1: 全上流の ssh に `-o` で渡すオプション。handler の `ssh_options` の前に並ぶ
+    /// 0.2.1: options passed with `-o` to the ssh of every upstream. They come before a handler's `ssh_options`
     #[serde(default)]
     pub ssh_options: Vec<String>,
     pub api_base: Option<Url>,
@@ -315,12 +324,12 @@ pub struct RelayConfig {
     pub token_ttl: Duration,
     #[serde(default = "d_cache_ttl", with = "humantime_serde")]
     pub upstream_token_cache_ttl: Duration,
-    /// `SSL_CERT_FILE` に加えて信頼する PEM バンドル
+    /// A PEM bundle to trust in addition to `SSL_CERT_FILE`
     pub ca_file: Option<PathBuf>,
-    /// 非推奨（0.1.9〜）: `project.delete` に移した。残っていれば既定値として読み、警告を出す
+    /// Deprecated since 0.1.9, moved to `project.delete`. Still read as the default, with a warning
     #[serde(default)]
     pub allow_delete: bool,
-    /// 非推奨（0.1.9〜）: `project.tags`（glob）に移した。true は `project.tags: ["*"]` と同じ
+    /// Deprecated since 0.1.9, moved to the `project.tags` globs. true is equivalent to `project.tags: ["*"]`
     #[serde(default)]
     pub allow_tags: bool,
     #[serde(default = "d_bootstrap")]
@@ -328,10 +337,10 @@ pub struct RelayConfig {
     #[serde(default)]
     pub limits: Limits,
     pub project: ProjectConfig,
-    /// テスト専用: 上流 ssh の代わりに実行するコマンド（`["git", "receive-pack", "<bare-dir>"]` の親ディレクトリ）
+    /// Test only: run a command instead of the upstream ssh (the parent directory for `["git", "receive-pack", "<bare-dir>"]`)
     #[cfg(feature = "test-hooks")]
     pub upstream_local_root: Option<PathBuf>,
-    /// テスト専用（0.2.0）: 上流ドメインごとの local root。無いドメインは `upstream_local_root`
+    /// Test only (0.2.0): a local root per upstream domain. Domains without one fall back to `upstream_local_root`
     #[cfg(feature = "test-hooks")]
     #[serde(default)]
     pub upstream_local_roots: BTreeMap<String, PathBuf>,
@@ -412,18 +421,18 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-/// 読み込み済み設定。`needs_relay` の判定と `resolve` を提供する。
+/// A loaded configuration, offering the `needs_relay` decision and `resolve`.
 #[derive(Debug, Clone)]
 pub struct Loaded {
     pub path: PathBuf,
     pub gateway: GatewayConfig,
-    /// 正規化済み（lower、末尾 `.` 除去）の handler マップ
+    /// Handler map, keyed by the normalized domain (lowercased, trailing `.` removed)
     handlers: BTreeMap<String, HandlerKind>,
-    /// 同じキーで handler の全項目（0.2.0: ssh_port / upstream など）
+    /// Every handler field under the same keys (0.2.0: ssh_port, upstream and the rest)
     handler_specs: BTreeMap<String, DomainHandler>,
 }
 
-/// ファイルから読む。存在しなければ空設定（Python の `load_config` と同じ振る舞い）。
+/// Reads the file. A missing file yields an empty configuration, matching Python's `load_config`.
 pub fn load(path: &Path) -> Result<Loaded, ConfigError> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -492,7 +501,7 @@ impl Loaded {
             .collect()
     }
 
-    /// 0.2.2: `https-relay` handler のドメイン（443 だけを関所の passthrough で通す）。
+    /// 0.2.2: the domains using the `https-relay` handler, which pass only 443 through the relay's passthrough.
     pub fn https_relay_domains(&self) -> Vec<String> {
         self.handlers
             .iter()
@@ -501,9 +510,9 @@ impl Loaded {
             .collect()
     }
 
-    /// relay を起動すべきか（`git-relay` handler が 1 つ以上）。
-    /// 0.2.0: 複数の git-relay ドメインはポートで分ける。ポート重複などは設定不正（Err）。
-    /// 0.2.2: `https-relay` だけで git-relay が無い構成は設定不正（443 passthrough は git-relay と一緒に起動する）。
+    /// Whether the relay should start, that is whether there is at least one `git-relay` handler.
+    /// 0.2.0: several git-relay domains are separated by port; a duplicate port and the like are invalid (`Err`).
+    /// 0.2.2: `https-relay` without any git-relay is invalid too, since the 443 passthrough starts alongside git-relay.
     pub fn needs_relay(&self) -> Result<bool, ConfigError> {
         if self.git_relay_domains().is_empty() {
             if !self.https_relay_domains().is_empty() {
@@ -528,12 +537,14 @@ impl Loaded {
         Ok(true)
     }
 
-    /// git-relay ドメインごとの上流を組み立てる（0.2.0）。
+    /// Builds the upstream for each git-relay domain (0.2.0).
     ///
-    /// - 既定上流: `default: true` の handler → 無ければ `ssh_port` を省いたもの → 無ければ辞書順の先頭
-    /// - 既定上流は `relay.ssh_listen` で listen し、`relay.upstream` / `api_base` / `graphql_base` /
-    ///   `paths.upstream_token` / `paths.known_hosts` を使う（0.1.x と同じ）
-    /// - それ以外は `ssh_port` 必須（`relay.ssh_listen` と同じ IP で listen）。state は `upstreams/<host>/`
+    /// - Default upstream: the handler with `default: true`, else the one without an `ssh_port`, else the
+    ///   first in lexicographic order
+    /// - The default upstream listens on `relay.ssh_listen` and uses `relay.upstream` / `api_base` /
+    ///   `graphql_base` / `paths.upstream_token` / `paths.known_hosts`, exactly as in 0.1.x
+    /// - Every other upstream needs an `ssh_port` and listens on the same IP as `relay.ssh_listen`,
+    ///   with its state under `upstreams/<host>/`
     fn resolve_upstreams(&self, relay: &RelayConfig) -> Result<Vec<Upstream>, ConfigError> {
         let domains = self.git_relay_domains();
         if domains.is_empty() {
@@ -596,7 +607,7 @@ impl Loaded {
                 Some(port) => SocketAddr::new(relay.ssh_listen.ip(), port),
                 None => relay.ssh_listen,
             };
-            // 0.2.1: handler の api_base / graphql_base が最優先。既定上流は relay.api_base / graphql_base も見る
+            // 0.2.1: the handler's api_base / graphql_base take precedence; the default upstream also honours relay.api_base / graphql_base
             let (api_over, gql_over) = if is_default {
                 (
                     h.api_base.clone().or_else(|| relay.api_base.clone()),
@@ -608,7 +619,7 @@ impl Loaded {
                 (h.api_base.clone(), h.graphql_base.clone())
             };
             let (api_base, graphql_base) = derive_api_bases(&host, api_over, gql_over)?;
-            // 0.2.1: ssh_options の検証（Key=Value、関所が強制するものは上書き不可）
+            // 0.2.1: validate ssh_options - Key=Value, and nothing the relay enforces may be overridden
             let mut ssh_options: Vec<String> = Vec::new();
             for opt in relay.ssh_options.iter().chain(h.ssh_options.iter()) {
                 let opt = opt.trim();
@@ -645,7 +656,7 @@ impl Loaded {
                 is_default,
             });
         }
-        // 既定上流を先頭に
+        // put the default upstream first
         out.sort_by_key(|u| !u.is_default);
         for (i, a) in out.iter().enumerate() {
             for b in &out[i + 1..] {
@@ -668,7 +679,7 @@ impl Loaded {
         Ok(out)
     }
 
-    /// relay の実行に必要な全てを解決する。
+    /// Resolves everything the relay needs in order to run.
     pub fn resolve(&self) -> Result<Resolved, ConfigError> {
         if self.git_relay_domains().is_empty() {
             return Err(ConfigError::NoGitRelayDomain);
@@ -685,7 +696,7 @@ impl Loaded {
         let api_base = default_up.api_base.clone();
         let graphql_base = default_up.graphql_base.clone();
 
-        // 案件の既定（旧 relay.allow_tags / allow_delete は既定へ畳み込む。0.1.9 で project 配下に移した）
+        // project defaults; the old relay.allow_tags / allow_delete fold into them (moved under project in 0.1.9)
         let pc = &relay.project;
         let default_push: Vec<String> = pc
             .push
@@ -700,7 +711,7 @@ impl Loaded {
         if relay.allow_delete {
             eprintln!("[relay] WARNING: relay.allow_delete is deprecated; write `delete: true` under relay.project (or per repo)");
         }
-        // 0.2.1: 上流層。キーは git-relay ドメイン（上流ホスト名でも可）
+        // 0.2.1: the upstream layer, keyed by git-relay domain (an upstream hostname also works)
         let known = || {
             upstreams
                 .iter()
@@ -731,10 +742,10 @@ impl Loaded {
                 )));
             }
         }
-        // (repo 設定, 属する上流ドメイン, 上流層) を集める: project.repos（host prefix）と upstreams.<d>.repos
+        // collect (repo config, owning upstream domain, upstream layer) from project.repos, with its host prefix, and upstreams.<d>.repos
         let mut entries: Vec<(&RepoConfig, String)> = Vec::new();
         for r in &pc.repos {
-            // 0.2.0: `host/Org/Repo` で上流を明示できる。`Org/Repo` は既定上流
+            // 0.2.0: `host/Org/Repo` names the upstream explicitly; a bare `Org/Repo` means the default upstream
             let (host, _) = split_repo_host(r.name.trim());
             let d = match host {
                 Some(h) => resolve_host(h)
@@ -780,7 +791,7 @@ impl Loaded {
                 .or(l_tags)
                 .unwrap_or_else(|| default_tags.clone());
             rp.delete = r.delete.or(l_delete).unwrap_or(default_delete);
-            // 権限: 上流層の差分 → repo の差分（どちらも allow は加算、deny は勝つ）
+            // permissions: the upstream layer's delta, then the repo's; in both, allow adds and deny wins
             if let Some(p) = layer.and_then(|l| l.permissions.as_ref()) {
                 rp.allow.extend(p.allow().iter().cloned());
                 rp.deny.extend(p.deny().iter().cloned());
@@ -806,7 +817,7 @@ impl Loaded {
         if project.name.trim().is_empty() {
             return Err(ConfigError::Invalid("project.name is required".into()));
         }
-        // 同名の Org/Repo が複数の上流にあるときは、`Org/Repo` だけの API 指定が既定上流に解ける旨を知らせる
+        // when the same Org/Repo exists on several upstreams, point out that a bare `Org/Repo` in an API call resolves to the default upstream
         for (i, a) in project.repos.iter().enumerate() {
             if project.repos[i + 1..]
                 .iter()
@@ -836,7 +847,7 @@ impl Loaded {
         })
     }
 
-    /// 0.2.2: 443 passthrough の宛先。git-relay の上流（その上限）+ https-relay のドメイン。
+    /// 0.2.2: the destinations of the 443 passthrough - the git-relay upstreams, with their caps, plus the https-relay domains.
     fn resolve_https_targets(
         &self,
         relay: &RelayConfig,
@@ -883,7 +894,7 @@ impl Loaded {
     }
 }
 
-/// `max_upload_bytes` を上限に変換する。`-1` = 無制限（None）、正 = バイト数。`0` とそれ以外はエラー。
+/// Turns `max_upload_bytes` into a cap: `-1` is unlimited (None) and a positive value is a byte count. `0` and anything else is an error.
 pub fn upload_cap(v: i64, what: &str) -> Result<Option<u64>, ConfigError> {
     match v {
         -1 => Ok(None),
@@ -897,7 +908,8 @@ pub fn upload_cap(v: i64, what: &str) -> Result<Option<u64>, ConfigError> {
     }
 }
 
-/// 関所が上流 ssh に強制するオプション。`ssh_options` で上書きさせない（先に並べるので実際にも勝つが、設定時に弾く）。
+/// Options the relay enforces on the upstream ssh. `ssh_options` may not override them - they are listed first
+/// and would win anyway, but they are also rejected at configuration time.
 pub const ENFORCED_SSH_OPTIONS: &[&str] = &[
     "batchmode",
     "stricthostkeychecking",
@@ -906,7 +918,7 @@ pub const ENFORCED_SSH_OPTIONS: &[&str] = &[
     "updatehostkeys",
 ];
 
-/// `Key=Value` 形式で、改行を含まず、強制オプションでないこと。
+/// Requires the `Key=Value` form, on a single line, and not one of the enforced options.
 pub fn validate_ssh_option(opt: &str) -> Result<(), String> {
     let (key, value) = opt
         .split_once('=')
@@ -929,8 +941,8 @@ pub fn validate_ssh_option(opt: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `host/Org/Repo` → (Some(host), "Org/Repo")、`Org/Repo` → (None, "Org/Repo")。
-/// 先頭要素に `.` が含まれる 3 要素のときだけ host と見なす（GitHub の org 名に `.` は使えない）。
+/// `host/Org/Repo` becomes (Some(host), "Org/Repo") and `Org/Repo` becomes (None, "Org/Repo").
+/// Only a three-part name whose first part contains a `.` is read as a host, since a GitHub org name cannot contain one.
 pub fn split_repo_host(name: &str) -> (Option<&str>, &str) {
     let trimmed = name.trim_start_matches('/');
     let parts: Vec<&str> = trimmed.split('/').collect();
@@ -969,7 +981,7 @@ fn derive_api_bases(
     Ok((api, graphql))
 }
 
-/// 上位プロキシ。`config.yml` の `proxy.upstream_proxy`（host:port）と資格情報（環境変数で上書き可）。
+/// The upstream proxy: `proxy.upstream_proxy` (host:port) from `config.yml`, plus credentials that environment variables may override.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxySpec {
     pub url: String,
@@ -1010,7 +1022,7 @@ fn resolve_proxy(p: &ProxyConfig) -> Result<Option<ProxySpec>, ConfigError> {
     }))
 }
 
-/// `state_dir` 配下のファイル配置。
+/// The file layout under `state_dir`.
 #[derive(Debug, Clone)]
 pub struct Paths {
     pub state_dir: PathBuf,
@@ -1038,14 +1050,14 @@ impl Paths {
     }
 }
 
-/// 1 つの上流（git-relay ドメイン）。0.2.0 で複数持てるようになった。
+/// A single upstream, that is one git-relay domain. Since 0.2.0 there can be more than one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Upstream {
-    /// DNS で関所に向けられるドメイン（agent が URL に書く名前。repo の host 表記もこれ）
+    /// The domain DNS points at the relay: the name the agent writes in a URL, and the host prefix on a repo
     pub domain: String,
-    /// 上流 git / API のホスト
+    /// The host of the upstream git / API
     pub host: String,
-    /// 関所がこの上流向けの SSH を受けるアドレス
+    /// The address on which the relay accepts SSH for this upstream
     pub listen: SocketAddr,
     pub upstream_ssh_port: u16,
     pub api_base: Url,
@@ -1053,32 +1065,32 @@ pub struct Upstream {
     pub oauth_client_id: String,
     pub upstream_token: PathBuf,
     pub known_hosts: PathBuf,
-    /// 0.2.1: 上流 ssh に足す `-o` オプション（relay.ssh_options + handler.ssh_options）
+    /// 0.2.1: `-o` options added to the upstream ssh (relay.ssh_options followed by handler.ssh_options)
     pub ssh_options: Vec<String>,
-    /// 0.2.2: 443 passthrough の送信上限（None = 無制限）
+    /// 0.2.2: upload cap for the 443 passthrough (None = unlimited)
     pub max_upload: Option<u64>,
     pub is_default: bool,
 }
 
-/// 0.2.2: 443 passthrough の宛先 1 つ分（git-relay の上流 + https-relay のドメイン）。SNI で選ぶ。
+/// 0.2.2: one destination of the 443 passthrough - a git-relay upstream or an https-relay domain. Selected by SNI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpsTarget {
     pub domain: String,
     pub host: String,
-    /// 送信上限（None = 無制限）
+    /// Upload cap (None = unlimited)
     pub max_upload: Option<u64>,
     pub kind: HandlerKind,
 }
 
-/// relay の実行に必要な解決済み設定。
+/// The resolved configuration the relay runs on.
 ///
-/// `domain` / `upstream` / `api_base` / `graphql_base` / `paths` は **既定上流** のもの（0.1.x 互換）。
-/// 全上流は `upstreams`（先頭が既定）。
+/// `domain` / `upstream` / `api_base` / `graphql_base` / `paths` describe the **default upstream**, which keeps
+/// them backward compatible with 0.1.x. Every upstream is in `upstreams`, the default one first.
 #[derive(Debug, Clone)]
 pub struct Resolved {
-    /// DNS で関所に向けられるドメイン（既定上流）
+    /// The domain DNS points at the relay, for the default upstream
     pub domain: String,
-    /// 上流 git / API のホスト（既定上流）
+    /// The host of the upstream git / API, for the default upstream
     pub upstream: String,
     pub api_base: Url,
     pub graphql_base: Url,
@@ -1086,9 +1098,9 @@ pub struct Resolved {
     pub proxy: Option<ProxySpec>,
     pub project: Project,
     pub relay: RelayConfig,
-    /// 0.2.0: 全上流。先頭が既定上流
+    /// 0.2.0: every upstream, the default one first
     pub upstreams: Vec<Upstream>,
-    /// 0.2.2: 443 passthrough の宛先（git-relay の上流 + https-relay。SNI で選ぶ）
+    /// 0.2.2: the destinations of the 443 passthrough - git-relay upstreams plus https-relay, selected by SNI
     pub https_targets: Vec<HttpsTarget>,
 }
 
@@ -1096,7 +1108,7 @@ impl Resolved {
     pub fn default_upstream(&self) -> &Upstream {
         &self.upstreams[0]
     }
-    /// ドメイン名または上流ホスト名で探す。
+    /// Looks up an upstream by domain name or by upstream hostname.
     pub fn upstream_named(&self, name: &str) -> Option<&Upstream> {
         let want = name.trim().trim_end_matches('.').to_ascii_lowercase();
         self.upstreams
@@ -1140,7 +1152,7 @@ relay:
         assert_eq!(app.tags, vec!["v*"]);
         assert!(!app.delete);
         let lib = r.project.find_repo("Org/Lib").unwrap();
-        // 旧 relay.allow_tags: true は project.tags が空なら ["*"] として既定に畳み込まれる
+        // the old relay.allow_tags: true folds into the defaults as ["*"] when project.tags is empty
         assert_eq!(lib.tags, vec!["*"]);
         assert!(lib.delete);
         assert_eq!(r.project.effective_keys(lib), vec!["pr:create", "pr:merge"]);
@@ -1149,15 +1161,15 @@ relay:
             r.project.effective_keys(old),
             vec!["ci:read", "pr:create", "pr:read"]
         );
-        // 既定の push glob は sekimore/*
+        // the default push glob is sekimore/*
         assert_eq!(old.push, vec!["sekimore/*"]);
-        // list 形式の permissions も従来どおり
+        // permissions written as a plain list still work as before
         let text2 = "domain_handlers:\n  github.com: { handler: git-relay }\nrelay:\n  project: { name: x, permissions: [pr:create] }\n";
         assert_eq!(
             p(text2).unwrap().resolve().unwrap().project.granted(),
             vec!["pr:create"]
         );
-        // repo の permissions の typo は起動時エラー
+        // a typo in a repo's permissions is a startup error
         let text3 = "domain_handlers:\n  github.com: { handler: git-relay }\nrelay:\n  project:\n    name: x\n    repos: [{ name: Org/A, mode: read-only, permissions: [pr:delete] }]\n";
         assert!(p(text3).unwrap().resolve().is_err());
     }
@@ -1197,7 +1209,7 @@ relay:
         );
         assert_eq!(r.paths.tokens, PathBuf::from("/data/relay/tokens.json"));
         assert!(r.proxy.is_none());
-        // 0.2.0: 単一上流は upstreams が 1 件で、0.1.x のフィールドと同じ値
+        // 0.2.0: a single upstream gives one entry in upstreams, matching the 0.1.x fields
         assert_eq!(r.upstreams.len(), 1);
         let u = r.default_upstream();
         assert_eq!(
@@ -1233,7 +1245,7 @@ relay:
             "{msg}"
         );
         assert!(msg.contains("needs its own ssh_port"), "{msg}");
-        // 同じポートを明示しても拒否
+        // spelling out the same port is rejected too
         let text = "domain_handlers:\n  github.com: { handler: git-relay }\n  ghe.example.com: { handler: git-relay, ssh_port: 22 }\nrelay:\n  project: { name: x }\n";
         let msg = p(text).unwrap().needs_relay().unwrap_err().to_string();
         assert!(msg.contains("both listen on ssh port 22"), "{msg}");
@@ -1253,13 +1265,13 @@ relay:
       - { name: ghe.example.com/Corp/Internal, mode: read-write, bases: [main] }
       - { name: Org/App, mode: read-only }   # DUP
 "#;
-        // 3 つ目は github.com 側の Org/App と重複 → 起動時エラー
+        // the third entry duplicates Org/App on github.com, so it is a startup error
         assert!(p(text).unwrap().resolve().is_err());
         let text = text.replace("      - { name: Org/App, mode: read-only }   # DUP\n", "");
         let l = p(&text).unwrap();
         assert!(l.needs_relay().unwrap());
         let r = l.resolve().unwrap();
-        // 既定上流は ssh_port を省いた github.com（0.1.x のフィールドはそのまま既定上流を指す）
+        // the default upstream is github.com, the one without an ssh_port; the 0.1.x fields still point at it
         assert_eq!(r.domain, "github.com");
         assert_eq!(r.upstream, "github.com");
         assert_eq!(r.api_base.as_str(), "https://api.github.com/");
@@ -1290,7 +1302,7 @@ relay:
             r.upstream_named("GHE.example.com").map(|u| u.listen.port()),
             Some(2222)
         );
-        // repo の host
+        // the repo's host
         let app = r.project.find_repo("Org/App").unwrap();
         assert_eq!(app.host, "github.com");
         let internal = r
@@ -1299,7 +1311,7 @@ relay:
             .unwrap();
         assert_eq!(internal.host, "ghe.example.com");
         assert_eq!(internal.full_name, "Corp/Internal");
-        // host 無しでも一意なら解ける。SSH 経路（上流固定）では他方の上流から見えない
+        // a unique name resolves without a host; on the SSH path, where the upstream is fixed, the other upstream is invisible
         assert!(r.project.find_repo("Corp/Internal").is_ok());
         assert!(r
             .project
@@ -1313,7 +1325,7 @@ relay:
             .project
             .find_repo_on("ghe.example.com", "Org/App")
             .is_err());
-        // 知らない host は起動時エラー
+        // an unknown host is a startup error
         let bad = "domain_handlers:\n  github.com: { handler: git-relay }\nrelay:\n  project:\n    name: x\n    repos: [{ name: other.example.com/Org/A, mode: read-only }]\n";
         assert!(matches!(
             p(bad).unwrap().resolve(),
@@ -1356,14 +1368,14 @@ relay:
         );
         assert_eq!(app.tags, vec!["v*"]);
         assert!(!app.delete);
-        // repo の deny は上流層の allow に勝つ。tags は repo 上書き
+        // a repo's deny beats the upstream layer's allow, and the repo's tags override
         let tool = pr.find_repo("Org/Tool").unwrap();
         assert_eq!(
             pr.effective_keys(tool),
             vec!["ci:read", "pr:create", "pr:read"]
         );
         assert!(tool.tags.is_empty());
-        // GHES 側: マージ不可、delete は上流層の既定
+        // on the GHES side: merging is not allowed and delete comes from the upstream layer's default
         let internal = pr.find_repo("ghe.example.com/Corp/Internal").unwrap();
         assert_eq!(internal.host, "ghe.example.com");
         assert_eq!(
@@ -1371,7 +1383,7 @@ relay:
             vec!["ci:read", "pr:create", "pr:read"]
         );
         assert!(internal.delete && internal.tags.is_empty());
-        // project.repos の host prefix 表記も上流層の既定を受ける
+        // the host-prefixed form under project.repos also picks up the upstream layer's defaults
         let legacy = pr.find_repo("Corp/Legacy").unwrap();
         assert_eq!(legacy.host, "ghe.example.com");
         assert!(legacy.delete);
@@ -1379,12 +1391,12 @@ relay:
             pr.effective_keys(legacy),
             vec!["ci:read", "pr:create", "pr:read"]
         );
-        // authorize は上流ごとに違う答えになる
+        // authorize answers differently per upstream
         assert!(pr.authorize("Org/App", Resource::Pr, Action::Merge).is_ok());
         assert!(pr
             .authorize("ghe.example.com/Corp/Internal", Resource::Pr, Action::Merge)
             .is_err());
-        // 知らない上流のキー / 別上流を指す repo 名は起動時エラー
+        // an unknown upstream key, or a repo name pointing at another upstream, is a startup error
         let bad = text.replace(
             "      ghe.example.com:\n        permissions",
             "      other.example.com:\n        permissions",
@@ -1417,7 +1429,7 @@ relay:
         let r = p(text).unwrap().resolve().unwrap();
         let gh = &r.upstreams[0];
         let ghe = &r.upstreams[1];
-        // relay.ssh_options は全上流に、handler のものはその上流だけに（順序: relay → handler）
+        // relay.ssh_options applies to every upstream and a handler's only to its own, in that order
         assert_eq!(gh.ssh_options, vec!["ConnectionAttempts=2"]);
         assert_eq!(
             ghe.ssh_options,
@@ -1427,7 +1439,7 @@ relay:
                 "HostKeyAlias=ghe.example.com"
             ]
         );
-        // api_base は handler の指定が勝つ（upstream から派生しない）
+        // the handler's api_base wins and is not derived from upstream
         assert_eq!(ghe.host, "host.docker.internal");
         assert_eq!(ghe.upstream_ssh_port, 2200);
         assert_eq!(ghe.api_base.as_str(), "https://ghe.example.com/api/v3");
@@ -1436,7 +1448,7 @@ relay:
             "https://ghe.example.com/api/graphql"
         );
         assert_eq!(gh.api_base.as_str(), "https://api.github.com/");
-        // 強制オプションの上書き、形式不正は起動時エラー
+        // overriding an enforced option, or a malformed one, is a startup error
         for bad in [
             "StrictHostKeyChecking=no",
             "batchmode=no",
@@ -1473,7 +1485,7 @@ relay:
             vec!["ghcr.io".to_string(), "registry-1.docker.io".to_string()]
         );
         let r = l.resolve().unwrap();
-        // SSH の上流は github.com だけ。443 の宛先は 3 つ
+        // github.com is the only SSH upstream, but there are three 443 destinations
         assert_eq!(r.upstreams.len(), 1);
         let caps: Vec<(&str, Option<u64>, HandlerKind)> = r
             .https_targets
@@ -1493,7 +1505,7 @@ relay:
             ]
         );
         assert_eq!(r.default_upstream().max_upload, Some(262144));
-        // 0 は設定エラー（-1 が無制限）
+        // 0 is a configuration error; -1 is what means unlimited
         let bad = text.replace("max_upload_bytes: -1", "max_upload_bytes: 0");
         let err = p(&bad).unwrap().resolve().unwrap_err().to_string();
         assert!(err.contains("max_upload_bytes 0"), "{err}");
@@ -1502,27 +1514,27 @@ relay:
             "https_max_upload_bytes: -5",
         );
         assert!(p(&bad).unwrap().resolve().is_err());
-        // https-relay に ssh_port は書けない
+        // ssh_port cannot be written on an https-relay
         let bad = text.replace(
             "{ handler: https-relay }",
             "{ handler: https-relay, ssh_port: 2222 }",
         );
         assert!(p(&bad).unwrap().resolve().is_err());
-        // https-relay だけ（git-relay 無し）は設定不正
+        // https-relay on its own, with no git-relay, is invalid
         let only = "domain_handlers:\n  ghcr.io: { handler: https-relay }\nrelay:\n  project: { name: x }\n";
         assert!(p(only).unwrap().needs_relay().is_err());
     }
 
     #[test]
     fn default_upstream_can_be_chosen_explicitly() {
-        // 全部に ssh_port があるときは default: true が既定上流。relay.upstream は既定上流にだけ効く
+        // when every entry has an ssh_port, default: true picks the default upstream, and relay.upstream applies only to it
         let text = "domain_handlers:\n  a.example.com: { handler: git-relay, ssh_port: 2201 }\n  b.example.com: { handler: git-relay, ssh_port: 2202, default: true, upstream: b-internal.example.com }\nrelay:\n  ssh_listen: 0.0.0.0:22\n  project: { name: x }\n";
         let r = p(text).unwrap().resolve().unwrap();
         assert_eq!(r.domain, "b.example.com");
         assert_eq!(r.upstream, "b-internal.example.com");
         assert_eq!(r.default_upstream().listen.port(), 2202);
         assert_eq!(r.upstreams[1].domain, "a.example.com");
-        // default を 2 つは不可
+        // two defaults are not allowed
         let text = "domain_handlers:\n  a.example.com: { handler: git-relay, default: true }\n  b.example.com: { handler: git-relay, ssh_port: 2202, default: true }\nrelay:\n  project: { name: x }\n";
         assert!(p(text).unwrap().resolve().is_err());
     }
@@ -1535,7 +1547,7 @@ relay:
             split_repo_host("ghe.example.com/Org/Repo"),
             (Some("ghe.example.com"), "Org/Repo")
         );
-        // 3 要素でも先頭に `.` が無ければ host ではない（そのまま Org/Repo 検証で落ちる）
+        // three parts without a `.` in the first are not a host, so this falls through to the Org/Repo check and fails there
         assert_eq!(split_repo_host("a/b/c"), (None, "a/b/c"));
     }
 
@@ -1595,7 +1607,7 @@ relay:
 
     #[test]
     fn proxy_placeholder_is_ignored_unless_enabled() {
-        // 実機の config.yml には enabled: false のまま upstream_proxy のプレースホルダが残っている
+        // real config.yml files keep an upstream_proxy placeholder around with enabled: false
         let text = "domain_handlers:\n  github.com: { handler: git-relay }\nproxy:\n  enabled: false\n  upstream_proxy: proxy.example.com:3129\nrelay:\n  project: { name: x }\n";
         assert!(p(text).unwrap().resolve().unwrap().proxy.is_none());
         let text = "domain_handlers:\n  github.com: { handler: git-relay }\nproxy:\n  upstream_proxy: proxy.example.com:3129\nrelay:\n  project: { name: x }\n";

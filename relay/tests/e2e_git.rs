@@ -1,8 +1,8 @@
-//! 実物の git / ssh クライアントで relay を通す end-to-end テスト。
+//! End-to-end tests that drive the relay with the real git / ssh clients.
 //!
-//! 上流は `LocalGitUpstream`（ローカル bare repo に対する `git receive-pack` / `git upload-pack`）なので、
-//! pkt-line / side-band の書き換え経路全体が本物のプロトコルで検証される。
-//! `git` と `ssh` が無い環境ではスキップする（`SEKIMORE_E2E_REQUIRED=1` なら失敗）。
+//! The upstream is `LocalGitUpstream` (`git receive-pack` / `git upload-pack` against a local bare repo),
+//! so the whole pkt-line / side-band rewriting path is exercised over the real protocol.
+//! Skipped where `git` and `ssh` are unavailable (fails instead when `SEKIMORE_E2E_REQUIRED=1`).
 
 mod common;
 
@@ -25,7 +25,7 @@ use tokio::net::TcpListener;
 use url::Url;
 
 fn have(bin: &str) -> bool {
-    // ssh は --version を持たない（-V が版表示）
+    // ssh has no --version (it prints its version for -V)
     let flag = if bin == "ssh" { "-V" } else { "--version" };
     Command::new(bin)
         .arg(flag)
@@ -34,7 +34,7 @@ fn have(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// 前提ツールが無ければスキップ（CI では必須にする）。
+/// Skip when the required tools are missing (CI makes them mandatory).
 macro_rules! require_tools {
     () => {
         if !have("git") || !have("ssh") {
@@ -69,7 +69,7 @@ impl E2e {
             self.key_path.display()
         )
     }
-    /// git を実行する（HOME を隔離し、署名など利用者の設定を持ち込まない）。
+    /// Run git with an isolated HOME, so none of the user's settings (signing and the like) leak in.
     fn git(&self, cwd: &Path, args: &[&str]) -> Output {
         Command::new("git")
             .args(args)
@@ -139,7 +139,7 @@ async fn setup(grants: &[&str]) -> E2e {
                 .unwrap();
         }
     }
-    // クライアント鍵
+    // Client key
     let key_path = dir.path().join("id_ed25519");
     let o = Command::new("ssh-keygen")
         .args(["-q", "-t", "ed25519", "-N", "", "-f"])
@@ -206,7 +206,7 @@ async fn setup(grants: &[&str]) -> E2e {
     }
 }
 
-/// 上流 bare に main の初期コミットを直接（file 経由で）入れる。
+/// Seed the upstream bare repo with an initial commit on main, directly over the file transport.
 fn seed_main(e: &E2e, repo: &str) -> PathBuf {
     let seed = e
         .dir
@@ -279,7 +279,7 @@ async fn clone_then_refs_for_push_creates_branch_and_pr() {
         .iter()
         .any(|(k, v)| k == "user-agent" && v.starts_with("sekimore-relay/")));
 
-    // 同じコミットの再 push は冪等（already exists にならない）
+    // Re-pushing the same commit is idempotent (no "already exists")
     let o = e.git(&work, &["push", "origin", "HEAD:refs/for/main"]);
     assert!(
         o.status.success(),
@@ -291,7 +291,7 @@ async fn clone_then_refs_for_push_creates_branch_and_pr() {
         Some(sha.as_str())
     );
 
-    // fetch（upload-pack 素通し）で sekimore ブランチが見える
+    // A fetch (upload-pack passed through unchanged) sees the sekimore branch
     let out = e.ok(&work, &["ls-remote", "origin"]);
     assert!(out.contains(&branch), "{out}");
     let audit = std::fs::read_to_string(&e.audit_path).unwrap();
@@ -305,7 +305,7 @@ async fn multiple_refs_for_and_push_options_and_atomic() {
     require_tools!();
     let e = setup(&["pr:create"]).await;
     seed_main(&e, "LibOrg/awesome-lib");
-    // develop も作る
+    // Create develop as well
     let seed = e.dir.path().join("seed-LibOrg_awesome-lib");
     e.ok(
         &seed,
@@ -394,11 +394,11 @@ async fn policy_denials_are_explicit_and_leave_upstream_untouched() {
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success(), "{args:?} must fail:\n{err}");
         assert!(err.contains(want), "{args:?}: {err}");
-        // 切断ではなく report-status の ng で返すので、git は remote rejected と表示し "hung up" にならない
+        // Rejections come back as an ng in report-status rather than a disconnect, so git prints remote rejected instead of "hung up"
         assert!(err.contains("[remote rejected]"), "{args:?}: {err}");
         assert!(!err.contains("hung up"), "{args:?}: {err}");
     }
-    // 削除は既定拒否
+    // Deletes are denied by default
     e.ok(&work, &["push", "origin", "HEAD:refs/heads/sekimore/x"]);
     let o = e.git(&work, &["push", "origin", ":refs/heads/sekimore/x"]);
     assert!(!o.status.success());
@@ -407,18 +407,18 @@ async fn policy_denials_are_explicit_and_leave_upstream_untouched() {
     assert!(e
         .bare_ref("LibOrg/awesome-lib", "refs/heads/sekimore/x")
         .is_some());
-    // main は動いていない
+    // main has not moved
     assert_eq!(
         e.bare_ref("LibOrg/awesome-lib", "refs/heads/main").unwrap(),
         main_sha
     );
     assert!(e.bare_ref("LibOrg/awesome-lib", "refs/tags/v1").is_none());
 
-    // 案件外
+    // Outside the project
     let o = e.git(e.dir.path(), &["ls-remote", &e.url("Attacker/evil")]);
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("is not in project"));
-    // read-only: clone は通り push は拒否
+    // read-only: clone succeeds, push is denied
     let ro = clone(&e, "VendorOrg/reference-impl", "ro");
     e.commit_file(&ro, "y.txt", b"y\n");
     let o = e.git(&ro, &["push", "origin", "HEAD:refs/heads/sekimore/y"]);
@@ -438,7 +438,7 @@ async fn non_fast_forward_ng_is_visible_through_sideband() {
     let work = clone(&e, "LibOrg/awesome-lib", "work");
     e.commit_file(&work, "a.txt", b"a\n");
     e.ok(&work, &["push", "origin", "HEAD:refs/heads/sekimore/topic"]);
-    // 履歴を巻き戻して別コミット → force push。上流は receive.denyNonFastForwards で ng を返す
+    // Rewind history, make a different commit, then force push; the upstream returns ng via receive.denyNonFastForwards
     e.ok(&work, &["reset", "-q", "--hard", "HEAD~1"]);
     e.commit_file(&work, "b.txt", b"b\n");
     let o = e.git(
@@ -474,7 +474,7 @@ async fn large_pack_streams_through() {
             .as_deref(),
         Some(sha.as_str())
     );
-    // clone し直して中身が届く
+    // A fresh clone gets the content
     let again = clone(&e, "LibOrg/awesome-lib", "again");
     e.ok(
         &again,
@@ -491,12 +491,12 @@ async fn empty_push_is_harmless() {
     seed_main(&e, "LibOrg/awesome-lib");
     let work = clone(&e, "LibOrg/awesome-lib", "work");
     e.ok(&work, &["push", "origin", "HEAD:refs/heads/sekimore/same"]);
-    // 何も変わらない push（up to date）
+    // A push with nothing to send (up to date)
     let o = e.git(&work, &["push", "origin", "HEAD:refs/heads/sekimore/same"]);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
 }
 
-// ---- 0.2.0: 複数上流をポートで分ける ----
+// ---- 0.2.0: several upstreams split across ports ----
 
 fn init_bare(bare: &Path) {
     std::fs::create_dir_all(bare).unwrap();
@@ -535,8 +535,8 @@ fn seed_main_at(e: &E2e, bare: &Path, name: &str) {
     );
 }
 
-/// 2 上流: `github.test`（既定、`e.addr` / `e.root`）と `ghe.test`（別ポート、戻り値の addr / root）。
-/// `LibOrg/awesome-lib` は両方にあり、github 側は read-write、ghe 側は read-only。`Corp/internal` は ghe だけ。
+/// Two upstreams: `github.test` (the default, `e.addr` / `e.root`) and `ghe.test` (its own port, the returned addr / root).
+/// `LibOrg/awesome-lib` exists on both — read-write on github, read-only on ghe. `Corp/internal` only exists on ghe.
 async fn setup_multi(grants: &[&str]) -> (E2e, SocketAddr, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("upstream-github");
@@ -637,7 +637,7 @@ async fn two_upstreams_are_kept_apart_by_listen_port() {
     seed_main_at(&e, &ghe_root.join("Corp/internal.git"), "seed-ghe-internal");
     seed_main_at(&e, &ghe_root.join("LibOrg/awesome-lib.git"), "seed-ghe-lib");
 
-    // 1. ghe ポート: Corp/internal を clone → refs/for/main → ghe 側 bare にだけブランチができ PR も作られる
+    // 1. ghe port: clone Corp/internal, push refs/for/main — the branch appears only in the ghe bare repo and a PR is created
     let work = e.dir.path().join("work-ghe");
     let o = e.git(
         e.dir.path(),
@@ -661,13 +661,13 @@ async fn two_upstreams_are_kept_apart_by_listen_port() {
     );
     assert!(!e.root.join("Corp/internal.git").exists());
 
-    // 2. github ポート: Corp/internal は案件外（別上流のリポジトリには届かない）
+    // 2. github port: Corp/internal is outside the project (another upstream's repos are unreachable)
     let o = e.git(e.dir.path(), &["ls-remote", &e.url("Corp/internal")]);
     assert!(!o.status.success());
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.contains("is not in project"), "{err}");
 
-    // 3. 同名 LibOrg/awesome-lib: github 側は read-write（push が github 側 bare にだけ届く）
+    // 3. Same name on both, LibOrg/awesome-lib: read-write on github (the push lands only in the github bare repo)
     let work2 = clone(&e, "LibOrg/awesome-lib", "work-gh");
     let sha2 = e.commit_file(&work2, "g.txt", b"y\n");
     let o = e.git(
@@ -685,7 +685,7 @@ async fn two_upstreams_are_kept_apart_by_listen_port() {
         "refs/heads/sekimore/topic"
     )
     .is_none());
-    // ghe 側は read-only: clone は通るが push は拒否（github 側の read-write と取り違えない）
+    // read-only on ghe: clone succeeds but push is denied (not confused with the read-write github side)
     let work3 = e.dir.path().join("work-ghe-lib");
     let o = e.git(
         e.dir.path(),
@@ -711,7 +711,7 @@ async fn two_upstreams_are_kept_apart_by_listen_port() {
     )
     .is_none());
 
-    // 監査にはどの上流だったかが載る
+    // The audit log records which upstream was used
     let audit = std::fs::read_to_string(&e.audit_path).unwrap();
     assert!(audit.contains("ghe.test"), "{audit}");
     assert!(audit.contains("github.test"), "{audit}");

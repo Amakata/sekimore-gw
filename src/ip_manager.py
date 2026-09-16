@@ -1,4 +1,4 @@
-"""静的IP管理モジュール - IPアドレス、CIDR、レンジのipset管理."""
+"""Static IP management - maintains ipsets of IP addresses, CIDRs and ranges."""
 
 import ipaddress
 import subprocess
@@ -7,21 +7,21 @@ from .logger import ComponentType, log_error, log_system_event
 
 
 class StaticIPManager:
-    """静的IPアドレスフィルタリング管理."""
+    """Manages static IP address filtering."""
 
     def __init__(self) -> None:
-        """初期化."""
+        """Initialize the manager."""
         self.allow_ipset_name = "allow_static_ips"
         self.block_ipset_name = "block_static_ips"
 
     def _expand_ip_range(self, ip_range: str) -> list[str]:
-        """IPレンジを個別IPに展開.
+        """Expand an IP range into individual addresses.
 
         Args:
-            ip_range: IPレンジ（例: 192.168.1.1-192.168.1.10）
+            ip_range: IP range (e.g. 192.168.1.1-192.168.1.10)
 
         Returns:
-            個別IPリスト
+            List of individual IP addresses
         """
         start_ip_str, end_ip_str = ip_range.split("-", 1)
         start_ip = ipaddress.ip_address(start_ip_str.strip())
@@ -34,10 +34,10 @@ class StaticIPManager:
         current_ip = start_ip
         while current_ip <= end_ip:  # type: ignore[operator]
             ip_list.append(str(current_ip))
-            # IPv4/IPv6両対応
+            # Works for both IPv4 and IPv6
             current_ip = ipaddress.ip_address(int(current_ip) + 1)
 
-            # 安全のため、最大1024個に制限
+            # Cap at 1024 addresses as a safety limit
             if len(ip_list) > 1024:
                 log_error(
                     ComponentType.FIREWALL,
@@ -48,13 +48,13 @@ class StaticIPManager:
         return ip_list
 
     def _run_ipset_command(self, args: list[str]) -> bool:
-        """ipsetコマンドを実行.
+        """Run an ipset command.
 
         Args:
-            args: ipsetコマンド引数
+            args: ipset command arguments
 
         Returns:
-            成功した場合True
+            True on success
         """
         try:
             subprocess.run(
@@ -65,7 +65,7 @@ class StaticIPManager:
             )
             return True
         except subprocess.CalledProcessError as e:
-            # すでに存在する場合のエラーは無視
+            # Ignore "already exists" errors
             if "already" in e.stderr.lower() or "exist" in e.stderr.lower():
                 return True
             log_error(
@@ -78,12 +78,12 @@ class StaticIPManager:
             return False
 
     def create_ipsets(self) -> bool:
-        """ipsetを作成（hash:net タイプでCIDR対応）."""
-        # 既存のipsetを削除（クリーンスタート）
+        """Create the ipsets (hash:net type, so CIDRs are supported)."""
+        # Destroy any existing ipsets for a clean start
         self._run_ipset_command(["destroy", self.allow_ipset_name])
         self._run_ipset_command(["destroy", self.block_ipset_name])
 
-        # hash:net タイプで作成（CIDR、IPv4対応）
+        # Create as hash:net (supports CIDR, IPv4)
         success = True
         success &= self._run_ipset_command(
             ["create", self.allow_ipset_name, "hash:net", "family", "inet"]
@@ -102,33 +102,33 @@ class StaticIPManager:
         return success
 
     def setup_static_ips(self, allow_ips: list[str], block_ips: list[str]) -> bool:
-        """静的IPフィルタリングを設定.
+        """Configure static IP filtering.
 
         Args:
-            allow_ips: 許可IPリスト（単一IP、CIDR、レンジ）
-            block_ips: 拒否IPリスト（単一IP、CIDR、レンジ）
+            allow_ips: Allowlisted IPs (single IP, CIDR or range)
+            block_ips: Denied IPs (single IP, CIDR or range)
 
         Returns:
-            成功した場合True
+            True on success
         """
-        # ipset作成
+        # Create the ipsets
         if not self.create_ipsets():
             return False
 
-        # 許可IPを追加
+        # Add allowlisted IPs
         for ip_spec in allow_ips:
             if "/" in ip_spec:
-                # CIDR: そのまま追加
+                # CIDR: add as-is
                 self._run_ipset_command(["add", self.allow_ipset_name, ip_spec])
             elif "-" in ip_spec:
-                # IPレンジ: 個別IPに展開して追加
+                # IP range: expand into individual addresses
                 for ip in self._expand_ip_range(ip_spec):
                     self._run_ipset_command(["add", self.allow_ipset_name, ip])
             else:
-                # 単一IP: そのまま追加
+                # Single IP: add as-is
                 self._run_ipset_command(["add", self.allow_ipset_name, ip_spec])
 
-        # 拒否IPを追加
+        # Add denied IPs
         for ip_spec in block_ips:
             if "/" in ip_spec:
                 self._run_ipset_command(["add", self.block_ipset_name, ip_spec])
@@ -146,7 +146,7 @@ class StaticIPManager:
         return True
 
     def cleanup(self) -> None:
-        """ipsetをクリーンアップ."""
+        """Tear down the ipsets."""
         self._run_ipset_command(["destroy", self.allow_ipset_name])
         self._run_ipset_command(["destroy", self.block_ipset_name])
         log_system_event("Static IP ipsets destroyed")

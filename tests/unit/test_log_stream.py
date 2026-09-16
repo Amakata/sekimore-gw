@@ -1,4 +1,4 @@
-"""Web UI のログ配信ポーラ（0.2.3）: snapshot、rowid カーソルの新着、まとめ配信、クライアント無しで停止."""
+"""The Web UI log streaming poller (0.2.3): snapshot, new rows via the rowid cursor, batched delivery, and stopping with no clients."""
 
 import asyncio
 import time
@@ -48,7 +48,7 @@ def describe_log_streamer():
         snap = await s.snapshot(limit=50)
         assert snap["type"] == "snapshot"
         comps = [e["component"] for e in snap["entries"]]
-        assert comps == ["DNS", "FIREWALL", "PROXY"]  # 昇順、ignored は出ない
+        assert comps == ["DNS", "FIREWALL", "PROXY"]  # Ascending; ignored is excluded
         fw = snap["entries"][1]
         assert fw["action"] == "BLOCKED" and fw["dst_port"] == 22 and "TCP" in fw["reason"]
         assert snap["entries"][2]["reason"] == "GET via proxy (TCP_MISS)"
@@ -67,7 +67,7 @@ def describe_log_streamer():
         s.poll_interval = 0.05
         s.start()
         await asyncio.sleep(0.15)
-        assert sent == []  # 起動時点より前の記録は配信しない（snapshot が担う）
+        assert sent == []  # Rows older than startup are not streamed (the snapshot covers those)
         async with aiosqlite.connect(db) as w:
             now = time.time()
             await w.execute(
@@ -84,7 +84,7 @@ def describe_log_streamer():
             )
             await w.commit()
         await asyncio.sleep(0.3)
-        assert len(sent) == 1, sent  # 同じ周期の新着は 1 メッセージ
+        assert len(sent) == 1, sent  # New rows within one poll cycle arrive as a single message
         msg = sent[0]
         assert msg["type"] == "logs"
         assert [(e["component"], e["action"]) for e in msg["entries"]] == [
@@ -95,7 +95,7 @@ def describe_log_streamer():
             msg["entries"][0]["domain"] == "new.example"
             and msg["entries"][0]["dst_ip"] == "5.6.7.8"
         )
-        # クライアントが居なくなるとポーラは止まる
+        # The poller stops once the last client goes away
         clients["n"] = 0
         await asyncio.sleep(0.2)
         assert not s.running

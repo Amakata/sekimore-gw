@@ -1,8 +1,10 @@
-"""Relay（中継関所）タブのデータ読み出し.
+"""Data sources for the Relay tab.
 
-relay の状態は Rust 側が /data/relay に書く（tokens.json / audit.jsonl / authorized_keys / …）。
-ここではそれを **読むだけ** で、Web UI の他タブと同じ形（設定 / 履歴 / ブロック履歴）に整える。
-秘密（トークン平文・上流トークン・ホスト鍵）はファイルにも無いか、あっても読まない。
+The relay state is written by the Rust side under /data/relay (tokens.json /
+audit.jsonl / authorized_keys / ...). This module only **reads** it and reshapes it into
+the same form as the other Web UI tabs (settings / history / block history). Secrets
+(plaintext tokens, the upstream token, host keys) are either not in those files at all
+or are never read.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-# 監査イベントの分類（relay/src の Audit が書く event 名）
+# Audit event categories (the event names written by Audit in relay/src)
 ALLOW_EVENTS = {
     "relay_ok": "GIT",
     "api_ok": "API",
@@ -57,28 +59,30 @@ class RelayRepo(BaseModel):
     mode: str
     bases: list[str] = []
     push: list[str] = []
-    tags: list[str] = []  # push を許すタグ glob（空 = 拒否）
+    tags: list[str] = []  # tag globs allowed for push (empty = denied)
     delete: bool = False
-    permissions: list[str] = []  # 実効権限 = (案件 allow ∪ repo allow) − (案件 deny ∪ repo deny)
-    host: str = ""  # 0.2.0: 上流ドメイン（`host/Org/Repo` の host。省略時は既定上流）
+    # effective = (project allow | repo allow) - (project deny | repo deny)
+    permissions: list[str] = []
+    # 0.2.0: upstream domain (the host in `host/Org/Repo`; default upstream if omitted)
+    host: str = ""
 
 
 class RelayUpstream(BaseModel):
-    """0.2.0: git-relay ドメイン 1 つ分（上流）。一覧の先頭が既定上流."""
+    """0.2.0: one git-relay domain (an upstream). The first in the list is the default."""
 
     domain: str
     upstream: str
     ssh_port: int
     default: bool = False
     api_base: str = ""
-    ssh_options: list[str] = []  # 0.2.1: 上流 ssh に足す -o（ProxyJump 等）
-    max_upload_bytes: int = 1048576  # 0.2.2: 443 の送信上限（-1 = 無制限）
+    ssh_options: list[str] = []  # 0.2.1: extra -o options for the upstream ssh (ProxyJump etc.)
+    max_upload_bytes: int = 1048576  # 0.2.2: upload cap on 443 (-1 = unlimited)
     token_present: bool = False
     known_hosts_count: int | None = None
 
 
 class RelayHttpsTarget(BaseModel):
-    """0.2.2: https-relay のドメイン（443 だけ関所の passthrough を通す）."""
+    """0.2.2: an https-relay domain (only 443 goes through the relay passthrough)."""
 
     domain: str
     upstream: str
@@ -86,11 +90,11 @@ class RelayHttpsTarget(BaseModel):
 
 
 class RelayStateFile(BaseModel):
-    """/data/relay 内のファイルの有無だけ（中身は出さない）."""
+    """Only whether a file under /data/relay exists; its contents are never exposed."""
 
     name: str
     present: bool
-    count: int | None = None  # authorized_keys の鍵数 / known_hosts の行数
+    count: int | None = None  # keys in authorized_keys / lines in known_hosts
 
 
 class RelayConfigResponse(BaseModel):
@@ -101,18 +105,20 @@ class RelayConfigResponse(BaseModel):
     https: str = "passthrough"
     bootstrap: str = "auto"
     token_ttl: str = "12h"
-    allow_delete: bool = False  # 0.1.9〜: project.delete の既定（旧 relay.allow_delete も畳み込む）
-    allow_tags: bool = False  # 0.1.9〜: project.tags が非空か（旧 relay.allow_tags も畳み込む）
-    tags: list[str] = []  # 案件既定のタグ glob
-    permissions_deny: list[str] = []  # 案件既定の deny
+    # 0.1.9+: default for project.delete (folds in the old relay.allow_delete)
+    allow_delete: bool = False
+    # 0.1.9+: whether project.tags is non-empty (folds in the old relay.allow_tags)
+    allow_tags: bool = False
+    tags: list[str] = []  # project default tag globs
+    permissions_deny: list[str] = []  # project default deny list
     ssh_listen: str = "0.0.0.0:22"
     api_listen: str = "0.0.0.0:8420"
     state_dir: str = "/data/relay"
     permissions: list[str] = []
     repos: list[RelayRepo] = []
-    upstreams: list[RelayUpstream] = []  # 0.2.0: 先頭が既定上流
+    upstreams: list[RelayUpstream] = []  # 0.2.0: the first entry is the default upstream
     https_relays: list[RelayHttpsTarget] = []  # 0.2.2
-    https_max_upload_bytes: int = 1048576  # 0.2.2: 送信上限の既定（-1 = 無制限）
+    https_max_upload_bytes: int = 1048576  # 0.2.2: default upload cap (-1 = unlimited)
     state_files: list[RelayStateFile] = []
     bootstrap_disabled: bool = False
 
@@ -128,7 +134,7 @@ class RelayTokenInfo(BaseModel):
 
 
 class RelayAuditEntry(BaseModel):
-    """監査ログ 1 行。Dashboard の LogEntry と同じ見せ方にするための形."""
+    """One audit log line, shaped like the dashboard LogEntry so it renders the same way."""
 
     timestamp: float
     component: str  # GIT / API / SSH / HTTPS / BOOTSTRAP / SYSTEM
@@ -141,8 +147,9 @@ class RelayAuditEntry(BaseModel):
     path: str | None = None
     label: str | None = None
     reason: str | None = None
-    detail: str | None = None  # bytes / ms / cmdline など補足
-    flag: str | None = None  # 0.2.2: "large_upload" = passthrough の送信が LARGE_UPLOAD_BYTES 以上
+    detail: str | None = None  # extras such as bytes / ms / cmdline
+    # 0.2.2: "large_upload" = passthrough upload of at least LARGE_UPLOAD_BYTES
+    flag: str | None = None
 
 
 class RelayStatsResponse(BaseModel):
@@ -152,16 +159,17 @@ class RelayStatsResponse(BaseModel):
     tokens_active: int = 0
     tokens_total: int = 0
     keys: int = 0
-    large_uploads: int = 0  # 0.2.2: 直近 24h の大きな送信（passthrough）
-    upload_capped: int = 0  # 0.2.2: 直近 24h の上限超過で切断した接続
+    large_uploads: int = 0  # 0.2.2: large passthrough uploads in the last 24h
+    upload_capped: int = 0  # 0.2.2: connections cut in the last 24h for exceeding the cap
 
 
-# 0.2.2: これ以上の送信（dev → 上流）があった passthrough 接続は Relay タブで目立たせる
+# 0.2.2: passthrough connections uploading at least this much (dev -> upstream) are
+# highlighted in the Relay tab
 LARGE_UPLOAD_BYTES = 1024 * 1024
 
 
 def parse_ts(value: Any) -> float | None:
-    """RFC3339（humantime 形式、小数秒は任意桁）→ epoch 秒."""
+    """Convert RFC3339 (humantime style, any number of fractional digits) to epoch seconds."""
     if not isinstance(value, str):
         return None
     m = _TS_RE.match(value)
@@ -183,11 +191,12 @@ def _port_of(listen: Any, default: int) -> int:
 
 
 def _git_relay_upstreams(config: dict) -> list[dict[str, Any]]:
-    """git-relay の上流一覧（relay/src/config.rs の resolve_upstreams と同じ規則。先頭が既定）.
+    """The git-relay upstreams, default first (same rules as resolve_upstreams in relay/src/config.rs).
 
-    既定上流 = `default: true` → 無ければ `ssh_port` を省いたもの → 無ければ辞書順の先頭。
-    既定上流は relay.ssh_listen / relay.upstream / <state_dir>/{upstream_token,known_hosts} を使い、
-    他は `ssh_port` で listen し、state は <state_dir>/upstreams/<host>/ に置く。
+    The default upstream is the one with `default: true`; failing that, the one without
+    `ssh_port`; failing that, the first in lexical order. The default uses
+    relay.ssh_listen / relay.upstream / <state_dir>/{upstream_token,known_hosts}; the
+    others listen on their `ssh_port` and keep state in <state_dir>/upstreams/<host>/.
     """
     handlers = config.get("domain_handlers") or {}
     relay = config.get("relay") or {}
@@ -222,7 +231,7 @@ def _git_relay_upstreams(config: dict) -> list[dict[str, Any]]:
             port = int(port) if port is not None else listen_port
         except (TypeError, ValueError):
             port = listen_port
-        if spec.get("api_base"):  # 0.2.1: handler の上書きが最優先
+        if spec.get("api_base"):  # 0.2.1: an override on the handler wins
             api_base = str(spec["api_base"])
         elif is_default and relay.get("api_base"):
             api_base = str(relay["api_base"])
@@ -259,7 +268,7 @@ def _git_relay_upstreams(config: dict) -> list[dict[str, Any]]:
 
 
 def _git_relay_domain(config: dict) -> str | None:
-    """既定上流のドメイン（git-relay が無ければ None）."""
+    """The default upstream domain, or None when there is no git-relay."""
     ups = _git_relay_upstreams(config)
     return ups[0]["domain"] if ups else None
 
@@ -272,7 +281,7 @@ def _int_or(value: Any, default: int) -> int:
 
 
 def _https_relays(config: dict) -> list[RelayHttpsTarget]:
-    """https-relay のドメイン（0.2.2）。上限は handler → relay の既定の順."""
+    """The https-relay domains (0.2.2). The cap comes from the handler, then the relay default."""
     handlers = config.get("domain_handlers") or {}
     relay = config.get("relay") or {}
     if not isinstance(handlers, dict) or not isinstance(relay, dict):
@@ -295,7 +304,7 @@ def _https_relays(config: dict) -> list[RelayHttpsTarget]:
 
 
 def _perm_spec(v: Any) -> tuple[list[str], list[str]]:
-    """permissions の `[…]`（allow）か `{allow, deny}` を (allow, deny) にする."""
+    """Turn a permissions `[...]` (allow) or `{allow, deny}` into an (allow, deny) pair."""
     if isinstance(v, list):
         return [str(x) for x in v], []
     if isinstance(v, dict):
@@ -312,7 +321,7 @@ def _count_lines(path: Path) -> int:
 
 
 def build_config(config: dict) -> RelayConfigResponse:
-    """config.yml の relay 部分を表示用に整える（Rust が所有するキーもそのまま読む）."""
+    """Shape the relay section of config.yml for display, including keys owned by Rust."""
     upstreams = _git_relay_upstreams(config)
     domain = upstreams[0]["domain"] if upstreams else None
     relay = config.get("relay") or {}
@@ -321,15 +330,16 @@ def build_config(config: dict) -> RelayConfigResponse:
     project = relay.get("project") or {}
     if not isinstance(project, dict):
         project = {}
-    # 案件の既定（旧 relay.allow_tags / allow_delete は既定へ畳み込む）
+    # Project defaults (the old relay.allow_tags / allow_delete fold into them)
     p_allow, p_deny = _perm_spec(project.get("permissions"))
     default_push = [str(p) for p in (project.get("push") or ["sekimore/*"])]
     default_tags = [str(t) for t in (project.get("tags") or [])]
     if not default_tags and bool(relay.get("allow_tags", False)):
         default_tags = ["*"]
     default_delete = bool(project.get("delete", False)) or bool(relay.get("allow_delete", False))
-    # 0.2.1: 上流層 project.upstreams.<domain>（permissions の差分と push / tags / delete の既定、repos）。
-    # キーはドメインでも上流ホスト名でもよい → ドメインに正規化
+    # 0.2.1: the upstream layer project.upstreams.<domain> (permission deltas, the
+    # push / tags / delete defaults, and repos). Keys may be either a domain or an
+    # upstream host name, so normalize them to domains.
     host_to_domain = {u["upstream"]: u["domain"] for u in upstreams}
     layers: dict[str, dict] = {}
     raw_layers = project.get("upstreams") or {}
@@ -337,7 +347,8 @@ def build_config(config: dict) -> RelayConfigResponse:
         for key, layer in raw_layers.items():
             k = str(key).strip().rstrip(".").lower()
             layers[host_to_domain.get(k, k)] = layer if isinstance(layer, dict) else {}
-    # (repo 設定, 上流ドメイン) を project.repos（host prefix）と upstreams.<d>.repos から集める
+    # Collect (repo config, upstream domain) from project.repos (host prefix) and
+    # upstreams.<d>.repos
     entries: list[tuple[dict, str]] = []
     for r in project.get("repos") or []:
         if not isinstance(r, dict) or not r.get("name"):
@@ -360,7 +371,8 @@ def build_config(config: dict) -> RelayConfigResponse:
         effective = sorted(
             (set(p_allow) | set(l_allow) | set(r_allow)) - (set(p_deny) | set(l_deny) | set(r_deny))
         )
-        # 0.2.0: `host/Org/Repo` は上流を明示。`Org/Repo` は既定上流（上流層の repos ではその上流）
+        # 0.2.0: `host/Org/Repo` names the upstream explicitly; `Org/Repo` means the
+        # default upstream (or, inside an upstream layer's repos, that upstream)
         name = str(r["name"]).strip().lstrip("/")
         parts = name.split("/")
         if len(parts) == 3 and "." in parts[0]:
@@ -413,7 +425,7 @@ def build_config(config: dict) -> RelayConfigResponse:
             "tokens.json",
             "audit.jsonl",
         ]
-        # 0.2.0: 既定以外の上流の state は upstreams/<host>/ にある
+        # 0.2.0: state for non-default upstreams lives under upstreams/<host>/
         for u in upstreams:
             if not u["default"]:
                 names.append(f"upstreams/{u['upstream']}/upstream_token")
@@ -446,7 +458,7 @@ def build_config(config: dict) -> RelayConfigResponse:
 
 
 def read_tokens(state_dir: Path, now: float | None = None) -> list[RelayTokenInfo]:
-    """tokens.json（ハッシュとメタデータのみ）を一覧にする。ハッシュ（キー）は出さない."""
+    """List tokens.json (hashes and metadata only); the hashes, which are the keys, are not exposed."""
     path = state_dir / "tokens.json"
     try:
         with open(path, encoding="utf-8") as f:
@@ -484,7 +496,7 @@ def read_tokens(state_dir: Path, now: float | None = None) -> list[RelayTokenInf
 
 
 def _tail_lines(path: Path, max_lines: int, max_bytes: int = 4 * 1024 * 1024) -> list[str]:
-    """ファイル末尾から最大 max_lines 行（大きな監査ログを全部読まない）."""
+    """Up to max_lines lines from the end of the file, so a large audit log is not read whole."""
     try:
         size = path.stat().st_size
         with open(path, "rb") as f:
@@ -495,7 +507,7 @@ def _tail_lines(path: Path, max_lines: int, max_bytes: int = 4 * 1024 * 1024) ->
         return []
     lines = chunk.decode("utf-8", errors="replace").splitlines()
     if start > 0 and lines:
-        lines = lines[1:]  # 途中から読んだ最初の行は欠けている
+        lines = lines[1:]  # reading from mid-file leaves the first line truncated
     return lines[-max_lines:] if max_lines > 0 else lines
 
 
@@ -551,9 +563,9 @@ def to_entry(obj: dict) -> RelayAuditEntry | None:
 
 
 def read_audit(state_dir: Path, limit: int = 100, kind: str = "all") -> list[RelayAuditEntry]:
-    """audit.jsonl の末尾を新しい順に。kind = all | allowed | blocked."""
+    """The tail of audit.jsonl, newest first. kind = all | allowed | blocked."""
     path = state_dir / "audit.jsonl"
-    # 絞り込むときは余裕を持って読む
+    # Read generously, since filtering discards some of it
     raw = _tail_lines(path, max(limit * 8, 400))
     out: list[RelayAuditEntry] = []
     for line in reversed(raw):
@@ -589,7 +601,7 @@ def build_stats(config: dict, since_hours: int = 24) -> RelayStatsResponse:
     allowed = blocked = large_uploads = upload_capped = 0
     for entry in read_audit(sd, limit=5000):
         if entry.timestamp < cutoff:
-            break  # 新しい順なので、ここから先は古い
+            break  # newest first, so everything past here is older
         if entry.action == "ALLOWED":
             allowed += 1
         elif entry.action == "BLOCKED":

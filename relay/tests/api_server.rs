@@ -170,7 +170,7 @@ async fn issue_labels_need_label_permission() {
     assert_eq!(code, 403);
     assert!(resp.error.unwrap().contains("issue:label"));
     assert!(recorded(&f.recorder).is_empty());
-    // ラベル無しなら通る
+    // Without labels it goes through
     let r = ApiRequest {
         title: "t".into(),
         ..req("LibOrg/awesome-lib")
@@ -246,15 +246,15 @@ async fn bootstrap_registers_key_and_issues_token() {
     assert_eq!(resp.git_domain.as_deref(), Some("github.com"));
     assert_eq!(resp.upstream.as_deref(), Some("github.com"));
     assert!(resp.fingerprint.unwrap().starts_with("SHA256:"));
-    // 発行されたトークンで API が使える
+    // The issued token works against the API
     let (code, _) = post(f.addr, "/whoami", Some(&token), &ApiRequest::default()).await;
     assert_eq!(code, 200);
-    // 再登録は冪等
+    // Re-registering is idempotent
     let (code, resp2) = post_bootstrap(f.addr, &key).await;
     assert_eq!(code, 200);
     assert!(!resp2.added);
     assert_eq!(f.ctx.keys.count(), 1);
-    // 不正な鍵
+    // Malformed key
     let (code, resp3) = post_bootstrap(f.addr, "not a key").await;
     assert_eq!(code, 400);
     assert!(!resp3.ok);

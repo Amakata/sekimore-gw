@@ -1,10 +1,12 @@
-# 開発用タスク。push 前に `mise run ci` で CI (relay.yml / test.yml / lint.yml) と同じチェックを一括で回す。
-# ci は独立チェックを並列で走らせる (mise の depends は並列実行)。重いのは pytest(~35s) と cargo test(~10s) だけ
-# なので、この 2 つを別レーンにして全体を最も重いタスクの時間 (~35s) に縮める。
+# Development tasks. Before pushing, run `mise run ci` to do the same checks as CI
+# (relay.yml / test.yml / lint.yml) all together.
+# ci runs the independent checks in parallel (mise's depends are executed concurrently). Only pytest (~35s)
+# and cargo test (~10s) are slow, so they get their own lanes and the whole run takes as long as the
+# slowest task (~35s).
 #
-#   mise run ci        # 全チェック並列。push 前に必ず
-#   mise run fmt       # rustfmt + ruff format を「適用」(--check ではなく書き換え)
-#   個別: mise run ci:rust-lint / ci:rust-test / ci:py-lint / ci:py-test / audit
+#   mise run ci        # every check in parallel. Always run before pushing
+#   mise run fmt       # rustfmt + ruff format, "applying" the changes (rewrites files, not --check)
+#   Individually: mise run ci:rust-lint / ci:rust-test / ci:py-lint / ci:py-test / audit
 
 [tools]
 rust = "1.89.0"
@@ -14,7 +16,7 @@ SEKIMORE_E2E_REQUIRED = "1"
 
 # ---- Rust (relay.yml) ----
 [tasks."ci:rust-lint"]
-description = "relay の fmt --check + clippy (速い)"
+description = "relay fmt --check + clippy (fast)"
 dir = "{{config_root}}/relay"
 run = """
 set -e
@@ -23,13 +25,13 @@ cargo clippy --all-targets --features test-hooks -- -D warnings
 """
 
 [tasks."ci:rust-test"]
-description = "relay の test --locked (e2e 込み、~10s)"
+description = "relay test --locked (includes e2e, ~10s)"
 dir = "{{config_root}}/relay"
 run = "cargo test --features test-hooks --locked"
 
 # ---- Python (lint.yml + test.yml) ----
 [tasks."ci:py-lint"]
-description = "ruff check / ruff format --check / mypy (速い)"
+description = "ruff check / ruff format --check / mypy (fast)"
 run = """
 set -e
 uv run ruff check src/ tests/
@@ -38,16 +40,16 @@ uv run mypy src/
 """
 
 [tasks."ci:py-test"]
-description = "pytest (~35s、最も重い)"
+description = "pytest (~35s, the slowest task)"
 run = 'uv run pytest -m "not e2e"'
 
-# ---- まとめ ----
+# ---- Combined ----
 [tasks.ci]
-description = "push 前の一括チェック (4 タスクを並列実行)"
+description = "all pre-push checks (runs 4 tasks in parallel)"
 depends = ["ci:rust-lint", "ci:rust-test", "ci:py-lint", "ci:py-test"]
 
 [tasks.fmt]
-description = "整形を適用する (rustfmt + ruff format。書き換え)"
+description = "apply formatting (rustfmt + ruff format; rewrites files)"
 run = """
 set -e
 (cd "{{config_root}}/relay" && cargo fmt)

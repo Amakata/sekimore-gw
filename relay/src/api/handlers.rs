@@ -1,4 +1,4 @@
-//! 各エンドポイント。要求の必須項目を確かめ、`Project::authorize` で証明を得て `GitHub` に渡す。
+//! The individual endpoints. Each checks the request's required fields, obtains proof via `Project::authorize`, and passes it to `GitHub`.
 
 use std::time::SystemTime;
 
@@ -15,7 +15,7 @@ use crate::policy::{Action, Authorized, Resource};
 use crate::ssh::authorized_keys::Added;
 use crate::tokens::TokenRecord;
 
-/// 証明が指す repo の上流の GitHub client（上流ごとに token / API base が違う。0.2.0）。
+/// The GitHub client for the upstream of the repo the proof refers to (each upstream has its own token and API base. 0.2.0).
 fn gh<'a>(ctx: &'a ApiContext, auth: &Authorized<'_>) -> Result<&'a GitHub, ApiError> {
     let host = ctx.project.host_of(auth.policy());
     let key = if host.is_empty() {
@@ -40,7 +40,7 @@ fn need(cond: bool, msg: &str) -> Result<(), ApiError> {
     }
 }
 
-/// Projects v2 は org 単位なので repo 省略可。ポリシーの anchor は案件の先頭リポジトリ。
+/// Projects v2 is org-scoped, so the repo may be omitted. The policy anchor is then the project's first repository.
 fn project_anchor<'a>(ctx: &'a ApiContext, req: &'a ApiRequest) -> Result<&'a str, ApiError> {
     if !req.repo.is_empty() {
         return Ok(&req.repo);
@@ -84,7 +84,7 @@ pub async fn dispatch(
     }
 }
 
-// ---- 権限確認 ----
+// ---- Permission checks ----
 
 fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiError> {
     let repos: Vec<String> = ctx
@@ -309,7 +309,7 @@ async fn ci_log(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiEr
         req.window as usize
     };
     let before = req.before.map(|b| b as usize);
-    // job_id 指定が無ければ、PR の失敗ジョブ (無ければ最後のジョブ) を自動選択
+    // With no job_id given, pick the PR's failing job automatically (or the last job if none failed)
     let (job_id, name, concl) = if req.job_id != 0 {
         (req.job_id, String::new(), String::new())
     } else {
@@ -348,7 +348,7 @@ async fn issue_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Issue, Action::Create)?;
-    // ラベル付与は別権限。付けるなら issue:label が必要
+    // Applying labels is a separate permission: issue:label is required to set them
     let label_auth = if req.labels.is_empty() {
         None
     } else {
@@ -480,7 +480,7 @@ async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
     })
 }
 
-// ---- ブートストラップ（認証なし） ----
+// ---- Bootstrap (unauthenticated) ----
 
 pub async fn bootstrap(
     ctx: &ApiContext,
@@ -542,7 +542,7 @@ pub async fn bootstrap(
         Added::New { fingerprint } => (fingerprint, true),
         Added::AlreadyPresent { fingerprint } => (fingerprint, false),
     };
-    // 同じ鍵からの再 bootstrap（コンテナ再作成など）は前のトークンを失効させる: 鍵 1 本につき有効トークンは 1 つ
+    // A re-bootstrap from the same key (e.g. after the container is recreated) revokes the previous token: one valid token per key
     let revoked_previous = ctx.tokens.revoke_by_fingerprint(&fingerprint).unwrap_or(0);
     let (token, rec) = ctx
         .tokens
