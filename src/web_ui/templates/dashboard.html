@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sekimore Dashboard</title>
+    <title data-i18n="title">Sekimore Gateway</title>
     <style>
         * {
             margin: 0;
@@ -312,19 +312,23 @@
         <h1>
             <span id="status-indicator" class="status-indicator status-disconnected"></span>
             <span id="gateway-name">Sekimore</span>
+            <select id="lang-select" onchange="setLang(this.value)" aria-label="Language" style="float: right; background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 4px 8px; font-size: 13px;">
+                <option value="en">English</option>
+                <option value="ja">日本語</option>
+            </select>
         </h1>
         <p id="gateway-description" class="gateway-description" style="display: none;"></p>
 
         <!-- タブナビゲーション -->
         <div class="tabs">
-            <button class="tab active" onclick="switchTab('dashboard')">Dashboard</button>
-            <button class="tab" onclick="switchTab('allowed')">Allowed Domains</button>
-            <button class="tab" onclick="switchTab('blocked')">Blocked Domains</button>
-            <button class="tab" onclick="switchTab('unique')">All Domains</button>
-            <button class="tab" onclick="switchTab('ignored')">Ignored Domains</button>
-            <button class="tab" onclick="switchTab('blocked-ips')">Blocked IPs</button>
-            <button class="tab" onclick="switchTab('config')">Config</button>
-            <button class="tab" onclick="switchTab('relay')">Relay</button>
+            <button class="tab active" onclick="switchTab('dashboard')" data-i18n="tab.dashboard">Dashboard</button>
+            <button class="tab" onclick="switchTab('allowed')" data-i18n="tab.allowed">Allowed Domains</button>
+            <button class="tab" onclick="switchTab('blocked')" data-i18n="tab.blocked">Blocked Domains</button>
+            <button class="tab" onclick="switchTab('unique')" data-i18n="tab.all">All Domains</button>
+            <button class="tab" onclick="switchTab('ignored')" data-i18n="tab.ignored">Ignored Domains</button>
+            <button class="tab" onclick="switchTab('blocked-ips')" data-i18n="tab.blocked_ips">Blocked IPs</button>
+            <button class="tab" onclick="switchTab('config')" data-i18n="tab.config">Config</button>
+            <button class="tab" onclick="switchTab('relay')" data-i18n="tab.relay">Relay</button>
         </div>
 
         <!-- Dashboard タブ -->
@@ -333,72 +337,72 @@
         <div class="stats">
             <div class="stat-card">
                 <div class="stat-value" id="stat-total">0</div>
-                <div class="stat-label">Total Requests (24h)</div>
+                <div data-i18n="stat.total_24h" class="stat-label">Total Requests (24h)</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="stat-allowed">0</div>
-                <div class="stat-label">DNS Allowed</div>
+                <div data-i18n="stat.dns_allowed" class="stat-label">DNS Allowed</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="stat-blocked">0</div>
-                <div class="stat-label">DNS Blocked</div>
+                <div data-i18n="stat.dns_blocked" class="stat-label">DNS Blocked</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="stat-ignored">0</div>
-                <div class="stat-label">DNS Ignored</div>
+                <div data-i18n="stat.dns_ignored" class="stat-label">DNS Ignored</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="stat-firewall-blocked">0</div>
-                <div class="stat-label">Firewall Blocked</div>
+                <div data-i18n="stat.fw_blocked" class="stat-label">Firewall Blocked</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="stat-proxy-allowed">0</div>
-                <div class="stat-label">Proxy Allowed</div>
+                <div data-i18n="stat.proxy_allowed" class="stat-label">Proxy Allowed</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="stat-proxy-blocked">0</div>
-                <div class="stat-label">Proxy Blocked</div>
+                <div data-i18n="stat.proxy_blocked" class="stat-label">Proxy Blocked</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="stat-domains">0</div>
-                <div class="stat-label">Unique Domains</div>
+                <div data-i18n="stat.unique_domains" class="stat-label">Unique Domains</div>
             </div>
         </div>
 
         <!-- DNSキャッシュ統計 -->
-        <h2>DNS Cache Statistics</h2>
+        <h2 data-i18n="cache.title">DNS Cache Statistics</h2>
         <div class="stats">
             <div class="stat-card">
                 <div class="stat-value" id="cache-enabled">N/A</div>
-                <div class="stat-label">Cache Status</div>
+                <div data-i18n="cache.status" class="stat-label">Cache Status</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="cache-size">0</div>
-                <div class="stat-label">Cache Size</div>
+                <div data-i18n="cache.size" class="stat-label">Cache Size</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="cache-hits">0</div>
-                <div class="stat-label">Cache Hits</div>
+                <div data-i18n="cache.hits" class="stat-label">Cache Hits</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="cache-misses">0</div>
-                <div class="stat-label">Cache Misses</div>
+                <div data-i18n="cache.misses" class="stat-label">Cache Misses</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="cache-hit-rate">0%</div>
-                <div class="stat-label">Hit Rate</div>
+                <div data-i18n="cache.hit_rate" class="stat-label">Hit Rate</div>
             </div>
         </div>
 
         <!-- 制御ボタン -->
         <div class="controls">
-            <button onclick="clearLogs()">Clear Logs</button>
-            <button onclick="refreshStats()">Refresh Stats</button>
+            <button data-i18n="btn.clear_logs" onclick="clearLogs()">Clear Logs</button>
+            <button data-i18n="btn.refresh_stats" onclick="refreshStats()">Refresh Stats</button>
         </div>
 
             <!-- ログ表示 -->
             <div class="logs-container" id="logs">
-                <div style="color: #8b949e; text-align: center; padding: 20px;">
+                <div data-i18n="logs.connecting" style="color: #8b949e; text-align: center; padding: 20px;">
                     Connecting to WebSocket...
                 </div>
             </div>
@@ -406,167 +410,202 @@
 
         <!-- Allowed Domains タブ -->
         <div id="tab-allowed" class="tab-content">
-            <h2 style="color: #58a6ff; margin-bottom: 20px;">許可ドメイン一覧</h2>
+            <h2 data-i18n="allowed.title" style="color: #58a6ff; margin-bottom: 20px;">Allowed Domains</h2>
             <div class="domain-list" id="allowed-domains-list">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
         </div>
 
         <!-- Blocked Domains タブ -->
         <div id="tab-blocked" class="tab-content">
-            <h2 style="color: #58a6ff; margin-bottom: 20px;">ブロックされたドメイン一覧</h2>
+            <h2 data-i18n="blocked.title" style="color: #58a6ff; margin-bottom: 20px;">Blocked Domains</h2>
             <div class="controls">
-                <button onclick="loadBlockedDomains()">Refresh</button>
+                <button data-i18n="btn.refresh" onclick="loadBlockedDomains()">Refresh</button>
             </div>
             <div class="domain-list" id="blocked-domains-list">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
         </div>
 
         <!-- All Domains タブ -->
         <div id="tab-unique" class="tab-content">
-            <h2 style="color: #58a6ff; margin-bottom: 20px;">全ドメイン一覧（アクセス統計）</h2>
+            <h2 data-i18n="all.title" style="color: #58a6ff; margin-bottom: 20px;">All Domains (access statistics)</h2>
             <div class="controls">
-                <button onclick="loadUniqueDomains()">Refresh</button>
+                <button data-i18n="btn.refresh" onclick="loadUniqueDomains()">Refresh</button>
             </div>
             <div class="domain-list" id="unique-domains-list">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
         </div>
 
         <!-- Ignored Domains タブ -->
         <div id="tab-ignored" class="tab-content">
-            <h2 style="color: #58a6ff; margin-bottom: 20px;">無視されたドメイン一覧</h2>
+            <h2 data-i18n="ignored.title" style="color: #58a6ff; margin-bottom: 20px;">Ignored Domains</h2>
             <div class="controls">
-                <button onclick="loadIgnoredDomains()">Refresh</button>
+                <button data-i18n="btn.refresh" onclick="loadIgnoredDomains()">Refresh</button>
             </div>
             <div class="domain-list" id="ignored-domains-list">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
         </div>
 
         <!-- Blocked IPs タブ -->
         <div id="tab-blocked-ips" class="tab-content">
-            <h2 style="color: #58a6ff; margin-bottom: 20px;">ブロックされたIPアドレス一覧</h2>
+            <h2 data-i18n="ips.title" style="color: #58a6ff; margin-bottom: 20px;">Blocked IP Addresses</h2>
             <div class="controls">
-                <button onclick="loadBlockedIPs()">Refresh</button>
+                <button data-i18n="btn.refresh" onclick="loadBlockedIPs()">Refresh</button>
             </div>
             <div class="domain-list" id="blocked-ips-list">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
         </div>
         <!-- Config タブ -->
         <div id="tab-config" class="tab-content">
-            <h2 style="color: #58a6ff; margin-bottom: 20px;">設定情報</h2>
+            <h2 data-i18n="config.title" style="color: #58a6ff; margin-bottom: 20px;">Configuration</h2>
             <div class="controls">
-                <button onclick="loadConfig()">Refresh</button>
+                <button data-i18n="btn.refresh" onclick="loadConfig()">Refresh</button>
             </div>
 
-            <h3 style="color: #e6edf3; margin-bottom: 15px;">Version</h3>
+            <h3 data-i18n="config.version" style="color: #e6edf3; margin-bottom: 15px;">Version</h3>
             <div class="stats" style="margin-bottom: 30px;">
                 <div class="stat-card">
                     <div class="stat-value" id="config-version-package" style="font-size: 24px;">-</div>
-                    <div class="stat-label">Package</div>
+                    <div data-i18n="config.package" class="stat-label">Package</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" id="config-version-core" style="font-size: 24px;">-</div>
-                    <div class="stat-label">Core SDK</div>
+                    <div data-i18n="config.core" class="stat-label">Core SDK</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" id="config-version-webui" style="font-size: 24px;">-</div>
-                    <div class="stat-label">Web UI</div>
+                    <div data-i18n="config.webui" class="stat-label">Web UI</div>
                 </div>
             </div>
 
-            <h3 style="color: #e6edf3; margin-bottom: 15px;">Proxy Settings</h3>
+            <h3 data-i18n="config.proxy_settings" style="color: #e6edf3; margin-bottom: 15px;">Proxy Settings</h3>
             <div class="domain-list" id="config-proxy-list">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Squid Configuration</h3>
+            <h3 data-i18n="config.squid" style="color: #e6edf3; margin: 25px 0 15px;">Squid Configuration</h3>
             <div class="domain-list" id="config-squid">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">iptables (filter)</h3>
+            <h3 data-i18n="config.iptables_filter" style="color: #e6edf3; margin: 25px 0 15px;">iptables (filter)</h3>
             <div class="domain-list" id="config-iptables-filter">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">iptables (nat)</h3>
+            <h3 data-i18n="config.iptables_nat" style="color: #e6edf3; margin: 25px 0 15px;">iptables (nat)</h3>
             <div class="domain-list" id="config-iptables-nat">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
         </div>
         <div id="tab-relay" class="tab-content">
-            <h2 style="color: #58a6ff; margin-bottom: 20px;">中継関所（Relay）</h2>
+            <h2 data-i18n="relay.title" style="color: #58a6ff; margin-bottom: 20px;">Relay</h2>
             <div class="controls">
-                <button onclick="loadRelay()">Refresh</button>
-                <span id="relay-disabled-note" style="color: #8b949e; font-size: 13px; display: none;">
-                    config.yml に <code>domain_handlers: { &lt;domain&gt;: { handler: git-relay } }</code> が無いので relay は動いていません
+                <button data-i18n="btn.refresh" onclick="loadRelay()">Refresh</button>
+                <span id="relay-disabled-note" data-i18n-html="relay.disabled_note" style="color: #8b949e; font-size: 13px; display: none;">
+                    config.yml has no <code>domain_handlers: { &lt;domain&gt;: { handler: git-relay } }</code>, so the relay is not running
                 </span>
             </div>
 
             <div class="stats" style="margin-bottom: 30px;">
                 <div class="stat-card">
                     <div class="stat-value" id="relay-stat-allowed">-</div>
-                    <div class="stat-label">Relay Allowed (24h)</div>
+                    <div data-i18n="relay.stat_allowed" class="stat-label">Relay Allowed (24h)</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" id="relay-stat-blocked">-</div>
-                    <div class="stat-label">Relay Blocked (24h)</div>
+                    <div data-i18n="relay.stat_blocked" class="stat-label">Relay Blocked (24h)</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" id="relay-stat-tokens">-</div>
-                    <div class="stat-label">Active Tokens</div>
+                    <div data-i18n="relay.stat_tokens" class="stat-label">Active Tokens</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" id="relay-stat-keys">-</div>
-                    <div class="stat-label">Registered Agent Keys</div>
+                    <div data-i18n="relay.stat_keys" class="stat-label">Registered Agent Keys</div>
                 </div>
             </div>
 
-            <h3 style="color: #e6edf3; margin-bottom: 15px;">Relay Settings</h3>
+            <h3 data-i18n="relay.settings" style="color: #e6edf3; margin-bottom: 15px;">Relay Settings</h3>
             <div class="domain-list" id="relay-config-list">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Permissions（API、既定拒否）</h3>
+            <h3 data-i18n="relay.permissions_title" style="color: #e6edf3; margin: 25px 0 15px;">Permissions (API, deny by default)</h3>
             <div class="domain-list" id="relay-permissions">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Repositories（案件）</h3>
+            <h3 data-i18n="relay.repos_title" style="color: #e6edf3; margin: 25px 0 15px;">Repositories (project)</h3>
             <div class="domain-list" id="relay-repos">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Project Tokens</h3>
+            <h3 data-i18n="relay.tokens_title" style="color: #e6edf3; margin: 25px 0 15px;">Project Tokens</h3>
             <div class="domain-list" id="relay-tokens">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Access History（許可された操作、最新 100 件）</h3>
+            <h3 data-i18n="relay.access_title" style="color: #e6edf3; margin: 25px 0 15px;">Access History (allowed operations, latest 100)</h3>
             <div class="logs-container" id="relay-access" style="max-height: 400px;">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">Block History（拒否された操作、最新 100 件）</h3>
+            <h3 data-i18n="relay.block_title" style="color: #e6edf3; margin: 25px 0 15px;">Block History (denied operations, latest 100)</h3>
             <div class="logs-container" id="relay-blocks" style="max-height: 400px;">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
 
-            <h3 style="color: #e6edf3; margin: 25px 0 15px;">State Files（/data/relay、有無のみ）</h3>
+            <h3 data-i18n="relay.state_files_title" style="color: #e6edf3; margin: 25px 0 15px;">State Files (/data/relay, presence only)</h3>
             <div class="domain-list" id="relay-state-files">
-                <div class="empty-state">読み込み中...</div>
+                <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
-            <p style="color: #8b949e; font-size: 12px; margin-top: 15px;">
-                この画面は閲覧のみ。トークンの失効や鍵の登録は gateway 内の <code>sekimore-relay</code> CLI（tokens / revoke / revoke-project / add-key / bootstrap disable）で行う。
+            <p data-i18n-html="relay.footer_note" style="color: #8b949e; font-size: 12px; margin-top: 15px;">
+                This view is read-only. Revoke tokens or register keys with the <code>sekimore-relay</code> CLI inside the gateway (tokens / revoke / revoke-project / add-key / bootstrap disable).
             </p>
         </div>
     </div>
 
     <script>
+        // ---- i18n (0.2.4): 文言は /api/i18n の辞書から。静的な要素は data-i18n / data-i18n-html、動的な文言は tr() ----
+        let I18N = { lang: 'en', strings: {} };
+        function tr(key, vars) {
+            let text = I18N.strings[key];
+            if (text === undefined) text = key;
+            if (vars) for (const name in vars) text = text.split(`{${name}}`).join(String(vars[name]));
+            return text;
+        }
+        function applyI18n() {
+            document.documentElement.lang = I18N.lang;
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const text = I18N.strings[el.dataset.i18n];
+                if (text !== undefined) el.textContent = text;
+            });
+            document.querySelectorAll('[data-i18n-html]').forEach(el => {
+                const html = I18N.strings[el.dataset.i18nHtml];
+                if (html !== undefined) el.innerHTML = html;
+            });
+            const sel = document.getElementById('lang-select');
+            if (sel) sel.value = I18N.lang;
+        }
+        async function loadI18n() {
+            try {
+                const r = await fetch('/api/i18n');
+                if (r.ok) I18N = await r.json();
+            } catch (e) {
+                console.error('Failed to load i18n:', e);
+            }
+            applyI18n();
+        }
+        function setLang(lang) {
+            document.cookie = `sekimore_lang=${encodeURIComponent(lang)}; path=/; max-age=31536000; SameSite=Lax`;
+            location.reload();
+        }
+
         let ws = null;
         const maxLogs = 100;
 
@@ -628,7 +667,7 @@
                 logsDiv.innerHTML = '';
             }
             if (!entries.length) {
-                if (replace) logsDiv.innerHTML = '<div class="empty-state">ログはまだありません</div>';
+                if (replace) logsDiv.innerHTML = `<div class="empty-state">${tr('logs.empty')}</div>`;
                 return;
             }
             const fragment = document.createDocumentFragment();
@@ -702,14 +741,14 @@
                 const cacheStats = await cacheResponse.json();
 
                 if (cacheStats.enabled) {
-                    document.getElementById('cache-enabled').textContent = 'Enabled';
+                    document.getElementById('cache-enabled').textContent = tr('common.enabled');
                     document.getElementById('cache-enabled').style.color = '#3fb950';
                     document.getElementById('cache-size').textContent = cacheStats.size.toLocaleString();
                     document.getElementById('cache-hits').textContent = cacheStats.hits.toLocaleString();
                     document.getElementById('cache-misses').textContent = cacheStats.misses.toLocaleString();
                     document.getElementById('cache-hit-rate').textContent = cacheStats.hit_rate.toFixed(2) + '%';
                 } else {
-                    document.getElementById('cache-enabled').textContent = 'Disabled';
+                    document.getElementById('cache-enabled').textContent = tr('common.disabled');
                     document.getElementById('cache-enabled').style.color = '#f85149';
                     document.getElementById('cache-size').textContent = '-';
                     document.getElementById('cache-hits').textContent = '-';
@@ -763,7 +802,7 @@
                 const listDiv = document.getElementById('allowed-domains-list');
 
                 if (domains.length === 0) {
-                    listDiv.innerHTML = '<div class="empty-state">許可ドメインが設定されていません</div>';
+                    listDiv.innerHTML = `<div class="empty-state">${tr('allowed.empty')}</div>`;
                     return;
                 }
 
@@ -776,7 +815,7 @@
             } catch (error) {
                 console.error('Failed to load allowed domains:', error);
                 document.getElementById('allowed-domains-list').innerHTML =
-                    '<div class="empty-state">エラー: データの読み込みに失敗しました</div>';
+                    `<div class="empty-state">${tr('error.load_data')}</div>`;
             }
         }
 
@@ -789,7 +828,7 @@
                 const listDiv = document.getElementById('blocked-domains-list');
 
                 if (domains.length === 0) {
-                    listDiv.innerHTML = '<div class="empty-state">ブロックされたドメインがありません</div>';
+                    listDiv.innerHTML = `<div class="empty-state">${tr('blocked.empty')}</div>`;
                     return;
                 }
 
@@ -803,7 +842,7 @@
                             <div>
                                 <div class="domain-name">${domain.domain}</div>
                                 <div class="historical-info">
-                                    ブロック回数: ${domain.query_count}回 (最終: ${lastAccess})
+                                    ${tr('blocked.count_line', {n: domain.query_count, time: lastAccess})}
                                 </div>
                             </div>
                             <span class="badge ${badgeClass}">${badgeText}</span>
@@ -813,7 +852,7 @@
             } catch (error) {
                 console.error('Failed to load blocked domains:', error);
                 document.getElementById('blocked-domains-list').innerHTML =
-                    '<div class="empty-state">エラー: データの読み込みに失敗しました</div>';
+                    `<div class="empty-state">${tr('error.load_data')}</div>`;
             }
         }
 
@@ -826,7 +865,7 @@
                 const listDiv = document.getElementById('unique-domains-list');
 
                 if (domains.length === 0) {
-                    listDiv.innerHTML = '<div class="empty-state">アクセスされたドメインがありません</div>';
+                    listDiv.innerHTML = `<div class="empty-state">${tr('all.empty')}</div>`;
                     return;
                 }
 
@@ -849,8 +888,8 @@
 
                     // 過去の履歴情報
                     const historicalText = domain.status === 'mixed'
-                        ? `過去: 許可${domain.allowed_count}回 / ブロック${domain.blocked_count}回`
-                        : `過去: ${domain.status === 'allowed' ? '許可' : 'ブロック'}${domain.query_count}回`;
+                        ? tr('all.history_mixed', {a: domain.allowed_count, b: domain.blocked_count})
+                        : tr('all.history_single', {status: domain.status === 'allowed' ? tr('all.status_allowed') : tr('all.status_blocked'), n: domain.query_count});
 
                     const lastAccess = new Date(domain.last_access * 1000).toLocaleString('ja-JP');
 
@@ -863,7 +902,7 @@
                             <div class="historical-info" style="margin-top: 5px;">
                                 <span style="color: #58a6ff;">🌐 IP: </span>
                                 ${displayIps.join(', ')}
-                                ${remainingCount > 0 ? ` <span style="color: #8b949e;">...他${remainingCount}個</span>` : ''}
+                                ${remainingCount > 0 ? ` <span style="color: #8b949e;">${tr('more_items', {n: remainingCount})}</span>` : ''}
                             </div>
                         `;
                     }
@@ -873,18 +912,18 @@
                             <div>
                                 <div class="domain-name">${domain.domain}</div>
                                 <div class="current-status">
-                                    <span class="status-label">現在のルール:</span>
+                                    <span class="status-label">${tr('all.current_rule')}</span>
                                     <span class="badge ${currentBadgeClass}">${currentBadgeText}</span>
                                 </div>
                                 <div class="historical-info">
-                                    ${historicalText} (最終: ${lastAccess})
+                                    ${historicalText} (${tr('last', {time: lastAccess})})
                                 </div>
                                 ${resolvedIpsHtml}
                             </div>
                             <div class="domain-stats">
-                                <span class="domain-stat">クエリ:<strong>${domain.query_count}</strong></span>
-                                <span class="domain-stat">許可:<strong>${domain.allowed_count}</strong></span>
-                                <span class="domain-stat">拒否:<strong>${domain.blocked_count}</strong></span>
+                                <span class="domain-stat">${tr('all.queries')}<strong>${domain.query_count}</strong></span>
+                                <span class="domain-stat">${tr('all.allowed')}<strong>${domain.allowed_count}</strong></span>
+                                <span class="domain-stat">${tr('all.blocked')}<strong>${domain.blocked_count}</strong></span>
                             </div>
                         </div>
                     `;
@@ -892,7 +931,7 @@
             } catch (error) {
                 console.error('Failed to load unique domains:', error);
                 document.getElementById('unique-domains-list').innerHTML =
-                    '<div class="empty-state">エラー: データの読み込みに失敗しました</div>';
+                    `<div class="empty-state">${tr('error.load_data')}</div>`;
             }
         }
 
@@ -905,7 +944,7 @@
                 const listDiv = document.getElementById('ignored-domains-list');
 
                 if (domains.length === 0) {
-                    listDiv.innerHTML = '<div class="empty-state">無視されたドメインがありません</div>';
+                    listDiv.innerHTML = `<div class="empty-state">${tr('ignored.empty')}</div>`;
                     return;
                 }
 
@@ -921,7 +960,7 @@
                             <div class="historical-info" style="margin-top: 5px;">
                                 <span style="color: #58a6ff;">IP: </span>
                                 ${displayIps.join(', ')}
-                                ${remainingCount > 0 ? ` <span style="color: #8b949e;">...他${remainingCount}個</span>` : ''}
+                                ${remainingCount > 0 ? ` <span style="color: #8b949e;">${tr('more_items', {n: remainingCount})}</span>` : ''}
                             </div>
                         `;
                     }
@@ -931,16 +970,16 @@
                             <div>
                                 <div class="domain-name">${domain.domain}</div>
                                 <div class="current-status">
-                                    <span class="status-label">ステータス:</span>
+                                    <span class="status-label">${tr('ignored.status')}</span>
                                     <span class="badge badge-ignored">IGNORED</span>
                                 </div>
                                 <div class="historical-info">
-                                    クエリ数: ${domain.ignored_count}回 (最終: ${lastAccess})
+                                    ${tr('ignored.queries_line', {n: domain.ignored_count, time: lastAccess})}
                                 </div>
                                 ${resolvedIpsHtml}
                             </div>
                             <div class="domain-stats">
-                                <span class="domain-stat">無視:<strong>${domain.ignored_count}</strong></span>
+                                <span class="domain-stat">${tr('ignored.count')}<strong>${domain.ignored_count}</strong></span>
                             </div>
                         </div>
                     `;
@@ -948,7 +987,7 @@
             } catch (error) {
                 console.error('Failed to load ignored domains:', error);
                 document.getElementById('ignored-domains-list').innerHTML =
-                    '<div class="empty-state">エラー: データの読み込みに失敗しました</div>';
+                    `<div class="empty-state">${tr('error.load_data')}</div>`;
             }
         }
 
@@ -961,7 +1000,7 @@
                 const listDiv = document.getElementById('blocked-ips-list');
 
                 if (blockedIps.length === 0) {
-                    listDiv.innerHTML = '<div class="empty-state">ブロックされたIPアドレスがありません</div>';
+                    listDiv.innerHTML = `<div class="empty-state">${tr('ips.empty')}</div>`;
                     return;
                 }
 
@@ -970,31 +1009,31 @@
 
                     // ポート情報
                     const portsText = ipInfo.ports.length > 0
-                        ? `ポート: ${ipInfo.ports.join(', ')}`
-                        : 'ポート: なし';
+                        ? tr('ips.ports', {list: ipInfo.ports.join(', ')})
+                        : tr('ips.ports_none');
 
                     // プロトコル情報
                     const protocolsText = ipInfo.protocols.length > 0
-                        ? `プロトコル: ${ipInfo.protocols.join(', ')}`
-                        : 'プロトコル: なし';
+                        ? tr('ips.protocols', {list: ipInfo.protocols.join(', ')})
+                        : tr('ips.protocols_none');
 
                     return `
                         <div class="domain-item">
                             <div>
                                 <div class="domain-name" style="color: #f85149;">🚫 ${ipInfo.ip_address}</div>
                                 <div class="current-status">
-                                    <span class="status-label">ブロック回数:</span>
-                                    <span class="badge badge-blocked-explicit">${ipInfo.block_count}回</span>
+                                    <span class="status-label">${tr('ips.block_count')}</span>
+                                    <span class="badge badge-blocked-explicit">${tr('ips.times', {n: ipInfo.block_count})}</span>
                                 </div>
                                 <div class="historical-info">
-                                    最終ブロック: ${lastBlocked}
+                                    ${tr('ips.last_blocked', {time: lastBlocked})}
                                 </div>
                                 <div class="historical-info" style="margin-top: 5px;">
                                     ${portsText} | ${protocolsText}
                                 </div>
                             </div>
                             <div class="domain-stats">
-                                <span class="domain-stat">ブロック:<strong>${ipInfo.block_count}</strong></span>
+                                <span class="domain-stat">${tr('ips.blocked')}<strong>${ipInfo.block_count}</strong></span>
                             </div>
                         </div>
                     `;
@@ -1002,7 +1041,7 @@
             } catch (error) {
                 console.error('Failed to load blocked IPs:', error);
                 document.getElementById('blocked-ips-list').innerHTML =
-                    '<div class="empty-state">エラー: データの読み込みに失敗しました</div>';
+                    `<div class="empty-state">${tr('error.load_data')}</div>`;
             }
         }
 
@@ -1022,12 +1061,12 @@
                 const listDiv = document.getElementById('config-proxy-list');
 
                 const items = [
-                    { label: 'Status', value: proxy.enabled ? 'Enabled' : 'Disabled', badge: proxy.enabled ? 'badge-allowed' : 'badge-blocked', badgeText: proxy.enabled ? 'ON' : 'OFF' },
-                    { label: 'Port', value: proxy.port },
-                    { label: 'Cache', value: proxy.cache_enabled ? `Enabled (${proxy.cache_size_mb} MB)` : 'Disabled' },
-                    { label: 'Upstream Proxy', value: proxy.upstream_proxy || 'None (direct)' },
-                    { label: 'Upstream TLS', value: proxy.upstream_proxy_tls ? 'Enabled' : 'Disabled' },
-                    { label: 'Upstream Auth', value: proxy.has_upstream_auth ? 'Configured' : 'None' },
+                    { label: tr('config.status'), value: proxy.enabled ? tr('common.enabled') : tr('common.disabled'), badge: proxy.enabled ? 'badge-allowed' : 'badge-blocked', badgeText: proxy.enabled ? 'ON' : 'OFF' },
+                    { label: tr('config.port'), value: proxy.port },
+                    { label: tr('config.cache'), value: proxy.cache_enabled ? `${tr('common.enabled')} (${proxy.cache_size_mb} MB)` : tr('common.disabled') },
+                    { label: tr('config.upstream_proxy'), value: proxy.upstream_proxy || tr('config.none_direct') },
+                    { label: tr('config.upstream_tls'), value: proxy.upstream_proxy_tls ? tr('common.enabled') : tr('common.disabled') },
+                    { label: tr('config.upstream_auth'), value: proxy.has_upstream_auth ? tr('config.configured') : tr('config.none') },
                 ];
 
                 listDiv.innerHTML = items.map(item => `
@@ -1050,7 +1089,7 @@
             } catch (error) {
                 console.error('Failed to load config:', error);
                 document.getElementById('config-proxy-list').innerHTML =
-                    '<div class="empty-state">エラー: 設定情報の読み込みに失敗しました</div>';
+                    `<div class="empty-state">${tr('error.load_config')}</div>`;
             }
         }
 
@@ -1089,7 +1128,7 @@
 
         // ---- Relay タブ ----
         function relayCap(bytes) {
-            if (bytes === -1 || bytes === undefined || bytes === null) return 'unlimited';
+            if (bytes === -1 || bytes === undefined || bytes === null) return tr('relay.unlimited');
             if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(bytes % 1048576 ? 1 : 0)} MiB`;
             if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
             return `${bytes} B`;
@@ -1132,7 +1171,7 @@
                         ${what ? `<span class="log-domain">${escapeHtml(what)}</span>` : ''}
                         ${e.label ? `<span class="log-ip">${escapeHtml(e.label)}</span>` : ''}
                         ${e.reason ? `<span style="color: #f85149; margin-left: 8px;">(${escapeHtml(e.reason)})</span>` : ''}
-                        ${e.flag === 'large_upload' ? `<span class="badge badge-blocked" style="margin-left: 8px;">⚠ LARGE UPLOAD</span>` : ''}
+                        ${e.flag === 'large_upload' ? `<span class="badge badge-blocked" style="margin-left: 8px;">${tr('relay.large_upload_badge')}</span>` : ''}
                         ${e.detail ? `<span style="color: #8b949e; margin-left: 8px; font-size: 11px;">${escapeHtml(e.detail)}</span>` : ''}
                     </div>`;
             }).join('');
@@ -1161,44 +1200,44 @@
                 document.getElementById('relay-stat-keys').textContent = cfg.enabled ? stats.keys : '-';
 
                 if (!cfg.enabled) {
-                    ids.forEach(id => { document.getElementById(id).innerHTML = '<div class="empty-state">relay は無効です</div>'; });
-                    renderRelayLog('relay-access', [], 'relay は無効です');
-                    renderRelayLog('relay-blocks', [], 'relay は無効です');
+                    ids.forEach(id => { document.getElementById(id).innerHTML = `<div class="empty-state">${tr('relay.disabled')}</div>`; });
+                    renderRelayLog('relay-access', [], tr('relay.disabled'));
+                    renderRelayLog('relay-blocks', [], tr('relay.disabled'));
                     return;
                 }
 
                 document.getElementById('relay-config-list').innerHTML = [
-                    relayKV('Status', 'Enabled', relayBadge('ON', 'badge-allowed')),
-                    relayKV('Domain (git-relay)', (cfg.upstreams || []).length > 1 ? `${cfg.domain} (default of ${cfg.upstreams.length})` : cfg.domain),
-                    relayKV('Upstream', cfg.upstream),
+                    relayKV(tr('relay.kv.status'), tr('common.enabled'), relayBadge('ON', 'badge-allowed')),
+                    relayKV(tr('relay.kv.domain'), (cfg.upstreams || []).length > 1 ? tr('relay.default_of', {domain: cfg.domain, n: cfg.upstreams.length}) : cfg.domain),
+                    relayKV(tr('relay.kv.upstream'), cfg.upstream),
                     // 0.2.0: 複数上流はポートで分かれる。上流ごとの listen ポート / token / known_hosts
                     ...((cfg.upstreams || []).length > 1 ? cfg.upstreams.map(u =>
                         relayKV(`↳ ${u.domain}${u.default ? ' (default)' : ''}`,
                             `→ ${u.upstream} · ssh :${u.ssh_port} · ${u.api_base} · known_hosts ${u.known_hosts_count ?? 0} · upload cap ${relayCap(u.max_upload_bytes)}${(u.ssh_options || []).length ? ' · ' + u.ssh_options.join(' ') : ''}`,
                             relayBadge(u.token_present ? 'TOKEN OK' : 'NO TOKEN', u.token_present ? 'badge-allowed' : 'badge-blocked'))) : []),
-                    relayKV('Project', cfg.project || '-'),
-                    relayKV('SSH listen', cfg.ssh_listen),
-                    relayKV('API listen', cfg.api_listen),
-                    relayKV('HTTPS (443)', cfg.https, relayBadge(cfg.https, cfg.https === 'passthrough' ? 'badge-allowed' : 'badge-blocked')),
+                    relayKV(tr('relay.kv.project'), cfg.project || '-'),
+                    relayKV(tr('relay.kv.ssh_listen'), cfg.ssh_listen),
+                    relayKV(tr('relay.kv.api_listen'), cfg.api_listen),
+                    relayKV(tr('relay.kv.https'), cfg.https, relayBadge(cfg.https, cfg.https === 'passthrough' ? 'badge-allowed' : 'badge-blocked')),
                     // 0.2.2: 送信上限（持ち出し対策）。宛先ごとの値は上流行 / https-relay 行に
-                    relayKV('HTTPS upload cap (per connection)',
+                    relayKV(tr('relay.kv.upload_cap'),
                         (cfg.upstreams || []).length === 1
                             ? `${cfg.upstreams[0].domain}: ${relayCap(cfg.upstreams[0].max_upload_bytes)}${cfg.upstreams[0].max_upload_bytes !== cfg.https_max_upload_bytes ? ` (default ${relayCap(cfg.https_max_upload_bytes)})` : ''}`
-                            : `default ${relayCap(cfg.https_max_upload_bytes)} (per upstream below)`,
+                            : tr('relay.default_cap', {cap: relayCap(cfg.https_max_upload_bytes)}),
                         relayBadge(((cfg.upstreams || []).length === 1 ? cfg.upstreams[0].max_upload_bytes : cfg.https_max_upload_bytes) === -1 ? 'UNLIMITED' : 'CAPPED',
                             ((cfg.upstreams || []).length === 1 ? cfg.upstreams[0].max_upload_bytes : cfg.https_max_upload_bytes) === -1 ? 'badge-blocked' : 'badge-allowed')),
-                    relayKV('Large uploads / capped (24h)', `${stats.large_uploads ?? 0} / ${stats.upload_capped ?? 0}`,
+                    relayKV(tr('relay.kv.large_uploads'), `${stats.large_uploads ?? 0} / ${stats.upload_capped ?? 0}`,
                         relayBadge((stats.large_uploads || stats.upload_capped) ? 'CHECK' : 'OK', (stats.large_uploads || stats.upload_capped) ? 'badge-blocked' : 'badge-allowed')),
                     ...((cfg.https_relays || []).map(t =>
-                        relayKV(`https-relay ${t.domain}`, `→ ${t.upstream}:443 · upload cap ${relayCap(t.max_upload_bytes)}`,
+                        relayKV(tr('relay.kv.https_relay', {domain: t.domain}), `→ ${t.upstream}:443 · upload cap ${relayCap(t.max_upload_bytes)}`,
                             relayBadge(t.max_upload_bytes === -1 ? 'UNLIMITED' : 'CAPPED', t.max_upload_bytes === -1 ? 'badge-blocked' : 'badge-allowed')))),
-                    relayKV('Bootstrap', cfg.bootstrap_disabled ? `${cfg.bootstrap} (disabled by kill-switch)` : cfg.bootstrap,
+                    relayKV(tr('relay.kv.bootstrap'), cfg.bootstrap_disabled ? tr('relay.disabled_by_killswitch', {mode: cfg.bootstrap}) : cfg.bootstrap,
                         relayBadge(cfg.bootstrap_disabled ? 'OFF' : 'ON', cfg.bootstrap_disabled ? 'badge-blocked' : 'badge-allowed')),
-                    relayKV('Token TTL', cfg.token_ttl),
-                    relayKV('Allow delete (refs)', cfg.allow_delete ? 'yes' : 'no'),
-                    relayKV('Tags (default globs)', cfg.tags && cfg.tags.length ? cfg.tags.join(', ') : 'deny'),
-                    relayKV('Delete (default)', cfg.allow_delete ? 'yes' : 'no'),
-                    relayKV('State dir', cfg.state_dir),
+                    relayKV(tr('relay.kv.token_ttl'), cfg.token_ttl),
+                    relayKV(tr('relay.kv.allow_delete'), cfg.allow_delete ? tr('yes') : tr('no')),
+                    relayKV(tr('relay.kv.tags'), cfg.tags && cfg.tags.length ? cfg.tags.join(', ') : tr('relay.deny')),
+                    relayKV(tr('relay.kv.delete'), cfg.allow_delete ? tr('yes') : tr('no')),
+                    relayKV(tr('relay.kv.state_dir'), cfg.state_dir),
                 ].join('');
 
                 const allPerms = ['issue:assign', 'issue:close', 'issue:comment', 'issue:create', 'issue:label',
@@ -1209,8 +1248,8 @@
                 cfg.permissions.forEach(p => allPerms.includes(p) || allPerms.push(p));
                 document.getElementById('relay-permissions').innerHTML = allPerms.map(p =>
                     denied.has(p)
-                        ? relayKV(p, 'denied (project deny, wins over repo allow)', relayBadge('DENY', 'badge-blocked'))
-                        : relayKV(p, granted.has(p) ? 'allowed (default)' : 'not granted', relayBadge(granted.has(p) ? 'ALLOW' : 'DENY', granted.has(p) ? 'badge-allowed' : 'badge-blocked-default'))
+                        ? relayKV(p, tr('relay.perm.denied_project'), relayBadge('DENY', 'badge-blocked'))
+                        : relayKV(p, granted.has(p) ? tr('relay.perm.allowed_default') : tr('relay.perm.not_granted'), relayBadge(granted.has(p) ? 'ALLOW' : 'DENY', granted.has(p) ? 'badge-allowed' : 'badge-blocked-default'))
                 ).join('');
 
                 const multiUpstream = (cfg.upstreams || []).length > 1;
@@ -1219,40 +1258,40 @@
                         <div>
                             <span class="domain-name">${escapeHtml(multiUpstream && r.host ? `${r.host}/${r.name}` : r.name)}</span>
                             <div class="domain-stats" style="margin-top: 4px;">
-                                <span class="domain-stat">PR bases: <strong>${escapeHtml(r.bases.join(', ') || '-')}</strong></span>
-                                <span class="domain-stat">direct push: <strong>${escapeHtml(r.push.join(', ') || '-')}</strong></span>
-                                <span class="domain-stat">tags: <strong>${escapeHtml((r.tags || []).join(', ') || 'deny')}</strong></span>
-                                <span class="domain-stat">delete: <strong>${r.delete ? 'yes' : 'no'}</strong></span>
-                                <span class="domain-stat">permissions: <strong>${escapeHtml((r.permissions || []).join(' ') || '(none)')}</strong></span>
+                                <span class="domain-stat">${tr('relay.repo.pr_bases')} <strong>${escapeHtml(r.bases.join(', ') || '-')}</strong></span>
+                                <span class="domain-stat">${tr('relay.repo.direct_push')} <strong>${escapeHtml(r.push.join(', ') || '-')}</strong></span>
+                                <span class="domain-stat">${tr('relay.repo.tags')} <strong>${escapeHtml((r.tags || []).join(', ') || tr('relay.deny'))}</strong></span>
+                                <span class="domain-stat">${tr('relay.repo.delete')} <strong>${r.delete ? tr('yes') : tr('no')}</strong></span>
+                                <span class="domain-stat">${tr('relay.repo.permissions')} <strong>${escapeHtml((r.permissions || []).join(' ') || '(none)')}</strong></span>
                             </div>
                         </div>
                         <div>${relayBadge(r.mode, r.mode === 'read-write' ? 'badge-mixed' : 'badge-ignored')}</div>
-                    </div>`).join('') : '<div class="empty-state">リポジトリが設定されていません（全て案件外として拒否）</div>';
+                    </div>`).join('') : `<div class="empty-state">${tr('relay.no_repos')}</div>`;
 
                 document.getElementById('relay-tokens').innerHTML = tokens.length ? tokens.map(t => `
                     <div class="domain-item">
                         <div>
                             <span class="domain-name" style="font-family: 'SF Mono', Monaco, monospace;">${escapeHtml(t.label)}</span>
                             <div class="domain-stats" style="margin-top: 4px;">
-                                <span class="domain-stat">issued: <strong>${escapeHtml(relayTime(t.issued_at))}</strong></span>
-                                <span class="domain-stat">expires: <strong>${escapeHtml(relayTime(t.expires_at))}</strong></span>
-                                <span class="domain-stat">last used: <strong>${escapeHtml(relayTime(t.last_used))}</strong></span>
-                                <span class="domain-stat">uses: <strong>${t.use_count}</strong></span>
+                                <span class="domain-stat">${tr('relay.token.issued')} <strong>${escapeHtml(relayTime(t.issued_at))}</strong></span>
+                                <span class="domain-stat">${tr('relay.token.expires')} <strong>${escapeHtml(relayTime(t.expires_at))}</strong></span>
+                                <span class="domain-stat">${tr('relay.token.last_used')} <strong>${escapeHtml(relayTime(t.last_used))}</strong></span>
+                                <span class="domain-stat">${tr('relay.token.uses')} <strong>${t.use_count}</strong></span>
                             </div>
                         </div>
                         <div>${relayBadge(t.state, t.state === 'active' ? 'badge-allowed' : (t.state === 'revoked' ? 'badge-blocked' : 'badge-ignored'))}</div>
-                    </div>`).join('') : '<div class="empty-state">トークンはまだ発行されていません</div>';
+                    </div>`).join('') : `<div class="empty-state">${tr('relay.no_tokens')}</div>`;
 
-                renderRelayLog('relay-access', access, '許可された操作はまだありません');
-                renderRelayLog('relay-blocks', blocks, '拒否された操作はありません');
+                renderRelayLog('relay-access', access, tr('relay.no_access'));
+                renderRelayLog('relay-blocks', blocks, tr('relay.no_blocks'));
 
                 document.getElementById('relay-state-files').innerHTML = cfg.state_files.map(f =>
-                    relayKV(f.name, f.count !== null && f.count !== undefined ? `${f.count} entries` : (f.present ? 'present' : 'missing'),
+                    relayKV(f.name, f.count !== null && f.count !== undefined ? tr('relay.file.entries', {n: f.count}) : (f.present ? tr('relay.file.present') : tr('relay.file.missing')),
                         relayBadge(f.present ? 'OK' : 'MISSING', f.present ? 'badge-allowed' : 'badge-blocked'))
                 ).join('');
             } catch (error) {
                 console.error('Failed to load relay:', error);
-                ids.forEach(id => { document.getElementById(id).innerHTML = '<div class="empty-state">エラー: relay 情報の読み込みに失敗しました</div>'; });
+                ids.forEach(id => { document.getElementById(id).innerHTML = `<div class="empty-state">${tr('error.load_relay')}</div>`; });
             }
         }
 
@@ -1285,10 +1324,12 @@
             }
         }
 
-        // 初期化
-        connectWebSocket();
-        refreshStats();
-        loadGatewayInfo();
+        // 初期化（文言の辞書を読んでから描き始める）
+        loadI18n().then(() => {
+            connectWebSocket();
+            refreshStats();
+            loadGatewayInfo();
+        });
 
         // 定期的に統計を更新
         setInterval(refreshStats, 10000);

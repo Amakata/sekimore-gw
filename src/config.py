@@ -142,6 +142,15 @@ def _port_of(listen: str, default: int) -> int:
         return default
 
 
+class UIConfig(BaseModel):
+    """Web UI の設定（0.2.4）."""
+
+    language: Literal["auto", "en", "ja"] = Field(
+        default="auto",
+        description="Web UI の言語。auto=ブラウザの Accept-Language（利用者が切り替えれば cookie が優先）/ en / ja",
+    )
+
+
 class Config(BaseModel):
     """AI Security Gateway 設定."""
 
@@ -176,6 +185,7 @@ class Config(BaseModel):
         description="ドメイン別 handler（git-relay / deny / splice）。完全一致 FQDN",
     )
     relay: RelayConfig = Field(default_factory=RelayConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
 
     @field_validator("domain_handlers", mode="before")
     @classmethod

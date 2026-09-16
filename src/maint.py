@@ -25,6 +25,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import i18n
+
 # ログを溜めるテーブル（記録系）。cache_stats は DNS キャッシュの統計で、reset のときだけ空にする
 LOG_TABLES = ("dns_queries", "firewall_blocks", "proxy_logs")
 RESET_ONLY_TABLES = ("cache_stats",)
@@ -145,44 +147,50 @@ def vacuum(db_path: str) -> tuple[int, int]:
     return before, os.path.getsize(db_path)
 
 
-def _print_stats(s: dict[str, Any]) -> None:
-    print(f"db:            {s['db_path']}")
+def _print_stats(s: dict[str, Any], lang: str) -> None:
+    def tr(key: str, **vars: Any) -> str:
+        return i18n.t(key, lang, **vars)
+
+    print(f"{tr('maint.stats.db'):<15}{s['db_path']}")
     if not s.get("exists"):
-        print("               (not found)")
+        print(f"{'':<15}{tr('maint.stats.not_found')}")
         return
-    print(f"size:          {_fmt_bytes(s['size_bytes'])} (+ wal {_fmt_bytes(s['wal_bytes'])})")
     print(
-        f"journal_mode:  {s['journal_mode']}   free pages: {s['freelist_pages']} x {s['page_size']} B"
+        f"{tr('maint.stats.size'):<15}{_fmt_bytes(s['size_bytes'])} (+ wal {_fmt_bytes(s['wal_bytes'])})"
     )
-    print("tables:")
+    print(
+        f"{tr('maint.stats.journal'):<15}{s['journal_mode']}   {tr('maint.stats.free_pages')} {s['freelist_pages']} x {s['page_size']} B"
+    )
+    print(tr("maint.stats.tables"))
     for table, info in s["tables"].items():
-        line = f"  {table:<18} {info['rows']:>10} rows"
+        line = f"  {table:<18} {info['rows']:>10} {tr('maint.stats.rows')}"
         if "oldest" in info:
             line += f"   {_fmt_ts(info['oldest'])} .. {_fmt_ts(info['newest'])}"
-            line += f"   indexes: {', '.join(info['indexes']) or '-'}"
+            line += f"   {tr('maint.stats.indexes')} {', '.join(info['indexes']) or '-'}"
         print(line)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, lang: str | None = None) -> int:
+    lang = lang or i18n.env_lang()
+
+    def tr(key: str, **vars: Any) -> str:
+        return i18n.t(key, lang, **vars)
+
     parser = argparse.ArgumentParser(
-        prog="python -m src.maint", description=__doc__.split("\n\n")[0]
+        prog="python -m src.maint", description=tr("maint.description")
     )
-    parser.add_argument(
-        "--db", default=None, help="SQLite のパス（既定: config.yml の database_path）"
-    )
-    parser.add_argument("--config", default="/etc/sekimore/config.yml")
+    parser.add_argument("--db", default=None, help=tr("maint.db"))
+    parser.add_argument("--config", default="/etc/sekimore/config.yml", help=tr("maint.config"))
     sub = parser.add_subparsers(dest="cmd", required=True)
-    p_stats = sub.add_parser("db-stats", help="件数・期間・サイズ・索引を表示する")
-    p_stats.add_argument("--json", action="store_true")
-    p_prune = sub.add_parser("db-prune", help="N 日より古い記録を削除する（明示操作）")
-    p_prune.add_argument("--before-days", type=float, required=True)
-    p_prune.add_argument(
-        "--vacuum", action="store_true", help="削除後に VACUUM してファイルを縮める"
-    )
-    p_prune.add_argument("--yes", action="store_true", help="確認なしで実行する")
-    p_reset = sub.add_parser("db-reset", help="記録を全て消して VACUUM する（明示操作）")
-    p_reset.add_argument("--yes", action="store_true", help="確認なしで実行する")
-    sub.add_parser("db-vacuum", help="VACUUM だけ行う")
+    p_stats = sub.add_parser("db-stats", help=tr("maint.stats"))
+    p_stats.add_argument("--json", action="store_true", help=tr("maint.json"))
+    p_prune = sub.add_parser("db-prune", help=tr("maint.prune"))
+    p_prune.add_argument("--before-days", type=float, required=True, help=tr("maint.before_days"))
+    p_prune.add_argument("--vacuum", action="store_true", help=tr("maint.vacuum_opt"))
+    p_prune.add_argument("--yes", action="store_true", help=tr("maint.yes"))
+    p_reset = sub.add_parser("db-reset", help=tr("maint.reset"))
+    p_reset.add_argument("--yes", action="store_true", help=tr("maint.yes"))
+    sub.add_parser("db-vacuum", help=tr("maint.vacuum"))
     args = parser.parse_args(argv)
 
     db_path = args.db or default_db_path(args.config)
@@ -191,37 +199,35 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             print(json.dumps(s, ensure_ascii=False, indent=2))
         else:
-            _print_stats(s)
+            _print_stats(s, lang)
         return 0
     if not os.path.exists(db_path):
-        print(f"db not found: {db_path}", file=sys.stderr)
+        print(tr("maint.not_found", db=db_path), file=sys.stderr)
         return 1
     if args.cmd in ("db-prune", "db-reset") and not args.yes:
         what = (
-            f"records older than {args.before_days:g} days"
+            tr("maint.confirm_prune_what", days=f"{args.before_days:g}")
             if args.cmd == "db-prune"
-            else "ALL records"
+            else tr("maint.confirm_reset_what")
         )
-        print(
-            f"This deletes {what} from {db_path} (DNS / firewall / proxy logs; the relay audit is separate)."
-        )
-        print("Re-run with --yes to proceed.")
+        print(tr("maint.confirm", what=what, db=db_path))
+        print(tr("maint.rerun"))
         return 2
     if args.cmd == "db-prune":
         deleted = prune(db_path, args.before_days, vacuum=args.vacuum)
         for table, n in deleted.items():
-            print(f"{table:<18} deleted {n} rows")
-        print("vacuumed" if args.vacuum else "not vacuumed (add --vacuum to shrink the file)")
+            print(tr("maint.deleted", table=f"{table:<18}", n=n))
+        print(tr("maint.vacuumed") if args.vacuum else tr("maint.not_vacuumed"))
         return 0
     if args.cmd == "db-reset":
         deleted = reset(db_path)
         for table, n in deleted.items():
-            print(f"{table:<18} deleted {n} rows")
-        print(f"vacuumed; {db_path} is now {_fmt_bytes(os.path.getsize(db_path))}")
+            print(tr("maint.deleted", table=f"{table:<18}", n=n))
+        print(tr("maint.reset_done", db=db_path, size=_fmt_bytes(os.path.getsize(db_path))))
         return 0
     if args.cmd == "db-vacuum":
         before, after = vacuum(db_path)
-        print(f"vacuumed: {_fmt_bytes(before)} -> {_fmt_bytes(after)}")
+        print(tr("maint.vacuum_result", before=_fmt_bytes(before), after=_fmt_bytes(after)))
         return 0
     return 1
 
