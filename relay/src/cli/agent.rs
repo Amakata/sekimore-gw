@@ -44,6 +44,11 @@ pub enum AgentCmd {
         #[command(subcommand)]
         cmd: ProjectCmd,
     },
+    #[command(about = t("agent.release"))]
+    Release {
+        #[command(subcommand)]
+        cmd: ReleaseCmd,
+    },
     #[command(about = t("agent.bootstrap"))]
     Bootstrap {
         #[arg(long, help = t("agent.bootstrap.pubkey_file"))]
@@ -174,6 +179,37 @@ pub enum IssueCmd {
         number: u64,
         #[arg(long, help = t("agent.issue.assignees"))]
         assignees: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ReleaseCmd {
+    #[command(about = t("agent.release.create"))]
+    Create {
+        #[arg(long, help = t("agent.release.tag"))]
+        tag: String,
+        #[arg(long, help = t("agent.release.title"))]
+        title: Option<String>,
+        #[arg(long, help = t("agent.release.notes"))]
+        notes: Option<String>,
+        #[arg(long, help = t("agent.release.notes_file"))]
+        notes_file: Option<PathBuf>,
+        #[arg(long, help = t("agent.release.generate_notes"))]
+        generate_notes: bool,
+        #[arg(long, help = t("agent.release.draft"))]
+        draft: bool,
+        #[arg(long, help = t("agent.release.prerelease"))]
+        prerelease: bool,
+    },
+    #[command(about = t("agent.release.view"))]
+    View {
+        #[arg(long, help = t("agent.release.tag"))]
+        tag: String,
+    },
+    #[command(about = t("agent.release.list"))]
+    List {
+        #[arg(long, default_value_t = 20, help = t("agent.release.limit"))]
+        limit: u32,
     },
 }
 
@@ -484,6 +520,42 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 req.project_id = project_id;
                 req.first = first;
                 "/project/list"
+            }
+        },
+        AgentCmd::Release { cmd } => match cmd {
+            ReleaseCmd::Create {
+                tag,
+                title,
+                notes,
+                notes_file,
+                generate_notes,
+                draft,
+                prerelease,
+            } => {
+                req.tag = tag;
+                req.title = title.unwrap_or_default();
+                // --notes-file is the way to pass a long body without fighting the shell.
+                req.body = match (notes, notes_file) {
+                    (Some(_), Some(_)) => {
+                        return Err(anyhow!("pass either --notes or --notes-file, not both"))
+                    }
+                    (Some(n), None) => n,
+                    (None, Some(f)) => std::fs::read_to_string(&f)
+                        .with_context(|| format!("read {}", f.display()))?,
+                    (None, None) => String::new(),
+                };
+                req.generate_notes = generate_notes;
+                req.draft = draft;
+                req.prerelease = prerelease;
+                "/release/create"
+            }
+            ReleaseCmd::View { tag } => {
+                req.tag = tag;
+                "/release/view"
+            }
+            ReleaseCmd::List { limit } => {
+                req.first = limit;
+                "/release/list"
             }
         },
     };

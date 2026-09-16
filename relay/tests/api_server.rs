@@ -328,3 +328,185 @@ async fn healthz_and_method_checks() {
         .unwrap();
     assert_eq!(resp.status().as_u16(), 404);
 }
+
+// ---- releases (0.2.6) ----
+
+#[tokio::test]
+async fn release_create_needs_the_permission() {
+    let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        tag: "v1.2.3".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/create", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp.error);
+    assert!(!resp.ok);
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "a denied release must not reach upstream"
+    );
+}
+
+#[tokio::test]
+async fn release_create_asks_github_to_write_the_notes_by_default() {
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v1.2.3".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/create", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(
+        resp.url.as_deref(),
+        Some("https://github.example/releases/v1.2.3")
+    );
+    let rec = recorded(&f.recorder);
+    assert_eq!(rec.len(), 1);
+    assert_eq!(rec[0].path, "/api/v3/repos/LibOrg/awesome-lib/releases");
+    assert_eq!(rec[0].body["tag_name"], "v1.2.3");
+    assert_eq!(rec[0].body["generate_release_notes"], true);
+    // The tag is the title when none is given, so a release is never untitled.
+    assert_eq!(rec[0].body["name"], "v1.2.3");
+    assert_eq!(rec[0].body["draft"], false);
+    assert_eq!(rec[0].body["prerelease"], false);
+}
+
+#[tokio::test]
+async fn release_create_keeps_an_explicit_body_and_title() {
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v1.2.3".into(),
+        title: "Big one".into(),
+        body: "handwritten".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/create", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    assert_eq!(rec[0].body["name"], "Big one");
+    assert_eq!(rec[0].body["body"], "handwritten");
+    // A body of one's own means no generated notes unless they were asked for.
+    assert_eq!(rec[0].body["generate_release_notes"], false);
+}
+
+#[tokio::test]
+async fn release_create_can_combine_a_body_with_generated_notes() {
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v1.2.3".into(),
+        body: "intro".into(),
+        generate_notes: true,
+        draft: true,
+        prerelease: true,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/release/create", Some(&f.token), &r).await;
+    assert_eq!(code, 200);
+    let rec = recorded(&f.recorder);
+    assert_eq!(rec[0].body["body"], "intro");
+    assert_eq!(rec[0].body["generate_release_notes"], true);
+    assert_eq!(rec[0].body["draft"], true);
+    assert_eq!(rec[0].body["prerelease"], true);
+}
+
+#[tokio::test]
+async fn release_create_reports_a_missing_tag_instead_of_crashing() {
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v9.9.9-missing".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/create", Some(&f.token), &r).await;
+    assert!(code >= 400, "unpushed tag must fail, got {code}");
+    assert!(!resp.ok);
+}
+
+#[tokio::test]
+async fn release_view_and_list_need_only_read() {
+    let f = start_api(project_case_a(&["release:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        tag: "v1.0.0".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/view", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(
+        resp.url.as_deref(),
+        Some("https://github.example/releases/v1.0.0")
+    );
+
+    let (code, resp) = post(
+        f.addr,
+        "/release/list",
+        Some(&f.token),
+        &req("LibOrg/awesome-lib"),
+    )
+    .await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let msg = resp.message.unwrap_or_default();
+    assert!(msg.contains("v1.1.0") && msg.contains("v1.0.0"), "{msg}");
+    assert!(msg.contains("[draft]"), "a draft should be marked: {msg}");
+
+    // read does not grant create
+    let r = ApiRequest {
+        tag: "v2.0.0".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/release/create", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+}
+
+#[tokio::test]
+async fn release_view_says_so_when_the_tag_has_none() {
+    let f = start_api(project_case_a(&["release:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        tag: "v0.0.0-none".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/view", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert!(resp.ok);
+    assert!(resp.url.is_none());
+    assert!(
+        resp.message.unwrap_or_default().contains("no release"),
+        "should say there is none"
+    );
+}
+
+#[tokio::test]
+async fn a_release_outside_the_project_is_refused() {
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v1.2.3".into(),
+        ..req("Other/elsewhere")
+    };
+    let (code, resp) = post(f.addr, "/release/create", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    assert!(!resp.ok);
+    assert!(recorded(&f.recorder).is_empty());
+}

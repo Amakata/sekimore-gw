@@ -3,7 +3,7 @@
 *[日本語版](README.ja.md)*
 
 A relay that brokers an AI agent's git (SSH) and GitHub API traffic under a per-project policy.
-It ships inside the sekimore-gw image and only starts when `config.yml` contains `handler: git-relay`.
+It ships inside the sekimore-gw image and only starts when `config.yml` contains `handler: github`.
 Without that, nothing changes.
 
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
@@ -50,7 +50,7 @@ Add this to `config.yml` (mounted at `/etc/sekimore/config.yml`). The minimal fo
 
 ```yaml
 domain_handlers:
-  github.com: { handler: git-relay }
+  github.com: { handler: github }
 
 relay:
   project:
@@ -59,6 +59,8 @@ relay:
     repos:
       - { name: Org/Repo, mode: read-write, bases: [main] }
 ```
+
+`git-relay` was this handler's original name and is still accepted, so a config that already works needs no edit.
 
 See "Configuration reference" for what each key means and a fuller example.
 An unknown key under `relay:` is an error, so a typo can never loosen a permission.
@@ -137,6 +139,9 @@ sekimore ci runs --ref v0.2.0                   # workflow runs for a tag / bran
 sekimore ci jobs --number 12                    # every job across the PR's runs (shows failures and job_id)
 sekimore ci log --number 12                     # a failed job's log, from the end. --before / --window to go back
 sekimore issue create --title T --labels bug    # labels also need issue:label
+sekimore release create --tag v0.2.6            # after the tag is pushed; GitHub writes the notes
+sekimore release view --tag v0.2.6              # the release for one tag
+sekimore release list --limit 10                # the most recent releases, newest first
 ```
 
 Run `sekimore guide` to print the usage guide written for AI agents (embedded in the CLI; the sources of truth are `relay/share/agent-guide.en.md` and `agent-guide.ja.md`).
@@ -152,11 +157,12 @@ Denied by default: repositories outside the project, pushes to a read-only repo,
 
 ### `domain_handlers.<domain>`
 
-Keys are exact FQDN matches. Listing `git-relay` more than once gives you more than one upstream.
+Keys are exact FQDN matches. Listing `github` more than once gives you more than one upstream.
+`git-relay` is the original name of the `github` handler and stays accepted, so existing configs keep working.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `handler` | `splice` | `git-relay` makes the relay handle the domain. `https-relay` passes only 443 through the relay's passthrough (for destinations you want an upload cap on). `deny` rejects, `splice` behaves as before |
+| `handler` | `splice` | `github` makes the relay handle the domain (the SSH git and the GitHub API). `https-relay` passes only 443 through the relay's passthrough (for destinations you want an upload cap on). `deny` rejects, `splice` behaves as before |
 | `ssh_port` | the port from `relay.ssh_listen` | The relay's SSH port. Required for the second and later upstreams |
 | `upstream` | the domain name | The real upstream host |
 | `upstream_ssh_port` | `relay.upstream_ssh_port` | The upstream's SSH port |
@@ -208,16 +214,16 @@ Keys are exact FQDN matches. Listing `git-relay` more than once gives you more t
 
 - Effective permissions = (project allow ∪ upstream allow ∪ repo allow) − (project deny ∪ upstream deny ∪ repo deny). A deny wins at any layer.
 - `push` / `tags` / `delete` are overridden in the order project → upstream → repo. Globs support `*` and `?`.
-- There are 16 permission keys: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:merge` `pr:close`, `issue:create` `issue:comment` `issue:close` `issue:label` `issue:assign`, `project:read` `project:add_item` `project:update_item`, `repo:read`, `ci:read`.
+- There are 18 permission keys: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:merge` `pr:close`, `issue:create` `issue:comment` `issue:close` `issue:label` `issue:assign`, `project:read` `project:add_item` `project:update_item`, `repo:read`, `ci:read`, `release:create` `release:read`.
 - Check the effective values with `sekimore-relay check` or the Relay tab in the Web UI.
 
 ### Example: github.com and GHES side by side
 
 ```yaml
 domain_handlers:
-  github.com: { handler: git-relay }                    # the default upstream (ssh_port omitted)
+  github.com: { handler: github }                       # the default upstream (ssh_port omitted)
   ghe.example.com:
-    handler: git-relay
+    handler: github
     ssh_port: 2222                                      # the second and later upstreams need their own port
     ssh_options: [ProxyJump=bastion.example.com]        # if it sits behind a bastion
 
@@ -237,6 +243,27 @@ relay:
           - { name: Corp/Internal, mode: read-write, bases: [main] }
 ```
 
+### Releases (0.2.6)
+
+`release:create` and `release:read` are denied by default like every other permission, so list them in `permissions`
+where you want them. The device flow token already carries the `repo` scope, so nothing has to be re-authenticated.
+
+```bash
+git push origin v0.2.6                                   # the tag has to exist upstream first
+sekimore release create --tag v0.2.6                     # GitHub writes the notes from the merged PRs
+sekimore release create --tag v0.2.6 --notes-file NOTES.md --draft
+sekimore release view --tag v0.2.6
+sekimore release list --limit 10
+```
+
+- The tag must already be upstream, so this runs after the tag push. GitHub answers 422 when the tag does not exist.
+- Without a body the relay asks for `generate_release_notes`, and GitHub composes it from the pull requests merged
+  since the previous tag. That is the usual path: nothing to write by hand.
+- `--notes` or `--notes-file` is used as the body instead. Add `--generate-notes` and GitHub appends its generated
+  notes to what you wrote.
+- `--title` defaults to the tag, so a release is never left untitled. `--prerelease` marks it as one.
+- `--draft` creates the release unpublished and leaves publishing to a human. The default is published.
+
 ### Exfiltration controls: the 443 upload cap and `https-relay`
 
 The relay never lets the AI use the operator's credentials, but an HTTPS push with someone else's credentials pasted into a prompt is indistinguishable from normal traffic unless you look inside the TLS.
@@ -245,7 +272,7 @@ Ordinary GETs and API calls send far less than that, and only large uploads such
 
 ```yaml
 domain_handlers:
-  github.com: { handler: git-relay, max_upload_bytes: 262144 }   # 256 KiB. HTTPS push is unnecessary — SSH goes through the relay
+  github.com: { handler: github, max_upload_bytes: 262144 }      # 256 KiB. HTTPS push is unnecessary — SSH goes through the relay
   ghcr.io:    { handler: https-relay, max_upload_bytes: -1 }     # unlimited where you push your own images
   registry-1.docker.io: { handler: https-relay }                 # use the default (relay.https_max_upload_bytes)
 relay:

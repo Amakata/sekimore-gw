@@ -86,13 +86,22 @@ class NetworkConfig(BaseModel):
 class DomainHandlerConfig(BaseModel):
     """A single domain_handlers entry (the relay)."""
 
-    handler: Literal["splice", "git-relay", "https-relay", "deny"] = Field(
+    handler: Literal["splice", "github", "https-relay", "deny"] = Field(
         default="splice",
         description=(
-            "splice = as before / git-relay = taken by the relay's SSH (DNS answers the relay's IP) / "
+            "splice = as before / github = taken by the relay's SSH and API (DNS answers the relay's IP) / "
             "https-relay = only 443 goes through the relay's passthrough, under an upload cap (0.2.2) / deny = refused"
         ),
     )
+
+    # 0.2.6: `git-relay` was the original spelling and still works; it normalizes to `github`.
+    # The SSH git half is not GitHub-specific, but the API half is, so the handler carries the
+    # forge's name. Nobody has to rewrite a working config.
+    @field_validator("handler", mode="before")
+    @classmethod
+    def accept_the_original_handler_name(cls, v: Any) -> Any:
+        return "github" if v == "git-relay" else v
+
     # 0.2.2: upload cap in bytes for the 443 passthrough. Omitted falls back to
     # relay.https_max_upload_bytes; -1 means unlimited. Read by the relay.
     max_upload_bytes: int | None = Field(
@@ -250,12 +259,12 @@ class Config(BaseModel):
         return {
             d: (h.ssh_port if h.ssh_port is not None else default_port)
             for d, h in self.domain_handlers.items()
-            if h.handler == "git-relay"
+            if h.handler == "github"
         }
 
     def git_relay_domains(self) -> list[str]:
         """Domains whose handler is git-relay."""
-        return [d for d, h in self.domain_handlers.items() if h.handler == "git-relay"]
+        return [d for d, h in self.domain_handlers.items() if h.handler == "github"]
 
     def https_relay_domains(self) -> list[str]:
         """Domains whose handler is https-relay (0.2.2; only 443 goes through the relay)."""

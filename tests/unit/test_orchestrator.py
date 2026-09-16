@@ -1091,7 +1091,7 @@ def describe_relay_wiring():
 
         assert mock_firewall.call_args.kwargs["relay_ports"] == [22, 8420, 443]
         assert mock_dns.call_args.kwargs["domain_handlers"] == {
-            "github.com": "git-relay",
+            "github.com": "github",
             "t.example.com": "deny",
         }
 

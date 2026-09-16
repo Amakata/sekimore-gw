@@ -100,6 +100,24 @@ pub struct PrResult {
     pub node_id: String,
 }
 
+/// 0.2.6: a GitHub release.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ReleaseResult {
+    #[serde(default)]
+    pub id: u64,
+    pub tag_name: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub html_url: String,
+    #[serde(default)]
+    pub draft: bool,
+    #[serde(default)]
+    pub prerelease: bool,
+    #[serde(default)]
+    pub published_at: Option<String>,
+}
+
 /// A single CI check on a PR (a check-run or commit status, normalized to one shape).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CheckItem {
@@ -186,6 +204,91 @@ impl GitHub {
                 out.get("message").and_then(Value::as_str).unwrap_or("?")
             ))
         })
+    }
+
+    /// 0.2.6: create a release for a tag that already exists upstream.
+    ///
+    /// `generate_notes` asks GitHub to build the body from the merged pull requests since the
+    /// previous tag, which is what the CLI does by default. An explicit `body` is used as-is, and
+    /// combines with `generate_notes`: GitHub appends the generated notes to it.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_release(
+        &self,
+        auth: &Authorized<'_>,
+        tag: &str,
+        name: Option<&str>,
+        body: Option<&str>,
+        generate_notes: bool,
+        draft: bool,
+        prerelease: bool,
+    ) -> Result<ReleaseResult, GhError> {
+        auth.ensure(Resource::Release, Action::Create)?;
+        let mut payload = json!({
+            "tag_name": tag,
+            "generate_release_notes": generate_notes,
+            "draft": draft,
+            "prerelease": prerelease,
+        });
+        // The tag is the name unless the caller says otherwise, so a release is never left untitled.
+        payload["name"] = json!(name.unwrap_or(tag));
+        if let Some(b) = body {
+            payload["body"] = json!(b);
+        }
+        let out: Value = self
+            .rest(
+                "POST",
+                &format!("/repos/{}/releases", auth.repo()),
+                Some(payload),
+            )
+            .await?;
+        serde_json::from_value::<ReleaseResult>(out.clone()).map_err(|_| {
+            GhError::Parse(format!(
+                "release not created: {}",
+                out.get("message").and_then(Value::as_str).unwrap_or("?")
+            ))
+        })
+    }
+
+    /// 0.2.6: the release for one tag. `Ok(None)` when the tag has no release yet.
+    pub async fn get_release_by_tag(
+        &self,
+        auth: &Authorized<'_>,
+        tag: &str,
+    ) -> Result<Option<ReleaseResult>, GhError> {
+        auth.ensure(Resource::Release, Action::Read)?;
+        match self
+            .rest::<Value>(
+                "GET",
+                &format!("/repos/{}/releases/tags/{tag}", auth.repo()),
+                None,
+            )
+            .await
+        {
+            Ok(v) => Ok(serde_json::from_value::<ReleaseResult>(v).ok()),
+            Err(GhError::Status { status: 404, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 0.2.6: the most recent releases, newest first.
+    pub async fn list_releases(
+        &self,
+        auth: &Authorized<'_>,
+        limit: u32,
+    ) -> Result<Vec<ReleaseResult>, GhError> {
+        auth.ensure(Resource::Release, Action::Read)?;
+        let out: Value = self
+            .rest(
+                "GET",
+                &format!(
+                    "/repos/{}/releases?per_page={}",
+                    auth.repo(),
+                    limit.clamp(1, 100)
+                ),
+                None,
+            )
+            .await?;
+        Ok(serde_json::from_value::<Vec<ReleaseResult>>(out).unwrap_or_default())
     }
 
     /// Find an open PR with the same head/base, so a re-push to `refs/for` can report the existing PR.

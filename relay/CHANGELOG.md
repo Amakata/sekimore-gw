@@ -2,6 +2,14 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.6 (2026-09-16. Releases from the agent, and the handler is named after the forge)
+
+- `sekimore release create --tag vX.Y.Z [--title T] [--notes "…" | --notes-file F] [--generate-notes] [--draft] [--prerelease]`, `sekimore release view --tag vX.Y.Z`, `sekimore release list [--limit N]`. The endpoints are `/release/create`, `/release/view`, `/release/list`
+- The tag has to exist upstream, so `release create` runs after `git push origin vX.Y.Z`; GitHub answers 422 otherwise. With no body the relay sets `generate_release_notes`, and GitHub writes the notes from the pull requests merged since the previous tag — the usual path. `--notes` / `--notes-file` is used as the body instead, and adding `--generate-notes` makes GitHub append its generated notes to it. `--title` defaults to the tag, `--draft` leaves publishing to a human (published by default)
+- Two new permissions, `release:create` and `release:read`, denied by default like the rest. The device flow token already carries the `repo` scope, so there is nothing to re-authenticate
+- `handler: git-relay` is now written `handler: github`. The SSH git half (refs/for, the policy, receive-pack) is plain git and would work against any forge, but the API half (pulls, check-runs, Projects v2) is GitHub's, so the handler carries the forge's name and leaves room for `gitlab` / `gitea` when 0.3.0 makes the API layer pluggable
+- `git-relay` keeps working — it is an alias on both the Rust and the Python side. No config has to be edited, now or later
+
 ## 0.2.5 (2026-09-16. Fixes the 0.2.4 image build)
 
 - Docker: copy `relay/locales` into the builder stage. The 0.2.4 CLI dictionaries are pulled in with `include_str!`, but only `relay/share` was copied, so the release build could not read `locales/ja.json` and the v0.2.4 image never published. No change to the relay itself; 0.2.4 and 0.2.5 are the same code.

@@ -32,6 +32,8 @@ sekimore ci runs --ref <tag|branch|sha>  # workflow runs for a ref
 sekimore ci jobs --number N              # jobs of the PR's latest run (which failed, job_id)
 sekimore ci log --number N               # log of the failed job from the end; --before <start> pages back, --window sets the size
 sekimore issue create --title "…" --body="…" [--labels a,b]
+sekimore release create --tag vX.Y.Z      # after pushing the tag; GitHub writes the notes
+sekimore release view --tag vX.Y.Z        # the release for one tag
 ```
 
 - Select the repository with `--repo Org/Repo`, or leave it to `SEKIMORE_REPO`. With several upstreams you can prefix the host: `--repo ghe.example.com/Org/Repo`.
@@ -45,6 +47,7 @@ sekimore issue create --title "…" --body="…" [--labels a,b]
 3. `sekimore pr create --head sekimore/<topic> --base main --title "…" --body="…"`
 4. Wait for `sekimore pr status --number N` to go green. Read `sekimore ci log` when it does not.
 5. With the permission and a human's go-ahead, `sekimore pr merge --number N`. Tags are pushed with `git push origin vX.Y.Z` and only for repositories where tags are allowed.
+6. After the tag is pushed, `sekimore release create --tag vX.Y.Z` turns it into a release. The body is written by GitHub from the pull requests since the previous tag, so you do not have to compose it. Pass `--notes` or `--notes-file` to write it yourself, and `--draft` to leave publishing to a human.
 
 ## Common denials
 

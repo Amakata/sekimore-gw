@@ -3,7 +3,7 @@
 *[English](README.md)*
 
 AI エージェントの git 操作（SSH）と GitHub API 操作を、案件単位のポリシーで中継する関所です。
-sekimore-gw のイメージに同梱され、`config.yml` に `handler: git-relay` があるときだけ起動します。
+sekimore-gw のイメージに同梱され、`config.yml` に `handler: github` があるときだけ起動します。
 無ければ何も変わりません。
 
 - 変更履歴: [CHANGELOG.md](CHANGELOG.md)
@@ -49,7 +49,7 @@ sekimore-gw のイメージに同梱され、`config.yml` に `handler: git-rela
 
 ```yaml
 domain_handlers:
-  github.com: { handler: git-relay }
+  github.com: { handler: github }
 
 relay:
   project:
@@ -58,6 +58,8 @@ relay:
     repos:
       - { name: Org/Repo, mode: read-write, bases: [main] }
 ```
+
+`git-relay` はこの handler の元の名前で、今も受け付けます。動いている設定を書き換える必要はありません。
 
 キーの意味と全体の例は「設定リファレンス」を見てください。
 `relay:` 配下の未知キーはエラーになります（typo で権限が緩まないため）。
@@ -136,6 +138,9 @@ sekimore ci runs --ref v0.2.0                   # タグ / ブランチ / SHA �
 sekimore ci jobs --number 12                    # PR の全 run のジョブ一覧（失敗と job_id が分かる）
 sekimore ci log --number 12                     # 失敗ジョブのログを末尾から。--before / --window で前へ
 sekimore issue create --title T --labels bug    # ラベル付きは issue:label も要る
+sekimore release create --tag v0.2.6            # タグを push した後に。本文は GitHub が書く
+sekimore release view --tag v0.2.6              # タグに対応する Release
+sekimore release list --limit 10                # 新しい順に Release 一覧
 ```
 
 AI エージェント向けの使い方は `sekimore guide` で表示できます（CLI に埋め込み。正本は `relay/share/agent-guide.en.md` と `agent-guide.ja.md`）。
@@ -151,11 +156,12 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 
 ### `domain_handlers.<domain>`
 
-キーは完全一致の FQDN です。`git-relay` を複数書くと上流が複数になります。
+キーは完全一致の FQDN です。`github` を複数書くと上流が複数になります。
+`git-relay` は `github` handler の元の名前で、今も受け付けます。既存の設定はそのまま動きます。
 
 | キー | 既定 | 意味 |
 |---|---|---|
-| `handler` | `splice` | `git-relay` で関所が受ける。`https-relay` は 443 だけを関所の passthrough で通す（送信上限を掛けたい宛先用）。`deny` は拒否、`splice` は従来どおり |
+| `handler` | `splice` | `github` で関所が受ける（SSH の git と GitHub API）。`https-relay` は 443 だけを関所の passthrough で通す（送信上限を掛けたい宛先用）。`deny` は拒否、`splice` は従来どおり |
 | `ssh_port` | `relay.ssh_listen` のポート | 関所側の SSH ポート。2 つ目以降の上流では必須 |
 | `upstream` | ドメイン名 | 実際の上流ホスト |
 | `upstream_ssh_port` | `relay.upstream_ssh_port` | 上流の SSH ポート |
@@ -207,16 +213,16 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 
 - 実効権限 = (案件 allow ∪ 上流 allow ∪ repo allow) − (案件 deny ∪ 上流 deny ∪ repo deny)。deny はどの層に書いても勝ちます。
 - `push` / `tags` / `delete` は 案件 → 上流 → repo の順で上書きされます。glob は `*` と `?` が使えます。
-- 権限キーは 16 個: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:merge` `pr:close`、`issue:create` `issue:comment` `issue:close` `issue:label` `issue:assign`、`project:read` `project:add_item` `project:update_item`、`repo:read`、`ci:read`。
+- 権限キーは 18 個: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:merge` `pr:close`、`issue:create` `issue:comment` `issue:close` `issue:label` `issue:assign`、`project:read` `project:add_item` `project:update_item`、`repo:read`、`ci:read`、`release:create` `release:read`。
 - 実効値は `sekimore-relay check` と Web UI の Relay タブで確認できます。
 
 ### 例: github.com と GHES を同時に扱う
 
 ```yaml
 domain_handlers:
-  github.com: { handler: git-relay }                    # 既定上流（ssh_port 省略）
+  github.com: { handler: github }                       # 既定上流（ssh_port 省略）
   ghe.example.com:
-    handler: git-relay
+    handler: github
     ssh_port: 2222                                      # 2 つ目以降は別ポート
     ssh_options: [ProxyJump=bastion.example.com]        # 踏み台経由なら
 
@@ -236,6 +242,27 @@ relay:
           - { name: Corp/Internal, mode: read-write, bases: [main] }
 ```
 
+### Release（0.2.6）
+
+`release:create` と `release:read` は他の権限と同じく既定で拒否です。使う案件では `permissions` に書いてください。
+device flow トークンは `repo` スコープを持っているので、認証をやり直す必要はありません。
+
+```bash
+git push origin v0.2.6                                   # タグが先に上流へ入っている必要がある
+sekimore release create --tag v0.2.6                     # 本文はマージ済み PR から GitHub が書く
+sekimore release create --tag v0.2.6 --notes-file NOTES.md --draft
+sekimore release view --tag v0.2.6
+sekimore release list --limit 10
+```
+
+- タグが上流に無いと GitHub が 422 を返すので、これはタグを push した後に実行します。
+- 本文を渡さないと関所が `generate_release_notes` を立て、前のタグ以降にマージされた PR から GitHub が本文を作ります。
+  これが通常の使い方で、自分で書く必要はありません。
+- `--notes` か `--notes-file` を渡すとそれが本文になります。さらに `--generate-notes` を付けると、書いた本文の後ろに
+  GitHub の生成した本文が追記されます。
+- `--title` の既定はタグ名なので、無題の Release はできません。`--prerelease` で prerelease になります。
+- `--draft` は未公開で作り、公開は人間に任せます。既定は公開済みです。
+
 ### 持ち出し対策: 443 の送信上限と `https-relay`
 
 関所は依頼者の資格情報を AI に使わせませんが、プロンプトに埋め込まれた他人の資格情報で HTTPS push する持ち出しは TLS の中身を見ない限り区別できません。
@@ -244,7 +271,7 @@ relay:
 
 ```yaml
 domain_handlers:
-  github.com: { handler: git-relay, max_upload_bytes: 262144 }   # 256 KiB。HTTPS push は関所経由の SSH を使うので不要
+  github.com: { handler: github, max_upload_bytes: 262144 }      # 256 KiB。HTTPS push は関所経由の SSH を使うので不要
   ghcr.io:    { handler: https-relay, max_upload_bytes: -1 }     # 自分で image を push する宛先は無制限
   registry-1.docker.io: { handler: https-relay }                 # 既定 (relay.https_max_upload_bytes) を使う
 relay:

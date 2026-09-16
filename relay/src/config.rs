@@ -25,7 +25,11 @@ pub const DEFAULT_OAUTH_CLIENT_ID: &str = "178c6fc778ccc68e1d6a";
 #[serde(rename_all = "kebab-case")]
 pub enum HandlerKind {
     Splice,
-    GitRelay,
+    /// SSH git plus the forge's API. `github` is the name to write; `git-relay` is the original
+    /// spelling from 0.1.0 and stays accepted, because the SSH git half is not GitHub-specific
+    /// but the API half is. 0.3.0 will pick the API dialect with a separate key.
+    #[serde(alias = "git-relay")]
+    Github,
     /// 0.2.2: pass only 443 through the relay's passthrough, for domains that need an upload cap. No SSH or API
     HttpsRelay,
     Deny,
@@ -496,7 +500,7 @@ impl Loaded {
     pub fn git_relay_domains(&self) -> Vec<String> {
         self.handlers
             .iter()
-            .filter(|(_, k)| **k == HandlerKind::GitRelay)
+            .filter(|(_, k)| **k == HandlerKind::Github)
             .map(|(d, _)| d.clone())
             .collect()
     }
@@ -859,7 +863,7 @@ impl Loaded {
                 domain: u.domain.clone(),
                 host: u.host.clone(),
                 max_upload: u.max_upload,
-                kind: HandlerKind::GitRelay,
+                kind: HandlerKind::Github,
             })
             .collect();
         for d in self.https_relay_domains() {
@@ -1128,6 +1132,49 @@ mod tests {
 
     fn p(text: &str) -> Result<Loaded, ConfigError> {
         parse(Path::new("test.yml"), text)
+    }
+
+    /// 0.2.6 renamed the handler to `github`. A config written for 0.1.x keeps working, and the two
+    /// spellings resolve identically, so nobody has to touch a running configuration.
+    #[test]
+    fn the_original_git_relay_handler_name_still_works() {
+        let body = |handler: &str| {
+            format!(
+                r#"
+domain_handlers:
+  github.com: {{ handler: {handler} }}
+relay:
+  project:
+    name: case-a
+    permissions: [pr:create]
+    repos:
+      - {{ name: Org/App, mode: read-write, bases: [main] }}
+"#
+            )
+        };
+        let old = p(&body("git-relay")).expect("git-relay must still parse");
+        let new = p(&body("github")).expect("github must parse");
+        assert_eq!(old.needs_relay().unwrap(), new.needs_relay().unwrap());
+        let (ro, rn) = (old.resolve().unwrap(), new.resolve().unwrap());
+        assert_eq!(ro.upstreams.len(), 1);
+        assert_eq!(ro.upstreams[0].domain, rn.upstreams[0].domain);
+        assert_eq!(ro.upstreams[0].host, rn.upstreams[0].host);
+        assert_eq!(ro.https_targets.len(), rn.https_targets.len());
+
+        // The two spellings may be mixed across domains
+        let mixed = p(r#"
+domain_handlers:
+  github.com: { handler: git-relay }
+  ghe.example.com: { handler: github, ssh_port: 2222 }
+relay:
+  project:
+    name: case-a
+    permissions: [pr:create]
+    repos:
+      - { name: github.com/Org/App, mode: read-write, bases: [main] }
+"#)
+        .expect("a mix of both names must parse");
+        assert_eq!(mixed.resolve().unwrap().upstreams.len(), 2);
     }
 
     #[test]
@@ -1495,7 +1542,7 @@ relay:
         assert_eq!(
             caps,
             vec![
-                ("github.com", Some(262144), HandlerKind::GitRelay),
+                ("github.com", Some(262144), HandlerKind::Github),
                 ("ghcr.io", None, HandlerKind::HttpsRelay),
                 (
                     "registry-1.docker.io",

@@ -24,6 +24,8 @@ pub enum Resource {
     Project,
     Repo,
     Ci,
+    /// 0.2.6: GitHub releases
+    Release,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -48,6 +50,7 @@ impl Resource {
             Resource::Project => "project",
             Resource::Repo => "repo",
             Resource::Ci => "ci",
+            Resource::Release => "release",
         }
     }
     /// The actions that exist for this resource. Used to reject typos in the config.
@@ -59,14 +62,16 @@ impl Resource {
             Resource::Project => &[Read, AddItem, UpdateItem],
             Resource::Repo => &[Read],
             Resource::Ci => &[Read],
+            Resource::Release => &[Create, Read],
         }
     }
-    pub const ALL: [Resource; 5] = [
+    pub const ALL: [Resource; 6] = [
         Resource::Pr,
         Resource::Issue,
         Resource::Project,
         Resource::Repo,
         Resource::Ci,
+        Resource::Release,
     ];
 }
 
@@ -99,9 +104,10 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "project" => Resource::Project,
         "repo" => Resource::Repo,
         "ci" => Resource::Ci,
+        "release" => Resource::Release,
         other => {
             return Err(format!(
-                "unknown resource {other:?} (known: ci, issue, pr, project, repo)"
+                "unknown resource {other:?} (known: ci, issue, pr, project, release, repo)"
             ))
         }
     };
@@ -1066,6 +1072,8 @@ mod tests {
         assert!(parse_permission("prcreate").is_err());
         assert!(Project::try_new("x", vec![], &["pr:delete".to_string()]).is_err());
         assert!(Project::try_new("x", vec![RepoPolicy::new("nope", Mode::ReadOnly)], &[]).is_err());
-        assert_eq!(all_permission_keys().len(), 16); // pr:read (0.1.3) + ci:read (0.1.5)
+        // pr:read (0.1.3) + ci:read (0.1.5) + release:create / release:read (0.2.6)
+        assert_eq!(all_permission_keys().len(), 18);
+        assert!(all_permission_keys().contains(&"release:create".to_string()));
     }
 }

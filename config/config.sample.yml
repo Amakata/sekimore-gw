@@ -87,9 +87,10 @@ database_path: "/data/security_gateway.db"
 # project's policy. See relay/README.md for the details.
 # domain_handlers:
 #   github.com:
-#     handler: git-relay          # an exact FQDN (splice and deny work here too)
+#     handler: github             # an exact FQDN. `git-relay` is the original name and still works
+#                                 # (splice and deny work here too)
 #   # ghe.example.com:            # 0.2.0+ several upstreams; each extra one listens on its own SSH port
-#   #   handler: git-relay        #   (name the upstream in repos as ghe.example.com/Org/Repo,
+#   #   handler: github           #   (name the upstream in repos as ghe.example.com/Org/Repo,
 #   #   ssh_port: 2222            #    or list it under project.upstreams.<domain>.repos below)
 #   #   ssh_options: [ProxyJump=bastion.example.com]   # 0.2.1+ passed to the upstream ssh with -o (bastion / ProxyCommand). Get the bastion's key with sekimore-relay keyscan
 #   #   api_base: https://ghe.example.com/api/v3       # 0.2.1+ API base when upstream points somewhere else
@@ -112,7 +113,7 @@ database_path: "/data/security_gateway.db"
 #     #     permissions: { allow: [pr:create], deny: [pr:merge] }
 #     #     repos:
 #     #       - { name: Corp/Internal, mode: read-write, bases: [main] }
-#     permissions: [pr:create, issue:create]   # resource:action. Anything not listed is denied. {allow: [...], deny: [...]} also works
+#     permissions: [pr:create, issue:create, release:create]   # resource:action. Anything not listed is denied. {allow: [...], deny: [...]} also works
 #     tags: []                                  # default globs of tags that may be pushed (empty = denied). Override per repo with repos[].tags
 #     delete: false                             # default for deleting branches and tags. Override with repos[].delete
 #     # repos[] takes mode / bases / push / tags / delete / permissions ({allow, deny}, a diff against the project defaults; deny wins)

@@ -77,6 +77,9 @@ pub async fn dispatch(
         "/project/add-item" => project_add_item(ctx, req).await,
         "/project/update-item" => project_update_item(ctx, req).await,
         "/project/list" => project_list(ctx, req).await,
+        "/release/create" => release_create(ctx, req).await,
+        "/release/view" => release_view(ctx, req).await,
+        "/release/list" => release_list(ctx, req).await,
         _ => Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: format!("unknown endpoint {path}"),
@@ -218,6 +221,100 @@ async fn pr_status(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
         raw: Some(raw),
         message: Some(msg),
         ..Default::default()
+    })
+}
+
+// ---- releases (0.2.6) ----
+
+/// Create a release for a tag that the relay already let through. The tag has to exist upstream,
+/// so this runs after `git push origin <tag>`; GitHub answers 422 when it does not.
+async fn release_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    need(!req.tag.is_empty(), "tag is required")?;
+    // Without notes of its own a release would be empty, so ask GitHub to write them.
+    let generate = req.generate_notes || req.body.is_empty();
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Release, Action::Create)?;
+    let rel = gh(ctx, &auth)?
+        .create_release(
+            &auth,
+            &req.tag,
+            if req.title.is_empty() {
+                None
+            } else {
+                Some(&req.title)
+            },
+            if req.body.is_empty() {
+                None
+            } else {
+                Some(&req.body)
+            },
+            generate,
+            req.draft,
+            req.prerelease,
+        )
+        .await?;
+    let state = if rel.draft { " (draft)" } else { "" };
+    Ok(ApiResponse {
+        number: Some(rel.id),
+        url: Some(rel.html_url.clone()),
+        message: Some(format!("created release {}{}", rel.tag_name, state)),
+        raw: serde_json::to_value(&rel).ok(),
+        ..Default::default()
+    })
+}
+
+async fn release_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    need(!req.tag.is_empty(), "tag is required")?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Release, Action::Read)?;
+    match gh(ctx, &auth)?.get_release_by_tag(&auth, &req.tag).await? {
+        Some(rel) => Ok(ApiResponse {
+            number: Some(rel.id),
+            url: Some(rel.html_url.clone()),
+            message: Some(format!(
+                "{}{} {}",
+                rel.tag_name,
+                if rel.draft { " (draft)" } else { "" },
+                rel.html_url
+            )),
+            raw: serde_json::to_value(&rel).ok(),
+            ..Default::default()
+        }),
+        None => Ok(ApiResponse {
+            message: Some(format!("no release for tag {}", req.tag)),
+            ..ApiResponse::ok()
+        }),
+    }
+}
+
+async fn release_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Release, Action::Read)?;
+    let limit = if req.first == 0 { 20 } else { req.first };
+    let rels = gh(ctx, &auth)?.list_releases(&auth, limit).await?;
+    let msg = rels
+        .iter()
+        .map(|r| {
+            format!(
+                "{}{}{} {}",
+                r.tag_name,
+                if r.draft { " [draft]" } else { "" },
+                if r.prerelease { " [prerelease]" } else { "" },
+                r.html_url
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(ApiResponse {
+        message: Some(msg),
+        raw: serde_json::to_value(&rels).ok(),
+        ..ApiResponse::ok()
     })
 }
 

@@ -205,7 +205,7 @@ def _git_relay_upstreams(config: dict) -> list[dict[str, Any]]:
     specs: dict[str, dict] = {}
     for domain, spec in handlers.items():
         spec = spec if isinstance(spec, dict) else {}
-        if spec.get("handler") == "git-relay":
+        if spec.get("handler") in ("github", "git-relay"):
             specs[str(domain).strip().rstrip(".").lower()] = spec
     if not specs:
         return []
