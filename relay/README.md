@@ -69,6 +69,24 @@ relay:
 （`Org/Repo` が 1 つの上流にしか無ければ省略可）。SSH 経路では接続ポートの上流に絞って repo を探すので、GHES の repo に
 github.com 側のポートから届くことはない。
 
+**踏み台・プロキシ経由の上流（0.2.1〜）**: 関所は上流 ssh を gateway の中で `ssh -F /dev/null …` として起動するので、
+ホスト（Mac）側の `~/.ssh/config` や port forwarding は見えない（agent の鍵だけが渡る）。踏み台や企業プロキシが要る上流は
+handler の `ssh_options` に ssh のオプションを書く（`-o` で渡す。`relay.ssh_options` は全上流共通）。関所が強制する
+BatchMode / StrictHostKeyChecking / known_hosts の設定は上書きできない（設定時にエラー）。踏み台のホスト鍵は
+`sekimore-relay keyscan bastion.example.com [--port 22] [--upstream ghe.example.com]` で fingerprint を確認しながら
+その上流の known_hosts に入れる。`api_base` / `graphql_base` は handler で上書きできる（`upstream` を転送先にしたときに使う）。
+
+```yaml
+domain_handlers:
+  ghe.example.com:
+    handler: git-relay
+    ssh_port: 2222
+    ssh_options:
+      - ProxyJump=bastion.example.com                        # 踏み台経由（ssh -W なので追加ツール不要）
+      # - ProxyCommand=nc -X connect -x proxy.corp:3128 %h %p   # 企業 HTTP プロキシ経由（gateway に nc が要る）
+    # api_base: https://ghe.example.com/api/v3               # upstream を転送先 (host.docker.internal 等) にしたとき
+```
+
 **上流ごとの権限（0.2.1〜）**: 案件既定と repo の間に上流の層を置ける。`project.upstreams.<domain>` に
 `permissions`（案件既定への差分）、`push` / `tags` / `delete`（その上流の repo の既定）、`repos`（その上流の repo。`Org/Repo` で書く）。
 実効権限 = (案件 allow ∪ 上流 allow ∪ repo allow) − (案件 deny ∪ 上流 deny ∪ repo deny)。

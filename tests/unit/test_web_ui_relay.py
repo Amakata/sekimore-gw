@@ -450,3 +450,29 @@ relay:
         assert legacy["delete"] is True
         assert legacy["permissions"] == ["ci:read", "pr:create", "pr:read"]
         assert len(data["repos"]) == 4
+
+    def it_prefers_the_handler_api_base_and_lists_ssh_options(tmp_path):
+        # 0.2.1: upstream を踏み台/転送先にしても api_base は handler の指定、ssh_options は relay → handler の順
+        text = config_text.replace(
+            "ghe.example.com: {handler: git-relay, ssh_port: 2222}",
+            "ghe.example.com: {handler: git-relay, ssh_port: 2222, upstream: host.docker.internal, "
+            "api_base: 'https://ghe.example.com/api/v3', ssh_options: [ProxyJump=bastion.example.com]}",
+        ).replace(
+            '  state_dir: "{state_dir}"',
+            '  state_dir: "{state_dir}"\n  ssh_options: [ConnectionAttempts=2]',
+        )
+        cfg = tmp_path / "config.yml"
+        cfg.write_text(text.replace("{state_dir}", str(tmp_path / "relay")))
+        with patch("src.web_ui.app.CONFIG_PATH", str(cfg)):
+            from src.web_ui.app import app
+
+            data = TestClient(app).get("/api/relay/config").json()
+        ups = {u["domain"]: u for u in data["upstreams"]}
+        assert ups["ghe.example.com"]["upstream"] == "host.docker.internal"
+        assert ups["ghe.example.com"]["api_base"] == "https://ghe.example.com/api/v3"
+        assert ups["ghe.example.com"]["ssh_options"] == [
+            "ConnectionAttempts=2",
+            "ProxyJump=bastion.example.com",
+        ]
+        assert ups["github.com"]["ssh_options"] == ["ConnectionAttempts=2"]
+        assert ups["github.com"]["api_base"] == "https://api.github.com"

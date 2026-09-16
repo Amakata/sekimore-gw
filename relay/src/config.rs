@@ -50,6 +50,15 @@ pub struct DomainHandler {
     /// 0.2.0: 既定上流にする（`Org/Repo` と書いた repo はこの上流）。省略時は `ssh_port` を省いたもの、無ければ辞書順の先頭
     #[serde(default)]
     pub default: bool,
+    /// 0.2.1: 上流 ssh に `-o` で渡すオプション（`ProxyJump=bastion` など）。この上流だけに効く。
+    /// 関所が強制する BatchMode / StrictHostKeyChecking / UserKnownHostsFile 等は上書きできない
+    #[serde(default)]
+    pub ssh_options: Vec<String>,
+    /// 0.2.1: この上流の REST / GraphQL の base URL（省略時は `upstream` から派生。既定上流は `relay.api_base` も見る）
+    #[serde(default)]
+    pub api_base: Option<Url>,
+    #[serde(default)]
+    pub graphql_base: Option<Url>,
 }
 
 fn default_handler() -> HandlerKind {
@@ -65,6 +74,9 @@ impl Default for DomainHandler {
             upstream_ssh_port: None,
             oauth_client_id: None,
             default: false,
+            ssh_options: Vec::new(),
+            api_base: None,
+            graphql_base: None,
         }
     }
 }
@@ -279,6 +291,9 @@ pub struct RelayConfig {
     pub upstream_ssh_port: u16,
     /// 上流 ssh に `-F` で渡す設定ファイル（ProxyCommand 等）。既定 /dev/null
     pub ssh_config: Option<PathBuf>,
+    /// 0.2.1: 全上流の ssh に `-o` で渡すオプション。handler の `ssh_options` の前に並ぶ
+    #[serde(default)]
+    pub ssh_options: Vec<String>,
     pub api_base: Option<Url>,
     pub graphql_base: Option<Url>,
     #[serde(default = "d_client_id")]
@@ -544,11 +559,27 @@ impl Loaded {
                 Some(port) => SocketAddr::new(relay.ssh_listen.ip(), port),
                 None => relay.ssh_listen,
             };
-            let (api_base, graphql_base) = if is_default {
-                derive_api_bases(&host, relay.api_base.clone(), relay.graphql_base.clone())?
+            // 0.2.1: handler の api_base / graphql_base が最優先。既定上流は relay.api_base / graphql_base も見る
+            let (api_over, gql_over) = if is_default {
+                (
+                    h.api_base.clone().or_else(|| relay.api_base.clone()),
+                    h.graphql_base
+                        .clone()
+                        .or_else(|| relay.graphql_base.clone()),
+                )
             } else {
-                derive_api_bases(&host, None, None)?
+                (h.api_base.clone(), h.graphql_base.clone())
             };
+            let (api_base, graphql_base) = derive_api_bases(&host, api_over, gql_over)?;
+            // 0.2.1: ssh_options の検証（Key=Value、関所が強制するものは上書き不可）
+            let mut ssh_options: Vec<String> = Vec::new();
+            for opt in relay.ssh_options.iter().chain(h.ssh_options.iter()) {
+                let opt = opt.trim();
+                validate_ssh_option(opt).map_err(|why| {
+                    ConfigError::Invalid(format!("ssh_options for {d}: {opt:?} {why}"))
+                })?;
+                ssh_options.push(opt.to_string());
+            }
             let (upstream_token, known_hosts) = if is_default {
                 let p = Paths::under(&relay.state_dir);
                 (p.upstream_token, p.known_hosts)
@@ -569,6 +600,7 @@ impl Loaded {
                     .unwrap_or_else(|| relay.oauth_client_id.clone()),
                 upstream_token,
                 known_hosts,
+                ssh_options,
                 is_default,
             });
         }
@@ -762,6 +794,38 @@ impl Loaded {
     }
 }
 
+/// 関所が上流 ssh に強制するオプション。`ssh_options` で上書きさせない（先に並べるので実際にも勝つが、設定時に弾く）。
+pub const ENFORCED_SSH_OPTIONS: &[&str] = &[
+    "batchmode",
+    "stricthostkeychecking",
+    "userknownhostsfile",
+    "globalknownhostsfile",
+    "updatehostkeys",
+];
+
+/// `Key=Value` 形式で、改行を含まず、強制オプションでないこと。
+pub fn validate_ssh_option(opt: &str) -> Result<(), String> {
+    let (key, value) = opt
+        .split_once('=')
+        .ok_or_else(|| "must be Key=Value (e.g. ProxyJump=bastion.example.com)".to_string())?;
+    let key = key.trim();
+    if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("has an invalid option name".into());
+    }
+    if value.trim().is_empty() {
+        return Err("has an empty value".into());
+    }
+    if opt.contains(['\n', '\r', '\0']) {
+        return Err("must be a single line".into());
+    }
+    if ENFORCED_SSH_OPTIONS.contains(&key.to_ascii_lowercase().as_str()) {
+        return Err(format!(
+            "cannot override {key}; the relay enforces it (BatchMode / StrictHostKeyChecking / known_hosts files)"
+        ));
+    }
+    Ok(())
+}
+
 /// `host/Org/Repo` → (Some(host), "Org/Repo")、`Org/Repo` → (None, "Org/Repo")。
 /// 先頭要素に `.` が含まれる 3 要素のときだけ host と見なす（GitHub の org 名に `.` は使えない）。
 pub fn split_repo_host(name: &str) -> (Option<&str>, &str) {
@@ -886,6 +950,8 @@ pub struct Upstream {
     pub oauth_client_id: String,
     pub upstream_token: PathBuf,
     pub known_hosts: PathBuf,
+    /// 0.2.1: 上流 ssh に足す `-o` オプション（relay.ssh_options + handler.ssh_options）
+    pub ssh_options: Vec<String>,
     pub is_default: bool,
 }
 
@@ -1209,6 +1275,63 @@ relay:
             "          - { name: github.com/Corp/Internal, mode: read-write, bases: [main] }",
         );
         assert!(p(&bad2).unwrap().resolve().is_err());
+    }
+
+    #[test]
+    fn ssh_options_and_api_base_per_handler() {
+        let text = r#"
+domain_handlers:
+  github.com: { handler: git-relay }
+  ghe.example.com:
+    handler: git-relay
+    ssh_port: 2222
+    upstream: host.docker.internal
+    upstream_ssh_port: 2200
+    api_base: https://ghe.example.com/api/v3
+    graphql_base: https://ghe.example.com/api/graphql
+    ssh_options: ["ProxyJump=bastion.example.com", " HostKeyAlias=ghe.example.com "]
+relay:
+  ssh_options: [ConnectionAttempts=2]
+  project: { name: x }
+"#;
+        let r = p(text).unwrap().resolve().unwrap();
+        let gh = &r.upstreams[0];
+        let ghe = &r.upstreams[1];
+        // relay.ssh_options は全上流に、handler のものはその上流だけに（順序: relay → handler）
+        assert_eq!(gh.ssh_options, vec!["ConnectionAttempts=2"]);
+        assert_eq!(
+            ghe.ssh_options,
+            vec![
+                "ConnectionAttempts=2",
+                "ProxyJump=bastion.example.com",
+                "HostKeyAlias=ghe.example.com"
+            ]
+        );
+        // api_base は handler の指定が勝つ（upstream から派生しない）
+        assert_eq!(ghe.host, "host.docker.internal");
+        assert_eq!(ghe.upstream_ssh_port, 2200);
+        assert_eq!(ghe.api_base.as_str(), "https://ghe.example.com/api/v3");
+        assert_eq!(
+            ghe.graphql_base.as_str(),
+            "https://ghe.example.com/api/graphql"
+        );
+        assert_eq!(gh.api_base.as_str(), "https://api.github.com/");
+        // 強制オプションの上書き、形式不正は起動時エラー
+        for bad in [
+            "StrictHostKeyChecking=no",
+            "batchmode=no",
+            "UserKnownHostsFile=/tmp/x",
+            "ProxyJump",
+            "=x",
+            "Proxy Jump=x",
+        ] {
+            let t = format!(
+                "domain_handlers:\n  github.com: {{ handler: git-relay, ssh_options: [\"{bad}\"] }}\nrelay:\n  project: {{ name: x }}\n"
+            );
+            let err = p(&t).unwrap().resolve().unwrap_err().to_string();
+            assert!(err.contains("ssh_options"), "{bad}: {err}");
+        }
+        assert!(validate_ssh_option("ProxyCommand=nc -X connect -x proxy:3128 %h %p").is_ok());
     }
 
     #[test]
