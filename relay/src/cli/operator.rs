@@ -7,6 +7,8 @@ use std::time::{Duration, SystemTime};
 use anyhow::{anyhow, bail, Context};
 
 use super::BootstrapAction;
+use russh::keys::PublicKey;
+
 use crate::audit::{Actor, Audit};
 use crate::config::{self, ConfigError, Resolved, Upstream};
 use crate::fsutil::{atomic_write, ensure_dir_0700, read_optional};
@@ -17,7 +19,7 @@ use crate::github::http::{build_client, HttpOptions};
 use crate::github::upstream_token::UpstreamTokenStore;
 use crate::github::GitHub;
 use crate::policy::all_permission_keys;
-use crate::ssh::authorized_keys::{Added, AuthorizedKeys};
+use crate::ssh::authorized_keys::{fingerprint, Added, AuthorizedKeys};
 use crate::tokens::TokenStore;
 
 pub const DEVICE_FLOW_SCOPES: &[&str] = &["repo", "project"];
@@ -208,6 +210,89 @@ pub fn merge_known_hosts(
     Ok(added)
 }
 
+/// `ssh-keyscan` の出力から `(host フィールド, "type base64")` を取り出す。コメント行（`# …`）は捨てる。
+pub fn parse_keyscan(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            if l.is_empty() || l.starts_with('#') {
+                return None;
+            }
+            let mut it = l.split_whitespace();
+            let host = it.next()?;
+            let kind = it.next()?;
+            let b64 = it.next()?;
+            if !kind.starts_with("ssh-") && !kind.starts_with("ecdsa-") {
+                return None;
+            }
+            Some((host.to_string(), format!("{kind} {b64}")))
+        })
+        .collect()
+}
+
+/// 0.2.1: 上流や踏み台（ProxyJump 先）のホスト鍵を取り、その上流の known_hosts に追記する。
+/// fingerprint を表示するので、操作者は公開されている値と照合してから信頼すること（TOFU）。
+pub fn keyscan(path: &Path, host: &str, port: u16, upstream: Option<&str>) -> anyhow::Result<()> {
+    let r = resolve(path)?;
+    let up = pick_upstream(&r, upstream)?;
+    let audit = open_audit(&r)?;
+    let host = host.trim().trim_end_matches('.');
+    if host.is_empty() || host.contains(['/', ' ', ',']) {
+        bail!("host must be a bare hostname or IP");
+    }
+    let out = std::process::Command::new("ssh-keyscan")
+        .args([
+            "-T",
+            "5",
+            "-t",
+            "ed25519,ecdsa,rsa",
+            "-p",
+            &port.to_string(),
+            host,
+        ])
+        .output()
+        .context("run ssh-keyscan (openssh-client)")?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let keys: Vec<String> = parse_keyscan(&text).into_iter().map(|(_, k)| k).collect();
+    if keys.is_empty() {
+        bail!(
+            "ssh-keyscan returned no host keys for {host}:{port} ({})",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    println!(
+        "host keys of {host}:{port} — verify these fingerprints out of band before trusting them:"
+    );
+    for k in &keys {
+        let kind = k.split_whitespace().next().unwrap_or("");
+        match PublicKey::from_openssh(k) {
+            Ok(pk) => println!("  {kind:<20} {}", fingerprint(&pk)),
+            Err(e) => println!("  {kind:<20} (unparseable: {e})"),
+        }
+    }
+    if let Some(dir) = up.known_hosts.parent() {
+        ensure_dir_0700(dir).with_context(|| format!("state dir {}", dir.display()))?;
+    }
+    let n = merge_known_hosts(&up.known_hosts, host, port, &keys)?;
+    println!(
+        "known_hosts: {} key(s) for {host}:{port} ({n} new) → {} (upstream {})",
+        keys.len(),
+        up.known_hosts.display(),
+        up.domain
+    );
+    audit.log(
+        "known_hosts_added",
+        Actor::Operator,
+        &[
+            ("host", host),
+            ("port", &port.to_string()),
+            ("upstream", &up.domain),
+            ("added", &n.to_string()),
+        ],
+    );
+    Ok(())
+}
+
 pub fn logout(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let r = resolve(path)?;
     let up = pick_upstream(&r, upstream)?;
@@ -259,6 +344,9 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
         println!("  rest:       {}", up.api_base);
         println!("  graphql:    {}", up.graphql_base);
         println!("  ssh listen: {}", up.listen);
+        if !up.ssh_options.is_empty() {
+            println!("  ssh options: {}", up.ssh_options.join(" "));
+        }
     }
     println!("api listen:   {}", r.relay.api_listen);
     println!(
@@ -381,7 +469,11 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             u.upstream_ssh_port,
             &u.known_hosts,
             r.relay.ssh_config.as_deref(),
-        );
+        )
+        .with_options(u.ssh_options.clone());
+        if !u.ssh_options.is_empty() {
+            println!("  ssh options:     {}", u.ssh_options.join(" "));
+        }
         match up.known_hosts_has_upstream() {
             Ok(true) => println!("  known_hosts:     ok ({})", u.known_hosts.display()),
             Ok(false) => println!("  known_hosts:     MISSING — {}", up.known_hosts_remedy()),
@@ -587,4 +679,28 @@ pub fn bootstrap(path: &Path, action: BootstrapAction) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_keyscan_output_keeps_keys_and_drops_comments() {
+        let text = "# bastion.example.com:22 SSH-2.0-OpenSSH_9.6\n\
+bastion.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n\
+[ghe.example.com]:2222 ecdsa-sha2-nistp256 AAAAE2VjZHNh extra-comment\n\
+garbage line\n";
+        let got = parse_keyscan(text);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].0, "bastion.example.com");
+        assert!(got[0].1.starts_with("ssh-ed25519 AAAAC3"));
+        assert_eq!(
+            got[1],
+            (
+                "[ghe.example.com]:2222".to_string(),
+                "ecdsa-sha2-nistp256 AAAAE2VjZHNh".to_string()
+            )
+        );
+    }
 }

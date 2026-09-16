@@ -73,6 +73,16 @@ pub enum Command {
         #[arg(long)]
         file: Option<PathBuf>,
     },
+    /// 上流や ProxyJump 先（踏み台）のホスト鍵を ssh-keyscan で取り、その上流の known_hosts に追記する（fingerprint を表示）
+    Keyscan {
+        /// ホスト名または IP
+        host: String,
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+        /// どの上流の known_hosts に入れるか（git-relay ドメイン。省略時は既定上流）
+        #[arg(long)]
+        upstream: Option<String>,
+    },
     /// POST /bootstrap の kill-switch
     Bootstrap {
         #[command(subcommand)]
@@ -117,6 +127,11 @@ pub async fn run(cli: Cli) -> i32 {
         Command::AddKey { line, file } => {
             operator::add_key(&cli.config, line.as_deref(), file.as_deref()).map(|_| 0)
         }
+        Command::Keyscan {
+            host,
+            port,
+            upstream,
+        } => operator::keyscan(&cli.config, &host, port, upstream.as_deref()).map(|_| 0),
         Command::Bootstrap { action } => operator::bootstrap(&cli.config, action).map(|_| 0),
         Command::Agent { repo, cmd } => agent::run(repo.as_deref(), cmd).await,
     };

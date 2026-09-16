@@ -1140,7 +1140,7 @@
                     // 0.2.0: 複数上流はポートで分かれる。上流ごとの listen ポート / token / known_hosts
                     ...((cfg.upstreams || []).length > 1 ? cfg.upstreams.map(u =>
                         relayKV(`↳ ${u.domain}${u.default ? ' (default)' : ''}`,
-                            `→ ${u.upstream} · ssh :${u.ssh_port} · ${u.api_base} · known_hosts ${u.known_hosts_count ?? 0}`,
+                            `→ ${u.upstream} · ssh :${u.ssh_port} · ${u.api_base} · known_hosts ${u.known_hosts_count ?? 0}${(u.ssh_options || []).length ? ' · ' + u.ssh_options.join(' ') : ''}`,
                             relayBadge(u.token_present ? 'TOKEN OK' : 'NO TOKEN', u.token_present ? 'badge-allowed' : 'badge-blocked'))) : []),
                     relayKV('Project', cfg.project || '-'),
                     relayKV('SSH listen', cfg.ssh_listen),

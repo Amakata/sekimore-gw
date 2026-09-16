@@ -228,10 +228,13 @@ fn build_upstream(r: &Resolved, up: &Upstream) -> Arc<dyn UpstreamGit> {
             return Arc::new(crate::git::upstream_local::LocalGitUpstream::new(root));
         }
     }
-    Arc::new(OpenSshUpstream::new(
-        &up.host,
-        up.upstream_ssh_port,
-        &up.known_hosts,
-        r.relay.ssh_config.as_deref(),
-    ))
+    Arc::new(
+        OpenSshUpstream::new(
+            &up.host,
+            up.upstream_ssh_port,
+            &up.known_hosts,
+            r.relay.ssh_config.as_deref(),
+        )
+        .with_options(up.ssh_options.clone()),
+    )
 }

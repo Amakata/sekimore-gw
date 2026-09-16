@@ -83,6 +83,8 @@ database_path: "/data/security_gateway.db"
 #   # ghe.example.com:            # 0.2.0〜 複数の上流も可。2 つ目以降は別の SSH ポートで受ける
 #   #   handler: git-relay        #   (repos の name は ghe.example.com/Org/Repo で上流を明示、
 #   #   ssh_port: 2222            #    または下の project.upstreams.<domain>.repos に書く)
+#   #   ssh_options: [ProxyJump=bastion.example.com]   # 0.2.1〜 上流 ssh に -o で渡す (踏み台 / ProxyCommand)。踏み台の鍵は sekimore-relay keyscan
+#   #   api_base: https://ghe.example.com/api/v3       # 0.2.1〜 upstream を転送先にしたときの API base
 # relay:
 #   https: passthrough            # 同一ドメインの 443: passthrough | reject
 #   bootstrap: auto               # 使い捨て鍵の登録 + 案件トークン発行を POST /bootstrap で自動化: auto | manual

@@ -21,6 +21,8 @@ pub struct OpenSshUpstream {
     pub ssh_config: Option<PathBuf>,
     pub auth_sock: Option<PathBuf>,
     pub ssh_bin: String,
+    /// 0.2.1: 設定からの追加 `-o`（ProxyJump 等）。関所が強制するオプションの後ろに並べる（先に指定した値が勝つ）
+    pub extra_options: Vec<String>,
 }
 
 impl OpenSshUpstream {
@@ -32,7 +34,14 @@ impl OpenSshUpstream {
             ssh_config: ssh_config.map(Path::to_path_buf),
             auth_sock: auth_sock_from_env(),
             ssh_bin: "ssh".to_string(),
+            extra_options: Vec::new(),
         }
+    }
+
+    /// 0.2.1: 設定の `ssh_options` を足す（検証は config 側で済んでいる）。
+    pub fn with_options(mut self, opts: Vec<String>) -> Self {
+        self.extra_options = opts;
+        self
     }
 
     /// known_hosts に上流ホストの行があるか。ハッシュ化行（`|1|…`）は照合できないので「ある」とみなす。
@@ -70,12 +79,14 @@ impl OpenSshUpstream {
     pub fn known_hosts_remedy(&self) -> String {
         format!(
             "known_hosts {} has no entry for {}; run `sekimore-relay login` (fetches the upstream host keys) or \
-             `ssh-keyscan -t ed25519,ecdsa,rsa -p {} {} >> {}`",
+             `sekimore-relay keyscan {} --port {}` (also for a ProxyJump bastion), or append \
+             `ssh-keyscan -t ed25519,ecdsa,rsa -p {} {}` yourself",
             self.known_hosts.display(),
             self.host,
-            self.port,
             self.host,
-            self.known_hosts.display()
+            self.port,
+            self.port,
+            self.host
         )
     }
 
@@ -98,6 +109,10 @@ impl OpenSshUpstream {
         }
         cmd.arg("-o")
             .arg(format!("UserKnownHostsFile={}", self.known_hosts.display()));
+        // 設定からの追加オプション。ssh は先に指定した値を使うので、上の強制オプションは上書きされない
+        for opt in &self.extra_options {
+            cmd.arg("-o").arg(opt);
+        }
         cmd.arg("-p").arg(self.port.to_string());
         cmd.arg(format!("git@{}", self.host));
         cmd.arg(remote);
@@ -216,5 +231,26 @@ mod tests {
         assert!(args.contains(&"StrictHostKeyChecking=yes".to_string()));
         assert_eq!(args.last().unwrap(), "git-upload-pack 'Org/Repo.git'");
         assert!(args.iter().any(|a| a.starts_with("UserKnownHostsFile=")));
+    }
+
+    #[test]
+    fn extra_options_come_after_enforced_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let up = OpenSshUpstream::new("ghe.example.com", 22, &dir.path().join("kh"), None)
+            .with_options(vec![
+                "ProxyJump=bastion.example.com".into(),
+                "StrictHostKeyChecking=no".into(), // config 側で弾かれるが、通っても後ろなので効かない
+            ]);
+        let cmd = up.command("git-upload-pack 'Org/Repo.git'");
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let pos = |s: &str| args.iter().position(|a| a == s).unwrap();
+        assert!(pos("StrictHostKeyChecking=yes") < pos("ProxyJump=bastion.example.com"));
+        assert!(pos("ProxyJump=bastion.example.com") < pos("StrictHostKeyChecking=no"));
+        assert!(pos("ProxyJump=bastion.example.com") < pos("git@ghe.example.com"));
+        assert_eq!(args[pos("ProxyJump=bastion.example.com") - 1], "-o");
     }
 }

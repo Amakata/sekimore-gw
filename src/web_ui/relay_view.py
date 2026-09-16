@@ -70,6 +70,7 @@ class RelayUpstream(BaseModel):
     ssh_port: int
     default: bool = False
     api_base: str = ""
+    ssh_options: list[str] = []  # 0.2.1: 上流 ssh に足す -o（ProxyJump 等）
     token_present: bool = False
     known_hosts_count: int | None = None
 
@@ -202,7 +203,9 @@ def _git_relay_upstreams(config: dict) -> list[dict[str, Any]]:
             port = int(port) if port is not None else listen_port
         except (TypeError, ValueError):
             port = listen_port
-        if is_default and relay.get("api_base"):
+        if spec.get("api_base"):  # 0.2.1: handler の上書きが最優先
+            api_base = str(spec["api_base"])
+        elif is_default and relay.get("api_base"):
             api_base = str(relay["api_base"])
         elif host == "github.com":
             api_base = "https://api.github.com"
@@ -213,6 +216,9 @@ def _git_relay_upstreams(config: dict) -> list[dict[str, Any]]:
         else:
             token_path = state_dir / "upstreams" / host / "upstream_token"
             kh_path = state_dir / "upstreams" / host / "known_hosts"
+        ssh_options = [str(o) for o in (relay.get("ssh_options") or [])] + [
+            str(o) for o in (spec.get("ssh_options") or [])
+        ]
         out.append(
             {
                 "domain": d,
@@ -220,6 +226,7 @@ def _git_relay_upstreams(config: dict) -> list[dict[str, Any]]:
                 "ssh_port": port,
                 "default": is_default,
                 "api_base": api_base,
+                "ssh_options": ssh_options,
                 "token_path": token_path,
                 "known_hosts_path": kh_path,
             }
@@ -370,6 +377,7 @@ def build_config(config: dict) -> RelayConfigResponse:
                 ssh_port=u["ssh_port"],
                 default=u["default"],
                 api_base=u["api_base"],
+                ssh_options=u["ssh_options"],
                 token_present=u["token_path"].exists(),
                 known_hosts_count=_count_lines(u["known_hosts_path"])
                 if u["known_hosts_path"].exists()
