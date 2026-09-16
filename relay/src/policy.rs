@@ -201,6 +201,13 @@ pub struct RepoPolicy {
     pub bases: Vec<String>,
     /// 直接 push を許可するブランチ glob（`refs/heads/` を除いた名前に対して）
     pub push: Vec<String>,
+    /// push を許可するタグ glob（`refs/tags/` を除いた名前に対して）。空 = 拒否
+    pub tags: Vec<String>,
+    /// ブランチ / タグの削除を許すか
+    pub delete: bool,
+    /// 案件既定への差分: 追加で許す権限 / 消す権限（deny はどの階層でも勝つ）
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
 }
 
 impl RepoPolicy {
@@ -210,7 +217,15 @@ impl RepoPolicy {
             mode,
             bases: Vec::new(),
             push: DEFAULT_PUSH_GLOBS.iter().map(|s| s.to_string()).collect(),
+            tags: Vec::new(),
+            delete: false,
+            allow: Vec::new(),
+            deny: Vec::new(),
         }
+    }
+    /// `refs/tags/<tag>` の push を許すか。
+    pub fn allows_tag(&self, tag: &str) -> bool {
+        self.tags.iter().any(|g| glob_match(g, tag))
     }
     pub fn allows_base(&self, branch: &str) -> bool {
         self.bases.is_empty() || self.bases.iter().any(|b| b == branch)
@@ -243,7 +258,10 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
 pub struct Project {
     pub name: String,
     pub repos: Vec<RepoPolicy>,
+    /// 案件の既定で許す権限
     perms: HashSet<(Resource, Action)>,
+    /// 案件の既定で消す権限（repo の allow より優先）
+    denies: HashSet<(Resource, Action)>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -384,11 +402,40 @@ impl Project {
             name: name.into(),
             repos: Vec::new(),
             perms: HashSet::new(),
+            denies: HashSet::new(),
         }
     }
 
     /// 設定から組み立てる。権限名の typo はここで弾く。
     pub fn try_new(
+        name: impl Into<String>,
+        repos: Vec<RepoPolicy>,
+        permissions: &[String],
+    ) -> Result<Self, String> {
+        Self::try_new_rules(name, repos, permissions, &[])
+    }
+
+    /// 案件既定の allow / deny と、各 repo の差分（allow / deny）を検証して組み立てる。
+    pub fn try_new_rules(
+        name: impl Into<String>,
+        repos: Vec<RepoPolicy>,
+        allow: &[String],
+        deny: &[String],
+    ) -> Result<Self, String> {
+        for r in &repos {
+            for spec in r.allow.iter().chain(r.deny.iter()) {
+                parse_permission(spec).map_err(|e| format!("repo {}: {e}", r.full_name))?;
+            }
+        }
+        let mut p = Self::try_new_allow(name, repos, allow)?;
+        for spec in deny {
+            let (r, a) = parse_permission(spec)?;
+            p.denies.insert((r, a));
+        }
+        Ok(p)
+    }
+
+    fn try_new_allow(
         name: impl Into<String>,
         repos: Vec<RepoPolicy>,
         permissions: &[String],
@@ -428,8 +475,49 @@ impl Project {
         self
     }
 
+    /// 案件既定として許されているか（repo の差分は見ない）。
     pub fn is_granted(&self, resource: Resource, action: Action) -> bool {
-        self.perms.contains(&(resource, action))
+        self.perms.contains(&(resource, action)) && !self.denies.contains(&(resource, action))
+    }
+
+    /// repo に対する実効権限: (案件 allow ∪ repo allow) − (案件 deny ∪ repo deny)。deny が勝つ。
+    pub fn effective(&self, repo: &RepoPolicy) -> HashSet<(Resource, Action)> {
+        let mut set = self.perms.clone();
+        for s in &repo.allow {
+            if let Ok(k) = parse_permission(s) {
+                set.insert(k);
+            }
+        }
+        for k in &self.denies {
+            set.remove(k);
+        }
+        for s in &repo.deny {
+            if let Ok(k) = parse_permission(s) {
+                set.remove(&k);
+            }
+        }
+        set
+    }
+
+    /// 実効権限を "resource:action" の一覧で（check / Web UI 用）。
+    pub fn effective_keys(&self, repo: &RepoPolicy) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .effective(repo)
+            .iter()
+            .map(|(r, a)| format!("{}:{}", r.as_str(), a.as_str()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// どこか（案件既定か、いずれかの repo）で許されている権限か。案件外 repo への応答を一定にするための粗い判定。
+    fn granted_anywhere(&self, resource: Resource, action: Action) -> bool {
+        if self.is_granted(resource, action) {
+            return true;
+        }
+        self.repos
+            .iter()
+            .any(|r| self.effective(r).contains(&(resource, action)))
     }
 
     /// 案件に含まれるリポジトリを探す。含まれなければ拒否 = 案件外への到達を拒否する唯一の防壁。
@@ -453,8 +541,8 @@ impl Project {
         resource: Resource,
         action: Action,
     ) -> Result<Authorized<'_>, Denied> {
-        // 1. 既定拒否（案件外リポジトリでも、まず「許可されていない操作」として落ちる = 情報を漏らさない）
-        if !self.perms.contains(&(resource, action)) {
+        // 1. 粗い既定拒否（案件外リポジトリでも、まず「許可されていない操作」として落ちる = 情報を漏らさない）
+        if !self.granted_anywhere(resource, action) {
             return Err(Denied::NotPermitted {
                 resource: resource.as_str(),
                 action: action.as_str(),
@@ -462,7 +550,14 @@ impl Project {
         }
         // 2. 案件に含まれるリポジトリか
         let found = self.find_repo(repo)?;
-        // 3. 書き込み系なら read-write が必要
+        // 3. その repo の実効権限（案件既定 + repo allow − deny。deny が勝つ）
+        if !self.effective(found).contains(&(resource, action)) {
+            return Err(Denied::NotPermitted {
+                resource: resource.as_str(),
+                action: action.as_str(),
+            });
+        }
+        // 4. 書き込み系なら read-write が必要
         if is_write(action) && found.mode == Mode::ReadOnly {
             return Err(Denied::RepoReadOnly {
                 repo: found.full_name.clone(),
@@ -508,9 +603,20 @@ impl Project {
         })
     }
 
+    /// 案件既定の権限（allow − deny）。
     pub fn granted(&self) -> Vec<String> {
         let mut v: Vec<String> = self
             .perms
+            .difference(&self.denies)
+            .map(|(r, a)| format!("{}:{}", r.as_str(), a.as_str()))
+            .collect();
+        v.sort();
+        v
+    }
+    /// 案件既定の deny。
+    pub fn denied(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .denies
             .iter()
             .map(|(r, a)| format!("{}:{}", r.as_str(), a.as_str()))
             .collect();
@@ -677,6 +783,66 @@ mod tests {
         assert!(p
             .authorize_git(GitVerb::ReceivePack, "/LibOrg/awesome-lib.git")
             .is_ok());
+    }
+
+    #[test]
+    fn per_repo_allow_and_deny_with_deny_winning() {
+        let mut lib = RepoPolicy::new("Org/Lib", Mode::ReadWrite);
+        lib.allow = vec!["pr:merge".into(), "issue:label".into()];
+        lib.deny = vec!["ci:read".into()];
+        let app = RepoPolicy::new("Org/App", Mode::ReadWrite);
+        let p = Project::try_new_rules(
+            "case-a",
+            vec![app, lib],
+            &["pr:create".into(), "pr:read".into(), "ci:read".into()],
+            &["issue:label".into()],
+        )
+        .unwrap();
+        // 案件既定
+        assert_eq!(p.granted(), vec!["ci:read", "pr:create", "pr:read"]);
+        assert_eq!(p.denied(), vec!["issue:label"]);
+        // App: 既定どおり
+        assert!(p.authorize("Org/App", Resource::Pr, Action::Create).is_ok());
+        assert!(p.authorize("Org/App", Resource::Ci, Action::Read).is_ok());
+        assert!(p.authorize("Org/App", Resource::Pr, Action::Merge).is_err());
+        // Lib: allow で pr:merge が増え、repo deny で ci:read が消え、案件 deny の issue:label は allow しても勝てない
+        assert!(p.authorize("Org/Lib", Resource::Pr, Action::Merge).is_ok());
+        assert!(matches!(
+            p.authorize("Org/Lib", Resource::Ci, Action::Read),
+            Err(Denied::NotPermitted { .. })
+        ));
+        assert!(matches!(
+            p.authorize("Org/Lib", Resource::Issue, Action::Label),
+            Err(Denied::NotPermitted { .. })
+        ));
+        assert_eq!(
+            p.effective_keys(&p.repos[1]),
+            vec!["pr:create", "pr:merge", "pr:read"]
+        );
+        // 案件外 repo: どこかで許されている操作なら RepoNotInProject、どこでも許されていなければ NotPermitted (情報を漏らさない)
+        assert!(matches!(
+            p.authorize("Other/Repo", Resource::Pr, Action::Merge),
+            Err(Denied::RepoNotInProject { .. })
+        ));
+        assert!(matches!(
+            p.authorize("Other/Repo", Resource::Pr, Action::Close),
+            Err(Denied::NotPermitted { .. })
+        ));
+        // repo の allow / deny も typo は起動時に弾く
+        let mut bad = RepoPolicy::new("Org/Bad", Mode::ReadOnly);
+        bad.allow = vec!["pr:delete".into()];
+        assert!(Project::try_new_rules("x", vec![bad], &[], &[]).is_err());
+    }
+
+    #[test]
+    fn tags_glob_per_repo() {
+        let mut r = RepoPolicy::new("Org/App", Mode::ReadWrite);
+        assert!(!r.allows_tag("v1.0.0")); // 既定は拒否
+        r.tags = vec!["v*".into(), "release-?".into()];
+        assert!(r.allows_tag("v1.0.0") && r.allows_tag("release-1"));
+        assert!(!r.allows_tag("release-10") && !r.allows_tag("nightly"));
+        r.tags = vec!["*".into()];
+        assert!(r.allows_tag("anything"));
     }
 
     #[test]

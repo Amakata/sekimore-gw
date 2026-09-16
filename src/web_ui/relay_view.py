@@ -56,6 +56,9 @@ class RelayRepo(BaseModel):
     mode: str
     bases: list[str] = []
     push: list[str] = []
+    tags: list[str] = []  # push を許すタグ glob（空 = 拒否）
+    delete: bool = False
+    permissions: list[str] = []  # 実効権限 = (案件 allow ∪ repo allow) − (案件 deny ∪ repo deny)
 
 
 class RelayStateFile(BaseModel):
@@ -74,8 +77,10 @@ class RelayConfigResponse(BaseModel):
     https: str = "passthrough"
     bootstrap: str = "auto"
     token_ttl: str = "12h"
-    allow_delete: bool = False
-    allow_tags: bool = False
+    allow_delete: bool = False  # 0.1.9〜: project.delete の既定（旧 relay.allow_delete も畳み込む）
+    allow_tags: bool = False  # 0.1.9〜: project.tags が非空か（旧 relay.allow_tags も畳み込む）
+    tags: list[str] = []  # 案件既定のタグ glob
+    permissions_deny: list[str] = []  # 案件既定の deny
     ssh_listen: str = "0.0.0.0:22"
     api_listen: str = "0.0.0.0:8420"
     state_dir: str = "/data/relay"
@@ -147,6 +152,15 @@ def _git_relay_domain(config: dict) -> str | None:
     return None
 
 
+def _perm_spec(v: Any) -> tuple[list[str], list[str]]:
+    """permissions の `[…]`（allow）か `{allow, deny}` を (allow, deny) にする."""
+    if isinstance(v, list):
+        return [str(x) for x in v], []
+    if isinstance(v, dict):
+        return [str(x) for x in (v.get("allow") or [])], [str(x) for x in (v.get("deny") or [])]
+    return [], []
+
+
 def _count_lines(path: Path) -> int:
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -164,16 +178,28 @@ def build_config(config: dict) -> RelayConfigResponse:
     project = relay.get("project") or {}
     if not isinstance(project, dict):
         project = {}
+    # 案件の既定（旧 relay.allow_tags / allow_delete は既定へ畳み込む）
+    p_allow, p_deny = _perm_spec(project.get("permissions"))
+    default_push = [str(p) for p in (project.get("push") or ["sekimore/*"])]
+    default_tags = [str(t) for t in (project.get("tags") or [])]
+    if not default_tags and bool(relay.get("allow_tags", False)):
+        default_tags = ["*"]
+    default_delete = bool(project.get("delete", False)) or bool(relay.get("allow_delete", False))
     repos: list[RelayRepo] = []
     for r in project.get("repos") or []:
         if not isinstance(r, dict) or not r.get("name"):
             continue
+        r_allow, r_deny = _perm_spec(r.get("permissions"))
+        effective = sorted((set(p_allow) | set(r_allow)) - (set(p_deny) | set(r_deny)))
         repos.append(
             RelayRepo(
                 name=str(r["name"]),
                 mode=str(r.get("mode", "read-only")),
                 bases=[str(b) for b in (r.get("bases") or [])],
-                push=[str(p) for p in (r.get("push") or ["sekimore/*"])],
+                push=[str(p) for p in r["push"]] if r.get("push") is not None else default_push,
+                tags=[str(t) for t in r["tags"]] if r.get("tags") is not None else default_tags,
+                delete=bool(r["delete"]) if r.get("delete") is not None else default_delete,
+                permissions=effective,
             )
         )
     state_dir = str(relay.get("state_dir", "/data/relay"))
@@ -185,12 +211,14 @@ def build_config(config: dict) -> RelayConfigResponse:
         https=str(relay.get("https", "passthrough")),
         bootstrap=str(relay.get("bootstrap", "auto")),
         token_ttl=str(relay.get("token_ttl", "12h")),
-        allow_delete=bool(relay.get("allow_delete", False)),
-        allow_tags=bool(relay.get("allow_tags", False)),
+        allow_delete=default_delete,
+        allow_tags=bool(default_tags),
+        tags=default_tags,
+        permissions_deny=sorted(set(p_deny)),
         ssh_listen=str(relay.get("ssh_listen", "0.0.0.0:22")),
         api_listen=str(relay.get("api_listen", "0.0.0.0:8420")),
         state_dir=state_dir,
-        permissions=sorted(str(p) for p in (project.get("permissions") or [])),
+        permissions=sorted(set(p_allow) - set(p_deny)),
         repos=repos,
     )
     if resp.enabled:

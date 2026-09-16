@@ -232,25 +232,48 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             ""
         }
     );
-    println!("allow_delete: {}", r.relay.allow_delete);
-    println!("allow_tags:   {}", r.relay.allow_tags);
+    // 0.1.9: タグ / 削除 / 権限は案件の既定 + repo の差分。repo ごとの実効値は下の repos に出す
     if let Some(px) = &r.proxy {
         println!("proxy:        {}", px.url);
     }
     println!("\npermissions (default deny):");
     let granted = r.project.granted();
+    let denied = r.project.denied();
     for k in all_permission_keys() {
-        println!("  [{}] {k}", if granted.contains(&k) { "x" } else { " " });
+        let mark = if denied.contains(&k) {
+            "-"
+        } else if granted.contains(&k) {
+            "x"
+        } else {
+            " "
+        };
+        println!("  [{mark}] {k}");
     }
-    println!("\nrepos:");
+    if !denied.is_empty() {
+        println!("  ([-] = project deny; wins over any allow)");
+    }
+    println!("\nrepos (effective = project defaults + repo allow - deny):");
     for rp in &r.project.repos {
         println!(
-            "  {:<40} {:<11} bases={:?} push={:?}",
+            "  {:<40} {:<11} bases={:?} push={:?} tags={:?} delete={}",
             rp.full_name,
             rp.mode.as_str(),
             rp.bases,
-            rp.push
+            rp.push,
+            rp.tags,
+            rp.delete
         );
+        let eff = r.project.effective_keys(rp);
+        if eff != granted || !rp.allow.is_empty() || !rp.deny.is_empty() {
+            println!(
+                "    permissions: {}",
+                if eff.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    eff.join(" ")
+                }
+            );
+        }
     }
     println!("\nstate:");
     let sock = auth_sock_from_env();

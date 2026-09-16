@@ -127,9 +127,26 @@ def describe_relay_api():
         assert data["project"] == "case-a"
         assert data["permissions"] == ["issue:comment", "pr:create"]
         assert data["repos"] == [
-            {"name": "Org/App", "mode": "read-write", "bases": ["main"], "push": ["sekimore/*"]},
-            {"name": "Org/Lib", "mode": "read-only", "bases": [], "push": ["sekimore/*"]},
+            {
+                "name": "Org/App",
+                "mode": "read-write",
+                "bases": ["main"],
+                "push": ["sekimore/*"],
+                "tags": [],
+                "delete": False,
+                "permissions": ["issue:comment", "pr:create"],
+            },
+            {
+                "name": "Org/Lib",
+                "mode": "read-only",
+                "bases": [],
+                "push": ["sekimore/*"],
+                "tags": [],
+                "delete": False,
+                "permissions": ["issue:comment", "pr:create"],
+            },
         ]
+        assert data["tags"] == [] and data["allow_tags"] is False and data["permissions_deny"] == []
         assert data["state_dir"] == str(state)
         files = {f["name"]: f for f in data["state_files"]}
         assert files["authorized_keys"] == {"name": "authorized_keys", "present": True, "count": 2}
@@ -264,3 +281,47 @@ def describe_relay_route_registration_order():
             "/api/relay/tokens",
             "/api/relay/audit",
         } <= paths
+
+
+def describe_per_repo_policy():
+    """0.1.9: 案件既定 + repo 差分 (deny が勝つ)、tags glob、delete、旧 relay.allow_* の畳み込み."""
+
+    CONFIG = """
+domain_handlers:
+  github.com: {handler: git-relay}
+relay:
+  allow_tags: true
+  state_dir: "{state_dir}"
+  project:
+    name: case-a
+    permissions: {allow: [pr:create, pr:read, ci:read], deny: [issue:label]}
+    tags: []
+    repos:
+      - {name: Org/App, mode: read-write, bases: [main], tags: ["v*"], permissions: {add_is_not_a_key: 1}}
+      - {name: Org/Lib, mode: read-only, permissions: {allow: [pr:merge, issue:label], deny: [ci:read]}}
+      - {name: Org/Old, mode: read-only, permissions: [pr:read], delete: true}
+"""
+
+    def it_computes_effective_permissions_tags_and_delete(tmp_path):
+        cfg = tmp_path / "config.yml"
+        cfg.write_text(CONFIG.replace("{state_dir}", str(tmp_path / "relay")))
+        with patch("src.web_ui.app.CONFIG_PATH", str(cfg)):
+            from src.web_ui.app import app
+
+            data = TestClient(app).get("/api/relay/config").json()
+        # 案件既定: allow − deny。旧 relay.allow_tags: true は project.tags が空なら ["*"] に畳み込む
+        assert data["permissions"] == ["ci:read", "pr:create", "pr:read"]
+        assert data["permissions_deny"] == ["issue:label"]
+        assert (
+            data["tags"] == ["*"] and data["allow_tags"] is True and data["allow_delete"] is False
+        )
+        repos = {r["name"]: r for r in data["repos"]}
+        # App: repo の permissions が不正な形 (dict だが allow/deny 無し) → 差分なし、tags は repo 指定 ["v*"]
+        assert repos["Org/App"]["permissions"] == ["ci:read", "pr:create", "pr:read"]
+        assert repos["Org/App"]["tags"] == ["v*"] and repos["Org/App"]["delete"] is False
+        # Lib: allow で pr:merge と issue:label を足すが、案件 deny の issue:label と repo deny の ci:read は消える
+        assert repos["Org/Lib"]["permissions"] == ["pr:create", "pr:merge", "pr:read"]
+        assert repos["Org/Lib"]["tags"] == ["*"]  # 未指定 → 案件既定 (畳み込まれた ["*"])
+        # Old: list は allow の追加 (置換ではない)、delete は repo 指定 true
+        assert repos["Org/Old"]["permissions"] == ["ci:read", "pr:create", "pr:read"]
+        assert repos["Org/Old"]["delete"] is True

@@ -90,4 +90,7 @@ database_path: "/data/security_gateway.db"
 #       - name: Org/Repo
 #         mode: read-write        # read-only | read-write
 #         bases: [main]           # PR の base として許可するブランチ。直接 push は既定で sekimore/* のみ
-#     permissions: [pr:create, issue:create]   # リソース:アクション。書かないものは拒否
+#     permissions: [pr:create, issue:create]   # リソース:アクション。書かないものは拒否。{allow: [...], deny: [...]} でも
+#     tags: []                                  # push を許すタグ glob の既定 (空 = 拒否)。repos[].tags で repo ごとに上書き
+#     delete: false                             # ブランチ / タグ削除の既定。repos[].delete で上書き
+#     # repos[] には mode / bases / push / tags / delete / permissions ({allow, deny} = 案件既定への差分。deny が勝つ) を書ける

@@ -65,8 +65,6 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         github: Some(github.clone()),
         audit: audit.clone(),
         limits: r.relay.limits.clone(),
-        allow_delete: r.relay.allow_delete,
-        allow_tags: r.relay.allow_tags,
     });
     let ssh = SshServer::new(
         server_config(host_key, r.relay.limits.session_timeout),

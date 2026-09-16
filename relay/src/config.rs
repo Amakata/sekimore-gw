@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use url::Url;
 
-use crate::policy::{Mode, Project, RepoPolicy};
+use crate::policy::{Mode, Project, RepoPolicy, DEFAULT_PUSH_GLOBS};
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/sekimore/config.yml";
 /// GitHub CLI の public client id。device flow は client secret を必要としない。
@@ -139,6 +139,42 @@ impl Default for Limits {
     }
 }
 
+/// API 権限の書き方。`[pr:create, …]`（allow だけ）か `{allow: […], deny: […]}`。
+/// repo 側に書けば案件既定への差分になり、**deny はどの階層に書いても勝つ**（GitHub の rulesets が
+/// write 権限より優先して制限をかけるのと同じ向き）。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum PermissionSpec {
+    List(Vec<String>),
+    Rules {
+        #[serde(default)]
+        allow: Vec<String>,
+        #[serde(default)]
+        deny: Vec<String>,
+    },
+}
+
+impl PermissionSpec {
+    pub fn allow(&self) -> &[String] {
+        match self {
+            PermissionSpec::List(v) => v,
+            PermissionSpec::Rules { allow, .. } => allow,
+        }
+    }
+    pub fn deny(&self) -> &[String] {
+        match self {
+            PermissionSpec::List(_) => &[],
+            PermissionSpec::Rules { deny, .. } => deny,
+        }
+    }
+}
+
+impl Default for PermissionSpec {
+    fn default() -> Self {
+        PermissionSpec::List(Vec::new())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepoConfig {
@@ -146,8 +182,14 @@ pub struct RepoConfig {
     pub mode: String,
     #[serde(default)]
     pub bases: Vec<String>,
-    /// 直接 push を許すブランチ glob。省略時は `sekimore/*`
+    /// 直接 push を許すブランチ glob。省略時は案件の `push`（既定 `sekimore/*`）
     pub push: Option<Vec<String>>,
+    /// push を許すタグの glob（`refs/tags/` を除いた名前）。省略時は案件の `tags`。`[]` は拒否
+    pub tags: Option<Vec<String>>,
+    /// ブランチ / タグの削除を許すか。省略時は案件の `delete`
+    pub delete: Option<bool>,
+    /// 案件既定への差分（allow を足す / deny で消す）。list なら allow の追加
+    pub permissions: Option<PermissionSpec>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -156,8 +198,17 @@ pub struct ProjectConfig {
     pub name: String,
     #[serde(default)]
     pub repos: Vec<RepoConfig>,
+    /// 案件の既定権限。`[…]` か `{allow, deny}`
     #[serde(default)]
-    pub permissions: Vec<String>,
+    pub permissions: PermissionSpec,
+    /// 直接 push を許すブランチ glob の既定（省略時 `sekimore/*`）
+    pub push: Option<Vec<String>>,
+    /// push を許すタグ glob の既定（省略時 = 拒否）
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// ブランチ / タグ削除の既定（省略時 false）
+    #[serde(default)]
+    pub delete: bool,
 }
 
 /// `relay:` セクション。relay が所有するので未知キーはエラー。
@@ -190,9 +241,10 @@ pub struct RelayConfig {
     pub upstream_token_cache_ttl: Duration,
     /// `SSL_CERT_FILE` に加えて信頼する PEM バンドル
     pub ca_file: Option<PathBuf>,
+    /// 非推奨（0.1.9〜）: `project.delete` に移した。残っていれば既定値として読み、警告を出す
     #[serde(default)]
     pub allow_delete: bool,
-    /// タグの push を許可する（既定は拒否。AI にリリースタグまで打たせる案件だけ true）
+    /// 非推奨（0.1.9〜）: `project.tags`（glob）に移した。true は `project.tags: ["*"]` と同じ
     #[serde(default)]
     pub allow_tags: bool,
     #[serde(default = "d_bootstrap")]
@@ -398,20 +450,40 @@ impl Loaded {
             relay.graphql_base.clone(),
         )?;
 
+        // 案件の既定（旧 relay.allow_tags / allow_delete は既定へ畳み込む。0.1.9 で project 配下に移した）
+        let pc = &relay.project;
+        let default_push: Vec<String> = pc
+            .push
+            .clone()
+            .unwrap_or_else(|| DEFAULT_PUSH_GLOBS.iter().map(|s| s.to_string()).collect());
+        let mut default_tags = pc.tags.clone();
+        if relay.allow_tags && default_tags.is_empty() {
+            eprintln!("[relay] WARNING: relay.allow_tags is deprecated; write `tags: [\"*\"]` under relay.project (or per repo)");
+            default_tags = vec!["*".to_string()];
+        }
+        let default_delete = pc.delete || relay.allow_delete;
+        if relay.allow_delete {
+            eprintln!("[relay] WARNING: relay.allow_delete is deprecated; write `delete: true` under relay.project (or per repo)");
+        }
         let mut repos = Vec::new();
-        for r in &relay.project.repos {
+        for r in &pc.repos {
             let mode = Mode::parse(&r.mode).map_err(ConfigError::Invalid)?;
             let mut rp = RepoPolicy::new(r.name.trim(), mode);
             rp.bases = r.bases.clone();
-            if let Some(p) = &r.push {
-                rp.push = p.clone();
+            rp.push = r.push.clone().unwrap_or_else(|| default_push.clone());
+            rp.tags = r.tags.clone().unwrap_or_else(|| default_tags.clone());
+            rp.delete = r.delete.unwrap_or(default_delete);
+            if let Some(p) = &r.permissions {
+                rp.allow = p.allow().to_vec();
+                rp.deny = p.deny().to_vec();
             }
             repos.push(rp);
         }
-        let project = Project::try_new(
-            relay.project.name.clone(),
+        let project = Project::try_new_rules(
+            pc.name.clone(),
             repos,
-            &relay.project.permissions,
+            pc.permissions.allow(),
+            pc.permissions.deny(),
         )
         .map_err(ConfigError::Invalid)?;
         if project.name.trim().is_empty() {
@@ -554,6 +626,50 @@ mod tests {
 
     fn p(text: &str) -> Result<Loaded, ConfigError> {
         parse(Path::new("test.yml"), text)
+    }
+
+    #[test]
+    fn per_repo_permissions_tags_delete_and_legacy_allow_tags() {
+        let text = r#"
+domain_handlers:
+  github.com: { handler: git-relay }
+relay:
+  allow_tags: true
+  project:
+    name: case-a
+    permissions: { allow: [pr:create, ci:read], deny: [issue:label] }
+    repos:
+      - { name: Org/App, mode: read-write, bases: [main], tags: ["v*"] }
+      - { name: Org/Lib, mode: read-only, permissions: { allow: [pr:merge], deny: [ci:read] }, delete: true }
+      - { name: Org/Old, mode: read-only, permissions: [pr:read] }
+"#;
+        let r = p(text).unwrap().resolve().unwrap();
+        assert_eq!(r.project.granted(), vec!["ci:read", "pr:create"]);
+        assert_eq!(r.project.denied(), vec!["issue:label"]);
+        let app = r.project.find_repo("Org/App").unwrap();
+        assert_eq!(app.tags, vec!["v*"]);
+        assert!(!app.delete);
+        let lib = r.project.find_repo("Org/Lib").unwrap();
+        // 旧 relay.allow_tags: true は project.tags が空なら ["*"] として既定に畳み込まれる
+        assert_eq!(lib.tags, vec!["*"]);
+        assert!(lib.delete);
+        assert_eq!(r.project.effective_keys(lib), vec!["pr:create", "pr:merge"]);
+        let old = r.project.find_repo("Org/Old").unwrap();
+        assert_eq!(
+            r.project.effective_keys(old),
+            vec!["ci:read", "pr:create", "pr:read"]
+        );
+        // 既定の push glob は sekimore/*
+        assert_eq!(old.push, vec!["sekimore/*"]);
+        // list 形式の permissions も従来どおり
+        let text2 = "domain_handlers:\n  github.com: { handler: git-relay }\nrelay:\n  project: { name: x, permissions: [pr:create] }\n";
+        assert_eq!(
+            p(text2).unwrap().resolve().unwrap().project.granted(),
+            vec!["pr:create"]
+        );
+        // repo の permissions の typo は起動時エラー
+        let text3 = "domain_handlers:\n  github.com: { handler: git-relay }\nrelay:\n  project:\n    name: x\n    repos: [{ name: Org/A, mode: read-only, permissions: [pr:delete] }]\n";
+        assert!(p(text3).unwrap().resolve().is_err());
     }
 
     #[test]

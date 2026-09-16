@@ -184,8 +184,6 @@ async fn setup(grants: &[&str]) -> E2e {
             idle_timeout: Duration::from_secs(20),
             ..Limits::default()
         },
-        allow_delete: false,
-        allow_tags: false,
     });
     let server = SshServer::new(
         server_config(host_key, Duration::from_secs(120)),
@@ -378,7 +376,7 @@ async fn policy_denials_are_explicit_and_leave_upstream_untouched() {
         ),
         (
             vec!["push", "origin", "HEAD:refs/tags/v1"],
-            "tags cannot be pushed",
+            "tag is not allowed for this repository",
         ),
         (
             vec![
