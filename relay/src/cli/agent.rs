@@ -16,6 +16,8 @@ pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:8420";
 pub enum AgentCmd {
     /// 自分の案件・権限・リポジトリを確認する
     Whoami,
+    /// AI エージェント向けの使い方（関所の前提、push の作法、sekimore コマンド、拒否メッセージの読み方）を表示する
+    Guide,
     /// Pull Request 操作
     Pr {
         #[command(subcommand)]
@@ -277,7 +279,15 @@ impl AgentClient {
     }
 }
 
+/// `sekimore guide` の本文。バイナリに埋め込むので CLI と版がずれない（relay/share/agent-guide.md が正本）。
+pub const AGENT_GUIDE: &str = include_str!("../../share/agent-guide.md");
+
 pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
+    if matches!(cmd, AgentCmd::Guide) {
+        // 接続情報もトークンも要らない（ネットワークに出ない）
+        print!("{AGENT_GUIDE}");
+        return Ok(0);
+    }
     let client = AgentClient::from_env()?;
     let repo = repo.unwrap_or("").to_string();
     let mut req = ApiRequest {
@@ -286,6 +296,7 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
     };
     let path = match cmd {
         AgentCmd::Whoami => "/whoami",
+        AgentCmd::Guide => unreachable!("guide is handled before connecting"),
         AgentCmd::Bootstrap { pubkey_file, label } => {
             let key = std::fs::read_to_string(&pubkey_file)
                 .with_context(|| format!("read {}", pubkey_file.display()))?;

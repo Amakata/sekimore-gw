@@ -98,6 +98,7 @@ GitHub の監査ログではエージェントと人間の操作を区別でき�
 - `/etc/sekimore-agent/env`（0600）に接続情報を書きます。`sekimore` ラッパーはこのファイルを読み、期限切れなら自動で取り直します。
 - 上流ごとに `~/.ssh/config` の `Host` ブロックと known_hosts を書きます。
 - コミット署名を AI 専用鍵に設定します。署名鍵の公開鍵は GitHub に「Signing Key」として手で登録してください（ログに表示されます）。
+- AI エージェント向けの使い方（`sekimore guide`）を Claude Code の skill と Codex の `AGENTS.md` に置きます。
 
 調整用の環境変数:
 
@@ -123,6 +124,10 @@ sekimore ci jobs --number 12                    # PR の全 run のジョブ一�
 sekimore ci log --number 12                     # 失敗ジョブのログを末尾から。--before / --window で前へ
 sekimore issue create --title T --labels bug    # ラベル付きは issue:label も要る
 ```
+
+AI エージェント向けの使い方は `sekimore guide` で表示できます（CLI に埋め込み。正本は `relay/share/agent-guide.md`）。
+agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimore-relay/SKILL.md`）と Codex CLI の `~/.codex/AGENTS.md`（マーカー付きブロック）に置くので、
+これらのツールは自動で読みます。他のツールは `sekimore guide` の出力をそのツールの規約の場所に置いてください。`SEKIMORE_AGENT_INSTRUCTIONS=none` で無効、`claude` や `codex` だけの指定も可能です。
 
 `sekimore` は `sekimore-relay agent` のラッパーです。repo は `--repo Org/Repo` で指定し、上流が複数あるときは `host/Org/Repo` と書けます。
 `--body` の値が `-` で始まるときは `--body="…"` の形にしてください。

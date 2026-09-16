@@ -24,6 +24,8 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
     && rm -rf src
 # 本ソースをコピーして本ビルド (依存は上でキャッシュ済み)。ダミーの成果物は消して確実に本体を再ビルド
 COPY relay/src ./src
+# sekimore guide (AI エージェント向けの使い方) はバイナリに埋め込む (include_str!)
+COPY relay/share ./share
 RUN T="$(cat /tmp/t)" \
     && rm -f "target/$T/release/deps/sekimore_relay"* "target/$T/release/sekimore-relay" 2>/dev/null || true; \
     cargo zigbuild --release --locked --target "$T" \

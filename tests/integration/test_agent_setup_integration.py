@@ -521,6 +521,12 @@ case "$url" in
 esac
 """
         )
+        (shim / "sekimore-relay").write_text(
+            "#!/bin/bash\n"
+            'if [ "$1" = --version ]; then echo "sekimore-relay 9.9.9"; exit 0; fi\n'
+            'if [ "$1" = agent ] && [ "$2" = guide ]; then printf "# guide (shim)\\n\\nUse sekimore.\\n"; exit 0; fi\n'
+            "exit 1\n"
+        )
         (shim / "ssh-keyscan").write_text(
             "#!/bin/bash\n"
             'host="${@: -1}"\n'
@@ -651,6 +657,37 @@ esac
         assert len((home / ".ssh" / "known_hosts").read_text().splitlines()) == 2
         cfg = (home / ".ssh" / "config").read_text()
         assert cfg.count("Host ghe.example.com") == 1 and cfg.count("Host github.com") == 1
+
+    def it_writes_agent_instructions_for_claude_and_codex_idempotently(tmp_path):
+        # 0.2.2: sekimore guide の本文を Claude Code の skill と Codex の AGENTS.md ブロックに置く
+        shim, log = _shims(tmp_path, valid_token=token)
+        proc, home = _run(tmp_path, shim)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        skill = home / ".claude" / "skills" / "sekimore-relay" / "SKILL.md"
+        text = skill.read_text()
+        assert text.startswith("---\nname: sekimore-relay\n")
+        assert (
+            "sekimore-relay 9.9.9" in text and "# guide (shim)" in text and "Use sekimore." in text
+        )
+        agents = home / ".codex" / "AGENTS.md"
+        atext = agents.read_text()
+        assert atext.count("<!-- >>> sekimore-relay >>> -->") == 1
+        assert "`sekimore guide`" in atext and "sekimore whoami" in atext
+        # 既存の AGENTS.md の内容は残し、ブロックだけ置き換える
+        agents.write_text("# my own notes\n\n" + atext)
+        proc, home = _run(tmp_path, shim)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        atext = agents.read_text()
+        assert atext.startswith("# my own notes")
+        assert atext.count("<!-- >>> sekimore-relay >>> -->") == 1
+        assert skill.read_text() == text
+
+    def it_can_skip_agent_instructions(tmp_path):
+        shim, log = _shims(tmp_path, valid_token=token)
+        proc, home = _run(tmp_path, shim, extra_env={"SEKIMORE_AGENT_INSTRUCTIONS": "none"})
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert not (home / ".claude" / "skills").exists()
+        assert not (home / ".codex").exists()
 
     def it_is_idempotent_and_keeps_a_valid_token(tmp_path):
         shim, log = _shims(tmp_path)
