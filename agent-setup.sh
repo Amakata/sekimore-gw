@@ -116,12 +116,14 @@ sekimore_relay_setup() {
   local xtrace=0
   case $- in *x*) xtrace=1 ;; esac
   set +x
-  local token="" token_expires="" repo="" git_domain="" resp=""
+  local token="" token_expires="" repo="" git_domain="" git_domains="" resp=""
   if [ -r "$env_file" ]; then
     token=$(sed -n 's/^SEKIMORE_TOKEN=//p' "$env_file" | head -1)
     token_expires=$(sed -n 's/^SEKIMORE_TOKEN_EXPIRES=//p' "$env_file" | head -1)
     repo=$(sed -n 's/^SEKIMORE_REPO=//p' "$env_file" | head -1)
     git_domain=$(sed -n 's/^SEKIMORE_GIT_DOMAIN=//p' "$env_file" | head -1)
+    # 0.2.0: 複数上流 ("domain:port,domain:port"。先頭が既定)。bootstrap を呼ばない再実行でも Host ブロックを再現できるように保存してある
+    git_domains=$(sed -n 's/^SEKIMORE_GIT_DOMAINS=//p' "$env_file" | head -1)
   fi
   if [ -n "$token" ] && curl -fsS -m 5 -o /dev/null -X POST -H "Authorization: Bearer $token" \
        -H 'Content-Type: application/json' -d '{}' "$endpoint/whoami" 2>/dev/null; then
@@ -143,6 +145,14 @@ sekimore_relay_setup() {
         local d
         d=$(printf '%s' "$resp" | grep -o '"git_domain":"[^"]*"' | cut -d'"' -f4)
         if [ -n "$d" ]; then git_domain=$d; fi
+        # 0.2.0: "git_domains":[{"domain":"github.com","ssh_port":22,...},{"domain":"ghe.example.com","ssh_port":2222,...}]
+        local gd
+        gd=$(printf '%s' "$resp" | grep -o '"git_domains":\[[^]]*\]' | grep -o '{[^}]*}' | while IFS= read -r obj; do
+               dd=$(printf '%s' "$obj" | grep -o '"domain":"[^"]*"' | cut -d'"' -f4)
+               pp=$(printf '%s' "$obj" | grep -o '"ssh_port":[0-9]*' | cut -d: -f2)
+               if [ -n "$dd" ]; then printf '%s:%s,' "$dd" "${pp:-22}"; fi
+             done)
+        if [ -n "$gd" ]; then git_domains=${gd%,}; fi
       else
         echo "[agent] relay: WARNING: bootstrap did not return a token: $(printf '%s' "$resp" | head -c 300)"
         echo "[agent] relay:   the operator can register the key and issue a token on the gateway:"
@@ -153,6 +163,12 @@ sekimore_relay_setup() {
     fi
   fi
   git_domain=${git_domain:-${SEKIMORE_GIT_DOMAIN:-github.com}}
+  # 一覧が無い (0.1.x の関所 / 手動) なら既定ドメインだけ。既定ドメインが一覧に無ければ先頭に足す
+  if [ -z "$git_domains" ]; then git_domains="$git_domain:$ssh_port"; fi
+  case ",$git_domains," in
+    *",$git_domain:"*) ;;
+    *) git_domains="$git_domain:$ssh_port,$git_domains" ;;
+  esac
 
   # env ファイル (atomic、0600、所有者は対象ユーザー)
   local tmp="$env_file.tmp.$$"
@@ -161,6 +177,7 @@ sekimore_relay_setup() {
     echo "SEKIMORE_IP=$gw"
     echo "SEKIMORE_ENDPOINT=$endpoint"
     echo "SEKIMORE_GIT_DOMAIN=$git_domain"
+    echo "SEKIMORE_GIT_DOMAINS=$git_domains"
     if [ -n "$repo" ]; then echo "SEKIMORE_REPO=$repo"; fi
     if [ -n "$token" ]; then echo "SEKIMORE_TOKEN=$token"; fi
     # 以下 2 つは `sekimore` ラッパーの自動更新用 (期限切れなら bootstrap をやり直す)
@@ -176,46 +193,57 @@ sekimore_relay_setup() {
   if [ "$xtrace" = 1 ]; then set -x; fi
 
   # ---- known_hosts: 関所のホスト鍵を <git_domain> として登録 (置換なので鍵が変わっても追従) ----
+  # 0.2.0: 上流ごとに関所側ポートが違う。ポートごとに keyscan し、"[domain]:port,[gw]:port" で登録する
   local kh="$home/.ssh/known_hosts"
   touch "$kh"
-  ssh-keygen -q -R "$git_domain" -f "$kh" >/dev/null 2>&1 || true
   ssh-keygen -q -R "$gw" -f "$kh" >/dev/null 2>&1 || true
-  if [ "$ssh_port" != 22 ]; then
-    ssh-keygen -q -R "[$git_domain]:$ssh_port" -f "$kh" >/dev/null 2>&1 || true
-    ssh-keygen -q -R "[$gw]:$ssh_port" -f "$kh" >/dev/null 2>&1 || true
-  fi
-  rm -f "$kh.old"
-  local scan="" i
-  for i in 1 2 3; do
-    scan=$(ssh-keyscan -T 3 -p "$ssh_port" "$gw" 2>/dev/null) || scan=""
-    if [ -n "$scan" ]; then break; fi
-    sleep 1
+  local entry d p scan i hostnames
+  for entry in $(printf '%s' "$git_domains" | tr ',' ' '); do
+    d=${entry%%:*}
+    p=${entry##*:}
+    if [ "$p" = "$entry" ] || [ -z "$p" ]; then p=22; fi
+    ssh-keygen -q -R "$d" -f "$kh" >/dev/null 2>&1 || true
+    if [ "$p" != 22 ]; then
+      ssh-keygen -q -R "[$d]:$p" -f "$kh" >/dev/null 2>&1 || true
+      ssh-keygen -q -R "[$gw]:$p" -f "$kh" >/dev/null 2>&1 || true
+    fi
+    scan=""
+    for i in 1 2 3; do
+      scan=$(ssh-keyscan -T 3 -p "$p" "$gw" 2>/dev/null) || scan=""
+      if [ -n "$scan" ]; then break; fi
+      sleep 1
+    done
+    if [ -z "$scan" ]; then
+      echo "[agent] relay: ERROR: relay on $gw:$p (for $d) did not answer ssh-keyscan"
+      return 1
+    fi
+    if [ "$p" = 22 ]; then hostnames="$d,$gw"; else hostnames="[$d]:$p,[$gw]:$p"; fi
+    # keyscan の先頭フィールド ("<ip>" または "[<ip>]:<port>") を差し替える
+    printf '%s\n' "$scan" | grep -v '^#' | awk -v h="$hostnames" '{ $1 = h; print }' >> "$kh"
   done
-  if [ -z "$scan" ]; then
-    echo "[agent] relay: ERROR: relay on $gw:$ssh_port did not answer ssh-keyscan"
-    return 1
-  fi
-  local hostnames
-  if [ "$ssh_port" = 22 ]; then hostnames="$git_domain,$gw"; else hostnames="[$git_domain]:$ssh_port,[$gw]:$ssh_port"; fi
-  # keyscan の先頭フィールド ("<ip>" または "[<ip>]:<port>") を差し替える
-  printf '%s\n' "$scan" | grep -v '^#' | awk -v h="$hostnames" '{ $1 = h; print }' >> "$kh"
+  rm -f "$kh.old"
   chown "$own" "$kh"
   chmod 644 "$kh"
 
-  # ---- ~/.ssh/config: マーカー付きブロックを置換 ----
+  # ---- ~/.ssh/config: マーカー付きブロックを置換 (上流ごとに Host ブロック、鍵は同じ使い捨て鍵) ----
   local cfg="$home/.ssh/config"
   touch "$cfg"
   local tmpc="$cfg.tmp.$$"
   awk '/^# >>> sekimore-relay >>>/{skip=1} /^# <<< sekimore-relay <<</{skip=0; next} !skip' "$cfg" > "$tmpc"
-  cat >> "$tmpc" <<CFG
-# >>> sekimore-relay >>>
-Host $git_domain
-  User git
-  Port $ssh_port
-  IdentityFile $keydir/id_ed25519
-  IdentitiesOnly yes
-# <<< sekimore-relay <<<
-CFG
+  {
+    echo "# >>> sekimore-relay >>>"
+    for entry in $(printf '%s' "$git_domains" | tr ',' ' '); do
+      d=${entry%%:*}
+      p=${entry##*:}
+      if [ "$p" = "$entry" ] || [ -z "$p" ]; then p=22; fi
+      echo "Host $d"
+      echo "  User git"
+      echo "  Port $p"
+      echo "  IdentityFile $keydir/id_ed25519"
+      echo "  IdentitiesOnly yes"
+    done
+    echo "# <<< sekimore-relay <<<"
+  } >> "$tmpc"
   mv -f "$tmpc" "$cfg"
   chmod 600 "$cfg"
   chown "$own" "$cfg"
@@ -240,7 +268,7 @@ CFG
   chown "$own" "$signers"
   if [ -f "$home/.gitconfig" ]; then chown "$own" "$home/.gitconfig"; fi
 
-  echo "[agent] relay: ready — git via $git_domain → $gw:$ssh_port, API $endpoint, env $env_file $token_note"
+  echo "[agent] relay: ready — git via $git_domains → $gw, API $endpoint, env $env_file $token_note"
   echo "[agent] relay: commits are signed with $keydir/signing_ed25519.pub"
   echo "[agent] relay: register that public key on GitHub as a *Signing Key* (Settings → SSH and GPG keys → New SSH key → Key type: Signing Key):"
   cat "$keydir/signing_ed25519.pub"
