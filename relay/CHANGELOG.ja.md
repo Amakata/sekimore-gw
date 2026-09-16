@@ -2,6 +2,14 @@
 
 *[English](CHANGELOG.md)*
 
+## 0.2.6（2026-09-16。エージェントからの Release 作成と、handler 名を上流サービス名に）
+
+- `sekimore release create --tag vX.Y.Z [--title T] [--notes "…" | --notes-file F] [--generate-notes] [--draft] [--prerelease]`、`sekimore release view --tag vX.Y.Z`、`sekimore release list [--limit N]`。エンドポイントは `/release/create`、`/release/view`、`/release/list`
+- タグが上流に無いと GitHub が 422 を返すので、`release create` は `git push origin vX.Y.Z` の後に実行する。本文を渡さないと関所が `generate_release_notes` を立て、前のタグ以降にマージされた PR から GitHub が本文を書く（これが通常の使い方）。`--notes` / `--notes-file` を渡すとそれが本文になり、さらに `--generate-notes` を付けると生成した本文が後ろに追記される。`--title` の既定はタグ名、`--draft` は公開を人間に任せる（既定は公開済み）
+- 権限に `release:create` と `release:read` を追加。他と同じく既定で拒否。device flow トークンは `repo` スコープを持つので、認証のやり直しは不要
+- `handler: git-relay` の書き方を `handler: github` に変更。SSH の git 側（refs/for、ポリシー、receive-pack）はただの git でどの forge でも動くが、API 側（pulls、check-runs、Projects v2）は GitHub 固有なので、handler に上流サービスの名前を持たせた。0.3.0 で API 層を差し替え可能にしたときの `gitlab` / `gitea` の余地にもなる
+- `git-relay` はそのまま動く。Rust 側も Python 側も別名として受け付けるので、設定を書き換える必要は今も今後も無い
+
 ## 0.2.5（2026-09-16。0.2.4 のイメージビルドの修正）
 
 - Docker: `relay/locales` をビルダー段にコピーする。0.2.4 の CLI 辞書は `include_str!` で取り込むが、コピーしていたのは `relay/share` だけだったため、リリースビルドが `locales/ja.json` を読めず v0.2.4 のイメージが公開されなかった。relay 本体の変更は無く、0.2.4 と 0.2.5 は同じコード。

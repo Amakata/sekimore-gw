@@ -116,6 +116,52 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
             serde_json::json!([{"number": 41, "html_url": "https://github.example/pr/41", "node_id": "PR_41"}]),
         );
     }
+    // 0.2.6: releases
+    if method == "POST" && p.ends_with("/releases") {
+        if body.get("tag_name").and_then(|t| t.as_str()) == Some("v9.9.9-missing") {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                serde_json::json!({"message": "Validation Failed", "errors": [{"code": "invalid", "field": "tag_name"}]}),
+            );
+        }
+        let tag = body
+            .get("tag_name")
+            .and_then(|t| t.as_str())
+            .unwrap_or("v0.0.0");
+        return (
+            StatusCode::CREATED,
+            serde_json::json!({
+                "id": 900,
+                "tag_name": tag,
+                "name": body.get("name").and_then(|n| n.as_str()).unwrap_or(tag),
+                "html_url": format!("https://github.example/releases/{tag}"),
+                "draft": body.get("draft").and_then(|d| d.as_bool()).unwrap_or(false),
+                "prerelease": body.get("prerelease").and_then(|d| d.as_bool()).unwrap_or(false),
+            }),
+        );
+    }
+    if method == "GET" && p.contains("/releases/tags/") {
+        if p.ends_with("/v0.0.0-none") {
+            return (
+                StatusCode::NOT_FOUND,
+                serde_json::json!({"message": "Not Found"}),
+            );
+        }
+        let tag = p.rsplit('/').next().unwrap_or("v1.0.0");
+        return (
+            StatusCode::OK,
+            serde_json::json!({"id": 901, "tag_name": tag, "name": tag, "html_url": format!("https://github.example/releases/{tag}"), "draft": false, "prerelease": false}),
+        );
+    }
+    if method == "GET" && p.ends_with("/releases") {
+        return (
+            StatusCode::OK,
+            serde_json::json!([
+                {"id": 902, "tag_name": "v1.1.0", "name": "v1.1.0", "html_url": "https://github.example/releases/v1.1.0", "draft": false, "prerelease": false},
+                {"id": 901, "tag_name": "v1.0.0", "name": "v1.0.0", "html_url": "https://github.example/releases/v1.0.0", "draft": true, "prerelease": false}
+            ]),
+        );
+    }
     if method == "POST" && p.ends_with("/issues") {
         return (
             StatusCode::CREATED,

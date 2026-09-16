@@ -305,12 +305,31 @@ def describe_domain_handlers():
                 "static.example.com": {},
             }
         )
-        assert config.domain_handlers["github.com"].handler == "git-relay"
+        assert config.domain_handlers["github.com"].handler == "github"
         assert config.domain_handlers["telemetry.example.com"].handler == "deny"
         assert config.domain_handlers["static.example.com"].handler == "splice"
         assert config.git_relay_domains() == ["github.com"]
         assert config.has_git_relay() is True
         assert config.relay_input_ports() == [22, 8420, 443]
+
+    def it_still_accepts_the_original_git_relay_spelling(sample_config_data):
+        """0.2.6 renamed the handler to `github`; a config written for 0.1.x must keep working."""
+        old = Config(domain_handlers={"github.com": {"handler": "git-relay"}})
+        new = Config(domain_handlers={"github.com": {"handler": "github"}})
+        assert old.domain_handlers["github.com"].handler == "github"
+        assert old.model_dump() == new.model_dump()
+        # Everything downstream of the name behaves the same
+        assert old.git_relay_domains() == new.git_relay_domains() == ["github.com"]
+        assert old.has_git_relay() is new.has_git_relay() is True
+        assert old.relay_input_ports() == new.relay_input_ports()
+        # Mixing the two spellings across domains is fine; both normalize
+        mixed = Config(
+            domain_handlers={
+                "github.com": {"handler": "git-relay"},
+                "ghe.example.com": {"handler": "github", "ssh_port": 2222},
+            }
+        )
+        assert sorted(mixed.git_relay_domains()) == ["ghe.example.com", "github.com"]
 
     def it_rejects_invalid_handler_wildcard_empty_and_duplicates():
         from pydantic import ValidationError
@@ -420,7 +439,7 @@ def describe_domain_handlers():
         out = tmp_path / "out.yml"
         config.to_yaml(Path(out))
         again = Config.from_yaml(Path(out))
-        assert again.domain_handlers["github.com"].handler == "git-relay"
+        assert again.domain_handlers["github.com"].handler == "github"
 
 
 def describe_allowed_ports_config():

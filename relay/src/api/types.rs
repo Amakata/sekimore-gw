@@ -53,6 +53,19 @@ pub struct ApiRequest {
     pub window: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<u64>,
+    /// 0.2.6: releases. `tag` names the release; `generate_notes` asks GitHub to write the body
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tag: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub generate_notes: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub draft: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub prerelease: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

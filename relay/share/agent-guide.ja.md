@@ -32,6 +32,8 @@ sekimore ci runs --ref <tag|branch|sha>  # ref に紐づく workflow run 一覧
 sekimore ci jobs --number N              # PR のジョブ一覧（どれが失敗したか、job_id）
 sekimore ci log --number N               # 失敗ジョブのログを末尾から。--before <start> で前へ、--window で行数
 sekimore issue create --title "…" --body="…" [--labels a,b]
+sekimore release create --tag vX.Y.Z      # タグを push した後に。本文は GitHub が書く
+sekimore release view --tag vX.Y.Z        # タグに対応する Release
 ```
 
 - repo は `--repo Org/Repo` で指定します（省略時は `SEKIMORE_REPO`）。上流が複数あるときは `--repo ghe.example.com/Org/Repo` のようにホストを付けられます。
@@ -45,6 +47,7 @@ sekimore issue create --title "…" --body="…" [--labels a,b]
 3. `sekimore pr create --head sekimore/<topic> --base main --title "…" --body="…"`
 4. `sekimore pr status --number N` で緑になるのを待つ。失敗は `sekimore ci log` で確認。
 5. 権限があり、人間の指示があれば `sekimore pr merge --number N`。タグは許可された repo でのみ `git push origin vX.Y.Z`。
+6. タグを push したら `sekimore release create --tag vX.Y.Z` で Release にする。本文は前のタグからの PR を元に GitHub が書くので、自分で組み立てなくてよい。自分で書くときは `--notes` か `--notes-file`、公開を人間に任せるときは `--draft`。
 
 ## よくある拒否メッセージ
 
