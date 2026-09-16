@@ -2,7 +2,7 @@
 
 *[English](CHANGELOG.md)*
 
-## 0.2.4（未リリース。ローカライズ）
+## 0.2.4（2026-09-16。ローカライズ。英語を正本に、日本語は言語ファイル）
 
 - Web UI: 文言を `src/locales/{en,ja}.json` に移し、既定を英語に。言語は `?lang=` → cookie（画面の切替）→ `config.yml` の `ui.language`（`auto` / `en` / `ja`）→ ブラウザの `Accept-Language` → 英語の順で決める。`/api/i18n`
 - `python -m src.maint`: `--help` とメッセージを `SEKIMORE_LANG` / `LC_ALL` / `LC_MESSAGES` / `LANG` で切替（既定は英語）

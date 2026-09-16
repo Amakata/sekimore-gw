@@ -2,7 +2,7 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
-## 0.2.4 (unreleased. Localization)
+## 0.2.4 (2026-09-16. Localization: English is primary, Japanese ships as a language file)
 
 - Web UI: strings moved into `src/locales/{en,ja}.json`, English by default. The language is resolved in this order: `?lang=` → cookie (the in-page switcher) → `ui.language` in `config.yml` (`auto` / `en` / `ja`) → the browser's `Accept-Language` → English. New `/api/i18n`
 - `python -m src.maint`: `--help` and all messages follow `SEKIMORE_LANG` / `LC_ALL` / `LC_MESSAGES` / `LANG` (English by default)
