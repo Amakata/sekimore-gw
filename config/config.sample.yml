@@ -64,6 +64,7 @@ proxy:
 
 # Network Configuration
 network:
+  # allowed_ports: [80, 443]     # 0.2.2〜 許可ドメイン / 許可 IP へ通す宛先 TCP ポート。空 (既定) は全ポート = 従来どおり
   # LAN-side network subnets
   # IMPORTANT: For sekimore-gw, this setting is primarily informational.
   # Network detection is performed dynamically via Docker API (see orchestrator.py).
@@ -85,8 +86,12 @@ database_path: "/data/security_gateway.db"
 #   #   ssh_port: 2222            #    または下の project.upstreams.<domain>.repos に書く)
 #   #   ssh_options: [ProxyJump=bastion.example.com]   # 0.2.1〜 上流 ssh に -o で渡す (踏み台 / ProxyCommand)。踏み台の鍵は sekimore-relay keyscan
 #   #   api_base: https://ghe.example.com/api/v3       # 0.2.1〜 upstream を転送先にしたときの API base
+#   # ghcr.io:                    # 0.2.2〜 https-relay: 443 だけを関所の passthrough で通し、送信上限を宛先ごとに掛ける
+#   #   handler: https-relay
+#   #   max_upload_bytes: -1      #   自分で image を push する宛先は無制限、省略時は relay.https_max_upload_bytes
 # relay:
 #   https: passthrough            # 同一ドメインの 443: passthrough | reject
+#   https_max_upload_bytes: 1048576   # 0.2.2〜 443 passthrough で dev → 上流へ送れる 1 接続あたりの上限 (持ち出し対策)。-1 で無制限
 #   bootstrap: auto               # 使い捨て鍵の登録 + 案件トークン発行を POST /bootstrap で自動化: auto | manual
 #   token_ttl: 12h
 #   project:

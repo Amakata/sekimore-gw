@@ -1207,3 +1207,14 @@ def describe_relay_settings_change_detection():
         )
         assert _relay_settings_changed(old, same) is False
         assert _relay_settings_changed(old, moved) is True
+
+    def it_treats_allowed_ports_changes_as_restart_needed():
+        from src.config import Config
+        from src.orchestrator import _allowed_ports_of, _relay_settings_changed
+
+        a = Config(network={"allowed_ports": [80, 443]})
+        b = Config(network={"allowed_ports": [443]})
+        assert _allowed_ports_of(a) == [80, 443]
+        assert _relay_settings_changed(a, Config(network={"allowed_ports": [80, 443]})) is False
+        assert _relay_settings_changed(a, b) is True
+        assert _allowed_ports_of(object()) == []

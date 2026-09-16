@@ -421,3 +421,49 @@ def describe_domain_handlers():
         config.to_yaml(Path(out))
         again = Config.from_yaml(Path(out))
         assert again.domain_handlers["github.com"].handler == "git-relay"
+
+
+def describe_allowed_ports_config():
+    """0.2.2: network.allowed_ports."""
+
+    def it_defaults_to_all_ports_and_validates_values():
+        from pydantic import ValidationError
+
+        assert Config().network.allowed_ports == []
+        cfg = Config(network={"allowed_ports": [443, 80, 443]})
+        assert cfg.network.allowed_ports == [443, 80]  # 重複は落とす、順序は保つ
+        # 文字列の数字は pydantic が int に寄せる（YAML の "443" も受ける）
+        assert Config(network={"allowed_ports": ["443"]}).network.allowed_ports == [443]
+        for bad in ([0], [70000], ["https"]):
+            with pytest.raises(ValidationError):
+                Config(network={"allowed_ports": bad})
+
+
+def describe_https_relay_handler():
+    """0.2.2: https-relay（443 だけ関所を通す）と送信上限 max_upload_bytes（-1 = 無制限）."""
+
+    def it_accepts_https_relay_next_to_git_relay_and_validates_caps():
+        from pydantic import ValidationError
+
+        cfg = Config(
+            domain_handlers={
+                "github.com": {"handler": "git-relay", "max_upload_bytes": 262144},
+                "ghcr.io": {"handler": "https-relay", "max_upload_bytes": -1},
+                "registry-1.docker.io": {"handler": "https-relay"},
+            }
+        )
+        assert cfg.https_relay_domains() == ["ghcr.io", "registry-1.docker.io"]
+        assert cfg.relay_domains() == ["github.com", "ghcr.io", "registry-1.docker.io"]
+        assert cfg.git_relay_ssh_ports() == {"github.com": 22}  # https-relay に SSH ポートは無い
+        assert cfg.relay_input_ports() == [22, 8420, 443]
+        for bad in (0, -2):
+            with pytest.raises(ValidationError, match="max_upload_bytes"):
+                Config(
+                    domain_handlers={
+                        "ghcr.io": {"handler": "https-relay", "max_upload_bytes": bad},
+                        "github.com": {"handler": "git-relay"},
+                    }
+                )
+        # git-relay 無しの https-relay は設定エラー
+        with pytest.raises(ValidationError, match="needs at least one git-relay"):
+            Config(domain_handlers={"ghcr.io": {"handler": "https-relay"}})

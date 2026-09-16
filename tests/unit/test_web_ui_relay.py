@@ -112,6 +112,8 @@ def describe_relay_api():
                 "tokens_active": 0,
                 "tokens_total": 0,
                 "keys": 0,
+                "large_uploads": 0,
+                "upload_capped": 0,
             }
             assert client.get("/api/relay/tokens").json() == []
             assert client.get("/api/relay/audit").json() == []
@@ -217,6 +219,8 @@ def describe_relay_api():
             "tokens_active": 1,
             "tokens_total": 3,
             "keys": 2,
+            "large_uploads": 0,
+            "upload_capped": 0,
         }
 
     def it_handles_missing_state_files(tmp_path):
@@ -476,3 +480,57 @@ relay:
         ]
         assert ups["github.com"]["ssh_options"] == ["ConnectionAttempts=2"]
         assert ups["github.com"]["api_base"] == "https://api.github.com"
+
+
+def describe_upload_caps_and_https_relay():
+    """0.2.2: 送信上限（既定 / 上流ごと / https-relay）と、大きな送信・上限超過の検知."""
+
+    config_text = """
+domain_handlers:
+  github.com: {handler: git-relay, max_upload_bytes: 262144}
+  ghcr.io: {handler: https-relay, max_upload_bytes: -1}
+  registry-1.docker.io: {handler: https-relay}
+relay:
+  https_max_upload_bytes: 4194304
+  state_dir: "{state_dir}"
+  project:
+    name: case-c
+    permissions: [pr:create]
+    repos:
+      - {name: Org/App, mode: read-write, bases: [main]}
+"""
+    audit_lines = [
+        '{"actor":"agent-via-gateway","bytes_in":"512","bytes_out":"9000","event":"https_passthrough","peer":"192.168.0.3:1","sni":"github.com","ts":"2099-01-01T00:00:01Z","upstream":"github.com","via":"sekimore-gateway"}',
+        '{"actor":"agent-via-gateway","bytes_in":"5242880","bytes_out":"100","event":"https_passthrough","peer":"192.168.0.3:2","sni":"ghcr.io","ts":"2099-01-01T00:00:02Z","upstream":"ghcr.io","via":"sekimore-gateway"}',
+        '{"actor":"agent-via-gateway","bytes_in":"262145","cap":"262144","event":"https_upload_capped","peer":"192.168.0.3:3","reason":"upload exceeded max_upload_bytes; connection closed","sni":"github.com","ts":"2099-01-01T00:00:03Z","upstream":"github.com","via":"sekimore-gateway"}',
+    ]
+
+    def it_reports_caps_per_target_and_flags_large_or_capped_uploads(tmp_path):
+        state = tmp_path / "relay"
+        state.mkdir()
+        (state / "audit.jsonl").write_text("\n".join(audit_lines) + "\n")
+        cfg = tmp_path / "config.yml"
+        cfg.write_text(config_text.replace("{state_dir}", str(state)))
+        with patch("src.web_ui.app.CONFIG_PATH", str(cfg)):
+            from src.web_ui.app import app
+
+            client = TestClient(app)
+            conf = client.get("/api/relay/config").json()
+            stats = client.get("/api/relay/stats").json()
+            allowed = client.get("/api/relay/audit?kind=allowed").json()
+            blocked = client.get("/api/relay/audit?kind=blocked").json()
+        assert conf["https_max_upload_bytes"] == 4194304
+        assert conf["upstreams"][0]["max_upload_bytes"] == 262144  # handler の指定が既定より優先
+        assert [(t["domain"], t["max_upload_bytes"]) for t in conf["https_relays"]] == [
+            ("ghcr.io", -1),
+            ("registry-1.docker.io", 4194304),
+        ]
+        big = [
+            e for e in allowed if e["event"] == "https_passthrough" and e["flag"] == "large_upload"
+        ]
+        assert len(big) == 1 and "bytes_in=5242880" in big[0]["detail"]
+        small = [e for e in allowed if e["event"] == "https_passthrough" and e["flag"] is None]
+        assert len(small) == 1
+        capped = [e for e in blocked if e["event"] == "https_upload_capped"]
+        assert len(capped) == 1 and capped[0]["component"] == "HTTPS"
+        assert stats["large_uploads"] == 1 and stats["upload_capped"] == 1

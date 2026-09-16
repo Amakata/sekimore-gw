@@ -125,7 +125,13 @@ allow_domains:
 
 block_domains:
   - .malicious.com
+
+network:
+  allowed_ports: [80, 443]   # Optional (0.2.2): destination TCP ports allowed towards allow-listed
+                             # domains/IPs. Empty (default) keeps the previous behaviour (all ports).
 ```
+
+Restricting `allowed_ports` closes bypass routes such as SSH to an allow-listed IP. Changing it requires a container restart.
 
 ### Proxy Configuration
 

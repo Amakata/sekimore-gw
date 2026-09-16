@@ -673,7 +673,8 @@ class DNSServer:
             )
             reply.header.rcode = 3  # NXDOMAIN
             return reply.pack()  # type: ignore[no-any-return]
-        if handler == "git-relay" and not self._is_self_query(client_addr[0]):
+        # 0.2.2: https-relay（443 だけ関所を通す）も同じく関所 IP を返す。実 IP は ipset に入れない
+        if handler in ("git-relay", "https-relay") and not self._is_self_query(client_addr[0]):
             gateway_ip = getattr(self, "gateway_ip", None)
             if not gateway_ip or gateway_ip == "0.0.0.0":
                 # 関所 IP が未検出なら従来経路にフォールバック（0.0.0.0 を返さない）

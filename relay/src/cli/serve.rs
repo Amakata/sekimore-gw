@@ -143,14 +143,16 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         upstream: r.upstream.clone(),
         port: 443,
         upstreams: r
-            .upstreams
+            .https_targets
             .iter()
-            .map(|u| SniTarget {
-                domain: u.domain.clone(),
-                host: u.host.clone(),
+            .map(|t| SniTarget {
+                domain: t.domain.clone(),
+                host: t.host.clone(),
                 port: 443,
+                max_upload: t.max_upload,
             })
             .collect(),
+        max_upload: r.default_upstream().max_upload,
         mode: r.relay.https,
         proxy: r.proxy.clone(),
         idle: r.relay.limits.idle_timeout,
@@ -165,12 +167,25 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         "https on {}: {}",
         r.relay.https_listen,
         match r.relay.https {
-            HttpsMode::Passthrough if r.upstreams.len() > 1 =>
-                "TCP passthrough to <upstream by SNI>:443",
+            HttpsMode::Passthrough if r.https_targets.len() > 1 =>
+                "TCP passthrough to <target by SNI>:443",
             HttpsMode::Passthrough => "TCP passthrough to upstream:443",
             HttpsMode::Reject => "reject (RST + audit)",
         }
     );
+    if r.relay.https == HttpsMode::Passthrough {
+        for t in &r.https_targets {
+            log::info!(
+                "https target {} → {}:443 ({:?}, upload cap {})",
+                t.domain,
+                t.host,
+                t.kind,
+                t.max_upload
+                    .map(|c| format!("{c} bytes"))
+                    .unwrap_or_else(|| "unlimited".to_string())
+            );
+        }
+    }
     audit.log(
         "serve_started",
         Actor::System,

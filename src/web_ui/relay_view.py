@@ -45,6 +45,7 @@ DENY_EVENTS = {
     "https_failed": "HTTPS",
     "upstream_preflight_failed": "GIT",
     "upstream_spawn_failed": "GIT",
+    "https_upload_capped": "HTTPS",
 }
 SYSTEM_EVENTS = {"serve_started": "SYSTEM", "bootstrap_enabled": "BOOTSTRAP"}
 
@@ -71,8 +72,17 @@ class RelayUpstream(BaseModel):
     default: bool = False
     api_base: str = ""
     ssh_options: list[str] = []  # 0.2.1: 上流 ssh に足す -o（ProxyJump 等）
+    max_upload_bytes: int = 1048576  # 0.2.2: 443 の送信上限（-1 = 無制限）
     token_present: bool = False
     known_hosts_count: int | None = None
+
+
+class RelayHttpsTarget(BaseModel):
+    """0.2.2: https-relay のドメイン（443 だけ関所の passthrough を通す）."""
+
+    domain: str
+    upstream: str
+    max_upload_bytes: int = 1048576
 
 
 class RelayStateFile(BaseModel):
@@ -101,6 +111,8 @@ class RelayConfigResponse(BaseModel):
     permissions: list[str] = []
     repos: list[RelayRepo] = []
     upstreams: list[RelayUpstream] = []  # 0.2.0: 先頭が既定上流
+    https_relays: list[RelayHttpsTarget] = []  # 0.2.2
+    https_max_upload_bytes: int = 1048576  # 0.2.2: 送信上限の既定（-1 = 無制限）
     state_files: list[RelayStateFile] = []
     bootstrap_disabled: bool = False
 
@@ -130,6 +142,7 @@ class RelayAuditEntry(BaseModel):
     label: str | None = None
     reason: str | None = None
     detail: str | None = None  # bytes / ms / cmdline など補足
+    flag: str | None = None  # 0.2.2: "large_upload" = passthrough の送信が LARGE_UPLOAD_BYTES 以上
 
 
 class RelayStatsResponse(BaseModel):
@@ -139,6 +152,12 @@ class RelayStatsResponse(BaseModel):
     tokens_active: int = 0
     tokens_total: int = 0
     keys: int = 0
+    large_uploads: int = 0  # 0.2.2: 直近 24h の大きな送信（passthrough）
+    upload_capped: int = 0  # 0.2.2: 直近 24h の上限超過で切断した接続
+
+
+# 0.2.2: これ以上の送信（dev → 上流）があった passthrough 接続は Relay タブで目立たせる
+LARGE_UPLOAD_BYTES = 1024 * 1024
 
 
 def parse_ts(value: Any) -> float | None:
@@ -219,6 +238,9 @@ def _git_relay_upstreams(config: dict) -> list[dict[str, Any]]:
         ssh_options = [str(o) for o in (relay.get("ssh_options") or [])] + [
             str(o) for o in (spec.get("ssh_options") or [])
         ]
+        max_upload = _int_or(
+            spec.get("max_upload_bytes"), _int_or(relay.get("https_max_upload_bytes"), 1048576)
+        )
         out.append(
             {
                 "domain": d,
@@ -227,6 +249,7 @@ def _git_relay_upstreams(config: dict) -> list[dict[str, Any]]:
                 "default": is_default,
                 "api_base": api_base,
                 "ssh_options": ssh_options,
+                "max_upload_bytes": max_upload,
                 "token_path": token_path,
                 "known_hosts_path": kh_path,
             }
@@ -239,6 +262,36 @@ def _git_relay_domain(config: dict) -> str | None:
     """既定上流のドメイン（git-relay が無ければ None）."""
     ups = _git_relay_upstreams(config)
     return ups[0]["domain"] if ups else None
+
+
+def _int_or(value: Any, default: int) -> int:
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _https_relays(config: dict) -> list[RelayHttpsTarget]:
+    """https-relay のドメイン（0.2.2）。上限は handler → relay の既定の順."""
+    handlers = config.get("domain_handlers") or {}
+    relay = config.get("relay") or {}
+    if not isinstance(handlers, dict) or not isinstance(relay, dict):
+        return []
+    default_cap = _int_or(relay.get("https_max_upload_bytes"), 1048576)
+    out = []
+    for domain, spec in sorted(handlers.items()):
+        spec = spec if isinstance(spec, dict) else {}
+        if spec.get("handler") != "https-relay":
+            continue
+        d = str(domain).strip().rstrip(".").lower()
+        out.append(
+            RelayHttpsTarget(
+                domain=d,
+                upstream=str(spec.get("upstream") or d).strip().lower(),
+                max_upload_bytes=_int_or(spec.get("max_upload_bytes"), default_cap),
+            )
+        )
+    return out
 
 
 def _perm_spec(v: Any) -> tuple[list[str], list[str]]:
@@ -348,6 +401,8 @@ def build_config(config: dict) -> RelayConfigResponse:
         repos=repos,
     )
     if resp.enabled:
+        resp.https_relays = _https_relays(config)
+        resp.https_max_upload_bytes = _int_or(relay.get("https_max_upload_bytes"), 1048576)
         sd = Path(state_dir)
         files = []
         names = [
@@ -378,6 +433,7 @@ def build_config(config: dict) -> RelayConfigResponse:
                 default=u["default"],
                 api_base=u["api_base"],
                 ssh_options=u["ssh_options"],
+                max_upload_bytes=u["max_upload_bytes"],
                 token_present=u["token_path"].exists(),
                 known_hosts_count=_count_lines(u["known_hosts_path"])
                 if u["known_hosts_path"].exists()
@@ -474,6 +530,9 @@ def to_entry(obj: dict) -> RelayAuditEntry | None:
         if obj.get(k) not in (None, ""):
             details.append(f"{k}={obj[k]}")
     peer = obj.get("peer")
+    flag = None
+    if event == "https_passthrough" and _int_or(obj.get("bytes_in"), 0) >= LARGE_UPLOAD_BYTES:
+        flag = "large_upload"
     return RelayAuditEntry(
         timestamp=ts,
         component=component,
@@ -487,6 +546,7 @@ def to_entry(obj: dict) -> RelayAuditEntry | None:
         label=obj.get("label"),
         reason=obj.get("reason"),
         detail=" ".join(details) if details else None,
+        flag=flag,
     )
 
 
@@ -526,7 +586,7 @@ def build_stats(config: dict, since_hours: int = 24) -> RelayStatsResponse:
     sd = Path(cfg.state_dir)
     now = datetime.now(UTC).timestamp()
     cutoff = now - since_hours * 3600
-    allowed = blocked = 0
+    allowed = blocked = large_uploads = upload_capped = 0
     for entry in read_audit(sd, limit=5000):
         if entry.timestamp < cutoff:
             break  # 新しい順なので、ここから先は古い
@@ -534,6 +594,10 @@ def build_stats(config: dict, since_hours: int = 24) -> RelayStatsResponse:
             allowed += 1
         elif entry.action == "BLOCKED":
             blocked += 1
+        if entry.flag == "large_upload":
+            large_uploads += 1
+        if entry.event == "https_upload_capped":
+            upload_capped += 1
     tokens = read_tokens(sd, now)
     keys = next((f.count or 0 for f in cfg.state_files if f.name == "authorized_keys"), 0)
     return RelayStatsResponse(
@@ -543,4 +607,6 @@ def build_stats(config: dict, since_hours: int = 24) -> RelayStatsResponse:
         tokens_active=sum(1 for t in tokens if t.state == "active"),
         tokens_total=len(tokens),
         keys=keys,
+        large_uploads=large_uploads,
+        upload_capped=upload_capped,
     )

@@ -102,14 +102,25 @@ def _relay_ports_of(config: object) -> list[int]:
     return [p for p in ports if isinstance(p, int)]
 
 
+def _allowed_ports_of(config: object) -> list[int]:
+    """許可ドメイン / 許可 IP へ通す宛先ポート（network.allowed_ports。無ければ空 = 全ポート）."""
+    network = getattr(config, "network", None)
+    ports = getattr(network, "allowed_ports", None)
+    if not isinstance(ports, list):
+        return []
+    return [p for p in ports if isinstance(p, int) and not isinstance(p, bool)]
+
+
 def _relay_settings_changed(old: object, new: object) -> bool:
-    """domain_handlers / relay に差分があるか（再起動が必要な変更）.
+    """domain_handlers / relay / network.allowed_ports に差分があるか（再起動が必要な変更）.
 
     0.2.0: handler の ssh_port（INPUT で開けるポート）が変わった場合も再起動が必要。
+    0.2.2: network.allowed_ports（FORWARD の宛先ポート）も起動時に決まるので同じ扱い。
     """
     return (
         _domain_handlers_of(old) != _domain_handlers_of(new)
         or _relay_ports_of(old) != _relay_ports_of(new)
+        or _allowed_ports_of(old) != _allowed_ports_of(new)
         or getattr(old, "relay", None) != getattr(new, "relay", None)
     )
 
@@ -477,6 +488,7 @@ class SecurityGatewayOrchestrator:
             wan_interface=wan_interface,
             lan_interface=lan_interface,
             relay_ports=_relay_ports_of(self.config),
+            allowed_ports=_allowed_ports_of(self.config),
         )
         self.ip_manager = StaticIPManager()
 

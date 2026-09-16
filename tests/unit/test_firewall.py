@@ -564,3 +564,104 @@ def describe_relay_ports():
         ]
         dports = [cmds[i][cmds[i].index("--dport") + 1] for i in idx]
         assert dports.index("22") < dports.index("8080")
+
+
+def describe_allowed_ports():
+    """0.2.2: 許可ドメイン / 許可 IP へ通す宛先ポートの制限（未設定なら従来どおり全ポート）."""
+
+    def _forward_accepts(mock_run):
+        return [
+            c.args[0]
+            for c in mock_run.call_args_list
+            if len(c.args[0]) > 2 and c.args[0][1:3] == ["-A", "FORWARD"] and "ACCEPT" in c.args[0]
+        ]
+
+    def _ok_except_nflog_delete(mock_run):
+        """全コマンド成功、ただし NFLOG 規則の削除は「無い」を返す (_remove_block_log_rule の while を止める)."""
+        from subprocess import CalledProcessError
+
+        def run(cmd, **_kw):
+            if cmd[1] == "-D" and "--nflog-prefix" in cmd:
+                raise CalledProcessError(1, cmd, stderr="No such rule")
+            return Mock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = run
+
+    @patch("subprocess.run")
+    def it_keeps_the_single_all_ports_rule_by_default(mock_run):
+        _ok_except_nflog_delete(mock_run)
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        fw.setup_domain("example.com", ["93.184.216.34"])
+        baseline = [c.args[0] for c in mock_run.call_args_list]
+        accepts = _forward_accepts(mock_run)
+        assert len(accepts) == 1 and "--dport" not in accepts[0]
+
+        mock_run.reset_mock()
+        FirewallManager(wan_interface="eth0", lan_interface="eth1", allowed_ports=[]).setup_domain(
+            "example.com", ["93.184.216.34"]
+        )
+        assert [c.args[0] for c in mock_run.call_args_list] == baseline, (
+            "allowed_ports=[] must be byte-identical"
+        )
+
+    @patch("subprocess.run")
+    def it_adds_one_tcp_rule_per_port_and_deletes_them_the_same_way(mock_run):
+        _ok_except_nflog_delete(mock_run)
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1", allowed_ports=[443, 80])
+        fw.setup_domain("example.com", ["93.184.216.34"])
+        accepts = _forward_accepts(mock_run)
+        assert [r[r.index("--dport") + 1] for r in accepts] == ["443", "80"]
+        for r in accepts:
+            assert r[:9] == [
+                "iptables-legacy",
+                "-A",
+                "FORWARD",
+                "-i",
+                "eth1",
+                "-o",
+                "eth0",
+                "-p",
+                "tcp",
+            ], r
+            assert "--match-set" in r and r[-2:] == ["-j", "ACCEPT"]
+        # 全ポートを通す規則は 1 本も無い
+        assert all("--dport" in r for r in accepts)
+        # 重複防止の削除もポートごと
+        deletes = [
+            c.args[0]
+            for c in mock_run.call_args_list
+            if len(c.args[0]) > 2
+            and c.args[0][1:3] == ["-D", "FORWARD"]
+            and "--match-set" in c.args[0]
+        ]
+        assert sorted(r[r.index("--dport") + 1] for r in deletes) == ["443", "80"]
+
+        # remove_domain もポートごとに消す
+        mock_run.reset_mock()
+        fw.remove_domain("example.com")
+        deletes = [
+            c.args[0]
+            for c in mock_run.call_args_list
+            if len(c.args[0]) > 2
+            and c.args[0][1:3] == ["-D", "FORWARD"]
+            and "--match-set" in c.args[0]
+        ]
+        assert sorted(r[r.index("--dport") + 1] for r in deletes) == ["443", "80"]
+
+    @patch("subprocess.run")
+    def it_restricts_static_allow_ips_and_lan_only_domains_too(mock_run):
+        _ok_except_nflog_delete(mock_run)
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1", allowed_ports=[443])
+        fw.setup_static_ip_rules("allow_static", "block_static")
+        accepts = _forward_accepts(mock_run)
+        assert len(accepts) == 1 and accepts[0][3:7] == ["-p", "tcp", "--dport", "443"]
+        assert "-i" not in accepts[0]
+        # DROP は従来どおり
+        drops = [c.args[0] for c in mock_run.call_args_list if "DROP" in c.args[0]]
+        assert len(drops) == 1 and "--dport" not in drops[0]
+
+        mock_run.reset_mock()
+        fw.setup_domain("sekimore.lan", ["10.100.0.2"])
+        accepts = _forward_accepts(mock_run)
+        assert len(accepts) == 1 and accepts[0][3:5] == ["-i", "eth1"] and "-o" not in accepts[0]
+        assert "--dport" in accepts[0]

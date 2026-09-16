@@ -13,6 +13,7 @@ class FirewallManager:
         wan_interface: str,
         lan_interface: str,
         relay_ports: list[int] | None = None,
+        allowed_ports: list[int] | None = None,
     ):
         """初期化.
 
@@ -20,10 +21,12 @@ class FirewallManager:
             wan_interface: WAN側インターフェース（インターネット側、orchestratorで動的検出）
             lan_interface: LAN側インターフェース（ローカルネットワーク側、orchestratorで動的検出）
             relay_ports: 中継関所のために lan_if 側 INPUT で開ける TCP ポート（無ければ規則を追加しない）
+            allowed_ports: 許可ドメイン / 許可 IP へ通す宛先 TCP ポート（空なら従来どおり全ポート）
         """
         self.wan_if = wan_interface
         self.lan_if = lan_interface
         self.relay_ports: list[int] = list(relay_ports or [])
+        self.allowed_ports: list[int] = list(allowed_ports or [])
         self.domain_ipsets: dict[str, str] = {}  # domain -> ipset_name のマッピング
 
         # iptables/ipsetコマンド（legacyを使用）
@@ -403,6 +406,25 @@ class FirewallManager:
 
         return True
 
+    def _forward_accept_rules(
+        self, ipset_name: str, is_lan_only: bool | None, action: str = "-A"
+    ) -> list[list[str]]:
+        """ipset 宛の FORWARD ACCEPT 規則を組み立てる.
+
+        allowed_ports が空なら従来どおり 1 本（全ポート）。指定があれば `-p tcp --dport <port>` を
+        ポートごとに 1 本ずつ。is_lan_only=None は静的 IP 用（インターフェース条件なし）。
+        action は "-A"（追加）か "-D"（削除）。
+        """
+        base = [self.iptables_cmd, action, "FORWARD"]
+        if is_lan_only is True:
+            base += ["-i", self.lan_if]
+        elif is_lan_only is False:
+            base += ["-i", self.lan_if, "-o", self.wan_if]
+        tail = ["-m", "set", "--match-set", ipset_name, "dst", "-j", "ACCEPT"]
+        if not self.allowed_ports:
+            return [base + tail]
+        return [base + ["-p", "tcp", "--dport", str(port)] + tail for port in self.allowed_ports]
+
     def setup_domain(self, domain: str, ips: list[str]) -> bool:
         """ドメインに対するipsetとiptablesルールを設定.
 
@@ -427,45 +449,9 @@ class FirewallManager:
         if not ipv4_ips:
             return True
 
-        # 既存ipsetのルールを削除（重複防止）
-        if not is_lan_only:
-            # WAN向けの場合はインターフェース条件付きで削除を試行
-            self._run_command(
-                [
-                    self.iptables_cmd,
-                    "-D",
-                    "FORWARD",
-                    "-i",
-                    self.lan_if,
-                    "-o",
-                    self.wan_if,
-                    "-m",
-                    "set",
-                    "--match-set",
-                    ipset_name,
-                    "dst",
-                    "-j",
-                    "ACCEPT",
-                ]
-            )
-        else:
-            # LAN専用の場合は-iのみで削除を試行
-            self._run_command(
-                [
-                    self.iptables_cmd,
-                    "-D",
-                    "FORWARD",
-                    "-i",
-                    self.lan_if,
-                    "-m",
-                    "set",
-                    "--match-set",
-                    ipset_name,
-                    "dst",
-                    "-j",
-                    "ACCEPT",
-                ]
-            )
+        # 既存ipsetのルールを削除（重複防止）。allowed_ports があればポートごとの規則を消す
+        for rule in self._forward_accept_rules(ipset_name, is_lan_only, action="-D"):
+            self._run_command(rule)
 
         # 既存ipsetを削除
         self._run_command([self.ipset_cmd, "destroy", ipset_name])
@@ -483,45 +469,10 @@ class FirewallManager:
         # LOGルールを一時的に削除
         self._remove_block_log_rule()
 
-        # iptablesルール追加（インターフェース条件付き）
-        if is_lan_only:
-            # LAN専用トラフィック（sekimore.lan等）は-iのみ
-            self._run_command(
-                [
-                    self.iptables_cmd,
-                    "-A",
-                    "FORWARD",
-                    "-i",
-                    self.lan_if,
-                    "-m",
-                    "set",
-                    "--match-set",
-                    ipset_name,
-                    "dst",
-                    "-j",
-                    "ACCEPT",
-                ]
-            )
-        else:
-            # WAN向けトラフィック（外部ドメイン）は-i と -o 両方
-            self._run_command(
-                [
-                    self.iptables_cmd,
-                    "-A",
-                    "FORWARD",
-                    "-i",
-                    self.lan_if,
-                    "-o",
-                    self.wan_if,
-                    "-m",
-                    "set",
-                    "--match-set",
-                    ipset_name,
-                    "dst",
-                    "-j",
-                    "ACCEPT",
-                ]
-            )
+        # iptablesルール追加（インターフェース条件付き。allowed_ports があれば -p tcp --dport ごとに 1 本）
+        # LAN専用トラフィック（sekimore.lan等）は-iのみ、WAN向けは -i と -o 両方
+        for rule in self._forward_accept_rules(ipset_name, is_lan_only, action="-A"):
+            self._run_command(rule)
 
         # LOGルールを再追加（ACCEPTルールの後に配置）
         self._add_block_log_rule()
@@ -610,20 +561,25 @@ class FirewallManager:
         ipset_name = self.domain_ipsets[domain]
 
         # iptablesルール削除
-        self._run_command(
-            [
-                self.iptables_cmd,
-                "-D",
-                "FORWARD",
-                "-m",
-                "set",
-                "--match-set",
-                ipset_name,
-                "dst",
-                "-j",
-                "ACCEPT",
-            ]
-        )
+        if self.allowed_ports:
+            is_lan_only = domain.endswith(".lan") or "." not in domain
+            for rule in self._forward_accept_rules(ipset_name, is_lan_only, action="-D"):
+                self._run_command(rule)
+        else:
+            self._run_command(
+                [
+                    self.iptables_cmd,
+                    "-D",
+                    "FORWARD",
+                    "-m",
+                    "set",
+                    "--match-set",
+                    ipset_name,
+                    "dst",
+                    "-j",
+                    "ACCEPT",
+                ]
+            )
 
         # ipset削除
         self._run_command([self.ipset_cmd, "destroy", ipset_name])
@@ -661,21 +617,9 @@ class FirewallManager:
             ]
         )
 
-        # 許可IPルール
-        self._run_command(
-            [
-                self.iptables_cmd,
-                "-A",
-                "FORWARD",
-                "-m",
-                "set",
-                "--match-set",
-                allow_ipset_name,
-                "dst",
-                "-j",
-                "ACCEPT",
-            ]
-        )
+        # 許可IPルール（allowed_ports があればポートごと）
+        for rule in self._forward_accept_rules(allow_ipset_name, None, action="-A"):
+            self._run_command(rule)
 
         log_system_event(
             "Static IP firewall rules added",

@@ -1201,6 +1201,16 @@ def describe_domain_handler_resolution():
         await s.mapping.db.close()
 
     @pytest.mark.asyncio
+    async def it_redirects_https_relay_domain_to_gateway_ip_too():
+        # 0.2.2: https-relay も関所 IP を返し、実 IP を ipset に入れない
+        s = await _server({"ghcr.io": "https-relay"}, allowed=["ghcr.io"])
+        r = await _query(s, "ghcr.io")
+        assert r.header.rcode == 0
+        assert len(r.rr) == 1 and str(r.rr[0].rdata) == "172.22.0.2"
+        s.firewall_manager.setup_domain.assert_not_called()
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
     async def it_returns_empty_for_aaaa():
         s = await _server({"github.com": "git-relay"}, allowed=["github.com"])
         r = await _query(s, "github.com", "AAAA")
