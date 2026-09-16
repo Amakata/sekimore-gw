@@ -396,3 +396,57 @@ relay:
         assert data["upstreams"][0]["ssh_port"] == 2222
         # host 無しの repo は既定上流 (ghe.example.com) のもの
         assert {r["name"]: r["host"] for r in data["repos"]}["Org/App"] == "ghe.example.com"
+
+
+def describe_upstream_policy_layer():
+    """0.2.1: project.upstreams.<domain> の層 (権限の差分、push / tags / delete の既定、repos)."""
+
+    config_text = """
+domain_handlers:
+  github.com: {handler: git-relay}
+  ghe.example.com: {handler: git-relay, ssh_port: 2222}
+relay:
+  state_dir: "{state_dir}"
+  project:
+    name: case-m
+    permissions: [pr:read, ci:read]
+    upstreams:
+      github.com:
+        permissions: {allow: [pr:create, pr:merge]}
+        tags: ["v*"]
+        repos:
+          - {name: Org/App, mode: read-write, bases: [main]}
+          - {name: Org/Tool, mode: read-write, tags: [], permissions: {deny: [pr:merge]}}
+      ghe.example.com:
+        permissions: {allow: [pr:create], deny: [pr:merge]}
+        delete: true
+        repos:
+          - {name: Corp/Internal, mode: read-write, bases: [main]}
+    repos:
+      - {name: ghe.example.com/Corp/Legacy, mode: read-only}
+"""
+
+    def it_applies_upstream_defaults_and_permission_diffs(tmp_path):
+        cfg = tmp_path / "config.yml"
+        cfg.write_text(config_text.replace("{state_dir}", str(tmp_path / "relay")))
+        with patch("src.web_ui.app.CONFIG_PATH", str(cfg)):
+            from src.web_ui.app import app
+
+            data = TestClient(app).get("/api/relay/config").json()
+        assert data["permissions"] == ["ci:read", "pr:read"]
+        repos = {(r["host"], r["name"]): r for r in data["repos"]}
+        app_ = repos[("github.com", "Org/App")]
+        assert app_["permissions"] == ["ci:read", "pr:create", "pr:merge", "pr:read"]
+        assert app_["tags"] == ["v*"] and app_["delete"] is False
+        tool = repos[("github.com", "Org/Tool")]
+        assert tool["permissions"] == ["ci:read", "pr:create", "pr:read"]  # repo の deny が勝つ
+        assert tool["tags"] == []  # repo 上書き
+        internal = repos[("ghe.example.com", "Corp/Internal")]
+        assert internal["permissions"] == ["ci:read", "pr:create", "pr:read"]
+        assert internal["delete"] is True and internal["tags"] == []
+        legacy = repos[
+            ("ghe.example.com", "Corp/Legacy")
+        ]  # project.repos の host prefix も上流層を受ける
+        assert legacy["delete"] is True
+        assert legacy["permissions"] == ["ci:read", "pr:create", "pr:read"]
+        assert len(data["repos"]) == 4

@@ -268,27 +268,56 @@ def build_config(config: dict) -> RelayConfigResponse:
     if not default_tags and bool(relay.get("allow_tags", False)):
         default_tags = ["*"]
     default_delete = bool(project.get("delete", False)) or bool(relay.get("allow_delete", False))
-    repos: list[RelayRepo] = []
+    # 0.2.1: 上流層 project.upstreams.<domain>（permissions の差分と push / tags / delete の既定、repos）。
+    # キーはドメインでも上流ホスト名でもよい → ドメインに正規化
+    host_to_domain = {u["upstream"]: u["domain"] for u in upstreams}
+    layers: dict[str, dict] = {}
+    raw_layers = project.get("upstreams") or {}
+    if isinstance(raw_layers, dict):
+        for key, layer in raw_layers.items():
+            k = str(key).strip().rstrip(".").lower()
+            layers[host_to_domain.get(k, k)] = layer if isinstance(layer, dict) else {}
+    # (repo 設定, 上流ドメイン) を project.repos（host prefix）と upstreams.<d>.repos から集める
+    entries: list[tuple[dict, str]] = []
     for r in project.get("repos") or []:
         if not isinstance(r, dict) or not r.get("name"):
             continue
-        r_allow, r_deny = _perm_spec(r.get("permissions"))
-        effective = sorted((set(p_allow) | set(r_allow)) - (set(p_deny) | set(r_deny)))
-        # 0.2.0: `host/Org/Repo` は上流を明示。`Org/Repo` は既定上流
         name = str(r["name"]).strip().lstrip("/")
+        parts = name.split("/")
         host = domain or ""
+        if len(parts) == 3 and "." in parts[0]:
+            host = host_to_domain.get(parts[0].lower(), parts[0].lower())
+        entries.append((r, host))
+    for d, layer in layers.items():
+        for r in layer.get("repos") or []:
+            if isinstance(r, dict) and r.get("name"):
+                entries.append((r, d))
+    repos: list[RelayRepo] = []
+    for r, host in entries:
+        layer = layers.get(host, {})
+        l_allow, l_deny = _perm_spec(layer.get("permissions"))
+        r_allow, r_deny = _perm_spec(r.get("permissions"))
+        effective = sorted(
+            (set(p_allow) | set(l_allow) | set(r_allow)) - (set(p_deny) | set(l_deny) | set(r_deny))
+        )
+        # 0.2.0: `host/Org/Repo` は上流を明示。`Org/Repo` は既定上流（上流層の repos ではその上流）
+        name = str(r["name"]).strip().lstrip("/")
         parts = name.split("/")
         if len(parts) == 3 and "." in parts[0]:
-            host, name = parts[0].lower(), "/".join(parts[1:])
+            name = "/".join(parts[1:])
+        l_push, l_tags, l_delete = layer.get("push"), layer.get("tags"), layer.get("delete")
+        push_v = r.get("push") if r.get("push") is not None else l_push
+        tags_v = r.get("tags") if r.get("tags") is not None else l_tags
+        delete_v = r.get("delete") if r.get("delete") is not None else l_delete
         repos.append(
             RelayRepo(
                 name=name,
                 host=host,
                 mode=str(r.get("mode", "read-only")),
                 bases=[str(b) for b in (r.get("bases") or [])],
-                push=[str(p) for p in r["push"]] if r.get("push") is not None else default_push,
-                tags=[str(t) for t in r["tags"]] if r.get("tags") is not None else default_tags,
-                delete=bool(r["delete"]) if r.get("delete") is not None else default_delete,
+                push=[str(p) for p in push_v] if push_v is not None else default_push,
+                tags=[str(t) for t in tags_v] if tags_v is not None else default_tags,
+                delete=bool(delete_v) if delete_v is not None else default_delete,
                 permissions=effective,
             )
         )

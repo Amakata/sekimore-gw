@@ -69,6 +69,27 @@ relay:
 （`Org/Repo` が 1 つの上流にしか無ければ省略可）。SSH 経路では接続ポートの上流に絞って repo を探すので、GHES の repo に
 github.com 側のポートから届くことはない。
 
+**上流ごとの権限（0.2.1〜）**: 案件既定と repo の間に上流の層を置ける。`project.upstreams.<domain>` に
+`permissions`（案件既定への差分）、`push` / `tags` / `delete`（その上流の repo の既定）、`repos`（その上流の repo。`Org/Repo` で書く）。
+実効権限 = (案件 allow ∪ 上流 allow ∪ repo allow) − (案件 deny ∪ 上流 deny ∪ repo deny)。
+
+```yaml
+relay:
+  project:
+    name: case-a
+    permissions: [pr:read, ci:read]                       # 全上流に共通の既定
+    upstreams:
+      github.com:
+        permissions: { allow: [pr:create, pr:merge] }     # github.com 側だけマージまで許す
+        tags: ["v*"]
+        repos:
+          - { name: Org/App, mode: read-write, bases: [main] }
+      ghe.example.com:
+        permissions: { allow: [pr:create], deny: [pr:merge] }   # GHES ではマージさせない
+        repos:
+          - { name: Corp/Internal, mode: read-write, bases: [main] }
+```
+
 ### 2. 依頼者の ssh-agent を関所に渡す
 
 relay は上流 git に **依頼者の ssh-agent** で認証する（鍵は Mac から出ない）。
