@@ -299,7 +299,41 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
     if !denied.is_empty() {
         println!("  ([-] = project deny; wins over any allow)");
     }
-    println!("\nrepos (effective = project defaults + repo allow - deny):");
+    // 0.2.1: 上流層（案件既定と repo の間）
+    if !r.relay.project.upstreams.is_empty() {
+        println!("\nupstreams (layer between project defaults and repos):");
+        for (name, up) in &r.relay.project.upstreams {
+            let mut parts = Vec::new();
+            if let Some(p) = &up.permissions {
+                if !p.allow().is_empty() {
+                    parts.push(format!("+{}", p.allow().join(" +")));
+                }
+                if !p.deny().is_empty() {
+                    parts.push(format!("-{}", p.deny().join(" -")));
+                }
+            }
+            if let Some(v) = &up.push {
+                parts.push(format!("push={v:?}"));
+            }
+            if let Some(v) = &up.tags {
+                parts.push(format!("tags={v:?}"));
+            }
+            if let Some(v) = up.delete {
+                parts.push(format!("delete={v}"));
+            }
+            println!(
+                "  {:<40} {} ({} repo(s))",
+                name,
+                if parts.is_empty() {
+                    "(no overrides)".to_string()
+                } else {
+                    parts.join(" ")
+                },
+                up.repos.len()
+            );
+        }
+    }
+    println!("\nrepos (effective = project defaults + upstream layer + repo allow - deny):");
     for rp in &r.project.repos {
         let shown = if multi {
             format!("{}/{}", r.project.host_of(rp), rp.full_name)

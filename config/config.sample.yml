@@ -81,8 +81,8 @@ database_path: "/data/security_gateway.db"
 #   github.com:
 #     handler: git-relay          # 完全一致 FQDN（splice / deny も指定可）
 #   # ghe.example.com:            # 0.2.0〜 複数の上流も可。2 つ目以降は別の SSH ポートで受ける
-#   #   handler: git-relay        #   (repos の name は ghe.example.com/Org/Repo で上流を明示)
-#   #   ssh_port: 2222
+#   #   handler: git-relay        #   (repos の name は ghe.example.com/Org/Repo で上流を明示、
+#   #   ssh_port: 2222            #    または下の project.upstreams.<domain>.repos に書く)
 # relay:
 #   https: passthrough            # 同一ドメインの 443: passthrough | reject
 #   bootstrap: auto               # 使い捨て鍵の登録 + 案件トークン発行を POST /bootstrap で自動化: auto | manual
@@ -93,6 +93,11 @@ database_path: "/data/security_gateway.db"
 #       - name: Org/Repo
 #         mode: read-write        # read-only | read-write
 #         bases: [main]           # PR の base として許可するブランチ。直接 push は既定で sekimore/* のみ
+#     # upstreams:                # 0.2.1〜 上流ごとの層 (案件既定と repo の間)。permissions は差分、push/tags/delete はその上流の既定
+#     #   ghe.example.com:
+#     #     permissions: { allow: [pr:create], deny: [pr:merge] }
+#     #     repos:
+#     #       - { name: Corp/Internal, mode: read-write, bases: [main] }
 #     permissions: [pr:create, issue:create]   # リソース:アクション。書かないものは拒否。{allow: [...], deny: [...]} でも
 #     tags: []                                  # push を許すタグ glob の既定 (空 = 拒否)。repos[].tags で repo ごとに上書き
 #     delete: false                             # ブランチ / タグ削除の既定。repos[].delete で上書き

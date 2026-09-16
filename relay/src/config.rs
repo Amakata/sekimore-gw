@@ -221,12 +221,31 @@ pub struct RepoConfig {
     pub permissions: Option<PermissionSpec>,
 }
 
+/// 0.2.1: `project.upstreams.<domain>`。その上流の repo に共通の既定と差分。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamPolicyConfig {
+    /// 案件既定への差分（allow を足す / deny で消す）。list なら allow の追加。repo の差分より先に適用される
+    pub permissions: Option<PermissionSpec>,
+    /// この上流の repo の既定（省略時は案件既定）
+    pub push: Option<Vec<String>>,
+    pub tags: Option<Vec<String>>,
+    pub delete: Option<bool>,
+    /// この上流の repo。`Org/Repo` で書く（host 付きは不要。書いた場合はこの上流と一致しなければエラー）
+    #[serde(default)]
+    pub repos: Vec<RepoConfig>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub name: String,
     #[serde(default)]
     pub repos: Vec<RepoConfig>,
+    /// 0.2.1: 上流（git-relay ドメイン）ごとの層。案件既定と repo の間に入り、
+    /// `permissions` は加算 / deny、`push` / `tags` / `delete` はその上流の repo の既定、`repos` はその上流の repo
+    #[serde(default)]
+    pub upstreams: BTreeMap<String, UpstreamPolicyConfig>,
     /// 案件の既定権限。`[…]` か `{allow, deny}`
     #[serde(default)]
     pub permissions: PermissionSpec,
@@ -608,42 +627,99 @@ impl Loaded {
         if relay.allow_delete {
             eprintln!("[relay] WARNING: relay.allow_delete is deprecated; write `delete: true` under relay.project (or per repo)");
         }
-        let mut repos = Vec::new();
+        // 0.2.1: 上流層。キーは git-relay ドメイン（上流ホスト名でも可）
+        let known = || {
+            upstreams
+                .iter()
+                .map(|u| u.domain.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let resolve_host = |name: &str| -> Result<String, ConfigError> {
+            let h = name.trim().trim_end_matches('.').to_ascii_lowercase();
+            upstreams
+                .iter()
+                .find(|u| u.domain == h || u.host == h)
+                .map(|u| u.domain.clone())
+                .ok_or_else(|| {
+                    ConfigError::Invalid(format!(
+                        "{name:?} is not a git-relay domain (known: {})",
+                        known()
+                    ))
+                })
+        };
+        let mut layers: BTreeMap<String, &UpstreamPolicyConfig> = BTreeMap::new();
+        for (key, up) in &pc.upstreams {
+            let d = resolve_host(key)
+                .map_err(|e| ConfigError::Invalid(format!("project.upstreams: {e}")))?;
+            if layers.insert(d.clone(), up).is_some() {
+                return Err(ConfigError::Invalid(format!(
+                    "project.upstreams: {d} is listed more than once"
+                )));
+            }
+        }
+        // (repo 設定, 属する上流ドメイン, 上流層) を集める: project.repos（host prefix）と upstreams.<d>.repos
+        let mut entries: Vec<(&RepoConfig, String)> = Vec::new();
         for r in &pc.repos {
-            let mode = Mode::parse(&r.mode).map_err(ConfigError::Invalid)?;
             // 0.2.0: `host/Org/Repo` で上流を明示できる。`Org/Repo` は既定上流
-            let (host, full_name) = split_repo_host(r.name.trim());
-            let host = match host {
-                Some(h) => {
-                    let h = h.to_ascii_lowercase();
-                    let up = upstreams
-                        .iter()
-                        .find(|u| u.domain == h || u.host == h)
-                        .ok_or_else(|| {
-                            ConfigError::Invalid(format!(
-                                "repo {:?}: {h:?} is not a git-relay domain (known: {})",
-                                r.name,
-                                upstreams
-                                    .iter()
-                                    .map(|u| u.domain.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ))
-                        })?;
-                    up.domain.clone()
-                }
+            let (host, _) = split_repo_host(r.name.trim());
+            let d = match host {
+                Some(h) => resolve_host(h)
+                    .map_err(|e| ConfigError::Invalid(format!("repo {:?}: {e}", r.name)))?,
                 None => domain.clone(),
             };
+            entries.push((r, d));
+        }
+        for (d, up) in &layers {
+            for r in &up.repos {
+                if let (Some(h), _) = split_repo_host(r.name.trim()) {
+                    let hd = resolve_host(h)
+                        .map_err(|e| ConfigError::Invalid(format!("repo {:?}: {e}", r.name)))?;
+                    if &hd != d {
+                        return Err(ConfigError::Invalid(format!(
+                            "project.upstreams.{d}.repos: {:?} names another upstream ({hd})",
+                            r.name
+                        )));
+                    }
+                }
+                entries.push((r, d.clone()));
+            }
+        }
+        let mut repos = Vec::new();
+        for (r, host) in entries {
+            let mode = Mode::parse(&r.mode).map_err(ConfigError::Invalid)?;
+            let (_, full_name) = split_repo_host(r.name.trim());
+            let layer = layers.get(&host).copied();
+            let l_push = layer.and_then(|l| l.push.clone());
+            let l_tags = layer.and_then(|l| l.tags.clone());
+            let l_delete = layer.and_then(|l| l.delete);
             let mut rp = RepoPolicy::new(full_name, mode);
             rp.host = host;
             rp.bases = r.bases.clone();
-            rp.push = r.push.clone().unwrap_or_else(|| default_push.clone());
-            rp.tags = r.tags.clone().unwrap_or_else(|| default_tags.clone());
-            rp.delete = r.delete.unwrap_or(default_delete);
-            if let Some(p) = &r.permissions {
-                rp.allow = p.allow().to_vec();
-                rp.deny = p.deny().to_vec();
+            rp.push = r
+                .push
+                .clone()
+                .or(l_push)
+                .unwrap_or_else(|| default_push.clone());
+            rp.tags = r
+                .tags
+                .clone()
+                .or(l_tags)
+                .unwrap_or_else(|| default_tags.clone());
+            rp.delete = r.delete.or(l_delete).unwrap_or(default_delete);
+            // 権限: 上流層の差分 → repo の差分（どちらも allow は加算、deny は勝つ）
+            if let Some(p) = layer.and_then(|l| l.permissions.as_ref()) {
+                rp.allow.extend(p.allow().iter().cloned());
+                rp.deny.extend(p.deny().iter().cloned());
             }
+            if let Some(p) = &r.permissions {
+                rp.allow.extend(p.allow().iter().cloned());
+                rp.deny.extend(p.deny().iter().cloned());
+            }
+            rp.allow.sort();
+            rp.allow.dedup();
+            rp.deny.sort();
+            rp.deny.dedup();
             repos.push(rp);
         }
         let mut project = Project::try_new_rules(
@@ -849,6 +925,7 @@ impl Resolved {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::{Action, Resource};
 
     const WITH: &str = include_str!("../../tests/fixtures/config_with_relay.yml");
     const WITHOUT: &str = include_str!("../../tests/fixtures/config_without_relay.yml");
@@ -1056,6 +1133,82 @@ relay:
             p(bad).unwrap().resolve(),
             Err(ConfigError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn upstream_layer_sets_defaults_and_permission_diffs_per_upstream() {
+        let text = r#"
+domain_handlers:
+  github.com: { handler: git-relay }
+  ghe.example.com: { handler: git-relay, ssh_port: 2222 }
+relay:
+  project:
+    name: case-m
+    permissions: [pr:read, ci:read]
+    upstreams:
+      github.com:
+        permissions: { allow: [pr:create, pr:merge] }
+        tags: ["v*"]
+        repos:
+          - { name: Org/App, mode: read-write, bases: [main] }
+          - { name: Org/Tool, mode: read-write, bases: [main], tags: [], permissions: { deny: [pr:merge] } }
+      ghe.example.com:
+        permissions: { allow: [pr:create], deny: [pr:merge] }
+        delete: true
+        repos:
+          - { name: Corp/Internal, mode: read-write, bases: [main] }
+    repos:
+      - { name: ghe.example.com/Corp/Legacy, mode: read-only }
+"#;
+        let r = p(text).unwrap().resolve().unwrap();
+        let pr = &r.project;
+        assert_eq!(pr.granted(), vec!["ci:read", "pr:read"]);
+        let app = pr.find_repo("github.com/Org/App").unwrap();
+        assert_eq!(
+            pr.effective_keys(app),
+            vec!["ci:read", "pr:create", "pr:merge", "pr:read"]
+        );
+        assert_eq!(app.tags, vec!["v*"]);
+        assert!(!app.delete);
+        // repo の deny は上流層の allow に勝つ。tags は repo 上書き
+        let tool = pr.find_repo("Org/Tool").unwrap();
+        assert_eq!(
+            pr.effective_keys(tool),
+            vec!["ci:read", "pr:create", "pr:read"]
+        );
+        assert!(tool.tags.is_empty());
+        // GHES 側: マージ不可、delete は上流層の既定
+        let internal = pr.find_repo("ghe.example.com/Corp/Internal").unwrap();
+        assert_eq!(internal.host, "ghe.example.com");
+        assert_eq!(
+            pr.effective_keys(internal),
+            vec!["ci:read", "pr:create", "pr:read"]
+        );
+        assert!(internal.delete && internal.tags.is_empty());
+        // project.repos の host prefix 表記も上流層の既定を受ける
+        let legacy = pr.find_repo("Corp/Legacy").unwrap();
+        assert_eq!(legacy.host, "ghe.example.com");
+        assert!(legacy.delete);
+        assert_eq!(
+            pr.effective_keys(legacy),
+            vec!["ci:read", "pr:create", "pr:read"]
+        );
+        // authorize は上流ごとに違う答えになる
+        assert!(pr.authorize("Org/App", Resource::Pr, Action::Merge).is_ok());
+        assert!(pr
+            .authorize("ghe.example.com/Corp/Internal", Resource::Pr, Action::Merge)
+            .is_err());
+        // 知らない上流のキー / 別上流を指す repo 名は起動時エラー
+        let bad = text.replace(
+            "      ghe.example.com:\n        permissions",
+            "      other.example.com:\n        permissions",
+        );
+        assert!(p(&bad).unwrap().resolve().is_err());
+        let bad2 = text.replace(
+            "          - { name: Corp/Internal, mode: read-write, bases: [main] }",
+            "          - { name: github.com/Corp/Internal, mode: read-write, bases: [main] }",
+        );
+        assert!(p(&bad2).unwrap().resolve().is_err());
     }
 
     #[test]
