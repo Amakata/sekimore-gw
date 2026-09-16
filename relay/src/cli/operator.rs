@@ -1,4 +1,4 @@
-//! 操作者向けサブコマンド（gateway コンテナ内で実行する）。
+//! Operator-facing subcommands (run inside the gateway container).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -43,7 +43,7 @@ fn is_wide(c: char) -> bool {
         | 0xFE30..=0xFE6F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 | 0x20000..=0x3FFFD)
 }
 
-/// entrypoint.sh 用。0 = 起動 / 1 = 不要 / 2 = 設定不正。
+/// For entrypoint.sh. 0 = start / 1 = not needed / 2 = invalid configuration.
 pub fn needs_relay(path: &Path) -> anyhow::Result<i32> {
     let loaded = match config::load(path) {
         Ok(l) => l,
@@ -80,7 +80,7 @@ pub fn open_audit(r: &Resolved) -> anyhow::Result<Arc<Audit>> {
     Ok(Arc::new(Audit::new(Some(&r.paths.audit), false)?))
 }
 
-/// 既定上流の GitHub client（0.1.x 互換）。
+/// GitHub client for the default upstream (0.1.x compatible).
 pub fn build_github(
     r: &Resolved,
     audit: Arc<Audit>,
@@ -88,7 +88,7 @@ pub fn build_github(
     build_github_for(r, r.default_upstream(), audit)
 }
 
-/// 上流ごとの GitHub client（api_base / graphql_base / upstream_token はその上流のもの。0.2.0）。
+/// GitHub client for one upstream (api_base / graphql_base / upstream_token are that upstream's. 0.2.0).
 pub fn build_github_for(
     r: &Resolved,
     up: &Upstream,
@@ -116,7 +116,7 @@ pub fn build_github_for(
     Ok((gh, store, http))
 }
 
-/// `--upstream` の解決。省略時は既定上流。
+/// Resolves `--upstream`, defaulting to the default upstream when omitted.
 pub fn pick_upstream<'a>(r: &'a Resolved, name: Option<&str>) -> anyhow::Result<&'a Upstream> {
     match name {
         None => Ok(r.default_upstream()),
@@ -230,7 +230,7 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// known_hosts に `<host> <key>` 行を追加する（既にある行は足さない）。追加した行数を返す。
+/// Adds `<host> <key>` lines to known_hosts, skipping lines already present. Returns the number added.
 pub fn merge_known_hosts(
     path: &Path,
     host: &str,
@@ -262,7 +262,7 @@ pub fn merge_known_hosts(
     Ok(added)
 }
 
-/// `ssh-keyscan` の出力から `(host フィールド, "type base64")` を取り出す。コメント行（`# …`）は捨てる。
+/// Extracts `(host field, "type base64")` pairs from `ssh-keyscan` output. Comment lines (`# …`) are discarded.
 pub fn parse_keyscan(text: &str) -> Vec<(String, String)> {
     text.lines()
         .filter_map(|l| {
@@ -282,8 +282,8 @@ pub fn parse_keyscan(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// 0.2.1: 上流や踏み台（ProxyJump 先）のホスト鍵を取り、その上流の known_hosts に追記する。
-/// fingerprint を表示するので、操作者は公開されている値と照合してから信頼すること（TOFU）。
+/// 0.2.1: fetches the host key of an upstream or a bastion (ProxyJump target) and appends it to that upstream's known_hosts.
+/// The fingerprint is printed so the operator can compare it against the published value before trusting it (TOFU).
 pub fn keyscan(path: &Path, host: &str, port: u16, upstream: Option<&str>) -> anyhow::Result<()> {
     let r = resolve(path)?;
     let up = pick_upstream(&r, upstream)?;
@@ -510,7 +510,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             String::new()
         }
     );
-    // 0.1.9: タグ / 削除 / 権限は案件の既定 + repo の差分。repo ごとの実効値は下の repos に出す
+    // 0.1.9: tags, deletion and permissions are the project default plus the repo's overrides. The effective per-repo values are listed under repos below
     if let Some(px) = &r.proxy {
         println!("{}{}", pad_label(&t("op.check.proxy"), 14), px.url);
     }
@@ -530,7 +530,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
     if !denied.is_empty() {
         println!("{}", t("op.check.deny_note"));
     }
-    // 0.2.1: 上流層（案件既定と repo の間）
+    // 0.2.1: the upstream layer (between the project default and the repo)
     if !r.relay.project.upstreams.is_empty() {
         println!("\n{}", t("op.check.upstreams"));
         for (name, up) in &r.relay.project.upstreams {

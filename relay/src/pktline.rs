@@ -1,20 +1,22 @@
-//! git pkt-line の解析・組み立て・ストリーム読み取り。
+//! Parsing, encoding and streaming of git pkt-lines.
 //!
-//! 設計上の要点:
-//!   - 借用でゼロコピー。`RefUpdate` は元バッファを指すだけで String を作らない
-//!   - **入力長に上限**を設ける。1 pkt は 65520 バイト（git の上限）、区間は呼び出し側が cap を渡す。
-//!     「長さを検証せずに巨大なメモリを要求する」型の問題（RUSTSEC-2026-0154 と同型）を防ぐ
-//!   - **fail-closed**。解釈できないコマンド行は読み飛ばさずエラーにする
-//!   - ref 名の差し替えは部分文字列置換ではなく、パース済みフィールドから再エンコードする
-//!     （`refs/for/main` が `refs/for/main2` に一致する事故を防ぐ）
-//!   - `PktReader` は flush 後の残余バイトを `into_parts()` で返す。呼び出し側は必ず前送すること
+//! Design notes:
+//!   - Zero-copy via borrows: `RefUpdate` points into the original buffer and never allocates a String
+//!   - **Input lengths are capped**: a single pkt is at most 65520 bytes (git's limit), and for a
+//!     section the caller supplies the cap. This rules out the "allocate huge memory from an
+//!     unvalidated length" class of bug (the same shape as RUSTSEC-2026-0154)
+//!   - **fail-closed**: a command line we cannot interpret is an error, never silently skipped
+//!   - Renaming a ref re-encodes from the parsed fields instead of doing a substring replacement
+//!     (so `refs/for/main` cannot accidentally match `refs/for/main2`)
+//!   - `PktReader` returns the bytes left over after the flush from `into_parts()`; the caller must
+//!     always forward them
 
 use std::fmt;
 
 use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-/// git が許す 1 pkt-line の最大長（ヘッダ込み）。
+/// Largest pkt-line git allows, header included.
 pub const MAX_PKT_LEN: usize = 65520;
 pub const FLUSH: &[u8] = b"0000";
 pub const DELIM: &[u8] = b"0001";
@@ -68,7 +70,7 @@ impl From<PktError> for std::io::Error {
     }
 }
 
-/// 1 つの pkt-line。`Data` のスライスはヘッダを除いたペイロード。
+/// A single pkt-line. The slice in `Data` is the payload with the header stripped.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Pkt<'a> {
     Flush,
@@ -89,9 +91,9 @@ fn parse_hex4(hdr: &[u8]) -> Option<usize> {
     Some(n)
 }
 
-/// バッファ先頭の pkt-line を 1 つ解析する。
+/// Parses one pkt-line from the front of the buffer.
 ///
-/// `Ok(None)` はバイト不足（もっと読む必要がある）。`Ok(Some((pkt, n)))` の `n` はヘッダ込みの消費バイト数。
+/// `Ok(None)` means more bytes are needed. In `Ok(Some((pkt, n)))`, `n` is the number of bytes consumed, header included.
 pub fn parse_one(buf: &[u8]) -> Result<Option<(Pkt<'_>, usize)>, PktError> {
     if buf.len() < 4 {
         return Ok(None);
@@ -129,7 +131,7 @@ fn shift(e: PktError, by: usize) -> PktError {
     }
 }
 
-/// スライス上の pkt-line を 1 行ずつ返すイテレータ。flush-pkt で終わる（flush 自身は返さない）。
+/// Iterator over the pkt-lines in a slice. It stops at the flush-pkt, which it does not yield.
 pub struct PktLines<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -137,18 +139,18 @@ pub struct PktLines<'a> {
 }
 
 impl<'a> PktLines<'a> {
-    /// flush を含めて消費したバイト数。
+    /// Bytes consumed, including the flush.
     pub fn consumed(&self) -> usize {
         self.pos
     }
-    /// flush-pkt を見たか。
+    /// Whether a flush-pkt was seen.
     pub fn saw_flush(&self) -> bool {
         self.done
     }
 }
 
 impl<'a> Iterator for PktLines<'a> {
-    /// (行の開始位置, ペイロード)
+    /// (offset where the line starts, payload)
     type Item = Result<(usize, &'a [u8]), PktError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -171,7 +173,7 @@ impl<'a> Iterator for PktLines<'a> {
                 Some(Ok((start, payload)))
             }
             Ok(Some((Pkt::Delim, n))) | Ok(Some((Pkt::ResponseEnd, n))) => {
-                // コマンド部には現れない。素通しせず不正扱い
+                // These never appear in the command section; treat them as malformed rather than passing them through unchanged
                 self.pos += n;
                 self.done = true;
                 Some(Err(PktError::MalformedCommand {
@@ -204,9 +206,9 @@ pub fn pkt_lines(buf: &[u8]) -> PktLines<'_> {
     }
 }
 
-// ---- receive-pack コマンド部 ----
+// ---- receive-pack command section ----
 
-/// ref 更新要求。すべて元バッファへの借用。
+/// A ref update request. Every field borrows from the original buffer.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RefUpdate<'a> {
     pub old: &'a str,
@@ -215,7 +217,7 @@ pub struct RefUpdate<'a> {
 }
 
 impl<'a> RefUpdate<'a> {
-    /// `refs/for/<base>` なら base を返す。
+    /// Returns the base branch if the ref is `refs/for/<base>`.
     pub fn refs_for_base(&self) -> Option<&'a str> {
         self.name
             .strip_prefix("refs/for/")
@@ -229,21 +231,21 @@ impl<'a> RefUpdate<'a> {
     }
 }
 
-/// コマンド部の 1 行。順序を保って再エンコードする。
+/// One line of the command section. Re-encoded in the original order.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum CommandLine<'a> {
     Update(RefUpdate<'a>),
-    /// `shallow <sha>`（shallow clone からの push）。無変更で通す
+    /// `shallow <sha>`, from a push out of a shallow clone. Forwarded unchanged
     Shallow(&'a str),
 }
 
-/// 解析済みのコマンド部。
+/// A parsed command section.
 #[derive(Debug, PartialEq, Eq)]
 pub struct CommandSection<'a> {
     pub lines: Vec<CommandLine<'a>>,
-    /// 先頭行の NUL 以降（capabilities）。末尾の改行は除く
+    /// Everything after the NUL on the first line (the capabilities), with any trailing newline stripped
     pub caps: Option<&'a [u8]>,
-    /// flush を含めて消費したバイト数
+    /// Bytes consumed, including the flush
     pub consumed: usize,
 }
 
@@ -260,7 +262,7 @@ fn is_hex_oid(s: &str) -> bool {
     (s.len() == 40 || s.len() == 64) && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// `git check-ref-format` 相当の検証。`refs/` で始まることも要求する（fail-closed）。
+/// Validation equivalent to `git check-ref-format`, plus a fail-closed requirement that the name start with `refs/`.
 pub fn validate_ref_name(name: &str) -> Result<(), &'static str> {
     if name.is_empty() {
         return Err("empty");
@@ -299,9 +301,9 @@ pub fn validate_ref_name(name: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// receive-pack のコマンド部（flush まで）を解析する。
+/// Parses the receive-pack command section, up to and including the flush.
 ///
-/// 解釈できない行はエラー（読み飛ばさない）。コマンドが 0 個（flush のみ）は `Ok` で `lines` が空。
+/// A line we cannot interpret is an error, never skipped. An empty command list (just a flush) is `Ok` with no `lines`.
 pub fn parse_receive_pack(data: &[u8]) -> Result<CommandSection<'_>, PktError> {
     let mut lines = Vec::new();
     let mut caps = None;
@@ -313,7 +315,7 @@ pub fn parse_receive_pack(data: &[u8]) -> Result<CommandSection<'_>, PktError> {
             Some(i) => (&payload[..i], Some(&payload[i + 1..])),
             None => (payload, None),
         };
-        // git は capabilities を「最初の update コマンド行」に付ける（shallow 行には付けない）
+        // git attaches the capabilities to the first update command line, never to a shallow line
         let is_shallow = body.starts_with(b"shallow ");
         if let Some(c) = cap_part {
             if saw_update || is_shallow {
@@ -395,7 +397,7 @@ fn strip_nl(b: &[u8]) -> &[u8] {
     }
 }
 
-/// 1 pkt-line を組み立てる（ヘッダ付き）。
+/// Builds one pkt-line, header included.
 pub fn encode(payload: &[u8]) -> Result<Vec<u8>, PktError> {
     let mut out = Vec::with_capacity(payload.len() + 4);
     encode_into(&mut out, payload)?;
@@ -412,7 +414,7 @@ pub fn encode_into(out: &mut Vec<u8>, payload: &[u8]) -> Result<(), PktError> {
     Ok(())
 }
 
-/// コマンド部を再エンコードする。先頭行に capabilities を付け、末尾に flush を置く。
+/// Re-encodes the command section: the capabilities go on the first line and a flush terminates it.
 pub fn encode_commands(
     lines: &[CommandLine<'_>],
     caps: Option<&[u8]>,
@@ -447,7 +449,7 @@ pub fn encode_commands(
     Ok(out)
 }
 
-/// capabilities 文字列（空白区切り）に `name` または `name=value` が含まれるか。
+/// Whether the space-separated capabilities string contains `name` or `name=value`.
 pub fn caps_contain(caps: &[u8], name: &str) -> bool {
     caps.split(|&b| b == b' ' || b == b'\n')
         .filter(|w| !w.is_empty())
@@ -457,9 +459,9 @@ pub fn caps_contain(caps: &[u8], name: &str) -> bool {
         })
 }
 
-// ---- ストリーム読み取り ----
+// ---- streaming reads ----
 
-/// 所有権付きの 1 pkt。`raw` はヘッダ込み（素通し転送に使う）。
+/// An owned pkt. `raw` includes the header, so the frame can be passed through unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
     Flush,
@@ -469,7 +471,7 @@ pub enum Frame {
 }
 
 impl Frame {
-    /// ヘッダ込みの生バイト。
+    /// The raw bytes, header included.
     pub fn raw(&self) -> Bytes {
         match self {
             Frame::Flush => Bytes::from_static(FLUSH),
@@ -478,7 +480,7 @@ impl Frame {
             Frame::Data(raw) => raw.clone(),
         }
     }
-    /// ペイロード（Data 以外は空）。
+    /// The payload; empty for anything but `Data`.
     pub fn payload(&self) -> &[u8] {
         match self {
             Frame::Data(raw) => &raw[4..],
@@ -490,7 +492,7 @@ impl Frame {
     }
 }
 
-/// 非同期ストリームから pkt-line を読む。
+/// Reads pkt-lines from an async stream.
 pub struct PktReader<R> {
     inner: R,
     buf: BytesMut,
@@ -504,7 +506,7 @@ impl<R: AsyncRead + Unpin> PktReader<R> {
         }
     }
 
-    /// 既に読み込んである残余バイトを先頭に置いて始める。
+    /// Starts with already-read leftover bytes at the front of the buffer.
     pub fn with_leftover(inner: R, leftover: BytesMut) -> Self {
         Self {
             inner,
@@ -512,7 +514,7 @@ impl<R: AsyncRead + Unpin> PktReader<R> {
         }
     }
 
-    /// 内側のリーダと未消費バイトを返す。**未消費バイトは呼び出し側が必ず前送する。**
+    /// Returns the inner reader and the unconsumed bytes. **The caller must forward those bytes.**
     pub fn into_parts(self) -> (R, BytesMut) {
         (self.inner, self.buf)
     }
@@ -525,7 +527,7 @@ impl<R: AsyncRead + Unpin> PktReader<R> {
         self.inner.read_buf(&mut self.buf).await
     }
 
-    /// 次の pkt を読む。きれいな EOF（未消費バイトなし）なら `Ok(None)`。途中で EOF ならエラー。
+    /// Reads the next pkt. A clean EOF, with nothing unconsumed, gives `Ok(None)`; an EOF mid-pkt is an error.
     pub async fn next(&mut self) -> std::io::Result<Option<Frame>> {
         loop {
             match parse_one(&self.buf)? {
@@ -563,9 +565,9 @@ impl<R: AsyncRead + Unpin> PktReader<R> {
         }
     }
 
-    /// flush-pkt までの区間を生バイトで返す（flush を含む）。`cap` を超えたら即エラー。
+    /// Returns the raw bytes up to and including the flush-pkt. Exceeding `cap` errors immediately.
     pub async fn read_section(&mut self, cap: usize) -> std::io::Result<Vec<u8>> {
-        let mut end = 0usize; // 解析済みバイト数
+        let mut end = 0usize; // bytes parsed so far
         loop {
             match parse_one(&self.buf[end..])? {
                 Some((Pkt::Flush, n)) => {
@@ -693,22 +695,22 @@ mod tests {
             .collect();
         let out = encode_commands(&renamed, sec.caps).unwrap();
 
-        // 書き換え後も正しくパースできる
+        // the rewritten section still parses
         let re = parse_receive_pack(&out).unwrap();
         assert_eq!(
             re.updates().next().unwrap().name,
             "refs/heads/sekimore/main-1234567"
         );
-        // ヘッダが再計算されている
+        // the header length was recalculated
         assert_ne!(&out[..4], &data[..4]);
-        // capabilities が生きている
+        // the capabilities survived
         assert_eq!(re.caps, Some(&b"report-status"[..]));
         assert!(out.ends_with(FLUSH));
     }
 
     #[test]
     fn rename_does_not_touch_similar_refs() {
-        // 旧実装の部分文字列置換だと refs/for/main が refs/for/main2 に一致した
+        // the old substring-replacement implementation matched refs/for/main against refs/for/main2
         let mut data = pkt(&format!("{ZERO} {SHA} refs/for/main2\n"));
         data.extend_from_slice(FLUSH);
         let sec = parse_receive_pack(&data).unwrap();
@@ -814,7 +816,7 @@ mod tests {
         let sec = parse_receive_pack(&data).unwrap();
         assert_eq!(sec.lines.len(), 2);
         assert!(matches!(sec.lines[0], CommandLine::Shallow(_)));
-        // caps は最初の update 行（2 行目）に付く。git は shallow 行に caps を付けない
+        // the caps belong to the first update line (the second one); git never puts caps on a shallow line
         assert_eq!(sec.caps, Some(&b"report-status"[..]));
         let out = encode_commands(&sec.lines, sec.caps).unwrap();
         assert_eq!(parse_receive_pack(&out).unwrap().lines, sec.lines);
@@ -827,7 +829,7 @@ mod tests {
             parse_one(data),
             Err(PktError::TooLong { len: 0xfff1, .. })
         ));
-        // 境界: ちょうど MAX_PKT_LEN は OK
+        // boundary: exactly MAX_PKT_LEN is fine
         let payload = vec![b'a'; MAX_PKT_LEN - 4];
         let enc = encode(&payload).unwrap();
         assert!(matches!(
@@ -856,7 +858,7 @@ mod tests {
         data.extend_from_slice(FLUSH);
         data.extend_from_slice(b"PACKDATA-after-flush");
 
-        // 1 バイトずつ届く遅いストリーム
+        // a slow stream that delivers only a few bytes at a time
         let (mut w, r) = tokio::io::duplex(4);
         let feed = data.clone();
         tokio::spawn(async move {
@@ -869,7 +871,7 @@ mod tests {
         let section = reader.read_section(1024).await.unwrap();
         assert_eq!(&section[..], &data[..section.len()]);
         assert!(section.ends_with(FLUSH));
-        // 残余（pack 先頭）が失われていない
+        // the leftover bytes, the start of the pack, are not lost
         let (mut inner, leftover) = reader.into_parts();
         let mut rest = leftover.to_vec();
         inner.read_to_end(&mut rest).await.unwrap();
@@ -887,7 +889,7 @@ mod tests {
         let err = reader.read_section(200).await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("exceeds 200"));
-        // 境界ちょうどは OK
+        // exactly at the boundary is fine
         let mut reader = PktReader::new(&data[..]);
         assert!(reader.read_section(data.len()).await.is_ok());
     }
@@ -902,7 +904,7 @@ mod tests {
         assert_eq!(f.raw(), Bytes::from(pkt("hello\n")));
         assert!(reader.next().await.unwrap().unwrap().is_flush());
         assert!(reader.next().await.unwrap().is_none());
-        // 途中 EOF はエラー
+        // an EOF mid-pkt is an error
         let mut reader = PktReader::new(&b"0009he"[..]);
         assert!(reader.next().await.is_err());
     }

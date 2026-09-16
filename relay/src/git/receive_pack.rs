@@ -1,14 +1,14 @@
-//! `git-receive-pack`（push）の中継。
+//! Relaying `git-receive-pack` (push).
 //!
-//! Go PoC はクライアント入力を全部読んでから上流を起動していた。receive-pack はサーバが先に
-//! advertisement を送るプロトコルなので、実 git とはデッドロックする。ここでは:
+//! The Go PoC read all of the client's input before spawning the upstream. In receive-pack the server sends its
+//! advertisement first, so that deadlocks against a real git. Instead we do:
 //!
-//!   A  上流 advertisement をクライアントへ無変更転送（ref → sha を記録）
-//!   B  クライアントのコマンド部（flush まで、上限付き）だけを解析・書き換えて上流へ
-//!   B2 push-options 区間は素通し
-//!   C  pack データは生ストリーム転送（バッファしない）
-//!   D  上流の report-status を元の ref 名に戻してクライアントへ
-//!   E  成功したら `refs/for` ごとに PR を作る
+//!   A  forward the upstream advertisement to the client unchanged (recording ref → sha)
+//!   B  parse and rewrite only the client's command section (up to the flush, with a size cap) and send it upstream
+//!   B2 the push-options section is passed through unchanged
+//!   C  stream the pack data raw, without buffering
+//!   D  map the upstream report-status back to the original ref names and send it to the client
+//!   E  on success, create a PR for each `refs/for`
 
 use std::collections::HashMap;
 
@@ -24,7 +24,7 @@ use crate::pktline::{
 };
 use crate::policy::{Denied, GitAuthorized, Project};
 
-/// エージェントのブランチ名前空間。
+/// The agent's branch namespace.
 pub const SEKIMORE_BRANCH_PREFIX: &str = "sekimore/";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +37,7 @@ pub enum OwnedCommand {
     Shallow(String),
 }
 
-/// `refs/for/<base>` 1 件に対応する PR 作成の意図。
+/// The intent to create one PR, corresponding to a single `refs/for/<base>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrIntent {
     pub client_ref: String,
@@ -80,7 +80,7 @@ fn zero_like(sha: &str) -> String {
     "0".repeat(sha.len())
 }
 
-/// advertisement の 1 行 `<sha> <ref>[\0caps]` を分解する。
+/// Split apart one advertisement line, `<sha> <ref>[\0caps]`.
 pub fn parse_advert_line(payload: &[u8]) -> Option<(String, String, Option<Vec<u8>>)> {
     let (body, caps) = match payload.iter().position(|&b| b == 0) {
         Some(i) => (&payload[..i], Some(payload[i + 1..].to_vec())),
@@ -102,7 +102,7 @@ pub fn parse_advert_line(payload: &[u8]) -> Option<(String, String, Option<Vec<u
     ))
 }
 
-/// コマンド部をポリシーに照らして書き換え計画を作る。拒否はここで（上流に何も送る前に）決まる。
+/// Check the command section against policy and build the rewrite plan. A denial is decided here, before anything is sent upstream.
 pub fn plan_push(
     project: &Project,
     auth: &GitAuthorized<'_>,
@@ -129,7 +129,7 @@ pub fn plan_push(
                     reason: "refs/for/* cannot be deleted",
                 });
             }
-            // pr:create + read-write + base 許可（Authorized はここでは捨てる。E 段で再取得する）
+            // pr:create + read-write + an allowed base (the Authorized is dropped here and re-obtained in stage E)
             project.authorize_pr(auth.repo(), base)?;
             let head_branch = format!("{SEKIMORE_BRANCH_PREFIX}{base}-{}", short_sha(u.new));
             let upstream_ref = format!("refs/heads/{head_branch}");
@@ -143,7 +143,7 @@ pub fn plan_push(
                     reason: "two refs/for updates map to the same branch",
                 });
             }
-            // 同じコミットの再 push は既存ブランチの更新にする（"already exists" にしない）
+            // Re-pushing the same commit updates the existing branch rather than failing with "already exists".
             let old = adv
                 .get(&upstream_ref)
                 .cloned()
@@ -235,7 +235,7 @@ pub async fn relay_receive_pack(
 ) -> RelayOutcome {
     let wd = Watchdog::new(ctx.limits.idle_timeout);
     wd.touch();
-    // 上流 stderr は最後にまとめてクライアントへ（relay 自身の行は "sekimore: " 接頭辞）
+    // Upstream stderr goes to the client in one batch at the end; the relay's own lines carry the "sekimore: " prefix.
     let stderr_task = proc.stderr.take().map(|mut es| {
         let w = wd.clone();
         tokio::spawn(async move {
@@ -366,9 +366,9 @@ pub async fn relay_receive_pack(
                 &[("repo", auth.repo()), ("project", auth.project())],
             );
             if report_status {
-                // client は report-status を待っているので、切断ではなく `ng` で拒否を返す
-                // （git は "! [remote rejected] … (reason)" と表示し、"remote end hung up" にならない）。
-                // client は commands の直後に pack を送り始めるので、読み捨てないと window が詰まって report を読めない
+                // The client is waiting for a report-status, so return the denial as an `ng` rather than dropping the connection
+                // (git then prints "! [remote rejected] … (reason)" instead of "remote end hung up").
+                // The client starts sending the pack right after the commands, so unless we drain it the window fills up and it never reads the report.
                 let report = reject_report(&section, &msg, sideband);
                 let (stdin, _leftover) = cl_reader.into_parts();
                 let _ = io.stdout.write_all(&report).await;
@@ -570,8 +570,8 @@ pub async fn relay_receive_pack(
     }
 }
 
-/// ポリシーで拒否した push への report-status: `unpack ok` + 全 ref に `ng <ref> <reason>`。
-/// side-band-64k を要求されていれば band 1 で包む（1 pkt ずつ。理由が長くても上限を超えない）。
+/// The report-status for a push denied by policy: `unpack ok` plus an `ng <ref> <reason>` for every ref.
+/// If side-band-64k was requested, wrap it in band 1, one pkt at a time, so a long reason still stays under the limit.
 fn reject_report(section: &CommandSection<'_>, reason: &str, sideband: bool) -> Vec<u8> {
     let reason = reason.replace(['\n', '\r'], " ");
     let mut inner: Vec<Vec<u8>> = vec![b"unpack ok\n".to_vec()];
@@ -598,7 +598,7 @@ fn reject_report(section: &CommandSection<'_>, reason: &str, sideband: bool) -> 
     out
 }
 
-/// stderr だけを借りて報告する（client 側リーダが stdin を借りている間に使う）。
+/// Report through stderr alone, for use while the client-side reader holds stdin.
 async fn say_err(stderr: &mut Box<dyn tokio::io::AsyncWrite + Send + Unpin + '_>, msg: &str) {
     let _ = stderr
         .write_all(format!("sekimore: {msg}\n").as_bytes())
@@ -606,7 +606,7 @@ async fn say_err(stderr: &mut Box<dyn tokio::io::AsyncWrite + Send + Unpin + '_>
     let _ = stderr.flush().await;
 }
 
-/// 上流 stderr（別タスクで収集）をクライアントへ流す。
+/// Forward the upstream stderr (collected by a separate task) to the client.
 async fn flush_upstream_stderr(io: &mut GitIo<'_>, task: Option<tokio::task::JoinHandle<Vec<u8>>>) {
     if let Some(t) = task {
         if let Ok(sink) = t.await {
@@ -618,7 +618,7 @@ async fn flush_upstream_stderr(io: &mut GitIo<'_>, task: Option<tokio::task::Joi
     }
 }
 
-/// PR を作る。成功（既存を含む）なら true。
+/// Create the PR. Returns true on success, including when the PR already exists.
 async fn create_pr(
     io: &mut GitIo<'_>,
     ctx: &GitContext,
@@ -636,7 +636,7 @@ async fn create_pr(
         .await;
         return false;
     };
-    // 証明を再取得（plan_push で検査済み。ここで失敗するのはポリシーが変わった場合のみ）
+    // Re-obtain the proof (plan_push already checked it; this can only fail if the policy changed since).
     let api_auth = match ctx.project.authorize_pr_for(auth, &pr.base) {
         Ok(a) => a,
         Err(d) => {
@@ -780,7 +780,7 @@ mod tests {
         )
     }
 
-    /// 0.1.9: タグ / 削除は repo の policy (project.tags / repos[].tags, delete) で決まる
+    /// 0.1.9: tags and deletes are governed by the repo's policy (project.tags / repos[].tags, delete)
     fn plan_with_tags(
         lines: &[String],
         adv: &HashMap<String, String>,
@@ -818,7 +818,7 @@ mod tests {
                 name: "refs/heads/sekimore/main-abcdef1".into()
             }
         );
-        // 再エンコードして解析できる。caps が保持される
+        // It can be re-encoded and parsed again, with caps preserved.
         let enc = pl.encode().unwrap();
         let re = parse_receive_pack(&enc).unwrap();
         assert_eq!(
@@ -865,7 +865,7 @@ mod tests {
             ),
             Err(Denied::BaseNotAllowed { .. })
         ));
-        // pr:create 無し
+        // Without pr:create
         let p = Project::new("case-a").with_repo("LibOrg/awesome-lib", Mode::ReadWrite, &["main"]);
         let auth = p
             .authorize_git(GitVerb::ReceivePack, "LibOrg/awesome-lib")
@@ -883,12 +883,12 @@ mod tests {
 
     #[test]
     fn direct_push_policy_is_fail_closed() {
-        // main への直接 push は既定拒否
+        // A direct push to main is denied by default.
         assert!(matches!(
             plan(&[format!("{ZERO} {SHA} refs/heads/main")], &HashMap::new()),
             Err(Denied::RefNotAllowed { .. })
         ));
-        // sekimore/* は許可
+        // sekimore/* is allowed.
         let pl = plan(
             &[format!("{SHA} {SHA2} refs/heads/sekimore/main-abcdef1")],
             &HashMap::new(),
@@ -896,12 +896,12 @@ mod tests {
         .unwrap();
         assert!(pl.prs.is_empty());
         assert_eq!(pl.commands.len(), 1);
-        // tag と削除は既定拒否
+        // Tags and deletes are denied by default.
         assert!(matches!(
             plan(&[format!("{ZERO} {SHA} refs/tags/v1")], &HashMap::new()),
             Err(Denied::RefNotAllowed { .. })
         ));
-        // allow_tags: true なら tag の push を許可、削除は allow_delete 次第
+        // With allow_tags: true a tag push is allowed; deletes still depend on allow_delete.
         let pl = plan_opts(
             &[format!("{ZERO} {SHA} refs/tags/v1")],
             &HashMap::new(),
@@ -919,7 +919,7 @@ mod tests {
             ),
             Err(Denied::DeleteNotAllowed { .. })
         ));
-        // tags は glob: ["v*"] なら v1 は通り release-1 は拒否
+        // tags are globs: with ["v*"], v1 passes and release-1 is denied.
         assert!(plan_with_tags(
             &[format!("{ZERO} {SHA} refs/tags/v1")],
             &HashMap::new(),

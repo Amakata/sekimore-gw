@@ -1,5 +1,5 @@
-//! SSH サーバの振る舞い: 未登録鍵の拒否、git 以外の exec 拒否、shell/pty/env/subsystem/direct-tcpip 拒否、
-//! ポリシー拒否が上流到達前に起きること、bootstrap で追記した鍵が再起動なしで通ること。
+//! SSH server behaviour: unregistered keys are denied, non-git exec is denied, shell/pty/env/subsystem/direct-tcpip
+//! are denied, policy denials happen before reaching the upstream, and a key appended by bootstrap works without a restart.
 
 mod common;
 
@@ -34,7 +34,7 @@ impl client::Handler for NoCheck {
     }
 }
 
-/// 上流に到達したら失敗するダミー。ポリシー拒否が上流の前で止まることを確かめる。
+/// A stub upstream that fails if it is ever reached, proving policy denials stop short of the upstream.
 struct FailingUpstream {
     reached: Arc<AtomicBool>,
 }
@@ -73,7 +73,7 @@ struct Server {
 async fn start(project: Project) -> Server {
     let dir = tempfile::tempdir().unwrap();
     let host_key = load_or_create_host_key(&dir.path().join("host_key")).unwrap();
-    // 2 回目の読み込みで同じ鍵が返る（生成→保存→読込）
+    // Loading a second time returns the same key (generate, persist, reload)
     let again = load_or_create_host_key(&dir.path().join("host_key")).unwrap();
     assert_eq!(host_key.public_key(), again.public_key());
     let keys = Arc::new(AuthorizedKeys::new(&dir.path().join("authorized_keys"), 8));
@@ -212,7 +212,7 @@ async fn policy_denials_happen_before_upstream() {
             "read-only",
         ),
     ] {
-        // 関所は 1 接続 1 exec（git と同じ）なのでコマンドごとに接続する
+        // The relay allows one exec per connection (same as git), so connect once per command
         let h = connect(s.addr, &key, "git").await.unwrap();
         let r = exec(&h, cmd).await;
         assert_eq!(r.status, Some(1), "{cmd}");
@@ -228,7 +228,7 @@ async fn policy_denials_happen_before_upstream() {
         "upstream must not be spawned for denied requests"
     );
 
-    // 許可されたリポジトリなら上流に到達する（このテストでは失敗するダミー）
+    // An allowed repository does reach the upstream (the stub that always fails, in this test)
     let h = connect(s.addr, &key, "git").await.unwrap();
     let r = exec(&h, "git-upload-pack 'LibOrg/awesome-lib.git'").await;
     assert_eq!(r.status, Some(1));
@@ -284,7 +284,7 @@ async fn direct_tcpip_and_second_exec_refused() {
 
     let first = exec(&h, "rm -rf /").await;
     assert_eq!(first.status, Some(1));
-    // 同じ接続で 2 回目の exec は channel_failure
+    // A second exec on the same connection gets channel_failure
     let second = exec(&h, "git-upload-pack 'LibOrg/awesome-lib.git'").await;
     assert!(second.failure, "second exec must be refused");
     assert!(!s.reached.load(Ordering::SeqCst));
@@ -298,7 +298,7 @@ async fn bootstrap_appended_key_authenticates_without_restart() {
         connect(s.addr, &key, "git").await.is_err(),
         "empty authorized_keys rejects everyone"
     );
-    // /bootstrap や add-key が追記した想定
+    // Simulates a key appended by /bootstrap or add-key
     s.keys.add(&key.public_key().to_openssh().unwrap()).unwrap();
     assert!(
         connect(s.addr, &key, "git").await.is_ok(),

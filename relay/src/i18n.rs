@@ -1,10 +1,10 @@
-//! CLI の文言（0.2.4）。`relay/locales/{en,ja}.json` をバイナリに埋め込み、実行時の言語で選ぶ。
+//! CLI strings (0.2.4). `relay/locales/{en,ja}.json` are embedded in the binary and selected by the runtime language.
 //!
-//! 言語は `SEKIMORE_LANG` → `LC_ALL` → `LC_MESSAGES` → `LANG` の順で見て、`ja*` なら日本語、それ以外は英語。
-//! 足りないキーは英語に落ち、英語にも無ければキーをそのまま返す。
+//! The language comes from `SEKIMORE_LANG` → `LC_ALL` → `LC_MESSAGES` → `LANG`, in that order: `ja*` means Japanese, anything else English.
+//! A missing key falls back to English, and to the key itself if English lacks it too.
 //!
-//! 対象は人間（操作者）向けの出力と `--help`。エージェントに返す拒否理由（`sekimore: …`）と監査ログは
-//! 英語のまま固定する（機械照合と AI の可読性のため）。
+//! This covers output aimed at humans (the operator) and `--help`. Denial reasons returned to agents (`sekimore: …`) and the audit log
+//! stay in English (for machine matching and AI readability).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -28,7 +28,7 @@ fn table(lang: &str) -> &'static HashMap<String, String> {
     }
 }
 
-/// `ja` / `ja_JP.UTF-8` / `ja-JP` → `ja`。対応外は None。`C` / `POSIX` も None。
+/// Maps `ja` / `ja_JP.UTF-8` / `ja-JP` → `ja`. Unsupported tags, as well as `C` and `POSIX`, give None.
 pub fn normalize(tag: &str) -> Option<&'static str> {
     let tag = tag.trim();
     if tag.is_empty() {
@@ -42,7 +42,7 @@ pub fn normalize(tag: &str) -> Option<&'static str> {
     SUPPORTED.iter().copied().find(|l| *l == primary)
 }
 
-/// 環境変数から言語を決める（環境の読み取り関数を渡す。テスト用）。
+/// Determines the language from the environment (the lookup function is injected for tests).
 pub fn lang_from(get: impl Fn(&str) -> Option<String>) -> &'static str {
     for var in ["SEKIMORE_LANG", "LC_ALL", "LC_MESSAGES", "LANG"] {
         if let Some(v) = get(var) {
@@ -54,12 +54,12 @@ pub fn lang_from(get: impl Fn(&str) -> Option<String>) -> &'static str {
     DEFAULT
 }
 
-/// 現在のプロセスの言語。
+/// The language of the current process.
 pub fn lang() -> &'static str {
     lang_from(|k| std::env::var(k).ok())
 }
 
-/// 指定した言語で文言を返す（無ければ英語 → キー）。
+/// Returns the string in the given language (falling back to English, then the key).
 pub fn t_in(lang: &str, key: &str) -> String {
     if let Some(s) = table(lang).get(key) {
         return s.clone();
@@ -72,12 +72,12 @@ pub fn t_in(lang: &str, key: &str) -> String {
     key.to_string()
 }
 
-/// 現在の言語で文言を返す。
+/// Returns the string in the current language.
 pub fn t(key: &str) -> String {
     t_in(lang(), key)
 }
 
-/// `{name}` を埋めて返す。
+/// Fills in `{name}` placeholders and returns the result.
 pub fn tf(key: &str, vars: &[(&str, &str)]) -> String {
     let mut s = t(key);
     for (name, value) in vars {

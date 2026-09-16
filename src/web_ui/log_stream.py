@@ -1,16 +1,20 @@
-"""ログのリアルタイム配信（WebSocket）を 1 本のポーラでまとめる（0.2.3）.
+"""Real-time log delivery (WebSocket) collapsed into a single poller (0.2.3).
 
-以前は WebSocket 接続ごとに 1 秒おきの全表走査（timestamp に索引なし）を行い、新着を 1 件ずつ送っていた。
-クライアントは 1 件受けるごとに /api/stats を叩くので、タブが非表示で溜まった分を戻ったときに 1 件ずつ処理して
-「ログが流れるのに時間がかかる」状態になっていた。
+Previously every WebSocket connection ran its own full-table scan once a second
+(timestamp had no index) and pushed new rows one at a time. The client hits /api/stats
+for each row it receives, so returning to a backgrounded tab meant chewing through the
+backlog row by row, which made the log feel slow to catch up.
 
-0.2.3 の形:
-- ポーラは 1 つ。1 秒おきに rowid カーソルで 3 テーブルの新着だけを読む（rowid は主キーなので索引済み）
-- 新着が 1 件でもあれば即時に 1 メッセージ ``{"type": "logs", "entries": [...]}`` を全クライアントに配信する
-  （1 件なら 1 件のまま = リアルタイム、多ければ配列でまとめて届く）
-- 接続時は ``{"type": "snapshot", "entries": [最新 N 件]}``。クライアントが ``{"type": "resync"}`` を送ってきたら
-  同じものを返す（タブが非表示から戻ったときに、溜まった分を捨てて最新から描き直すため）
-- クライアントが 1 つも居なければポーラは止まる
+How 0.2.3 works:
+- One poller. Once a second it reads only the new rows from the three tables using a
+  rowid cursor (rowid is the primary key, so it is already indexed).
+- As soon as there is at least one new row it broadcasts a single
+  ``{"type": "logs", "entries": [...]}`` message to every client (one row stays one row,
+  so it is still real-time; a burst arrives batched in the array).
+- On connect the client gets ``{"type": "snapshot", "entries": [latest N]}``, and the
+  same thing again whenever it sends ``{"type": "resync"}`` (so a tab coming back from
+  the background can drop its backlog and redraw from the latest state).
+- The poller stops once no clients remain.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ import aiosqlite
 SNAPSHOT_LIMIT = 50
 POLL_INTERVAL = 1.0
 
-# WebSocket で送るテーブルとカーソル名
+# Tables streamed over the WebSocket, and their cursor names
 _TABLES = ("dns", "fw", "proxy")
 
 
@@ -47,7 +51,7 @@ def _dns_entry(row: Any) -> dict[str, Any]:
 
 
 def _fw_entry(row: Any) -> dict[str, Any]:
-    # Docker 環境ではログ詳細が取れないことがある（カウンターモード）
+    # Under Docker the log details are sometimes unavailable (counter mode)
     src_ip = row[1] if row[1] and row[1] != "blocked" else None
     dst_ip = row[2] if row[2] and row[2] != "blocked" else None
     protocol = row[4] if row[4] and row[4] != "IP" else "IP"
@@ -126,15 +130,15 @@ _TABLE_NAMES = {"dns": "dns_queries", "fw": "firewall_blocks", "proxy": "proxy_l
 
 
 class LogStreamer:
-    """3 テーブルの新着を 1 本のポーラで読み、まとめて配信する."""
+    """Reads new rows from the three tables with a single poller and broadcasts them together."""
 
     def __init__(self, db_path: str, broadcast: Any, has_clients: Any) -> None:
-        """初期化.
+        """Initialize.
 
         Args:
-            db_path: SQLite のパス
-            broadcast: ``await broadcast(message: dict)`` で全クライアントに送る関数
-            has_clients: ``has_clients() -> bool``。偽になったらポーラを止める
+            db_path: Path to the SQLite database
+            broadcast: Function sending to every client via ``await broadcast(message: dict)``
+            has_clients: ``has_clients() -> bool``; the poller stops once it returns false
         """
         self.db_path = db_path
         self._broadcast = broadcast
@@ -143,10 +147,10 @@ class LogStreamer:
         self._cursors: dict[str, int] = {}
         self.poll_interval = POLL_INTERVAL
 
-    # ---- 接続時 ----
+    # ---- On connect ----
 
     async def snapshot(self, limit: int = SNAPSHOT_LIMIT) -> dict[str, Any]:
-        """最新 limit 件（3 テーブル合わせて、時刻の昇順）."""
+        """The latest `limit` entries across all three tables, oldest first."""
         entries: list[dict[str, Any]] = []
         db = await aiosqlite.connect(self.db_path)
         try:
@@ -157,17 +161,17 @@ class LogStreamer:
                     async for row in cursor:
                         entries.append(conv(row[1:]))
                     await cursor.close()
-                except Exception:  # テーブル未作成など
+                except Exception:  # e.g. the table does not exist yet
                     continue
         finally:
             await db.close()
         entries.sort(key=lambda e: e["timestamp"])
         return {"type": "snapshot", "entries": entries[-limit:]}
 
-    # ---- ポーラ ----
+    # ---- Poller ----
 
     def start(self) -> None:
-        """ポーラを起動する（既に動いていれば何もしない）."""
+        """Start the poller; a no-op if it is already running."""
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._run())
 
@@ -183,7 +187,7 @@ class LogStreamer:
         return self._task is not None and not self._task.done()
 
     async def _init_cursors(self, db: aiosqlite.Connection) -> None:
-        """起動時点の末尾から配信する（履歴は snapshot が担う）."""
+        """Start streaming from the tail as of startup; history comes from snapshot()."""
         for name in _TABLES:
             if name in self._cursors:
                 continue
@@ -198,7 +202,7 @@ class LogStreamer:
                 self._cursors[name] = 0
 
     async def poll_once(self, db: aiosqlite.Connection) -> list[dict[str, Any]]:
-        """新着を読んでカーソルを進める。時刻の昇順で返す."""
+        """Read new rows and advance the cursors. Returns them oldest first."""
         await self._init_cursors(db)
         entries: list[dict[str, Any]] = []
         for name, (sql, conv) in _QUERIES.items():
@@ -208,7 +212,7 @@ class LogStreamer:
                     self._cursors[name] = max(self._cursors[name], int(row[0]))
                     entries.append(conv(row[1:]))
                 await cursor.close()
-            except Exception:  # テーブル未作成（proxy 無効など）
+            except Exception:  # table does not exist (e.g. the proxy is disabled)
                 continue
         entries.sort(key=lambda e: e["timestamp"])
         return entries
@@ -222,7 +226,7 @@ class LogStreamer:
                 await asyncio.sleep(self.poll_interval)
                 try:
                     entries = await self.poll_once(db)
-                except Exception as e:  # DB が一時的にロックされた等。次の周期で再試行
+                except Exception as e:  # e.g. the DB is briefly locked; retry next cycle
                     print(f"Warning: log stream poll error: {e}")
                     continue
                 if entries:
@@ -232,16 +236,16 @@ class LogStreamer:
 
 
 async def _pragmas(db: aiosqlite.Connection) -> None:
-    """読み取り側の接続でも書き込みと衝突しないように（WAL は DNSMapping が設定済み）."""
-    # PRAGMA は 1 行返す。cursor を閉じずに置くと statement が開いたままになり、この接続の読み取りが
-    # 古いスナップショットに固定される（新着が見えなくなる）ので必ず閉じる
+    """Keep reader connections from colliding with writers (DNSMapping already set WAL)."""
+    # A PRAGMA returns a row. Leaving the cursor open leaves the statement open, which
+    # pins this connection's reads to a stale snapshot and hides new rows, so close it.
     with contextlib.suppress(Exception):
         cursor = await db.execute("PRAGMA busy_timeout=5000")
         await cursor.close()
 
 
 def parse_client_message(text: str) -> str | None:
-    """クライアントからのメッセージ種別（"resync" など）。壊れていれば None."""
+    """The message type sent by a client ("resync" etc.), or None if it is malformed."""
     try:
         obj = json.loads(text)
     except (TypeError, ValueError):

@@ -1,7 +1,7 @@
-//! 使い捨て SSH 鍵（エージェント側）の公開鍵リスト。
+//! Public key list for the agent's disposable SSH keys.
 //!
-//! `/data/relay/authorized_keys`（OpenSSH 形式）。`POST /bootstrap` や `add-key` が追記するので、
-//! mtime / サイズの変化を見て再読込する（再起動なしで有効になる）。
+//! Stored at `/data/relay/authorized_keys` (OpenSSH format). `POST /bootstrap` and `add-key` append to it,
+//! so the file is reloaded whenever its mtime or size changes (new keys take effect without a restart).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -58,7 +58,7 @@ pub fn fingerprint(key: &PublicKey) -> String {
     key.fingerprint(HashAlg::Sha256).to_string()
 }
 
-/// 1 行の公開鍵を解析する。options 付き行（`no-pty ssh-ed25519 …`）や秘密鍵は拒否される。
+/// Parses a single public key line. Lines with options (`no-pty ssh-ed25519 …`) and private keys are rejected.
 pub fn parse_public_key(line: &str) -> Result<PublicKey, AddError> {
     let line = line.trim();
     if line.is_empty() || line.contains('\n') {
@@ -124,7 +124,7 @@ impl AuthorizedKeys {
         }
     }
 
-    /// 登録済みか。ファイルが変わっていれば読み直す。
+    /// Whether the key is registered. Reloads the file if it has changed.
     pub fn contains(&self, key: &PublicKey) -> bool {
         self.refresh();
         self.cache
@@ -139,7 +139,7 @@ impl AuthorizedKeys {
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).count
     }
 
-    /// 公開鍵を追記する（冪等）。
+    /// Appends a public key (idempotent).
     pub fn add(&self, line: &str) -> Result<Added, AddError> {
         let key = parse_public_key(line)?;
         let fp = fingerprint(&key);
@@ -195,7 +195,7 @@ mod tests {
         ));
         assert!(ak.contains(&k1));
         assert_eq!(ak.count(), 1);
-        // 別プロセスが追記した想定
+        // Simulate another process appending
         let k2 = gen();
         let mut f = std::fs::OpenOptions::new()
             .append(true)
@@ -204,7 +204,7 @@ mod tests {
         use std::io::Write;
         writeln!(f, "{}", k2.to_openssh().unwrap()).unwrap();
         drop(f);
-        // mtime の粒度に負けないよう少し待つ
+        // Wait a moment so the change is visible at mtime granularity
         std::thread::sleep(std::time::Duration::from_millis(20));
         assert!(ak.contains(&k2));
         assert_eq!(ak.count(), 2);

@@ -1,8 +1,8 @@
-//! `serve`: SSH（git）+ HTTP（API）+ 443 passthrough を起動する。
+//! `serve`: starts SSH (git), HTTP (the API) and the 443 passthrough.
 //!
-//! 0.2.0: git-relay ドメイン（上流）ごとに SSH listener を 1 本ずつ持つ。SSH の exec にはホスト名が
-//! 無いので、接続を受けたポートで上流を決め、その上流専用の `GitContext`（上流 git / GitHub client /
-//! known_hosts）でセッションを処理する。上流が 1 つなら 0.1.x と同じ構成になる。
+//! 0.2.0: one SSH listener per git-relay domain (i.e. per upstream). An SSH exec carries no hostname,
+//! so the upstream is determined by the port the connection arrived on, and the session is handled with that
+//! upstream's own `GitContext` (upstream git, GitHub client, known_hosts). With a single upstream this is the same setup as 0.1.x.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
@@ -51,7 +51,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         MAX_AUTHORIZED_KEYS,
     ));
 
-    // 起動を止めない警告（agent / keys。上流ごとのものは下のループで）
+    // Warnings that do not stop startup (agent / keys; the per-upstream ones are in the loop below)
     let sock = auth_sock_from_env();
     match preflight_agent(sock.as_deref()).await {
         Ok(n) => log::info!("ssh-agent: {n} identities"),
@@ -61,7 +61,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         log::warn!("authorized_keys is empty; agents must bootstrap (POST /bootstrap) or the operator must `add-key`");
     }
 
-    // 上流ごと: GitHub client / 上流 git / SSH listener。russh 設定・鍵・セッション上限は共有
+    // Per upstream: GitHub client, upstream git, SSH listener. The russh config, keys and session limit are shared
     let ssh_config = Arc::new(server_config(host_key, r.relay.limits.session_timeout));
     let sessions = Arc::new(Semaphore::new(r.relay.limits.max_sessions.max(1)));
     let mut githubs: HashMap<String, Arc<GitHub>> = HashMap::new();
@@ -138,7 +138,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         r.relay.bootstrap
     );
 
-    // 443: 複数上流なら ClientHello の SNI で上流を選ぶ。無い / 一致しなければ既定上流
+    // 443: with multiple upstreams, pick by the ClientHello SNI; fall back to the default when absent or unmatched
     let pt = Arc::new(Passthrough {
         upstream: r.upstream.clone(),
         port: 443,
@@ -213,7 +213,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `/bootstrap` の応答に載せる全 git ドメイン（先頭が既定上流）。
+/// Every git domain to report in the `/bootstrap` response (the first is the default upstream).
 fn git_domains(r: &Resolved) -> Vec<GitDomain> {
     r.upstreams
         .iter()

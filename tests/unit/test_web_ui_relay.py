@@ -1,4 +1,4 @@
-"""Web UI の Relay タブ API（/api/relay/*）のテスト — /data/relay を読むだけで変更系は無い."""
+"""Tests for the Web UI Relay tab API (/api/relay/*) — read-only over /data/relay, no mutations."""
 
 import json
 from pathlib import Path
@@ -158,7 +158,7 @@ def describe_relay_api():
         assert files["upstream_token"]["present"] is True and "count" in files["upstream_token"]
         assert files["host_key"]["present"] is False
         assert data["bootstrap_disabled"] is False
-        # 秘密はレスポンスに含まれない
+        # Secrets never make it into the response
         assert "gho_secret" not in json.dumps(data)
 
     def it_lists_tokens_without_hashes_newest_first(tmp_path):
@@ -171,7 +171,7 @@ def describe_relay_api():
         assert [t["label"] for t in tokens] == ["skm_aaaaaaaa", "skm_bbbbbbbb", "skm_cccccccc"]
         assert [t["state"] for t in tokens] == ["active", "revoked", "expired"]
         assert tokens[0]["use_count"] == 7 and tokens[0]["last_used"] == pytest.approx(1789390800.5)
-        assert "a" * 64 not in resp.text  # ハッシュ（キー）は出さない
+        assert "a" * 64 not in resp.text  # The hash (the key) is not exposed
 
     def it_splits_audit_into_access_and_block_history(tmp_path):
         cfg, _state = _write_state(tmp_path)
@@ -182,7 +182,7 @@ def describe_relay_api():
             allowed = client.get("/api/relay/audit?kind=allowed").json()
             blocked = client.get("/api/relay/audit?kind=blocked").json()
             everything = client.get("/api/relay/audit?kind=all&limit=3").json()
-        # 新しい順（ファイル末尾が先頭）。壊れた行は無視
+        # Newest first (end of file comes first). Malformed lines are skipped
         assert [e["event"] for e in allowed] == ["https_passthrough", "relay_ok", "ssh_auth_ok"]
         assert all(e["action"] == "ALLOWED" for e in allowed)
         assert (
@@ -197,7 +197,7 @@ def describe_relay_api():
         assert blocked[1]["reason"] == "pr:close is not allowed by policy"
         assert blocked[2]["detail"] == "kind=repo_not_in_project"
         assert len(everything) == 3
-        assert everything[-1]["event"] == "api_error"  # limit は新しい順に効く
+        assert everything[-1]["event"] == "api_error"  # limit applies to the newest-first ordering
 
     def it_counts_stats_over_last_24h_only(tmp_path):
         cfg, _state = _write_state(tmp_path)
@@ -256,11 +256,12 @@ def describe_relay_api():
 
 
 def describe_relay_route_registration_order():
-    """/api/relay/* が __main__ ブロック (uvicorn.run) より前で登録されること.
+    """/api/relay/* must be registered before the __main__ block (uvicorn.run).
 
-    バグ: relay エンドポイントを app.py 末尾 (if __name__ == '__main__': uvicorn.run(app) の後) に
-    追記していたため、`python -m src.web_ui.app` で起動すると uvicorn.run の時点で app に relay ルートが
-    まだ無く、実プロセスが 404 を返していた (import 経由のテストでは登録済みに見えて検出できなかった)。
+    Bug: the relay endpoints were appended to the end of app.py (after
+    `if __name__ == '__main__': uvicorn.run(app)`), so starting with `python -m src.web_ui.app`
+    reached uvicorn.run before the relay routes existed and the real process returned 404
+    (tests that import the app saw them registered, so they missed it).
     """
 
     def it_defines_relay_routes_before_the_main_block():
@@ -274,7 +275,7 @@ def describe_relay_route_registration_order():
         ):
             pos = src.index(f'"{route}"')
             assert pos < main_pos, (
-                f"{route} は __main__ ブロックより前で定義すること (実プロセスで 404 になる)"
+                f"{route} must be defined before the __main__ block, or it 404s in the real process"
             )
 
     def it_registers_relay_routes_on_the_app():
@@ -290,7 +291,7 @@ def describe_relay_route_registration_order():
 
 
 def describe_per_repo_policy():
-    """0.1.9: 案件既定 + repo 差分 (deny が勝つ)、tags glob、delete、旧 relay.allow_* の畳み込み."""
+    """0.1.9: project defaults + per-repo diffs (deny wins), tags globs, delete, and folding in legacy relay.allow_*."""
 
     config_text = """
 domain_handlers:
@@ -315,26 +316,26 @@ relay:
             from src.web_ui.app import app
 
             data = TestClient(app).get("/api/relay/config").json()
-        # 案件既定: allow − deny。旧 relay.allow_tags: true は project.tags が空なら ["*"] に畳み込む
+        # Project defaults: allow − deny. Legacy relay.allow_tags: true folds into ["*"] when project.tags is empty
         assert data["permissions"] == ["ci:read", "pr:create", "pr:read"]
         assert data["permissions_deny"] == ["issue:label"]
         assert (
             data["tags"] == ["*"] and data["allow_tags"] is True and data["allow_delete"] is False
         )
         repos = {r["name"]: r for r in data["repos"]}
-        # App: repo の permissions が不正な形 (dict だが allow/deny 無し) → 差分なし、tags は repo 指定 ["v*"]
+        # App: malformed repo permissions (a dict with no allow/deny) → no diff; tags come from the repo as ["v*"]
         assert repos["Org/App"]["permissions"] == ["ci:read", "pr:create", "pr:read"]
         assert repos["Org/App"]["tags"] == ["v*"] and repos["Org/App"]["delete"] is False
-        # Lib: allow で pr:merge と issue:label を足すが、案件 deny の issue:label と repo deny の ci:read は消える
+        # Lib: allow adds pr:merge and issue:label, but the project deny on issue:label and the repo deny on ci:read strip them out
         assert repos["Org/Lib"]["permissions"] == ["pr:create", "pr:merge", "pr:read"]
-        assert repos["Org/Lib"]["tags"] == ["*"]  # 未指定 → 案件既定 (畳み込まれた ["*"])
-        # Old: list は allow の追加 (置換ではない)、delete は repo 指定 true
+        assert repos["Org/Lib"]["tags"] == ["*"]  # Unspecified → project default
+        # Old: a bare list adds to allow (it does not replace), and delete is set to true on the repo
         assert repos["Org/Old"]["permissions"] == ["ci:read", "pr:create", "pr:read"]
         assert repos["Org/Old"]["delete"] is True
 
 
 def describe_multi_upstream():
-    """0.2.0: 複数の git-relay ドメイン (ポートで分ける)。既定上流、上流ごとの state、repo の host."""
+    """0.2.0: several git-relay domains split across ports — default upstream, per-upstream state, per-repo host."""
 
     config_text = """
 domain_handlers:
@@ -364,7 +365,7 @@ relay:
 
             data = TestClient(app).get("/api/relay/config").json()
         assert data["enabled"] is True
-        # 0.1.x のフィールドは既定上流 (ssh_port を省いた github.com) を指す
+        # The 0.1.x fields point at the default upstream (github.com, the one without an ssh_port)
         assert data["domain"] == "github.com" and data["upstream"] == "github.com"
         ups = data["upstreams"]
         assert [u["domain"] for u in ups] == ["github.com", "ghe.example.com"]
@@ -379,7 +380,7 @@ relay:
         files = {f["name"]: f for f in data["state_files"]}
         assert files["upstreams/ghe.example.com/upstream_token"]["present"] is False
         assert files["upstreams/ghe.example.com/known_hosts"]["count"] == 1
-        # 秘密 (上流トークンの中身) は応答に出ない
+        # Secrets (the upstream token itself) never appear in the response
         assert "gho_x" not in json.dumps(data)
 
     def it_picks_default_true_when_every_entry_has_an_ssh_port(tmp_path):
@@ -398,12 +399,12 @@ relay:
         assert data["domain"] == "ghe.example.com"
         assert [u["domain"] for u in data["upstreams"]] == ["ghe.example.com", "github.com"]
         assert data["upstreams"][0]["ssh_port"] == 2222
-        # host 無しの repo は既定上流 (ghe.example.com) のもの
+        # A repo with no host belongs to the default upstream (ghe.example.com)
         assert {r["name"]: r["host"] for r in data["repos"]}["Org/App"] == "ghe.example.com"
 
 
 def describe_upstream_policy_layer():
-    """0.2.1: project.upstreams.<domain> の層 (権限の差分、push / tags / delete の既定、repos)."""
+    """0.2.1: the project.upstreams.<domain> layer — permission diffs, push / tags / delete defaults, repos."""
 
     config_text = """
 domain_handlers:
@@ -443,20 +444,20 @@ relay:
         assert app_["permissions"] == ["ci:read", "pr:create", "pr:merge", "pr:read"]
         assert app_["tags"] == ["v*"] and app_["delete"] is False
         tool = repos[("github.com", "Org/Tool")]
-        assert tool["permissions"] == ["ci:read", "pr:create", "pr:read"]  # repo の deny が勝つ
-        assert tool["tags"] == []  # repo 上書き
+        assert tool["permissions"] == ["ci:read", "pr:create", "pr:read"]  # The repo deny wins
+        assert tool["tags"] == []  # Overridden by the repo
         internal = repos[("ghe.example.com", "Corp/Internal")]
         assert internal["permissions"] == ["ci:read", "pr:create", "pr:read"]
         assert internal["delete"] is True and internal["tags"] == []
         legacy = repos[
             ("ghe.example.com", "Corp/Legacy")
-        ]  # project.repos の host prefix も上流層を受ける
+        ]  # A host prefix in project.repos also picks up the upstream layer
         assert legacy["delete"] is True
         assert legacy["permissions"] == ["ci:read", "pr:create", "pr:read"]
         assert len(data["repos"]) == 4
 
     def it_prefers_the_handler_api_base_and_lists_ssh_options(tmp_path):
-        # 0.2.1: upstream を踏み台/転送先にしても api_base は handler の指定、ssh_options は relay → handler の順
+        # 0.2.1: even when upstream is a bastion/forward target, api_base comes from the handler, and ssh_options are ordered relay first, then handler
         text = config_text.replace(
             "ghe.example.com: {handler: git-relay, ssh_port: 2222}",
             "ghe.example.com: {handler: git-relay, ssh_port: 2222, upstream: host.docker.internal, "
@@ -483,7 +484,7 @@ relay:
 
 
 def describe_upload_caps_and_https_relay():
-    """0.2.2: 送信上限（既定 / 上流ごと / https-relay）と、大きな送信・上限超過の検知."""
+    """0.2.2: upload caps (default / per-upstream / https-relay) and detection of large or over-cap uploads."""
 
     config_text = """
 domain_handlers:
@@ -520,7 +521,7 @@ relay:
             allowed = client.get("/api/relay/audit?kind=allowed").json()
             blocked = client.get("/api/relay/audit?kind=blocked").json()
         assert conf["https_max_upload_bytes"] == 4194304
-        assert conf["upstreams"][0]["max_upload_bytes"] == 262144  # handler の指定が既定より優先
+        assert conf["upstreams"][0]["max_upload_bytes"] == 262144  # handler beats the default
         assert [(t["domain"], t["max_upload_bytes"]) for t in conf["https_relays"]] == [
             ("ghcr.io", -1),
             ("registry-1.docker.io", 4194304),

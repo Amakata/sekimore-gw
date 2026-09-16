@@ -1,4 +1,4 @@
-//! 統合テストの共通フィクスチャ: 一時 state dir、mock GitHub、API サーバ起動、HTTP ヘルパ。
+//! Shared fixtures for the integration tests: a temp state dir, a mock GitHub, API server startup, and HTTP helpers.
 #![allow(dead_code)]
 
 use std::collections::{HashMap, VecDeque};
@@ -35,7 +35,7 @@ pub struct Recorded {
 
 pub type Recorder = Arc<Mutex<Vec<Recorded>>>;
 
-/// GitHub API の mock。記録して決まった JSON を返す。
+/// Mock GitHub API: records requests and returns canned JSON.
 pub async fn mock_github() -> (Url, Recorder) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -1,10 +1,10 @@
-//! 監査ログ（JSONL）。
+//! Audit log (JSONL).
 //!
-//! device flow で「人の権限」で動くため、GitHub 側の監査ログでは
-//! エージェントの操作と人間の操作が区別できない。その区別をここで残すことが、この構成では必須。
+//! Because the device flow runs with a human's permissions, GitHub's own audit log cannot tell
+//! agent actions apart from human ones. Recording that distinction here is essential to this setup.
 //!
-//! 規約: 全ての拒否に `reason`、エージェント起点は `actor: agent-via-gateway`、
-//! 操作者 CLI は `actor: operator`。トークンは `label` 以外の形で書かない。
+//! Conventions: every denial carries a `reason`, agent-initiated events use `actor: agent-via-gateway`,
+//! and the operator CLI uses `actor: operator`. Tokens are never written in any form other than `label`.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -17,11 +17,11 @@ use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Actor {
-    /// SSH / HTTP API 経由でエージェントが起こした操作
+    /// An action an agent initiated over SSH or the HTTP API
     Agent,
-    /// 操作者の CLI
+    /// The operator CLI
     Operator,
-    /// relay 自身（起動、設定など）
+    /// The relay itself (startup, configuration, and so on)
     System,
 }
 
@@ -42,10 +42,10 @@ pub struct Audit {
 }
 
 impl Audit {
-    /// `path` が None なら stderr のみ（テスト用）。
+    /// If `path` is None, logs go to stderr only (for tests).
     pub fn new(path: Option<&Path>, echo: bool) -> std::io::Result<Self> {
         if let Some(p) = path {
-            // 早期に開けることを確認する（権限エラーを起動時に出す）
+            // Confirm the file opens early so permission errors surface at startup
             OpenOptions::new()
                 .append(true)
                 .create(true)
@@ -98,7 +98,7 @@ impl Audit {
         }
     }
 
-    /// 拒否の記録。`reason` を必ず持つ。
+    /// Records a denial. Always carries a `reason`.
     pub fn deny(&self, event: &str, actor: Actor, reason: &str, fields: &[(&str, &str)]) {
         let mut v: Vec<(&str, &str)> = Vec::with_capacity(fields.len() + 1);
         v.push(("reason", reason));

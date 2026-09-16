@@ -1,8 +1,8 @@
-//! コマンドライン。操作者向け（gateway 内で `docker compose exec sekimore-gw sekimore-relay …`）と
-//! エージェント向け（devcontainer 内で `sekimore-relay agent …`）。
+//! Command line. Operator-facing (run inside the gateway as `docker compose exec sekimore-gw sekimore-relay …`)
+//! and agent-facing (run inside the devcontainer as `sekimore-relay agent …`).
 //!
-//! 0.2.4: ヘルプ文は `relay/locales/*.json` から実行時に引く（`crate::i18n`）。clap の doc comment は
-//! コンパイル時に固定されてしまうため使わない。
+//! 0.2.4: help text is looked up at runtime from `relay/locales/*.json` (see `crate::i18n`). clap's doc comments
+//! are not used because they would be baked in at compile time.
 
 pub mod agent;
 pub mod operator;
@@ -103,7 +103,7 @@ pub enum BootstrapAction {
     Status,
 }
 
-/// 実行して終了コードを返す。
+/// Runs the command and returns the exit code.
 pub async fn run(cli: Cli) -> i32 {
     let result: anyhow::Result<i32> = match cli.cmd {
         Command::NeedsRelay => operator::needs_relay(&cli.config),

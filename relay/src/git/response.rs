@@ -1,12 +1,12 @@
-//! 上流 receive-pack の応答（report-status）の書き換え。
+//! Rewriting the upstream receive-pack response (report-status).
 //!
-//! `refs/for/<base>` を `refs/heads/sekimore/<base>-<sha7>` に書き換えて push した場合、上流は
-//! `ok refs/heads/sekimore/...` を返す。send-pack は自分が送った ref 名で報告を照合するので、
-//! 元の名前（`refs/for/<base>`）に戻して返す必要がある（未知 ref の報告や欠落はエラー扱いになる）。
-//! `report-status` を剥がす手もあるが、`ng`（non-fast-forward 等）をエージェントに見せられなくなるので採らない。
+//! When we rewrite `refs/for/<base>` to `refs/heads/sekimore/<base>-<sha7>` before pushing, upstream replies with
+//! `ok refs/heads/sekimore/...`. send-pack matches reports against the ref names it sent, so we have to map them
+//! back to the original names (`refs/for/<base>`); a report for an unknown ref, or a missing one, is treated as an error.
+//! We could strip `report-status` instead, but then the agent would never see an `ng` (non-fast-forward and the like), so we do not.
 //!
-//! side-band-64k が交渉されている場合、report-status は band 1 の中に pkt-line として入っている。
-//! band 1 のバイト列を再組立してから書き換え、band 1 で再送出する。band 2（progress）/3（error）は素通し。
+//! When side-band-64k has been negotiated, report-status arrives as pkt-lines inside band 1.
+//! We reassemble the band 1 byte stream, rewrite it, and re-emit it on band 1. Bands 2 (progress) and 3 (error) are passed through unchanged.
 
 use std::collections::HashMap;
 
@@ -50,12 +50,12 @@ impl ResponseRewriter {
         self.unpack_ok
     }
 
-    /// 上流からの 1 フレームを処理し、クライアントへ送るバイト列を `out` に追記する。
+    /// Process one frame from upstream, appending the bytes to send to the client to `out`.
     pub fn feed(&mut self, frame: &Frame, out: &mut Vec<u8>) -> Result<(), PktError> {
         match frame {
             Frame::Flush | Frame::Delim | Frame::ResponseEnd => {
                 if self.sideband && !self.inner.is_empty() {
-                    // 途中で終わった内側データは無変更で吐く（診断のため捨てない）
+                    // Emit truncated inner data unchanged; do not drop it, it helps diagnosis.
                     let rest = self.inner.split().freeze();
                     emit_band1(out, &rest)?;
                 }
@@ -113,7 +113,7 @@ impl ResponseRewriter {
         }
     }
 
-    /// 上流 EOF 後。内側の残りがあれば無変更で吐く。
+    /// Called after upstream EOF: emit any leftover inner data unchanged.
     pub fn finish(&mut self, out: &mut Vec<u8>) -> Result<(), PktError> {
         if self.sideband && !self.inner.is_empty() {
             let rest = self.inner.split().freeze();
@@ -122,7 +122,7 @@ impl ResponseRewriter {
         Ok(())
     }
 
-    /// `ok <ref>` / `ng <ref> <msg>` / `option refname <ref>` の ref を元の名前に戻す。他は無変更。
+    /// Map the ref in `ok <ref>` / `ng <ref> <msg>` / `option refname <ref>` back to its original name. Everything else is left unchanged.
     pub fn rewrite_line(&mut self, payload: &[u8]) -> Vec<u8> {
         let (body, nl) = match payload.last() {
             Some(b'\n') => (&payload[..payload.len() - 1], true),
@@ -177,7 +177,7 @@ impl ResponseRewriter {
     }
 }
 
-/// band 1 の pkt として送出する。内側バイト列が大きければ複数 pkt に分ける。
+/// Emit the bytes as band 1 pkts, splitting across several pkts when the inner byte stream is large.
 fn emit_band1(out: &mut Vec<u8>, inner: &[u8]) -> Result<(), PktError> {
     const CHUNK: usize = MAX_PKT_LEN - 4 - 1;
     for chunk in inner.chunks(CHUNK) {
@@ -227,17 +227,17 @@ mod tests {
             RefStatus::Ng("non-fast-forward".into())
         );
         assert_eq!(rw.unpack_ok(), Some(true));
-        // 長さヘッダが再計算されている（"ok refs/for/main\n" = 17 + 4 = 0x15）
+        // The length header has been recomputed ("ok refs/for/main\n" = 17 + 4 = 0x15).
         assert!(s.contains("0015ok refs/for/main\n"), "{s}");
     }
 
     #[tokio::test]
     async fn sideband_inner_line_split_across_two_band1_packets() {
-        // 内側: "unpack ok\n" と "ok refs/heads/sekimore/main-1234567\n" と "0000"
+        // Inner stream: "unpack ok\n", "ok refs/heads/sekimore/main-1234567\n" and "0000"
         let mut inner = encode(b"unpack ok\n").unwrap();
         inner.extend_from_slice(&encode(b"ok refs/heads/sekimore/main-1234567\n").unwrap());
         inner.extend_from_slice(FLUSH);
-        // 途中で分割して band 1 の 2 パケットにする（progress を挟む）
+        // Split it mid-stream into two band 1 packets, with a progress packet in between.
         let cut = 17;
         let mut p1 = vec![1u8];
         p1.extend_from_slice(&inner[..cut]);
@@ -254,7 +254,7 @@ mod tests {
         rw.feed(&Frame::Flush, &mut out).unwrap();
         rw.finish(&mut out).unwrap();
 
-        // 出力を再解析: band 1 を連結すると書き換え済みの内側ストリームになる
+        // Re-parse the output: concatenating band 1 gives back the rewritten inner stream.
         let mut reader = PktReader::new(&out[..]);
         let mut band1 = Vec::new();
         let mut band2 = Vec::new();
@@ -291,7 +291,7 @@ mod tests {
             rw.rewrite_line(b"something else"),
             b"something else".to_vec()
         );
-        // ng で ref 名だけ（メッセージ無し）
+        // An ng with only the ref name and no message
         assert_eq!(
             rw.rewrite_line(b"ng refs/heads/sekimore/main-1234567"),
             b"ng refs/for/main".to_vec()

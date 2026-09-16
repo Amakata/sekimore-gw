@@ -484,7 +484,7 @@ echo "[agent] This should not be reached"
 
 
 def describe_sekimore_relay_setup():
-    """agent-setup.sh の sekimore_relay_setup（relay のエージェント側セットアップ）を偽 curl / ssh-keyscan で検証する."""
+    """Exercise sekimore_relay_setup in agent-setup.sh (the agent-side relay setup) with fake curl / ssh-keyscan."""
 
     import os
     import pwd
@@ -496,7 +496,7 @@ def describe_sekimore_relay_setup():
     gw = "172.19.0.2"
 
     def _shims(tmp_path: Path, *, relay_present=True, valid_token=None, bootstrap_json=None):
-        """PATH に置く偽コマンド。呼び出しは calls.log に記録する."""
+        """Fake commands placed on PATH; every invocation is recorded in calls.log."""
         shim = tmp_path / "shim"
         shim.mkdir(exist_ok=True)
         log = tmp_path / "calls.log"
@@ -578,7 +578,7 @@ esac
         assert f"SEKIMORE_TOKEN={token}" in text
         assert "SEKIMORE_REPO=LibOrg/awesome-lib" in text
         assert "SEKIMORE_GIT_DOMAIN=ghe.example.com" in text
-        # `sekimore` ラッパーの自動更新用
+        # Used by the `sekimore` wrapper to auto-refresh
         assert "SEKIMORE_TOKEN_EXPIRES=2026-01-01T00:00:00Z" in text
         assert f"SEKIMORE_AGENT_KEY={home}/.ssh/sekimore/id_ed25519.pub" in text
 
@@ -616,7 +616,7 @@ esac
         assert "whoami-ok" not in calls
 
     def it_writes_a_host_block_and_known_hosts_entry_per_git_domain(tmp_path):
-        # 0.2.0: /bootstrap の git_domains (既定が先頭) から、上流ごとに Host ブロックとポート別 known_hosts を作る
+        # 0.2.0: from /bootstrap's git_domains (default first), write a Host block per upstream and a per-port known_hosts entry
         multi = (
             '{"ok":true,"fingerprint":"SHA256:x","added":true,"token":"' + token + '",'
             '"token_expires":"2026-01-01T00:00:00Z","project":"case-m",'
@@ -648,7 +648,7 @@ esac
         blocks = re.findall(r"Host (\S+)\n  User git\n  Port (\d+)\n", cfg)
         assert blocks == [("github.com", "22"), ("ghe.example.com", "2222")], cfg
 
-        # 2 回目 (トークン有効 → bootstrap 無し) でも env の SEKIMORE_GIT_DOMAINS から同じ結果を再現し、重複しない
+        # On a second run (valid token, so no bootstrap) SEKIMORE_GIT_DOMAINS from the env reproduces the same result without duplicates
         proc, home = _run(tmp_path, shim)
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert (
@@ -659,7 +659,7 @@ esac
         assert cfg.count("Host ghe.example.com") == 1 and cfg.count("Host github.com") == 1
 
     def it_writes_agent_instructions_for_claude_and_codex_idempotently(tmp_path):
-        # 0.2.2: sekimore guide の本文を Claude Code の skill と Codex の AGENTS.md ブロックに置く
+        # 0.2.2: install the sekimore guide text as a Claude Code skill and as a block in Codex's AGENTS.md
         shim, log = _shims(tmp_path, valid_token=token)
         proc, home = _run(tmp_path, shim)
         assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -673,7 +673,7 @@ esac
         atext = agents.read_text()
         assert atext.count("<!-- >>> sekimore-relay >>> -->") == 1
         assert "`sekimore guide`" in atext and "sekimore whoami" in atext
-        # 既存の AGENTS.md の内容は残し、ブロックだけ置き換える
+        # Existing AGENTS.md content is preserved; only the block is replaced
         agents.write_text("# my own notes\n\n" + atext)
         proc, home = _run(tmp_path, shim)
         assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -697,7 +697,7 @@ esac
         pub_before = (keydir / "id_ed25519.pub").read_text()
         sign_before = (keydir / "signing_ed25519.pub").read_text()
 
-        # 2 回目: 既存トークンが /whoami で有効 → bootstrap を呼ばない、鍵は変わらない、追記は増えない
+        # Second run: the existing token passes /whoami, so bootstrap is skipped, the keys stay put, and nothing is appended again
         shim, log = _shims(tmp_path, valid_token=token)
         log.write_text("")
         proc, home = _run(tmp_path, shim)
@@ -736,7 +736,7 @@ esac
         assert "bootstrap-called" not in log.read_text()
         text = (tmp_path / "etc" / "env").read_text()
         assert "SEKIMORE_TOKEN" not in text and "SEKIMORE_GIT_DOMAIN=github.com" in text
-        # 鍵と known_hosts / ssh config は作られる（操作者が add-key するため）
+        # Keys, known_hosts, and the ssh config are still created (so the operator can add-key)
         assert (home / ".ssh" / "sekimore" / "id_ed25519.pub").exists()
         assert "Host github.com" in (home / ".ssh" / "config").read_text()
 
@@ -761,8 +761,9 @@ esac
         assert re.search(r"ssh-keyscan .*-p 2222", log.read_text())
 
     def it_names_the_signing_key_after_the_operator_and_project(tmp_path):
-        """署名鍵のコメント = GitHub 登録時の Title。案件名と git の user.name / user.email を含め、
-        SEKIMORE_SIGNING_KEY_COMMENT で上書きでき、旧既定 (…@<hostname>) の既存鍵は名前入りに更新される."""
+        """The signing key comment becomes the Title when registered on GitHub. It carries the project name
+        plus git's user.name / user.email, can be overridden with SEKIMORE_SIGNING_KEY_COMMENT, and an existing
+        key still on the old default (…@<hostname>) is updated to the named form."""
         shim, _log = _shims(tmp_path)
         home = tmp_path / "home"
         home.mkdir(exist_ok=True)
@@ -783,11 +784,11 @@ esac
         pub = (keydir / "signing_ed25519.pub").read_text().rstrip("\n")
         assert pub.endswith(" sekimore-agent-signing: case-a / Taro Test <taro@example.com>"), pub
         key_part = " ".join(pub.split(" ")[:2])
-        # allowed_signers はコメント抜きの鍵だけを持つ (スペース入りコメントに影響されない)
+        # allowed_signers holds only the key without the comment (so comments with spaces do not affect it)
         signers = (home / ".config" / "git" / "allowed_signers").read_text()
         assert key_part in signers and "Taro Test" not in signers
 
-        # 旧既定コメントのままの鍵は、2 回目の実行で名前入りに更新される。鍵 (fingerprint) は不変
+        # A key still carrying the old default comment is updated to the named form on the second run; the key (fingerprint) is unchanged
         subprocess.run(
             [
                 "ssh-keygen",
@@ -810,7 +811,7 @@ esac
         assert pub2.endswith(" sekimore-agent-signing: case-a / Taro Test <taro@example.com>"), pub2
         assert " ".join(pub2.split(" ")[:2]) == key_part
 
-        # 操作者が明示したコメントは既存鍵にも反映される (鍵は不変)
+        # An explicit operator-supplied comment is applied to the existing key too (the key is unchanged)
         proc, home = _run(
             tmp_path, shim, extra_env={"SEKIMORE_SIGNING_KEY_COMMENT": "my agent key"}
         )

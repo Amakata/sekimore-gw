@@ -1,6 +1,7 @@
-"""WebSocket エンドポイントの統合テスト（0.2.3 の配信形式: snapshot / logs の配列）.
+"""Integration tests for the WebSocket endpoint (the 0.2.3 wire format: snapshot / arrays of logs).
 
-websocket_endpoint を偽の WebSocket で直接動かす。receive_text はキューで待たせ、切断は WebSocketDisconnect で伝える。
+websocket_endpoint is driven directly with a fake WebSocket. receive_text blocks on a queue, and
+disconnects are signalled with WebSocketDisconnect.
 """
 
 import asyncio
@@ -27,7 +28,7 @@ async def _create_db(db_path):
 
 
 class FakeWebSocket:
-    """send_json を記録し、receive_text はキューで待つ。close() で WebSocketDisconnect を起こす."""
+    """Records send_json calls and blocks receive_text on a queue. close() raises WebSocketDisconnect."""
 
     def __init__(self):
         self.sent = []
@@ -60,7 +61,7 @@ async def _endpoint(db_path):
     original_interval = log_stream.POLL_INTERVAL
     web_app_module.DB_PATH = str(db_path)
     web_app_module._streamer = None
-    # ポーラの周期はインスタンス生成時に固定されるので、endpoint を起動する前に短くする
+    # The poll interval is captured when the instance is created, so shorten it before starting the endpoint
     log_stream.POLL_INTERVAL = 0.05
     ws = FakeWebSocket()
     task = asyncio.create_task(websocket_endpoint(ws))
@@ -108,7 +109,7 @@ def describe_websocket_integration():
                 "DNS",
                 "FIREWALL",
                 "DNS",
-            ]  # 時刻の昇順、ignored は出ない
+            ]  # Ascending by timestamp, and ignored entries are excluded
             assert entries[0]["domain"] == "example.com" and entries[0]["action"] == "ALLOWED"
             assert (
                 entries[1]["src_ip"] == "192.168.1.100"
@@ -146,7 +147,7 @@ def describe_websocket_integration():
                 await db.commit()
             await asyncio.sleep(0.4)
             batches = [m for m in ws.sent if m["type"] == "logs"]
-            assert len(batches) == 1, ws.sent  # 同じ周期の 6 件は 1 メッセージ
+            assert len(batches) == 1, ws.sent  # One poll cycle, one message
             entries = batches[0]["entries"]
             assert len(entries) == 6
             assert [e["domain"] for e in entries[:5]] == [f"d{i}.example" for i in range(5)]
@@ -167,7 +168,7 @@ def describe_websocket_integration():
                 await db.commit()
             await asyncio.sleep(0.3)
             ws.incoming.put_nowait('{"type": "resync"}')
-            ws.incoming.put_nowait("garbage")  # 壊れたメッセージは無視
+            ws.incoming.put_nowait("garbage")  # Malformed messages are ignored
             await asyncio.sleep(0.2)
             snapshots = [m for m in ws.sent if m["type"] == "snapshot"]
             assert len(snapshots) == 2

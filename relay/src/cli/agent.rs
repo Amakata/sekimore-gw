@@ -1,8 +1,8 @@
-//! エージェント側 CLI。関所の素直なエンドポイントを叩くだけ（gh 互換は目指さない）。
+//! Agent-side CLI. It just calls the relay's plain endpoints (gh compatibility is not a goal).
 //!
-//! エージェントが持つのは案件トークンのみ（上流では無効な文字列）。
+//! All the agent holds is a project token (a string that is worthless against the upstream).
 //!
-//! 0.2.4: ヘルプ文は `relay/locales/*.json` から実行時に引く（`crate::i18n`）。
+//! 0.2.4: help text is looked up at runtime from `relay/locales/*.json` (see `crate::i18n`).
 
 use std::path::PathBuf;
 
@@ -233,7 +233,7 @@ impl AgentClient {
     }
 
     pub fn new(endpoint: &str, token: Option<String>) -> anyhow::Result<Self> {
-        // 関所は同じ隔離境界の内側。プロキシ環境変数は無視する
+        // The relay sits inside the same isolation boundary, so proxy environment variables are ignored
         let http = reqwest::Client::builder()
             .no_proxy()
             .timeout(std::time::Duration::from_secs(60))
@@ -287,11 +287,11 @@ impl AgentClient {
     }
 }
 
-/// `sekimore guide` の本文。バイナリに埋め込むので CLI と版がずれない（relay/share/agent-guide.*.md が正本）。
+/// The body of `sekimore guide`. Embedded in the binary so it cannot drift from the CLI version (relay/share/agent-guide.*.md is the source of truth).
 pub const AGENT_GUIDE_EN: &str = include_str!("../../share/agent-guide.en.md");
 pub const AGENT_GUIDE_JA: &str = include_str!("../../share/agent-guide.ja.md");
 
-/// 指定があればその言語、無ければ環境の言語。未対応の指定は英語に落とす。
+/// Uses the requested language, or the environment's language when none is given. An unsupported request falls back to English.
 pub fn guide_for(lang: Option<&str>) -> &'static str {
     let chosen = lang
         .and_then(crate::i18n::normalize)
@@ -304,7 +304,7 @@ pub fn guide_for(lang: Option<&str>) -> &'static str {
 
 pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
     if let AgentCmd::Guide { lang } = &cmd {
-        // 接続情報もトークンも要らない（ネットワークに出ない）
+        // Needs neither connection details nor a token (it never touches the network)
         print!("{}", guide_for(lang.as_deref()));
         return Ok(0);
     }
@@ -328,7 +328,7 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 );
                 return Ok(1);
             }
-            // agent-setup.sh が読む機械可読出力（トークンは stdout にしか出さない）
+            // Machine-readable output for agent-setup.sh to read (the token only ever goes to stdout)
             println!("{}", serde_json::to_string(&resp)?);
             return Ok(0);
         }
@@ -496,7 +496,7 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
     Ok(0)
 }
 
-/// `pr status` の人間向け表示。raw に PrStatus の JSON が入っている。
+/// Human-readable rendering of `pr status`. raw holds the PrStatus JSON.
 fn print_pr_status(resp: &ApiResponse) {
     if let Some(m) = &resp.message {
         println!("{m}");
@@ -516,7 +516,7 @@ fn print_pr_status(resp: &ApiResponse) {
     }
 }
 
-/// `ci log` の人間向け表示。raw に CiLogPage の JSON が入っている。
+/// Human-readable rendering of `ci log`. raw holds the CiLogPage JSON.
 fn print_ci_log(resp: &ApiResponse) {
     let Some(raw) = &resp.raw else { return };
     let g = |k: &str| raw.get(k);

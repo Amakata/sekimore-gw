@@ -1,4 +1,4 @@
-"""AI Security Gateway - メインエントリーポイント."""
+"""AI Security Gateway - main entry point."""
 
 import asyncio
 import sys
@@ -9,14 +9,14 @@ from .orchestrator import SecurityGatewayOrchestrator
 
 
 def main() -> None:
-    """メイン関数."""
-    # 設定ファイルパス
+    """Main entry point."""
+    # Configuration file path
     config_path = Path("/etc/sekimore/config.yml")
 
-    # オーケストレータ初期化
+    # Initialize the orchestrator
     orchestrator = SecurityGatewayOrchestrator(config_path=config_path)
 
-    # 起動
+    # Start
     try:
         asyncio.run(orchestrator.start())
     except KeyboardInterrupt:

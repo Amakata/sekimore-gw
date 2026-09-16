@@ -63,7 +63,7 @@ def describe_firewall_manager():
         )
         fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
 
-        # 削除操作で「no chain」エラーが出た場合、Falseを返す（ループ終了）
+        # A delete that fails with "no chain" returns False (ending the loop)
         result = fw._run_command(["iptables", "-D", "FORWARD", "-j", "NFLOG"])
 
         assert result is False
@@ -506,7 +506,7 @@ def describe_firewall_manager():
 
 
 def describe_relay_ports():
-    """中継関所のための INPUT 開放（lan_if 限定、無ければ規則が増えない）."""
+    """Opening INPUT for the relay (limited to lan_if; no rules are added without one)."""
 
     def _input_dport_rules(mock_run):
         rules = []
@@ -556,7 +556,7 @@ def describe_relay_ports():
         for rule in _input_dport_rules(mock_run):
             if rule[rule.index("--dport") + 1] in ("22", "8420", "443"):
                 assert "-i" in rule and rule[rule.index("-i") + 1] == "eth1", rule
-        # relay 規則は Web UI(8080) の前に入る（INPUT の順序）
+        # Relay rules come before the Web UI (8080) in the INPUT chain
         idx = [
             i
             for i, c in enumerate(cmds)
@@ -567,7 +567,7 @@ def describe_relay_ports():
 
 
 def describe_allowed_ports():
-    """0.2.2: 許可ドメイン / 許可 IP へ通す宛先ポートの制限（未設定なら従来どおり全ポート）."""
+    """0.2.2: restricting the destination ports allowed to allowed domains / IPs (all ports as before when unset)."""
 
     def _forward_accepts(mock_run):
         return [
@@ -577,7 +577,7 @@ def describe_allowed_ports():
         ]
 
     def _ok_except_nflog_delete(mock_run):
-        """全コマンド成功、ただし NFLOG 規則の削除は「無い」を返す (_remove_block_log_rule の while を止める)."""
+        """Every command succeeds, except deleting the NFLOG rule reports "not found" (to stop the while loop in _remove_block_log_rule)."""
         from subprocess import CalledProcessError
 
         def run(cmd, **_kw):
@@ -624,9 +624,9 @@ def describe_allowed_ports():
                 "tcp",
             ], r
             assert "--match-set" in r and r[-2:] == ["-j", "ACCEPT"]
-        # 全ポートを通す規則は 1 本も無い
+        # Not a single rule allows all ports
         assert all("--dport" in r for r in accepts)
-        # 重複防止の削除もポートごと
+        # The dedup deletes are per-port as well
         deletes = [
             c.args[0]
             for c in mock_run.call_args_list
@@ -636,7 +636,7 @@ def describe_allowed_ports():
         ]
         assert sorted(r[r.index("--dport") + 1] for r in deletes) == ["443", "80"]
 
-        # remove_domain もポートごとに消す
+        # remove_domain deletes per-port too
         mock_run.reset_mock()
         fw.remove_domain("example.com")
         deletes = [
@@ -656,7 +656,7 @@ def describe_allowed_ports():
         accepts = _forward_accepts(mock_run)
         assert len(accepts) == 1 and accepts[0][3:7] == ["-p", "tcp", "--dport", "443"]
         assert "-i" not in accepts[0]
-        # DROP は従来どおり
+        # DROP is unchanged
         drops = [c.args[0] for c in mock_run.call_args_list if "DROP" in c.args[0]]
         assert len(drops) == 1 and "--dport" not in drops[0]
 

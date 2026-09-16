@@ -1,4 +1,4 @@
-"""統合ログシステム - DNS、iptables、Proxyのログを統一フォーマットで出力."""
+"""Unified logging - emits DNS, iptables and proxy logs in a single format."""
 
 import logging
 import sys
@@ -8,7 +8,7 @@ import structlog
 
 
 class LogLevel(str, Enum):
-    """ログレベル."""
+    """Log level."""
 
     DEBUG = "DEBUG"
     INFO = "INFO"
@@ -18,7 +18,7 @@ class LogLevel(str, Enum):
 
 
 class ComponentType(str, Enum):
-    """コンポーネント種別."""
+    """Component type."""
 
     DNS = "DNS"
     FIREWALL = "FIREWALL"
@@ -28,15 +28,15 @@ class ComponentType(str, Enum):
 
 
 def setup_logging(log_level: str = "INFO") -> None:
-    """ログシステムの初期化."""
-    # Pythonの標準loggingモジュールの設定
+    """Initialize the logging system."""
+    # Configure Python's standard logging module
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
         level=getattr(logging, log_level.upper()),
     )
 
-    # structlogの設定
+    # Configure structlog
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
@@ -56,7 +56,7 @@ def setup_logging(log_level: str = "INFO") -> None:
 
 
 def get_logger(component: ComponentType) -> structlog.BoundLogger:
-    """コンポーネント別ロガーを取得."""
+    """Return a logger bound to the given component."""
     logger = structlog.get_logger()
     return logger.bind(component=component.value)  # type: ignore[no-any-return]
 
@@ -68,7 +68,7 @@ def log_dns_query(
     ttl: int,
     status: str = "allowed",
 ) -> None:
-    """DNS クエリログ."""
+    """Log a DNS query."""
     logger = get_logger(ComponentType.DNS)
     logger.info(
         "DNS query",
@@ -88,7 +88,7 @@ def log_firewall_action(
     domain: str | None = None,
     reason: str | None = None,
 ) -> None:
-    """iptables アクションログ."""
+    """Log an iptables action."""
     logger = get_logger(ComponentType.FIREWALL)
 
     emoji = "✅" if action == "ALLOWED" else "❌"
@@ -118,12 +118,12 @@ def log_firewall_action(
 
 
 def log_system_event(event: str, **kwargs: str) -> None:
-    """システムイベントログ."""
+    """Log a system event."""
     logger = get_logger(ComponentType.SYSTEM)
     logger.info(event, **kwargs)
 
 
 def log_error(component: ComponentType, error: str, **kwargs: str) -> None:
-    """エラーログ."""
+    """Log an error."""
     logger = get_logger(component)
     logger.error(error, **kwargs)

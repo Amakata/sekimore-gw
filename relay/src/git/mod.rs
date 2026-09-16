@@ -1,14 +1,14 @@
-//! git 経路: SSH の exec 要求を受け、ポリシー検査 → 上流 git へ中継する。
+//! The git path: take an SSH exec request, run the policy check, then relay to the upstream git.
 //!
-//! 流れ（`doc/sekimore-gw/design/relay.md` の状態機械）:
-//!   P0 exec 解析 → P1 `authorize_git` → P2 プリフライト → P3 上流起動 → 中継 → P9 終了コード
+//! The flow (the state machine in `doc/sekimore-gw/design/relay.md`):
+//!   P0 parse exec → P1 `authorize_git` → P2 preflight → P3 spawn upstream → relay → P9 exit code
 //!
-//! 上流を叩く `UpstreamGit::spawn` は `GitAuthorized` しか受け取らない。
+//! `UpstreamGit::spawn`, the only way to reach upstream, accepts nothing but a `GitAuthorized`.
 //!
 //! ```compile_fail
 //! # use sekimore_relay::git::UpstreamGit;
 //! # async fn f(up: &dyn UpstreamGit) {
-//! // 検査を通さずリポジトリ名だけで上流を起動することはできない
+//! // You cannot spawn the upstream with just a repository name, bypassing the policy check.
 //! let _ = up.spawn("Attacker/evil").await;
 //! # }
 //! ```
@@ -36,17 +36,17 @@ use crate::github::GitHub;
 pub use crate::policy::GitVerb;
 use crate::policy::{Denied, GitAuthorized, Project};
 
-/// SSH チャネルの stdin/stdout/stderr。russh への依存はここで切れる。
+/// stdin/stdout/stderr of the SSH channel. The dependency on russh stops here.
 pub struct GitIo<'a> {
     pub stdin: Box<dyn AsyncRead + Send + Unpin + 'a>,
     pub stdout: Box<dyn AsyncWrite + Send + Unpin + 'a>,
     pub stderr: Box<dyn AsyncWrite + Send + Unpin + 'a>,
 }
 
-/// 上流 git の起動に失敗した理由。`message` は人間向け（`Permission denied (publickey)` に見せない）。
+/// Why spawning the upstream git failed. `message` is for humans, so it never shows up as `Permission denied (publickey)`.
 #[derive(Debug, Clone)]
 pub struct UpstreamError {
-    /// 監査ログ用の短い種別（agent_unset, agent_missing, known_hosts, spawn ...）
+    /// A short kind for the audit log (agent_unset, agent_missing, known_hosts, spawn, ...)
     pub kind: &'static str,
     pub message: String,
 }
@@ -59,7 +59,7 @@ impl fmt::Display for UpstreamError {
 
 impl std::error::Error for UpstreamError {}
 
-/// 起動した上流プロセス。stdio は relay が握る。
+/// A spawned upstream process. The relay owns its stdio.
 pub struct UpstreamProcess {
     pub child: Child,
     pub stdin: ChildStdin,
@@ -87,30 +87,30 @@ impl UpstreamProcess {
     }
 }
 
-/// 上流 git の起動方法。本番は OpenSSH 子プロセス、テストはローカル bare repo。
+/// How to spawn the upstream git: an OpenSSH child process in production, a local bare repo in tests.
 #[async_trait]
 pub trait UpstreamGit: Send + Sync {
-    /// 上流に接続する前の検査（agent 到達性、known_hosts など）。
+    /// Checks run before connecting upstream (agent reachability, known_hosts, and so on).
     async fn preflight(&self) -> Result<(), UpstreamError>;
-    /// 上流 `git-<verb>` を起動する。引数は **config の正規名**（クライアント入力を使わない）。
+    /// Spawn the upstream `git-<verb>`. The argument is the **canonical name from config**, never client input.
     async fn spawn(&self, auth: &GitAuthorized<'_>) -> Result<UpstreamProcess, UpstreamError>;
-    /// ログ用の説明。
+    /// A description for logging.
     fn describe(&self) -> String;
 }
 
-/// git 経路の共有コンテキスト。
+/// Shared context for the git path.
 pub struct GitContext {
     pub project: Project,
-    /// 0.2.0: この listener が受ける上流（git-relay ドメイン）。空なら上流を区別しない（単一上流のテスト）
+    /// 0.2.0: the upstream this listener serves (the git-relay domain). Empty means upstreams are not distinguished (single-upstream tests)
     pub host: String,
     pub upstream: Arc<dyn UpstreamGit>,
-    /// PR 作成に使う。None なら `refs/for` は「push は通るが PR は作れない」旨を返す
+    /// Used to create PRs. When None, `refs/for` reports that the push went through but no PR could be created
     pub github: Option<Arc<GitHub>>,
     pub audit: Arc<Audit>,
     pub limits: Limits,
 }
 
-/// `git-upload-pack 'Org/Repo.git'` を分解する。
+/// Split apart a `git-upload-pack 'Org/Repo.git'` command line.
 pub fn parse_exec_command(cmdline: &str) -> Result<(GitVerb, String), Denied> {
     let deny = || Denied::UnsupportedCommand {
         cmdline: cmdline.trim().to_string(),
@@ -145,7 +145,7 @@ pub fn parse_exec_command(cmdline: &str) -> Result<(GitVerb, String), Denied> {
     Ok((verb, arg.trim_start_matches('/').to_string()))
 }
 
-/// 無通信の監視。コピー側が `touch()` し、`expired()` が idle 超過で完了する。
+/// Idle watchdog: the copy loop calls `touch()`, and `expired()` completes once the idle limit is exceeded.
 pub struct Watchdog {
     start: Instant,
     last_ms: AtomicU64,
@@ -176,7 +176,7 @@ impl Watchdog {
     }
 }
 
-/// `reader` → `writer` を 64 KiB 単位でコピーし、活動を watchdog に伝える。転送バイト数を返す。
+/// Copy `reader` → `writer` in 64 KiB chunks, reporting activity to the watchdog. Returns the number of bytes transferred.
 pub async fn copy_touch<R, W>(
     mut reader: R,
     mut writer: W,
@@ -213,7 +213,7 @@ async fn say(stderr: &mut (dyn AsyncWrite + Send + Unpin), msg: &str) {
     let _ = stderr.flush().await;
 }
 
-/// exec 要求 1 件を処理し、終了コードを返す。
+/// Handle one exec request and return its exit code.
 pub async fn handle_exec(mut io: GitIo<'_>, cmdline: &str, ctx: &GitContext, peer: &str) -> u32 {
     let started = Instant::now();
     // P0
@@ -230,7 +230,7 @@ pub async fn handle_exec(mut io: GitIo<'_>, cmdline: &str, ctx: &GitContext, pee
             return 1;
         }
     };
-    // P1（案件外リポジトリへの到達を拒否する唯一の防壁）
+    // P1 (the single barrier that denies reaching a repository outside the project)
     let auth = match ctx.project.authorize_git_on(&ctx.host, verb, &repo_path) {
         Ok(a) => a,
         Err(d) => {
@@ -334,7 +334,7 @@ pub async fn handle_exec(mut io: GitIo<'_>, cmdline: &str, ctx: &GitContext, pee
     outcome.status
 }
 
-/// 中継結果。
+/// The outcome of a relay.
 pub struct RelayOutcome {
     pub status: u32,
     pub bytes_in: u64,
@@ -342,7 +342,7 @@ pub struct RelayOutcome {
     pub note: Option<String>,
 }
 
-/// 子プロセスの終了を終了コードに変換する。ssh の 255 は接続失敗。
+/// Turn a child process's termination into an exit code. From ssh, 255 means the connection failed.
 pub fn exit_code_of(status: std::process::ExitStatus) -> u32 {
     match status.code() {
         Some(c) if c >= 0 => c as u32,

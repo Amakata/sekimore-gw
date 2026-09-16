@@ -152,7 +152,7 @@
             background: #f85149;
         }
 
-        /* タブナビゲーション */
+        /* Tab navigation */
         .tabs {
             display: flex;
             gap: 5px;
@@ -190,7 +190,7 @@
             display: block;
         }
 
-        /* ドメインリスト */
+        /* Domain list */
         .domain-list {
             background: #161b22;
             border: 1px solid #30363d;
@@ -319,7 +319,7 @@
         </h1>
         <p id="gateway-description" class="gateway-description" style="display: none;"></p>
 
-        <!-- タブナビゲーション -->
+        <!-- Tab navigation -->
         <div class="tabs">
             <button class="tab active" onclick="switchTab('dashboard')" data-i18n="tab.dashboard">Dashboard</button>
             <button class="tab" onclick="switchTab('allowed')" data-i18n="tab.allowed">Allowed Domains</button>
@@ -331,9 +331,9 @@
             <button class="tab" onclick="switchTab('relay')" data-i18n="tab.relay">Relay</button>
         </div>
 
-        <!-- Dashboard タブ -->
+        <!-- Dashboard tab -->
         <div id="tab-dashboard" class="tab-content active">
-            <!-- 統計情報 -->
+            <!-- Statistics -->
         <div class="stats">
             <div class="stat-card">
                 <div class="stat-value" id="stat-total">0</div>
@@ -369,7 +369,7 @@
             </div>
         </div>
 
-        <!-- DNSキャッシュ統計 -->
+        <!-- DNS cache statistics -->
         <h2 data-i18n="cache.title">DNS Cache Statistics</h2>
         <div class="stats">
             <div class="stat-card">
@@ -394,13 +394,13 @@
             </div>
         </div>
 
-        <!-- 制御ボタン -->
+        <!-- Control buttons -->
         <div class="controls">
             <button data-i18n="btn.clear_logs" onclick="clearLogs()">Clear Logs</button>
             <button data-i18n="btn.refresh_stats" onclick="refreshStats()">Refresh Stats</button>
         </div>
 
-            <!-- ログ表示 -->
+            <!-- Log view -->
             <div class="logs-container" id="logs">
                 <div data-i18n="logs.connecting" style="color: #8b949e; text-align: center; padding: 20px;">
                     Connecting to WebSocket...
@@ -408,7 +408,7 @@
             </div>
         </div>
 
-        <!-- Allowed Domains タブ -->
+        <!-- Allowed Domains tab -->
         <div id="tab-allowed" class="tab-content">
             <h2 data-i18n="allowed.title" style="color: #58a6ff; margin-bottom: 20px;">Allowed Domains</h2>
             <div class="domain-list" id="allowed-domains-list">
@@ -416,7 +416,7 @@
             </div>
         </div>
 
-        <!-- Blocked Domains タブ -->
+        <!-- Blocked Domains tab -->
         <div id="tab-blocked" class="tab-content">
             <h2 data-i18n="blocked.title" style="color: #58a6ff; margin-bottom: 20px;">Blocked Domains</h2>
             <div class="controls">
@@ -427,7 +427,7 @@
             </div>
         </div>
 
-        <!-- All Domains タブ -->
+        <!-- All Domains tab -->
         <div id="tab-unique" class="tab-content">
             <h2 data-i18n="all.title" style="color: #58a6ff; margin-bottom: 20px;">All Domains (access statistics)</h2>
             <div class="controls">
@@ -438,7 +438,7 @@
             </div>
         </div>
 
-        <!-- Ignored Domains タブ -->
+        <!-- Ignored Domains tab -->
         <div id="tab-ignored" class="tab-content">
             <h2 data-i18n="ignored.title" style="color: #58a6ff; margin-bottom: 20px;">Ignored Domains</h2>
             <div class="controls">
@@ -449,7 +449,7 @@
             </div>
         </div>
 
-        <!-- Blocked IPs タブ -->
+        <!-- Blocked IPs tab -->
         <div id="tab-blocked-ips" class="tab-content">
             <h2 data-i18n="ips.title" style="color: #58a6ff; margin-bottom: 20px;">Blocked IP Addresses</h2>
             <div class="controls">
@@ -459,7 +459,7 @@
                 <div data-i18n="loading" class="empty-state">Loading...</div>
             </div>
         </div>
-        <!-- Config タブ -->
+        <!-- Config tab -->
         <div id="tab-config" class="tab-content">
             <h2 data-i18n="config.title" style="color: #58a6ff; margin-bottom: 20px;">Configuration</h2>
             <div class="controls">
@@ -571,7 +571,7 @@
     </div>
 
     <script>
-        // ---- i18n (0.2.4): 文言は /api/i18n の辞書から。静的な要素は data-i18n / data-i18n-html、動的な文言は tr() ----
+        // ---- i18n (0.2.4): strings come from the /api/i18n dictionary. Static elements use data-i18n / data-i18n-html, dynamic text uses tr() ----
         let I18N = { lang: 'en', strings: {} };
         function tr(key, vars) {
             let text = I18N.strings[key];
@@ -609,11 +609,11 @@
         let ws = null;
         const maxLogs = 100;
 
-        // WebSocket接続（0.2.3: サーバは snapshot / logs(配列) を送る。1 件でも即時、多ければまとめて届く）
+        // WebSocket connection (0.2.3: the server sends snapshot / logs(array). A single entry arrives immediately, many arrive batched)
         let staleWhileHidden = false;
         let statsTimer = null;
         function scheduleStatsRefresh() {
-            // ログ 1 件ごとに /api/stats を叩かない。新着があった後、最短 3 秒に 1 回
+            // Do not hit /api/stats for every log entry. At most once every 3 seconds after new entries arrive
             if (statsTimer) return;
             statsTimer = setTimeout(() => { statsTimer = null; refreshStats(); }, 3000);
         }
@@ -634,10 +634,10 @@
                     renderLogs(msg.entries || [], true);
                     staleWhileHidden = false;
                 } else if (msg && msg.type === 'logs') {
-                    if (document.hidden) { staleWhileHidden = true; return; }  // 戻ったら resync で最新から描き直す
+                    if (document.hidden) { staleWhileHidden = true; return; }  // On return, resync redraws from the latest state
                     renderLogs(msg.entries || [], false);
                 } else if (msg && msg.component) {
-                    renderLogs([msg], false);  // 旧サーバ（1 件ずつ）との互換
+                    renderLogs([msg], false);  // Compatibility with an older server (one entry at a time)
                 }
                 scheduleStatsRefresh();
             };
@@ -646,7 +646,7 @@
                 console.log('WebSocket disconnected');
                 document.getElementById('status-indicator').className = 'status-indicator status-disconnected';
 
-                // 5秒後に再接続
+                // Reconnect after 5 seconds
                 setTimeout(connectWebSocket, 5000);
             };
 
@@ -660,7 +660,7 @@
             }
         });
 
-        // ログを描画する。entries は時刻の昇順。replace なら全置換（snapshot）、そうでなければ先頭に追加
+        // Render the logs. entries is in ascending time order. replace means replace everything (snapshot), otherwise prepend
         function renderLogs(entries, replace) {
             const logsDiv = document.getElementById('logs');
             if (replace || (logsDiv.children.length === 1 && logsDiv.children[0].textContent.includes('Connecting'))) {
@@ -671,7 +671,7 @@
                 return;
             }
             const fragment = document.createDocumentFragment();
-            // 新しいものが上に来るように、昇順の配列を後ろから積む
+            // Push the ascending array from the back so the newest ends up on top
             for (let i = entries.length - 1; i >= 0; i--) {
                 fragment.appendChild(buildLogEntry(entries[i]));
             }
@@ -681,7 +681,7 @@
             }
         }
 
-        // ログ 1 件の要素を作る
+        // Build the element for a single log entry
         function buildLogEntry(log) {
             const entry = document.createElement('div');
             let logClass = 'log-blocked';
@@ -695,7 +695,7 @@
             if (log.action === 'ALLOWED') { emoji = '✅'; actionClass = 'action-allowed'; }
             else if (log.action === 'IGNORED') { emoji = '⏭️'; actionClass = 'action-ignored'; }
 
-            // コンポーネント表示（DNS / FIREWALL / PROXY）
+            // Component badge (DNS / FIREWALL / PROXY)
             let componentBadge;
             if (log.component === 'FIREWALL') {
                 componentBadge = '<span style="background: rgba(201, 209, 217, 0.1); color: #c9d1d9; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 8px;">FIREWALL</span>';
@@ -717,7 +717,7 @@
             return entry;
         }
 
-        // 統計情報を更新
+        // Update the statistics
         async function refreshStats() {
             try {
                 const response = await fetch('/api/stats');
@@ -735,7 +735,7 @@
                 console.error('Failed to fetch stats:', error);
             }
 
-            // キャッシュ統計を更新
+            // Update the cache statistics
             try {
                 const cacheResponse = await fetch('/api/cache-stats');
                 const cacheStats = await cacheResponse.json();
@@ -760,22 +760,22 @@
             }
         }
 
-        // ログをクリア
+        // Clear the logs
         function clearLogs() {
             document.getElementById('logs').innerHTML = '';
         }
 
-        // タブ切り替え
+        // Switch tabs
         function switchTab(tabName) {
-            // すべてのタブとコンテンツを非アクティブに
+            // Deactivate every tab and its content
             document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
 
-            // 指定されたタブとコンテンツをアクティブに
+            // Activate the requested tab and its content
             event.target.classList.add('active');
             document.getElementById(`tab-${tabName}`).classList.add('active');
 
-            // タブ切り替え時にデータを読み込み
+            // Load the data for the tab being switched to
             if (tabName === 'allowed') {
                 loadAllowedDomains();
             } else if (tabName === 'blocked') {
@@ -793,7 +793,7 @@
             }
         }
 
-        // 許可ドメイン一覧を読み込み
+        // Load the list of allowed domains
         async function loadAllowedDomains() {
             try {
                 const response = await fetch('/api/domains/allowed');
@@ -819,7 +819,7 @@
             }
         }
 
-        // ブロックドメイン一覧を読み込み（実際にブロックされたドメイン）
+        // Load the list of blocked domains (domains that were actually blocked)
         async function loadBlockedDomains() {
             try {
                 const response = await fetch('/api/domains/blocked-actual');
@@ -856,7 +856,7 @@
             }
         }
 
-        // ユニークドメイン一覧を読み込み
+        // Load the list of unique domains
         async function loadUniqueDomains() {
             try {
                 const response = await fetch('/api/domains/unique');
@@ -870,7 +870,7 @@
                 }
 
                 listDiv.innerHTML = domains.map(domain => {
-                    // 現在のルールのバッジ
+                    // Badge for the current rule
                     let currentBadgeClass, currentBadgeText;
                     if (domain.current_rule === 'allowed') {
                         currentBadgeClass = 'badge-allowed';
@@ -886,14 +886,14 @@
                         currentBadgeText = '⛔ BLOCKED (Default Deny)';
                     }
 
-                    // 過去の履歴情報
+                    // Historical information
                     const historicalText = domain.status === 'mixed'
                         ? tr('all.history_mixed', {a: domain.allowed_count, b: domain.blocked_count})
                         : tr('all.history_single', {status: domain.status === 'allowed' ? tr('all.status_allowed') : tr('all.status_blocked'), n: domain.query_count});
 
                     const lastAccess = new Date(domain.last_access * 1000).toLocaleString('ja-JP');
 
-                    // 解決済みIPアドレスの表示
+                    // Resolved IP addresses
                     let resolvedIpsHtml = '';
                     if (domain.resolved_ips && domain.resolved_ips.length > 0) {
                         const displayIps = domain.resolved_ips.slice(0, 3);
@@ -935,7 +935,7 @@
             }
         }
 
-        // 無視されたドメイン一覧を読み込み
+        // Load the list of ignored domains
         async function loadIgnoredDomains() {
             try {
                 const response = await fetch('/api/domains/ignored');
@@ -951,7 +951,7 @@
                 listDiv.innerHTML = domains.map(domain => {
                     const lastAccess = new Date(domain.last_access * 1000).toLocaleString('ja-JP');
 
-                    // 解決済みIPアドレスの表示
+                    // Resolved IP addresses
                     let resolvedIpsHtml = '';
                     if (domain.resolved_ips && domain.resolved_ips.length > 0) {
                         const displayIps = domain.resolved_ips.slice(0, 3);
@@ -991,7 +991,7 @@
             }
         }
 
-        // ブロックされたIPアドレス一覧を読み込み
+        // Load the list of blocked IP addresses
         async function loadBlockedIPs() {
             try {
                 const response = await fetch('/api/blocked-ips');
@@ -1007,12 +1007,12 @@
                 listDiv.innerHTML = blockedIps.map(ipInfo => {
                     const lastBlocked = new Date(ipInfo.last_blocked * 1000).toLocaleString('ja-JP');
 
-                    // ポート情報
+                    // Port information
                     const portsText = ipInfo.ports.length > 0
                         ? tr('ips.ports', {list: ipInfo.ports.join(', ')})
                         : tr('ips.ports_none');
 
-                    // プロトコル情報
+                    // Protocol information
                     const protocolsText = ipInfo.protocols.length > 0
                         ? tr('ips.protocols', {list: ipInfo.protocols.join(', ')})
                         : tr('ips.protocols_none');
@@ -1045,18 +1045,18 @@
             }
         }
 
-        // 設定情報を読み込み
+        // Load the configuration
         async function loadConfig() {
             try {
                 const response = await fetch('/api/config');
                 const config = await response.json();
 
-                // バージョン情報
+                // Version information
                 document.getElementById('config-version-package').textContent = config.version_package;
                 document.getElementById('config-version-core').textContent = config.version_core;
                 document.getElementById('config-version-webui').textContent = config.version_webui;
 
-                // プロキシ設定
+                // Proxy settings
                 const proxy = config.proxy;
                 const listDiv = document.getElementById('config-proxy-list');
 
@@ -1081,7 +1081,7 @@
                     </div>
                 `).join('');
 
-                // Squid設定
+                // Squid settings
                 renderPreBlock('config-squid', config.squid, 'config_text');
 
                 // iptables
@@ -1126,7 +1126,7 @@
             return div.innerHTML;
         }
 
-        // ---- Relay タブ ----
+        // ---- Relay tab ----
         function relayCap(bytes) {
             if (bytes === -1 || bytes === undefined || bytes === null) return tr('relay.unlimited');
             if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(bytes % 1048576 ? 1 : 0)} MiB`;
@@ -1210,7 +1210,7 @@
                     relayKV(tr('relay.kv.status'), tr('common.enabled'), relayBadge('ON', 'badge-allowed')),
                     relayKV(tr('relay.kv.domain'), (cfg.upstreams || []).length > 1 ? tr('relay.default_of', {domain: cfg.domain, n: cfg.upstreams.length}) : cfg.domain),
                     relayKV(tr('relay.kv.upstream'), cfg.upstream),
-                    // 0.2.0: 複数上流はポートで分かれる。上流ごとの listen ポート / token / known_hosts
+                    // 0.2.0: multiple upstreams are split by port. Per-upstream listen port / token / known_hosts
                     ...((cfg.upstreams || []).length > 1 ? cfg.upstreams.map(u =>
                         relayKV(`↳ ${u.domain}${u.default ? ' (default)' : ''}`,
                             `→ ${u.upstream} · ssh :${u.ssh_port} · ${u.api_base} · known_hosts ${u.known_hosts_count ?? 0} · upload cap ${relayCap(u.max_upload_bytes)}${(u.ssh_options || []).length ? ' · ' + u.ssh_options.join(' ') : ''}`,
@@ -1219,7 +1219,7 @@
                     relayKV(tr('relay.kv.ssh_listen'), cfg.ssh_listen),
                     relayKV(tr('relay.kv.api_listen'), cfg.api_listen),
                     relayKV(tr('relay.kv.https'), cfg.https, relayBadge(cfg.https, cfg.https === 'passthrough' ? 'badge-allowed' : 'badge-blocked')),
-                    // 0.2.2: 送信上限（持ち出し対策）。宛先ごとの値は上流行 / https-relay 行に
+                    // 0.2.2: upload cap (exfiltration control). Per-destination values appear on the upstream / https-relay rows
                     relayKV(tr('relay.kv.upload_cap'),
                         (cfg.upstreams || []).length === 1
                             ? `${cfg.upstreams[0].domain}: ${relayCap(cfg.upstreams[0].max_upload_bytes)}${cfg.upstreams[0].max_upload_bytes !== cfg.https_max_upload_bytes ? ` (default ${relayCap(cfg.https_max_upload_bytes)})` : ''}`
@@ -1295,7 +1295,7 @@
             }
         }
 
-        // ゲートウェイ情報を読み込み
+        // Load the gateway info
         async function loadGatewayInfo() {
             try {
                 const response = await fetch('/api/gateway-info');
@@ -1324,14 +1324,14 @@
             }
         }
 
-        // 初期化（文言の辞書を読んでから描き始める）
+        // Initialization (load the string dictionary before rendering anything)
         loadI18n().then(() => {
             connectWebSocket();
             refreshStats();
             loadGatewayInfo();
         });
 
-        // 定期的に統計を更新
+        // Refresh the statistics periodically
         setInterval(refreshStats, 10000);
         setInterval(() => { if (document.getElementById('tab-relay').classList.contains('active')) loadRelay(); }, 10000);
     </script>

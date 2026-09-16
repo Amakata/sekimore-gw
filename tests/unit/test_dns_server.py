@@ -734,7 +734,7 @@ def describe_dns_server_query_handling():
         dns_server.cache = None
         dns_server.firewall_manager = Mock()
         dns_server.firewall_manager.setup_domain = Mock()
-        dns_server.gateway_hostname = None  # sekimore-gw自身の名前解決用
+        dns_server.gateway_hostname = None  # For resolving sekimore-gw's own name
         dns_server.gateway_ip = None
 
         # Mock _resolve_domain to return IPs
@@ -773,7 +773,7 @@ def describe_dns_server_query_handling():
         dns_server.cache_enabled = False
         dns_server.firewall_manager = Mock()
         dns_server.firewall_manager.setup_domain = Mock()
-        dns_server.gateway_hostname = None  # sekimore-gw自身の名前解決用
+        dns_server.gateway_hostname = None  # For resolving sekimore-gw's own name
         dns_server.gateway_ip = None
 
         # Mock _resolve_domain for IPv6
@@ -1150,7 +1150,7 @@ def describe_resolve_domain():
 
 
 def describe_domain_handler_resolution():
-    """domain_handlers（git-relay / deny / splice）の DNS 分岐."""
+    """DNS branching for domain_handlers (git-relay / deny / splice)."""
 
     import tempfile
     from unittest.mock import AsyncMock, Mock
@@ -1202,7 +1202,7 @@ def describe_domain_handler_resolution():
 
     @pytest.mark.asyncio
     async def it_redirects_https_relay_domain_to_gateway_ip_too():
-        # 0.2.2: https-relay も関所 IP を返し、実 IP を ipset に入れない
+        # 0.2.2: https-relay also returns the relay IP and keeps the real IP out of the ipset
         s = await _server({"ghcr.io": "https-relay"}, allowed=["ghcr.io"])
         r = await _query(s, "ghcr.io")
         assert r.header.rcode == 0
@@ -1285,7 +1285,7 @@ def describe_domain_handler_resolution():
 
     @pytest.mark.asyncio
     async def it_handles_servers_constructed_without_the_attribute():
-        # 既存テストは __new__ で組み立てて属性を個別に入れる。domain_handlers 無しでも動く
+        # Existing tests build the server with __new__ and set attributes one by one; it works without domain_handlers too
         s = await _server({}, allowed=["example.com"])
         del s.domain_handlers
         s._resolve_domain = AsyncMock(return_value=(["93.184.216.34"], 300))
@@ -1295,7 +1295,7 @@ def describe_domain_handler_resolution():
 
 
 def describe_domain_handlers_backward_compat():
-    """domain_handlers を渡さない場合と {} を渡した場合で応答バイト列と ipset 呼出が一致する（ゴールデン）."""
+    """Golden test: omitting domain_handlers and passing {} produce identical response bytes and ipset calls."""
 
     import tempfile
     from unittest.mock import AsyncMock, Mock

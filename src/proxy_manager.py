@@ -1,4 +1,4 @@
-"""プロキシ管理モジュール - Squid設定生成と管理."""
+"""Proxy management - generates and manages the Squid configuration."""
 
 import subprocess
 from pathlib import Path
@@ -8,7 +8,7 @@ from .logger import ComponentType, log_error, log_system_event
 
 
 class ProxyManager:
-    """Squidプロキシサーバー管理."""
+    """Manages the Squid proxy server."""
 
     def __init__(
         self,
@@ -22,18 +22,18 @@ class ProxyManager:
         upstream_proxy_username: str | None = None,
         upstream_proxy_password: str | None = None,
     ):
-        """初期化.
+        """Initialize the manager.
 
         Args:
-            config_template_path: Squid設定テンプレートパス
-            config_output_path: 出力先設定ファイルパス
-            cache_enabled: キャッシュ有効化
-            cache_size_mb: キャッシュサイズ（MB）
-            upstream_proxy: 上位プロキシ（host:port）
-            upstream_proxy_tls: 上位プロキシへの接続にTLSを使用
-            upstream_dns: 上位DNSサーバー（デフォルト: Docker内蔵DNS 127.0.0.11）
-            upstream_proxy_username: 上位プロキシ認証ユーザー名
-            upstream_proxy_password: 上位プロキシ認証パスワード
+            config_template_path: Path to the Squid config template
+            config_output_path: Path to write the generated config to
+            cache_enabled: Whether caching is enabled
+            cache_size_mb: Cache size in MB
+            upstream_proxy: Upstream proxy (host:port)
+            upstream_proxy_tls: Use TLS when connecting to the upstream proxy
+            upstream_dns: Upstream DNS server (default: Docker's built-in DNS, 127.0.0.11)
+            upstream_proxy_username: Username for upstream proxy authentication
+            upstream_proxy_password: Password for upstream proxy authentication
         """
         self.template_path = Path(config_template_path or constants.SQUID_TEMPLATE_PATH)
         self.output_path = Path(config_output_path or constants.SQUID_CONFIG_PATH)
@@ -46,16 +46,16 @@ class ProxyManager:
         self.upstream_proxy_password = upstream_proxy_password
 
     def generate_config(self, allowed_domains: list[str]) -> bool:
-        """Squid設定ファイルを生成.
+        """Generate the Squid configuration file.
 
         Args:
-            allowed_domains: 許可ドメインリスト
+            allowed_domains: Domain allowlist
 
         Returns:
-            成功した場合True
+            True on success
         """
         try:
-            # テンプレート読み込み
+            # Load the template
             if not self.template_path.exists():
                 log_error(
                     ComponentType.PROXY,
@@ -66,16 +66,16 @@ class ProxyManager:
             with open(self.template_path) as f:
                 template = f.read()
 
-            # 許可ドメインACL生成
+            # Build the allowlist ACLs
             domain_acls = self._generate_domain_acls(allowed_domains)
 
-            # キャッシュ設定
+            # Cache settings
             cache_config = self._generate_cache_config()
 
-            # 上位プロキシ設定
+            # Upstream proxy settings
             upstream_config = self._generate_upstream_proxy_config()
 
-            # テンプレート置換
+            # Fill in the template
             config = template.format(
                 ALLOWED_DOMAINS_ACL=domain_acls,
                 CACHE_CONFIG=cache_config,
@@ -83,7 +83,7 @@ class ProxyManager:
                 DNS_NAMESERVERS=self.upstream_dns,
             )
 
-            # 設定ファイル出力
+            # Write out the config file
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.output_path, "w") as f:
                 f.write(config)
@@ -104,51 +104,51 @@ class ProxyManager:
             return False
 
     def _generate_domain_acls(self, domains: list[str]) -> str:
-        """ドメインACLを生成.
+        """Build the domain ACLs.
 
         Args:
-            domains: 許可ドメインリスト
+            domains: Domain allowlist
 
         Returns:
-            ACL設定文字列
+            ACL configuration snippet
         """
         acl_lines = []
 
-        # ドメインごとにACLを定義
+        # Define one ACL entry per domain
         for domain in domains:
             if domain.startswith("*."):
-                # ワイルドカード: *.example.com → .example.com
+                # Wildcard: *.example.com -> .example.com
                 acl_lines.append(f"acl allowed_domains dstdomain {domain[1:]}")
             else:
-                # 通常ドメイン
+                # Plain domain
                 acl_lines.append(f"acl allowed_domains dstdomain {domain}")
 
         return "\n".join(acl_lines)
 
     def _generate_cache_config(self) -> str:
-        """キャッシュ設定を生成.
+        """Build the cache configuration.
 
         Returns:
-            キャッシュ設定文字列
+            Cache configuration snippet
         """
         if not self.cache_enabled:
             return "cache deny all"
 
-        # キャッシュディレクトリとサイズ設定
+        # Cache directory and sizing
         return f"""cache_dir ufs /var/spool/squid {self.cache_size_mb} 16 256
 maximum_object_size 100 MB
 cache_mem 256 MB"""
 
     def _generate_upstream_proxy_config(self) -> str:
-        """上位プロキシ設定を生成.
+        """Build the upstream proxy configuration.
 
         Returns:
-            上位プロキシ設定文字列
+            Upstream proxy configuration snippet
         """
         if not self.upstream_proxy:
             return "# No upstream proxy configured"
 
-        # host:port形式をパース
+        # Parse the host:port form
         parts = self.upstream_proxy.split(":")
         if len(parts) != 2:
             log_error(
@@ -159,7 +159,7 @@ cache_mem 256 MB"""
 
         host, port = parts
 
-        # オプション構築
+        # Build up the cache_peer options
         options = ""
         if self.upstream_proxy_tls:
             options += " tls"
@@ -185,10 +185,10 @@ cache_peer {host} parent {port} 0 no-query default{options}
 never_direct allow all"""
 
     def reload_config(self) -> bool:
-        """Squid設定をリロード.
+        """Reload the Squid configuration.
 
         Returns:
-            成功した場合True
+            True on success
         """
         try:
             # squid -k reconfigure
@@ -213,13 +213,13 @@ never_direct allow all"""
             return False
 
     def start(self) -> bool:
-        """Squidを起動.
+        """Start Squid.
 
         Returns:
-            成功した場合True
+            True on success
         """
         try:
-            # キャッシュディレクトリ初期化
+            # Initialize the cache directories
             log_system_event("Initializing Squid cache directories")
             result = subprocess.run(
                 ["squid", "-z"],
@@ -232,7 +232,7 @@ never_direct allow all"""
                     ComponentType.PROXY,
                     f"Squid cache initialization failed: {result.stderr}",
                 )
-                # 初期化失敗してもSquid起動は試みる（キャッシュ無効の場合など）
+                # Still try to start Squid even if this fails (e.g. caching disabled)
 
             # squid -N (foreground mode)
             subprocess.Popen(
@@ -249,10 +249,10 @@ never_direct allow all"""
             return False
 
     def stop(self) -> bool:
-        """Squidを停止.
+        """Stop Squid.
 
         Returns:
-            成功した場合True
+            True on success
         """
         try:
             subprocess.run(

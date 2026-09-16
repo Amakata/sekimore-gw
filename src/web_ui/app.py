@@ -1,6 +1,7 @@
-"""FastAPI Webアプリケーション - リアルタイム監視ダッシュボード."""
+"""FastAPI web application - the real-time monitoring dashboard."""
 
-# NOTE: proxy_blocks テーブルは proxy_logs に統合済み（ProxyMonitor.init_db で自動マイグレーション）
+# NOTE: the proxy_blocks table has been merged into proxy_logs (ProxyMonitor.init_db
+# migrates automatically)
 
 import contextlib
 import os
@@ -24,26 +25,26 @@ from .log_stream import LogStreamer, parse_client_message
 
 
 class DomainRequest(BaseModel):
-    """ドメイン追加/削除リクエスト."""
+    """Request to add or remove a domain."""
 
     domain: str
 
 
 class StatsResponse(BaseModel):
-    """統計レスポンス."""
+    """Statistics response."""
 
     total: int
     allowed: int
     blocked: int
     ignored: int
     unique_domains: int
-    firewall_blocked: int  # iptablesでブロックされた数
-    proxy_allowed: int  # Squidプロキシで許可された数
-    proxy_blocked: int  # Squidプロキシでブロックされた数
+    firewall_blocked: int  # blocked by iptables
+    proxy_allowed: int  # allowed by the Squid proxy
+    proxy_blocked: int  # blocked by the Squid proxy
 
 
 class CacheStatsResponse(BaseModel):
-    """DNSキャッシュ統計レスポンス."""
+    """DNS cache statistics response."""
 
     enabled: bool
     size: int = 0
@@ -53,7 +54,7 @@ class CacheStatsResponse(BaseModel):
 
 
 class LogEntry(BaseModel):
-    """ログエントリ."""
+    """A log entry."""
 
     timestamp: float
     component: str
@@ -66,7 +67,7 @@ class LogEntry(BaseModel):
 
 
 class DomainInfo(BaseModel):
-    """ドメイン情報."""
+    """Information about a domain."""
 
     domain: str
     query_count: int
@@ -74,13 +75,13 @@ class DomainInfo(BaseModel):
     blocked_count: int
     ignored_count: int = 0
     last_access: float
-    status: str  # 過去の履歴: "allowed", "blocked", "mixed"
-    current_rule: str  # 現在のルール: "allowed", "blocked_explicit", "blocked_default", "ignored"
-    resolved_ips: list[str] | None = None  # 解決されたIPアドレスのリスト
+    status: str  # historical: "allowed", "blocked", "mixed"
+    current_rule: str  # current rule: "allowed", "blocked_explicit", "blocked_default", "ignored"
+    resolved_ips: list[str] | None = None  # the resolved IP addresses
 
 
 class ProxyConfigResponse(BaseModel):
-    """プロキシ設定レスポンス."""
+    """Proxy settings response."""
 
     enabled: bool
     port: int
@@ -92,14 +93,14 @@ class ProxyConfigResponse(BaseModel):
 
 
 class SquidConfigResponse(BaseModel):
-    """Squid設定レスポンス."""
+    """Squid configuration response."""
 
     available: bool
     config_text: str | None = None
 
 
 class IptablesResponse(BaseModel):
-    """iptablesルールレスポンス."""
+    """iptables rules response."""
 
     available: bool
     filter_rules: str | None = None
@@ -108,7 +109,7 @@ class IptablesResponse(BaseModel):
 
 
 class ConfigResponse(BaseModel):
-    """設定情報レスポンス."""
+    """Configuration information response."""
 
     version_package: str
     version_core: str
@@ -119,7 +120,7 @@ class ConfigResponse(BaseModel):
 
 
 class BlockedIPInfo(BaseModel):
-    """ブロックされたIPアドレスの情報."""
+    """Information about a blocked IP address."""
 
     ip_address: str
     block_count: int
@@ -129,36 +130,36 @@ class BlockedIPInfo(BaseModel):
 
 
 class ConnectionManager:
-    """WebSocket接続管理."""
+    """Manages the WebSocket connections."""
 
     def __init__(self) -> None:
-        """初期化."""
+        """Initialize."""
         self.active_connections: list[WebSocket] = []
 
     async def connect(self, websocket: WebSocket) -> None:
-        """WebSocket接続を受け入れ.
+        """Accept a WebSocket connection.
 
         Args:
-            websocket: WebSocketインスタンス
+            websocket: The WebSocket instance
         """
         await websocket.accept()
         self.active_connections.append(websocket)
         log_system_event("WebSocket client connected", count=str(len(self.active_connections)))
 
     def disconnect(self, websocket: WebSocket) -> None:
-        """WebSocket接続を切断.
+        """Close a WebSocket connection.
 
         Args:
-            websocket: WebSocketインスタンス
+            websocket: The WebSocket instance
         """
         self.active_connections.remove(websocket)
         log_system_event("WebSocket client disconnected", count=str(len(self.active_connections)))
 
     async def broadcast(self, message: dict) -> None:
-        """すべてのクライアントにメッセージを配信.
+        """Broadcast a message to every client.
 
         Args:
-            message: 配信するメッセージ
+            message: The message to broadcast
         """
         disconnected = []
 
@@ -166,50 +167,51 @@ class ConnectionManager:
             try:
                 await connection.send_json(message)
             except Exception:
-                # 接続エラーは後でクリーンアップ
+                # Clean up connection errors afterwards
                 disconnected.append(connection)
 
-        # 切断されたクライアントを削除
+        # Drop the disconnected clients
         for conn in disconnected:
             if conn in self.active_connections:
                 self.active_connections.remove(conn)
 
 
-# FastAPIアプリケーション
+# FastAPI application
 app = FastAPI(
     title="AI Security Gateway Dashboard",
     version="0.3.2",
-    description="リアルタイム監視ダッシュボード",
+    description="Real-time monitoring dashboard",
 )
 
-# 接続マネージャー
+# Connection manager
 manager = ConnectionManager()
 
-# データベースパス（環境変数から取得可能に）
+# Database path (overridable through the environment)
 DB_PATH = constants.DB_PATH
 CONFIG_PATH = constants.CONFIG_PATH
 
 
 async def get_db() -> aiosqlite.Connection:
-    """データベース接続を取得.
+    """Open a database connection.
 
     Returns:
-        aiosqlite接続
+        An aiosqlite connection
     """
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
-    # 書き込み側（DNS / monitor）と衝突したら少し待つ（0.2.3。WAL は DNSMapping.init_db が設定する）
+    # Wait briefly when colliding with a writer (DNS / monitor). 0.2.3; WAL itself is set
+    # by DNSMapping.init_db.
     with contextlib.suppress(Exception):
         cursor = await db.execute("PRAGMA busy_timeout=5000")
-        await cursor.close()  # 開いたままの statement は読み取りを古いスナップショットに固定する
+        await cursor.close()  # an open statement pins reads to a stale snapshot
     return db
 
 
 def load_config() -> dict:
-    """設定ファイルを読み込み.
+    """Load the configuration file.
 
     Returns:
-        設定辞書
+        The configuration as a dict
     """
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
@@ -220,33 +222,33 @@ def load_config() -> dict:
 
 
 def get_current_rule(domain: str, config: dict) -> str:
-    """ドメインの現在のルールを判定.
+    """Determine the current rule for a domain.
 
     Args:
-        domain: ドメイン名
-        config: 設定辞書
+        domain: The domain name
+        config: The configuration dict
 
     Returns:
-        現在のルール: "allowed", "ignored", "blocked_explicit", "blocked_default"
+        The current rule: "allowed", "ignored", "blocked_explicit" or "blocked_default"
     """
     domain_lower = domain.lower().rstrip(".")
     allow_domains = config.get("allow_domains", [])
     block_domains = config.get("block_domains", [])
     ignore_domains = config.get("ignore_domains", [])
 
-    # ブロックリストチェック（最優先）
+    # Block list first, it wins over everything else
     for blocked in block_domains:
-        # 完全一致
+        # Exact match
         if blocked == domain_lower:
             return "blocked_explicit"
-        # ワイルドカード（.example.com形式）
+        # Wildcard (the .example.com form)
         if blocked.startswith(".") and (
             domain_lower.endswith(blocked) or domain_lower.endswith(blocked[1:])
         ):
             return "blocked_explicit"
 
-    # 無視リストチェック（blockの次、allowの前）
-    # allow_domainsへの追加は不要。DNS応答はNXDOMAINだがログノイズを軽減
+    # Ignore list, checked after block and before allow. These need no allow_domains
+    # entry: the DNS answer is still NXDOMAIN, but the log noise goes away.
     for ignored in ignore_domains:
         if ignored == domain_lower:
             return "ignored"
@@ -255,27 +257,27 @@ def get_current_rule(domain: str, config: dict) -> str:
         ):
             return "ignored"
 
-    # 許可リストチェック
+    # Allow list
     for allowed in allow_domains:
-        # 完全一致
+        # Exact match
         if allowed == domain_lower:
             return "allowed"
-        # ワイルドカード（.example.com形式）
+        # Wildcard (the .example.com form)
         if allowed.startswith(".") and (
             domain_lower.endswith(allowed) or domain_lower.endswith(allowed[1:])
         ):
             return "allowed"
 
-    # どちらにも該当しない場合（デフォルト拒否）
+    # Matched nothing, so denied by default
     return "blocked_default"
 
 
 @app.get("/api/gateway-info")
 async def get_gateway_info() -> dict:
-    """ゲートウェイ情報API.
+    """Gateway information API.
 
     Returns:
-        ゲートウェイ名称・説明
+        The gateway name and description
     """
     config = load_config()
     return {
@@ -285,7 +287,7 @@ async def get_gateway_info() -> dict:
 
 
 def _read_squid_config() -> SquidConfigResponse:
-    """Squid設定ファイルを読み取る."""
+    """Read the Squid configuration file."""
     squid_path = Path(constants.SQUID_CONFIG_PATH)
     if squid_path.exists():
         try:
@@ -299,9 +301,9 @@ def _read_squid_config() -> SquidConfigResponse:
 
 
 def _run_iptables(iptables_cmd: str) -> IptablesResponse:
-    """iptablesコマンドでfilterとnatテーブルのルールを取得する."""
+    """Read the filter and nat table rules via the iptables command."""
     try:
-        # filterテーブル
+        # filter table
         filter_result = subprocess.run(
             [iptables_cmd, "-L", "-n", "-v"],
             capture_output=True,
@@ -311,7 +313,7 @@ def _run_iptables(iptables_cmd: str) -> IptablesResponse:
         if filter_result.returncode != 0:
             return IptablesResponse(available=False, error=filter_result.stderr.strip())
 
-        # natテーブル
+        # nat table
         nat_result = subprocess.run(
             [iptables_cmd, "-t", "nat", "-L", "-n", "-v"],
             capture_output=True,
@@ -335,10 +337,10 @@ def _run_iptables(iptables_cmd: str) -> IptablesResponse:
 
 @app.get("/api/config", response_model=ConfigResponse)
 async def get_config() -> ConfigResponse:
-    """設定情報API - バージョン、プロキシ、Squid、iptables設定を返す.
+    """Configuration API - returns the versions and the proxy, Squid and iptables settings.
 
     Returns:
-        設定情報
+        The configuration information
     """
     try:
         package_version = pkg_version("sekimore-gw")
@@ -348,7 +350,7 @@ async def get_config() -> ConfigResponse:
     config = load_config()
     proxy_cfg = config.get("proxy", {})
 
-    # 認証情報の有無のみ公開（パスワード自体は返さない）
+    # Expose only whether credentials exist; never the password itself
     has_auth = bool(
         proxy_cfg.get("upstream_proxy_username") or os.getenv("SEKIMORE_UPSTREAM_PROXY_USERNAME")
     )
@@ -363,10 +365,10 @@ async def get_config() -> ConfigResponse:
         has_upstream_auth=has_auth,
     )
 
-    # Squid設定
+    # Squid configuration
     squid_response = _read_squid_config()
 
-    # iptablesルール（iptables-legacy = コンテナ内のファイアウォールルール）
+    # iptables rules (iptables-legacy holds the firewall rules inside the container)
     iptables_response = _run_iptables("iptables-legacy")
 
     return ConfigResponse(
@@ -380,7 +382,7 @@ async def get_config() -> ConfigResponse:
 
 
 class I18nResponse(BaseModel):
-    """Web UI の文言辞書（0.2.4）."""
+    """The Web UI string dictionary (0.2.4)."""
 
     lang: str
     supported: list[str]
@@ -389,7 +391,10 @@ class I18nResponse(BaseModel):
 
 @app.get("/api/i18n", response_model=I18nResponse)
 async def get_i18n(request: Request, lang: str | None = None) -> I18nResponse:
-    """言語を決めて文言辞書を返す（?lang= → cookie → config の ui.language → Accept-Language → en）."""
+    """Resolve the language and return its dictionary.
+
+    Order: `?lang=` -> cookie -> `ui.language` in the config -> `Accept-Language` -> en.
+    """
     config = load_config()
     ui = config.get("ui") if isinstance(config, dict) else None
     configured = ui.get("language", "auto") if isinstance(ui, dict) else "auto"
@@ -406,10 +411,10 @@ async def get_i18n(request: Request, lang: str | None = None) -> I18nResponse:
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
-    """ダッシュボードメイン画面.
+    """The main dashboard page.
 
     Returns:
-        HTMLレスポンス
+        An HTML response
     """
     html_path = Path(__file__).parent / "templates" / "dashboard.html"
 
@@ -422,18 +427,18 @@ async def index() -> HTMLResponse:
 
 @app.get("/api/stats", response_model=StatsResponse)
 async def get_stats() -> StatsResponse:
-    """統計情報API（過去24時間）.
+    """Statistics API, covering the last 24 hours.
 
     Returns:
-        統計情報
+        The statistics
     """
     db = await get_db()
 
-    # 過去24時間のタイムスタンプ
+    # Cutoff timestamp for the last 24 hours
     one_day_ago = time.time() - 86400
 
     try:
-        # 総アクセス数
+        # Total accesses
         cursor = await db.execute(
             "SELECT COUNT(*) FROM dns_queries WHERE timestamp > ?",
             (one_day_ago,),
@@ -441,7 +446,7 @@ async def get_stats() -> StatsResponse:
         row = await cursor.fetchone()
         total = row[0] if row else 0
 
-        # 許可数
+        # Allowed
         cursor = await db.execute(
             "SELECT COUNT(*) FROM dns_queries WHERE timestamp > ? AND status = 'allowed'",
             (one_day_ago,),
@@ -449,7 +454,7 @@ async def get_stats() -> StatsResponse:
         row = await cursor.fetchone()
         allowed = row[0] if row else 0
 
-        # ブロック数
+        # Blocked
         cursor = await db.execute(
             "SELECT COUNT(*) FROM dns_queries WHERE timestamp > ? AND status = 'blocked'",
             (one_day_ago,),
@@ -457,7 +462,7 @@ async def get_stats() -> StatsResponse:
         row = await cursor.fetchone()
         blocked = row[0] if row else 0
 
-        # 無視数
+        # Ignored
         cursor = await db.execute(
             "SELECT COUNT(*) FROM dns_queries WHERE timestamp > ? AND status = 'ignored'",
             (one_day_ago,),
@@ -465,7 +470,7 @@ async def get_stats() -> StatsResponse:
         row = await cursor.fetchone()
         ignored = row[0] if row else 0
 
-        # ユニークドメイン数
+        # Unique domains
         cursor = await db.execute(
             "SELECT COUNT(DISTINCT query_domain) FROM dns_queries WHERE timestamp > ?",
             (one_day_ago,),
@@ -473,7 +478,7 @@ async def get_stats() -> StatsResponse:
         row = await cursor.fetchone()
         unique_domains = row[0] if row else 0
 
-        # ファイアウォールブロック数
+        # Firewall blocks
         cursor = await db.execute(
             "SELECT COUNT(*) FROM firewall_blocks WHERE timestamp > ?",
             (one_day_ago,),
@@ -481,7 +486,7 @@ async def get_stats() -> StatsResponse:
         row = await cursor.fetchone()
         firewall_blocked = row[0] if row else 0
 
-        # プロキシ許可数
+        # Proxy allows and blocks
         proxy_allowed = 0
         proxy_blocked = 0
         try:
@@ -518,15 +523,15 @@ async def get_stats() -> StatsResponse:
 
 @app.get("/api/cache-stats", response_model=CacheStatsResponse)
 async def get_cache_stats() -> CacheStatsResponse:
-    """DNSキャッシュ統計API.
+    """DNS cache statistics API.
 
     Returns:
-        キャッシュ統計情報
+        The cache statistics
     """
     db = await get_db()
 
     try:
-        # cache_statsテーブルから最新の統計を取得
+        # Latest statistics from the cache_stats table
         cursor = await db.execute(
             "SELECT size, hits, misses, hit_rate FROM cache_stats WHERE id = 1"
         )
@@ -541,11 +546,11 @@ async def get_cache_stats() -> CacheStatsResponse:
                 hit_rate=row[3],
             )
 
-        # キャッシュ統計がDBに存在しない場合は無効
+        # No cache statistics in the DB means the cache is disabled
         return CacheStatsResponse(enabled=False)
 
     except Exception:
-        # テーブルが存在しない場合など
+        # e.g. the table does not exist
         return CacheStatsResponse(enabled=False)
     finally:
         await db.close()
@@ -553,13 +558,13 @@ async def get_cache_stats() -> CacheStatsResponse:
 
 @app.get("/api/logs", response_model=list[LogEntry])
 async def get_logs(limit: int = 100) -> list[LogEntry]:
-    """最近のログを取得.
+    """Return the most recent logs.
 
     Args:
-        limit: 取得件数
+        limit: How many entries to return
 
     Returns:
-        ログエントリのリスト
+        A list of log entries
     """
     db = await get_db()
 
@@ -599,13 +604,13 @@ async def get_logs(limit: int = 100) -> list[LogEntry]:
 
 @app.get("/api/firewall-blocks", response_model=list[LogEntry])
 async def get_firewall_blocks(limit: int = 100) -> list[LogEntry]:
-    """最近のファイアウォールブロックログを取得.
+    """Return the most recent firewall block logs.
 
     Args:
-        limit: 取得件数
+        limit: How many entries to return
 
     Returns:
-        ログエントリのリスト
+        A list of log entries
     """
     db = await get_db()
 
@@ -622,12 +627,12 @@ async def get_firewall_blocks(limit: int = 100) -> list[LogEntry]:
 
         logs = []
         async for row in cursor:
-            # Docker環境ではログ詳細が取得できないため、カウンターモード表示
+            # Under Docker the log details are unavailable, so fall back to counter mode
             src_ip = row[1] if row[1] and row[1] != "blocked" else None
             dst_ip = row[2] if row[2] and row[2] != "blocked" else None
             protocol = row[4] if row[4] and row[4] != "IP" else "IP"
 
-            # 詳細情報が取得できている場合とそうでない場合で表示を分ける
+            # Show a different reason depending on whether the details came through
             if src_ip and dst_ip:
                 reason = f"{protocol} traffic blocked by firewall"
             else:
@@ -653,13 +658,13 @@ async def get_firewall_blocks(limit: int = 100) -> list[LogEntry]:
 
 @app.get("/api/proxy-logs", response_model=list[LogEntry])
 async def get_proxy_logs(limit: int = 100) -> list[LogEntry]:
-    """最近のプロキシアクセスログを取得（許可・拒否両方）.
+    """Return the most recent proxy access logs, both allowed and denied.
 
     Args:
-        limit: 取得件数
+        limit: How many entries to return
 
     Returns:
-        ログエントリのリスト
+        A list of log entries
     """
     db = await get_db()
 
@@ -700,7 +705,7 @@ async def get_proxy_logs(limit: int = 100) -> list[LogEntry]:
 
 @app.get("/api/proxy-blocks", response_model=list[LogEntry])
 async def get_proxy_blocks(limit: int = 100) -> list[LogEntry]:
-    """後方互換用: プロキシブロックログのみ取得."""
+    """Backward compatible endpoint: proxy block logs only."""
     db = await get_db()
 
     try:
@@ -736,13 +741,13 @@ async def get_proxy_blocks(limit: int = 100) -> list[LogEntry]:
 
 @app.get("/api/blocked-ips", response_model=list[BlockedIPInfo])
 async def get_blocked_ips(limit: int = 100) -> list[BlockedIPInfo]:
-    """ブロックされたIPアドレスの統計情報を取得.
+    """Return statistics about blocked IP addresses.
 
     Args:
-        limit: 取得件数
+        limit: How many entries to return
 
     Returns:
-        ブロックされたIPアドレス情報のリスト
+        A list of blocked IP address records
     """
     db = await get_db()
 
@@ -769,7 +774,7 @@ async def get_blocked_ips(limit: int = 100) -> list[BlockedIPInfo]:
 
         blocked_ips = []
         async for row in cursor:
-            # ポートのリストを作成（Noneを除外）
+            # Build the port list, dropping None
             ports = []
             if row["ports"]:
                 for port_str in row["ports"].split(","):
@@ -778,7 +783,7 @@ async def get_blocked_ips(limit: int = 100) -> list[BlockedIPInfo]:
                         with contextlib.suppress(ValueError):
                             ports.append(int(port_str))
 
-            # プロトコルのリストを作成
+            # Build the protocol list
             protocols = []
             if row["protocols"]:
                 for proto in row["protocols"].split(","):
@@ -806,7 +811,7 @@ _streamer: LogStreamer | None = None
 
 
 def get_streamer() -> LogStreamer:
-    """全 WebSocket 接続で共有するポーラ（DB_PATH が差し替えられていれば作り直す）."""
+    """The poller shared by every WebSocket connection; rebuilt when DB_PATH changed."""
     global _streamer
     if _streamer is None or _streamer.db_path != DB_PATH:
         _streamer = LogStreamer(
@@ -819,14 +824,16 @@ def get_streamer() -> LogStreamer:
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
-    """WebSocketエンドポイント - リアルタイムログ配信（DNS + Firewall + Proxy）.
+    """WebSocket endpoint - real-time log delivery (DNS + Firewall + Proxy).
 
-    0.2.3: 接続時に snapshot（最新 50 件）を 1 メッセージで送り、以後は共有ポーラが 1 秒おきに新着を
-    ``{"type": "logs", "entries": [...]}`` でまとめて配信する。クライアントの ``{"type": "resync"}`` には
-    snapshot を返す（タブが非表示から戻ったとき）。以前の「接続ごとの全表走査 + 1 件ずつ送信」を置き換えた。
+    0.2.3: on connect the client gets a snapshot (the latest 50 entries) in one message;
+    after that the shared poller broadcasts new rows once a second as
+    ``{"type": "logs", "entries": [...]}``. A client ``{"type": "resync"}`` gets another
+    snapshot, which is what a tab coming back from the background sends. This replaces
+    the old per-connection full-table scan that pushed one row at a time.
 
     Args:
-        websocket: WebSocketインスタンス
+        websocket: The WebSocket instance
     """
     await manager.connect(websocket)
     streamer = get_streamer()
@@ -853,10 +860,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
 @app.get("/api/domains/allowed", response_model=list[str])
 async def get_allowed_domains() -> list[str]:
-    """許可ドメイン一覧を取得.
+    """Return the allowed domains.
 
     Returns:
-        許可ドメインのリスト
+        A list of allowed domains
     """
     config = load_config()
     return config.get("allow_domains", [])  # type: ignore[no-any-return]
@@ -864,17 +871,17 @@ async def get_allowed_domains() -> list[str]:
 
 @app.get("/api/domains/blocked", response_model=list[str])
 async def get_blocked_domains() -> list[str]:
-    """ブロックドメイン設定一覧を取得（config.yml）.
+    """Return the configured blocked domains from config.yml.
 
     Returns:
-        ブロックドメインのリスト
+        A list of blocked domains
     """
     config = load_config()
     return config.get("block_domains", [])  # type: ignore[no-any-return]
 
 
 class BlockedDomainInfo(BaseModel):
-    """ブロックされたドメイン情報."""
+    """Information about a blocked domain."""
 
     domain: str
     block_type: str  # "explicit" or "default"
@@ -884,16 +891,16 @@ class BlockedDomainInfo(BaseModel):
 
 @app.get("/api/domains/blocked-actual", response_model=list[BlockedDomainInfo])
 async def get_blocked_actual_domains() -> list[BlockedDomainInfo]:
-    """実際にブロックされたドメイン一覧を取得（アクセス履歴から）.
+    """Return the domains actually blocked, taken from the access history.
 
     Returns:
-        ブロックされたドメイン情報のリスト
+        A list of blocked domain records
     """
     db = await get_db()
     config = load_config()
 
     try:
-        # ブロックされたクエリを取得
+        # Fetch the blocked queries
         cursor = await db.execute(
             """
             SELECT
@@ -910,10 +917,10 @@ async def get_blocked_actual_domains() -> list[BlockedDomainInfo]:
         blocked_domains = []
         async for row in cursor:
             domain = row[0]
-            # 現在のルールを判定
+            # Determine the current rule
             current_rule = get_current_rule(domain, config)
 
-            # blocked_explicit または blocked_default のドメインのみ
+            # Keep only blocked_explicit and blocked_default domains
             if current_rule in ["blocked_explicit", "blocked_default"]:
                 block_type = "explicit" if current_rule == "blocked_explicit" else "default"
                 blocked_domains.append(
@@ -933,10 +940,10 @@ async def get_blocked_actual_domains() -> list[BlockedDomainInfo]:
 
 @app.get("/api/domains/unique", response_model=list[DomainInfo])
 async def get_unique_domains() -> list[DomainInfo]:
-    """ユニークドメイン一覧を取得（アクセス統計付き）.
+    """Return the unique domains along with their access statistics.
 
     Returns:
-        ドメイン情報のリスト
+        A list of domain records
     """
     db = await get_db()
     config = load_config()
@@ -964,7 +971,7 @@ async def get_unique_domains() -> list[DomainInfo]:
             blocked_count = row["blocked_count"] or 0
             ignored_count = row["ignored_count"] or 0
 
-            # 過去の履歴ステータスを判定
+            # Determine the historical status
             if allowed_count > 0 and blocked_count == 0:
                 historical_status = "allowed"
             elif blocked_count > 0 and allowed_count == 0:
@@ -972,18 +979,18 @@ async def get_unique_domains() -> list[DomainInfo]:
             else:
                 historical_status = "mixed"
 
-            # 現在のルールを判定
+            # Determine the current rule
             current_rule = get_current_rule(row["query_domain"], config)
 
-            # ignored ドメインはデフォルトで除外
+            # Ignored domains are excluded by default
             if current_rule == "ignored":
                 continue
 
-            # IPアドレスのリストを作成（重複を除去）
+            # Build the deduplicated list of IP addresses
             resolved_ips = []
             all_response_ips = row["all_response_ips"]
             if all_response_ips:
-                # GROUP_CONCATで結合されたカンマ区切りのIPアドレスを分割して重複除去
+                # Split the comma-separated addresses GROUP_CONCAT joined, then dedupe
                 ip_set = set()
                 for ip in all_response_ips.split(","):
                     ip = ip.strip()
@@ -1013,10 +1020,10 @@ async def get_unique_domains() -> list[DomainInfo]:
 
 @app.get("/api/domains/ignored-config", response_model=list[str])
 async def get_ignored_domains_config() -> list[str]:
-    """無視ドメイン設定一覧を取得（config.yml）.
+    """Return the configured ignored domains from config.yml.
 
     Returns:
-        無視ドメインのリスト
+        A list of ignored domains
     """
     config = load_config()
     return config.get("ignore_domains", [])  # type: ignore[no-any-return]
@@ -1024,10 +1031,10 @@ async def get_ignored_domains_config() -> list[str]:
 
 @app.get("/api/domains/ignored", response_model=list[DomainInfo])
 async def get_ignored_domains() -> list[DomainInfo]:
-    """無視されたドメインの統計を取得（DBから）.
+    """Return statistics for ignored domains, read from the database.
 
     Returns:
-        無視ドメイン情報のリスト
+        A list of ignored domain records
     """
     db = await get_db()
     config = load_config()
@@ -1058,7 +1065,7 @@ async def get_ignored_domains() -> list[DomainInfo]:
 
             current_rule = get_current_rule(row["query_domain"], config)
 
-            # IPアドレスのリストを作成（重複を除去）
+            # Build the deduplicated list of IP addresses
             resolved_ips: list[str] = []
             all_response_ips = row["all_response_ips"]
             if all_response_ips:
@@ -1091,15 +1098,15 @@ async def get_ignored_domains() -> list[DomainInfo]:
 
 @app.post("/api/domains/allow")
 async def add_allowed_domain(request: DomainRequest) -> dict:
-    """許可ドメインを追加（設定ファイル更新）.
+    """Add an allowed domain by updating the configuration file.
 
     Args:
-        request: ドメインリクエスト
+        request: The domain request
 
     Returns:
-        成功レスポンス
+        A success response
     """
-    # 実装時は設定ファイルを更新してオーケストレータに通知
+    # When implemented, this updates the config file and notifies the orchestrator
     log_system_event("Domain whitelist add request", domain=request.domain)
 
     return {"success": True, "domain": request.domain}
@@ -1107,13 +1114,13 @@ async def add_allowed_domain(request: DomainRequest) -> dict:
 
 @app.delete("/api/domains/allow/{domain}")
 async def remove_allowed_domain(domain: str) -> dict:
-    """許可ドメインを削除.
+    """Remove an allowed domain.
 
     Args:
-        domain: ドメイン名
+        domain: The domain name
 
     Returns:
-        成功レスポンス
+        A success response
     """
     log_system_event("Domain whitelist remove request", domain=domain)
 
@@ -1122,30 +1129,30 @@ async def remove_allowed_domain(domain: str) -> dict:
 
 @app.post("/api/domains/block")
 async def add_blocked_domain(request: DomainRequest) -> dict:
-    """拒否ドメインを追加.
+    """Add a denied domain.
 
     Args:
-        request: ドメインリクエスト
+        request: The domain request
 
     Returns:
-        成功レスポンス
+        A success response
     """
     log_system_event("Domain blocklist add request", domain=request.domain)
 
     return {"success": True, "domain": request.domain}
 
 
-# 新しいログのブロードキャスト用関数（オーケストレータから呼び出し）
+# Broadcasts a new log entry; called by the orchestrator
 async def broadcast_log(log_entry: LogEntry) -> None:
-    """新しいログをすべてのWebSocketクライアントに配信.
+    """Send a new log entry to every WebSocket client.
 
     Args:
-        log_entry: ログエントリ
+        log_entry: The log entry
     """
     await manager.broadcast(log_entry.model_dump())
 
 
-# ---- Relay（中継関所）タブ: /data/relay を読むだけ（変更系は sekimore-relay CLI のみ） ----
+# ---- Relay tab: read-only over /data/relay; changes go through the sekimore-relay CLI ----
 from . import relay_view  # noqa: E402
 
 
@@ -1155,25 +1162,25 @@ def _relay_state_dir() -> Path:
 
 @app.get("/api/relay/config", response_model=relay_view.RelayConfigResponse)
 async def get_relay_config() -> relay_view.RelayConfigResponse:
-    """relay の設定（domain_handlers / relay セクション）と状態ファイルの有無."""
+    """The relay settings (domain_handlers / relay sections) and which state files exist."""
     return relay_view.build_config(load_config())
 
 
 @app.get("/api/relay/stats", response_model=relay_view.RelayStatsResponse)
 async def get_relay_stats() -> relay_view.RelayStatsResponse:
-    """relay の 24h 統計（許可 / 拒否件数、トークン、登録鍵）."""
+    """24h relay statistics: allowed / denied counts, tokens and registered keys."""
     return relay_view.build_stats(load_config())
 
 
 @app.get("/api/relay/tokens", response_model=list[relay_view.RelayTokenInfo])
 async def get_relay_tokens() -> list[relay_view.RelayTokenInfo]:
-    """案件トークンの一覧（ラベルとメタデータのみ。ハッシュも平文も出さない）."""
+    """The project tokens: labels and metadata only, never the hash or the plaintext."""
     return relay_view.read_tokens(_relay_state_dir())
 
 
 @app.get("/api/relay/audit", response_model=list[relay_view.RelayAuditEntry])
 async def get_relay_audit(limit: int = 100, kind: str = "all") -> list[relay_view.RelayAuditEntry]:
-    """監査ログ（新しい順）。kind=allowed でアクセス履歴、kind=blocked でブロック履歴."""
+    """The audit log, newest first. kind=allowed gives the access history, kind=blocked the blocks."""
     limit = max(1, min(limit, 1000))
     if kind not in ("all", "allowed", "blocked"):
         kind = "all"

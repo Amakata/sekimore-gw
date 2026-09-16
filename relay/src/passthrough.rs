@@ -1,9 +1,9 @@
-//! 同じドメインの 443。`github.com` を関所に向けると HTTPS も来る。INPUT DROP のまま放置すると
-//! 無言タイムアウトになる（最悪ケース）。既定は実 upstream:443 への TCP 素通し（TLS は終端しない）、
-//! `relay.https: reject` なら即時切断 + ログ。
+//! Port 443 for the same domain. Pointing `github.com` at the relay brings HTTPS along with it. Leaving it
+//! at INPUT DROP gives a silent timeout (the worst outcome). By default the TCP stream is passed through unchanged
+//! to the real upstream:443 (TLS is not terminated); with `relay.https: reject` it is closed immediately and logged.
 //!
-//! 0.2.0: 複数上流のときは **ClientHello の SNI** を先読みして上流を選ぶ（TLS は終端しないので
-//! 平文のまま読める）。SNI が無い / どの上流にも一致しなければ既定上流（0.1.x と同じ）。
+//! 0.2.0: with multiple upstreams, the **SNI in the ClientHello** is peeked at to pick one (TLS is not terminated,
+//! so it can be read in the clear). Without an SNI, or with no matching upstream, the default upstream is used (same as 0.1.x).
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -19,39 +19,39 @@ use crate::config::{HttpsMode, ProxySpec};
 use crate::git::{copy_touch, Watchdog};
 use crate::netutil::http_connect_tunnel;
 
-/// SNI で選べる上流 1 つ分。`domain` は DNS で関所に向けられる名前（= SNI に来る名前）、`host` は実上流。
+/// One upstream selectable by SNI. `domain` is the name DNS points at the relay (i.e. the name that arrives in the SNI); `host` is the real upstream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SniTarget {
     pub domain: String,
     pub host: String,
     pub port: u16,
-    /// 0.2.2: この宛先への送信上限（None = 無制限）
+    /// 0.2.2: upload cap for this destination (None = unlimited)
     pub max_upload: Option<u64>,
 }
 
-/// ClientHello を待つ上限。TLS でない / 遅いクライアントは読めた分だけで既定上流へ流す。
+/// How long to wait for a ClientHello. Non-TLS or slow clients are forwarded to the default upstream with whatever was read.
 pub const CLIENT_HELLO_TIMEOUT: Duration = Duration::from_secs(5);
-/// 先読みの上限（TLS レコード最大 16 KiB + ヘッダ）。
+/// Cap on the peeked bytes (maximum TLS record of 16 KiB plus the header).
 const CLIENT_HELLO_CAP: usize = 16 * 1024 + 5 + 256;
 
 pub struct Passthrough {
-    /// 既定上流（SNI が無い / 一致しないときの接続先）
+    /// Default upstream (used when there is no SNI, or no match)
     pub upstream: String,
     pub port: u16,
-    /// 0.2.0: SNI で選ぶ上流の一覧（既定上流も含めてよい）。空なら常に既定上流
+    /// 0.2.0: upstreams selectable by SNI (the default upstream may be included). Empty means always use the default
     pub upstreams: Vec<SniTarget>,
-    /// 0.2.2: 既定上流（SNI 無し / 不一致）への送信上限。None = 無制限
+    /// 0.2.2: upload cap for the default upstream (no SNI or no match). None = unlimited
     pub max_upload: Option<u64>,
     pub mode: HttpsMode,
     pub proxy: Option<ProxySpec>,
     pub idle: Duration,
     pub conns: Semaphore,
     pub audit: Arc<Audit>,
-    /// テスト用: 解決先がこのホスト自身でも接続する
+    /// For tests: connect even when the name resolves to this host itself
     pub allow_local: bool,
 }
 
-/// `ip` がこのホスト自身のアドレスか（DNS 自己参照ループの検知）。
+/// Whether `ip` is an address of this host (detects a DNS self-loop).
 pub fn is_local_ip(ip: IpAddr) -> bool {
     if ip.is_loopback() {
         return true;
@@ -70,8 +70,8 @@ pub fn is_local_ip(ip: IpAddr) -> bool {
     sock.local_addr().map(|a| a.ip() == ip).unwrap_or(false)
 }
 
-/// TLS ClientHello から SNI（server_name 拡張の host_name）を取り出す。
-/// TLS でない、ClientHello でない、拡張が無い、途中で切れている場合は None。名前は小文字・末尾 `.` 無し。
+/// Extracts the SNI (the host_name of the server_name extension) from a TLS ClientHello.
+/// Returns None if this is not TLS, not a ClientHello, has no extensions, or is truncated. The name is lowercased with no trailing `.`.
 pub fn parse_sni(buf: &[u8]) -> Option<String> {
     // TLS record: content_type(1)=handshake(0x16) version(2) length(2)
     if buf.len() < 5 || buf[0] != 0x16 {
@@ -123,8 +123,8 @@ pub fn parse_sni(buf: &[u8]) -> Option<String> {
     None
 }
 
-/// 先頭の TLS レコード（ClientHello）を読み、(SNI, 読んだバイト列) を返す。
-/// TLS でなければ最初に読めた分で止める。タイムアウト / エラー時も読めた分をそのまま返す（上流へ前送する）。
+/// Reads the first TLS record (the ClientHello) and returns (SNI, bytes read).
+/// For non-TLS traffic it stops at the first successful read. On timeout or error it still returns what was read (to forward upstream).
 async fn read_client_hello(stream: &mut TcpStream, timeout: Duration) -> (Option<String>, Vec<u8>) {
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let _ = tokio::time::timeout(timeout, async {
@@ -152,7 +152,7 @@ async fn read_client_hello(stream: &mut TcpStream, timeout: Duration) -> (Option
 }
 
 impl Passthrough {
-    /// SNI から接続先を選ぶ。(host, port, 送信上限, 一致したか)。
+    /// Picks the destination from the SNI. Returns (host, port, upload cap, whether it matched).
     pub fn select(&self, sni: Option<&str>) -> (&str, u16, Option<u64>, bool) {
         if let Some(name) = sni {
             for t in &self.upstreams {
@@ -164,7 +164,7 @@ impl Passthrough {
         (&self.upstream, self.port, self.max_upload, false)
     }
 
-    /// 既定上流へ接続する（0.1.x 互換）。
+    /// Connects to the default upstream (0.1.x compatible).
     pub async fn connect_upstream(&self) -> std::io::Result<TcpStream> {
         self.connect_upstream_to(&self.upstream, self.port).await
     }
@@ -230,7 +230,7 @@ impl Passthrough {
                     return;
                 };
                 let mut stream = stream;
-                // 上流が 1 つなら先読みは不要（0.1.x と同じ挙動）
+                // With a single upstream there is nothing to peek at (same behaviour as 0.1.x)
                 let (sni, prefix) = if this.upstreams.len() > 1 {
                     read_client_hello(&mut stream, CLIENT_HELLO_TIMEOUT).await
                 } else {
@@ -244,7 +244,7 @@ impl Passthrough {
                 let sni_s = sni.clone().unwrap_or_else(|| "-".to_string());
                 match this.connect_upstream_to(&host, port).await {
                     Ok(mut up) => {
-                        // 先読みした ClientHello だけで上限を超えるなら、上流へ何も送らずに切る
+                        // If the peeked ClientHello alone exceeds the cap, close without sending anything upstream
                         if cap.is_some_and(|c| prefix.len() as u64 > c) {
                             this.audit.deny(
                                 "https_upload_capped",
@@ -318,8 +318,8 @@ impl Passthrough {
         }
     }
 
-    /// 双方向に流す。返り値は (dev → 上流のバイト数, 上流 → dev のバイト数, 上限で切ったか)。
-    /// `already` は先読み（ClientHello）で既に上流へ送ったバイト数で、上限に数える。`cap` None は無制限。
+    /// Pumps both directions. Returns (bytes dev → upstream, bytes upstream → dev, whether the cap cut it off).
+    /// `already` is the number of bytes the peeked ClientHello already sent upstream, and counts against the cap. A `cap` of None is unlimited.
     async fn pump(
         &self,
         client: TcpStream,
@@ -332,7 +332,7 @@ impl Passthrough {
         let (cr, cw) = client.into_split();
         let (ur, uw) = upstream.into_split();
         let wd_down = wd.clone();
-        // 上流 → dev は別タスクで流し続ける（上限に達したら abort して接続ごと閉じる）
+        // upstream → dev keeps flowing in its own task (aborted, closing the connection, once the cap is hit)
         let down =
             tokio::spawn(async move { copy_touch(ur, cw, &wd_down, true).await.unwrap_or(0) });
         let up = copy_capped(cr, uw, &wd, cap, already);
@@ -342,7 +342,7 @@ impl Passthrough {
                     down.abort();
                     return (sent, 0, true);
                 }
-                // dev 側が送り終えた。応答が流れ終わるまで（idle 監視付きで）待つ
+                // The dev side is done sending. Wait for the response to drain (with the idle watchdog running)
                 tokio::select! {
                     r = down => (sent, r.unwrap_or(0), false),
                     _ = wd.expired() => (sent, 0, false),
@@ -356,8 +356,8 @@ impl Passthrough {
     }
 }
 
-/// dev → 上流のコピー。`cap`（None = 無制限）を超える分は送らずに止め、(送ったバイト数, 上限に達したか) を返す。
-/// `already` は既に送った分（上限に数える）。
+/// Copies dev → upstream. Stops without sending anything beyond `cap` (None = unlimited) and returns (bytes sent, whether the cap was hit).
+/// `already` is what has already been sent (and counts against the cap).
 async fn copy_capped<R, W>(
     mut reader: R,
     mut writer: W,
@@ -436,7 +436,7 @@ mod tests {
         tokio::spawn(p.run(listener));
 
         let mut c = TcpStream::connect(addr).await.unwrap();
-        // 700 バイトは通り、次の 700 バイトで上限 1024 を超える → 切断
+        // 700 bytes get through; the next 700 push past the cap of 1024 → disconnect
         let chunk = vec![b'x'; 700];
         c.write_all(&chunk).await.unwrap();
         let mut got = Vec::new();
@@ -451,7 +451,7 @@ mod tests {
         }
         assert_eq!(got.len(), 700);
         let _ = c.write_all(&chunk).await;
-        // 2 つ目は転送されず、接続が閉じられる（read が 0 かエラーで終わる）
+        // The second chunk is not forwarded and the connection is closed (read ends with 0 or an error)
         let mut extra = 0usize;
         loop {
             match tokio::time::timeout(Duration::from_secs(3), c.read(&mut buf)).await {
@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(p.select(None).2, Some(64));
         tokio::spawn(p.run(listener));
 
-        // big.test: ClientHello (>64 バイト) + 続きが全部エコーされる
+        // big.test: the ClientHello (>64 bytes) and everything after it are echoed back
         let hello = client_hello(Some("big.test"));
         let mut c = TcpStream::connect(addr).await.unwrap();
         c.write_all(&hello).await.unwrap();
@@ -508,7 +508,7 @@ mod tests {
             got += n;
         }
         assert_eq!(got, want);
-        // small.test: ClientHello 自体が 64 バイトを超えるので即座に切られる
+        // small.test: the ClientHello alone exceeds 64 bytes, so the connection is cut immediately
         let hello = client_hello(Some("small.test"));
         let mut c = TcpStream::connect(addr).await.unwrap();
         let _ = c.write_all(&hello).await;
@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(extra, 0);
     }
 
-    /// 最小の TLS 1.2 ClientHello（拡張は SNI だけ、あれば）。
+    /// A minimal TLS 1.2 ClientHello (SNI is the only extension, when given).
     fn client_hello(sni: Option<&str>) -> Vec<u8> {
         let mut exts = Vec::new();
         if let Some(name) = sni {
@@ -536,7 +536,7 @@ mod tests {
             exts.extend_from_slice(&(body.len() as u16).to_be_bytes());
             exts.extend_from_slice(&body);
         }
-        // もう 1 つダミー拡張（supported_versions 相当）を後ろに足して走査を確かめる
+        // Append one more dummy extension (standing in for supported_versions) to exercise the scan
         exts.extend_from_slice(&43u16.to_be_bytes());
         exts.extend_from_slice(&3u16.to_be_bytes());
         exts.extend_from_slice(&[2, 3, 4]);
@@ -567,16 +567,16 @@ mod tests {
         assert_eq!(parse_sni(&client_hello(None)), None);
         assert_eq!(parse_sni(b"GET / HTTP/1.1\r\n"), None);
         assert_eq!(parse_sni(b""), None);
-        // 途中で切れていれば None（読み足す側の判断に任せる）
+        // Truncated input yields None (it is up to the caller to read more)
         let full = client_hello(Some("a.test"));
         assert_eq!(parse_sni(&full[..full.len() - 3]), None);
-        // ClientHello 以外のハンドシェイク
+        // A handshake message other than ClientHello
         let mut sh = full.clone();
         sh[5] = 0x02;
         assert_eq!(parse_sni(&sh), None);
     }
 
-    /// 接続直後に tag を書いて閉じるサーバ。返り値はポート。
+    /// A server that writes tag and closes as soon as it accepts. Returns the port.
     async fn tag_server(tag: &'static str) -> u16 {
         let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
@@ -656,7 +656,7 @@ mod tests {
             b"A"
         );
         assert_eq!(roundtrip(addr, &client_hello(None)).await, b"A");
-        // TLS でない平文も既定上流へ
+        // Non-TLS plaintext also goes to the default upstream
         assert_eq!(roundtrip(addr, b"GET / HTTP/1.0\r\n\r\n").await, b"A");
     }
 
@@ -687,7 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn client_hello_prefix_is_forwarded_before_the_rest_of_the_stream() {
-        // 2 上流構成（先読みが走る）で echo に流し、ClientHello + 続きのバイトが順序どおり届くこと
+        // With two upstreams (so the peek runs), stream to echo and check the ClientHello and following bytes arrive in order
         let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let echo_port = echo.local_addr().unwrap().port();
         tokio::spawn(async move {

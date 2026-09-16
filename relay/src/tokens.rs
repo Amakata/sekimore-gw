@@ -1,13 +1,13 @@
-//! 案件トークンのストア。
+//! Project token store.
 //!
-//! 方式は不透明トークン: エージェントに渡すのは意味のない乱数で、案件・有効期限は関所側のストアが持つ。
-//!   - 即時失効ができる（自律エージェントに渡す鍵なので必須）
-//!   - ポリシー変更が既発行トークンにも即反映される
-//!   - トークン自体に情報が載らない
+//! Tokens are opaque: the agent receives meaningless random bytes, while the project and expiry live in the relay's store.
+//!   - Revocation is immediate (essential for a credential handed to an autonomous agent)
+//!   - Policy changes apply to already-issued tokens right away
+//!   - The token itself carries no information
 //!
-//! ストアには **SHA-256 ハッシュのみ**。平文は発行時の戻り値にしか存在しない。
-//! ラベルはハッシュの先頭 8 hex（平文の一部を出さない）。
-//! 更新は flock → 読む → 変える → atomic rename（`serve` と操作者 CLI の並行実行に耐える）。
+//! The store holds **SHA-256 hashes only**. The plaintext exists only in the value returned at issue time.
+//! The label is the first 8 hex characters of the hash (it reveals no part of the plaintext).
+//! Updates follow flock → read → modify → atomic rename, so `serve` and the operator CLI can run concurrently.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -20,13 +20,13 @@ use sha2::{Digest, Sha256};
 use crate::fsutil::{atomic_write, read_optional, FlockGuard};
 
 pub const TOKEN_PREFIX: &str = "skm_";
-/// 期限切れ後もこの期間はレコードを残す（`tokens` で最近の失効を確認できる）。過ぎたら保存時に落とす。
-/// 永続的な記録は audit.jsonl が持つので、ストアに残す意味は一覧性だけ。
+/// How long expired records are kept (so `tokens` still shows recent revocations). Past this, they are dropped on save.
+/// audit.jsonl holds the permanent record, so keeping them in the store only helps the listing.
 pub const RETENTION_AFTER_EXPIRY: Duration = Duration::from_secs(7 * 24 * 3600);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TokenRecord {
-    /// 表示用の短い識別子（ハッシュ先頭 8 hex）。ログや一覧に使う
+    /// Short display identifier (first 8 hex of the hash), used in logs and listings
     pub label: String,
     pub project: String,
     #[serde(with = "humantime_serde")]
@@ -39,7 +39,7 @@ pub struct TokenRecord {
     pub use_count: u64,
     #[serde(default)]
     pub revoked: bool,
-    /// 発行のきっかけになった agent 鍵の fingerprint（bootstrap 経由のみ。手動 `token` は None）
+    /// Fingerprint of the agent key this token was issued for (bootstrap only; a manual `token` leaves it None)
     #[serde(default)]
     pub fingerprint: Option<String>,
 }
@@ -91,7 +91,7 @@ pub struct TokenStore {
     path: PathBuf,
 }
 
-/// 期限切れから RETENTION_AFTER_EXPIRY を過ぎたレコードを落とす（失効済みでも同じ基準。書き込み時に呼ぶ）。
+/// Drops records whose expiry is more than RETENTION_AFTER_EXPIRY ago (same rule for revoked ones). Called on write.
 fn prune(f: &mut StoreFile, now: SystemTime) {
     f.records
         .retain(|_, rec| now <= rec.expires_at + RETENTION_AFTER_EXPIRY);
@@ -125,12 +125,12 @@ impl TokenStore {
         atomic_write(&self.path, &data, 0o600)
     }
 
-    /// 発行。平文は戻り値でのみ返し、保存しない。
+    /// Issues a token. The plaintext is only returned, never stored.
     pub fn issue(&self, project: &str, ttl: Duration) -> std::io::Result<(String, TokenRecord)> {
         self.issue_for(project, ttl, None)
     }
 
-    /// 発行（bootstrap 用: どの agent 鍵に渡したかを記録する）。
+    /// Issues a token for bootstrap, recording which agent key received it.
     pub fn issue_for(
         &self,
         project: &str,
@@ -160,7 +160,7 @@ impl TokenStore {
         Ok((token, rec))
     }
 
-    /// 同じ agent 鍵に発行した有効なトークンを全て失効させる（再 bootstrap 時のローテーション）。件数を返す。
+    /// Revokes every valid token issued to the same agent key (rotation on re-bootstrap). Returns the count.
     pub fn revoke_by_fingerprint(&self, fingerprint: &str) -> std::io::Result<usize> {
         let _g = FlockGuard::lock(&self.path)?;
         let mut f = self.load()?;
@@ -181,7 +181,7 @@ impl TokenStore {
         Ok(n)
     }
 
-    /// 検証。使用実績も記録する（監査のため。保存失敗でも検証結果は返す）。
+    /// Verifies a token and records its use (for audit purposes; the result is returned even if the save fails).
     pub fn verify(&self, token: &str) -> Result<TokenRecord, VerifyError> {
         let hash = hash_token(token);
         let _g = FlockGuard::lock(&self.path).map_err(VerifyError::Io)?;
@@ -201,7 +201,7 @@ impl TokenStore {
         Ok(out)
     }
 
-    /// ラベル指定で失効。見つかれば true。
+    /// Revokes by label. Returns true if a matching token was found.
     pub fn revoke(&self, label: &str) -> std::io::Result<bool> {
         let _g = FlockGuard::lock(&self.path)?;
         let mut f = self.load()?;
@@ -219,7 +219,7 @@ impl TokenStore {
         Ok(found)
     }
 
-    /// 案件のトークンを全て失効させる（案件終了時）。失効させた件数を返す。
+    /// Revokes every token of a project (when the project ends). Returns the number revoked.
     pub fn revoke_project(&self, project: &str) -> std::io::Result<usize> {
         let _g = FlockGuard::lock(&self.path)?;
         let mut f = self.load()?;
@@ -237,7 +237,7 @@ impl TokenStore {
         Ok(n)
     }
 
-    /// 発行済みトークンの一覧（平文は含まない）。発行日時順。
+    /// Lists issued tokens (never the plaintext), ordered by issue time.
     pub fn list(&self) -> std::io::Result<Vec<TokenRecord>> {
         let _g = FlockGuard::lock(&self.path)?;
         let f = self.load()?;
@@ -265,10 +265,10 @@ mod tests {
         assert_eq!(plain.len(), TOKEN_PREFIX.len() + 64);
         assert_eq!(rec.project, "case-a");
         assert!(rec.label.starts_with(TOKEN_PREFIX) && rec.label.len() == TOKEN_PREFIX.len() + 8);
-        // ラベルは平文の一部ではない
+        // The label is not a substring of the plaintext
         assert!(!plain.starts_with(&rec.label));
 
-        // 平文はストアに保存されない
+        // The plaintext is never persisted to the store
         let text = std::fs::read_to_string(dir.path().join("tokens.json")).unwrap();
         assert!(!text.contains(&plain));
         assert!(text.contains(&hash_token(&plain)));
@@ -370,7 +370,7 @@ mod tests {
         let (manual_plain, _) = s.issue("case-a", Duration::from_secs(3600)).unwrap();
         assert_eq!(s.revoke_by_fingerprint("SHA256:k1").unwrap(), 1);
         assert!(matches!(s.verify(&old_plain), Err(VerifyError::Revoked)));
-        // 別の鍵と手動発行は影響を受けない
+        // Other keys and manually issued tokens are unaffected
         assert!(s.verify(&other_plain).is_ok());
         assert!(s.verify(&manual_plain).is_ok());
         assert_eq!(s.revoke_by_fingerprint("SHA256:k1").unwrap(), 0);
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn long_expired_records_are_pruned_on_write() {
         let (_d, s) = store();
-        let (_, recent) = s.issue("case-a", Duration::ZERO).unwrap(); // 期限切れ直後: 残る
+        let (_, recent) = s.issue("case-a", Duration::ZERO).unwrap(); // just expired: kept
         let mut f = s.load().unwrap();
         let mut old = recent.clone();
         old.label = "skm_00000000".into();
@@ -395,7 +395,7 @@ mod tests {
         f.records.insert("f".repeat(64), old);
         s.save(&f).unwrap();
         assert_eq!(s.list().unwrap().len(), 2);
-        // 次の書き込みで 7 日超のものだけ消える
+        // The next write drops only the records older than 7 days
         s.issue("case-a", Duration::from_secs(60)).unwrap();
         let labels: Vec<String> = s.list().unwrap().into_iter().map(|r| r.label).collect();
         assert_eq!(labels.len(), 2);

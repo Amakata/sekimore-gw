@@ -1,4 +1,4 @@
-# 共有 fixture: relay 無しの従来設定。Python テストと relay（Rust）テストの双方が読む。
+# Shared fixture: the traditional configuration, no relay. Read by both the Python tests and the Rust relay tests.
 name: fixture-without-relay
 allow_domains:
   - pypi.org

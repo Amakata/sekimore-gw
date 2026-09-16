@@ -1,4 +1,4 @@
-"""Squidアクセスログ監視モジュール - プロキシアクセスの記録（許可・拒否両方）."""
+"""Squid access log monitor - records proxy accesses (both allowed and denied)."""
 
 import asyncio
 import re
@@ -28,7 +28,7 @@ BLOCKED_RESULTS = frozenset(
 
 
 class ProxyMonitor:
-    """Squidアクセスログを監視してアクセスを記録（許可・拒否両方）."""
+    """Watches the Squid access log and records accesses (both allowed and denied)."""
 
     def __init__(self, db_path: str, log_path: str = "/var/log/squid/access.log"):
         self.db_path = db_path
@@ -37,9 +37,9 @@ class ProxyMonitor:
         self.running = False
 
     async def init_db(self) -> None:
-        """データベース初期化（proxy_logsテーブル作成 + proxy_blocksからのマイグレーション）."""
+        """Initialize the database: create proxy_logs and migrate from proxy_blocks."""
         self.db = await aiosqlite.connect(self.db_path)
-        # 0.2.3: WAL（DNSMapping と同じ DB。設定は冪等）と busy_timeout
+        # 0.2.3: WAL (same DB as DNSMapping; applying these is idempotent) and busy_timeout
         for pragma in (
             "PRAGMA journal_mode=WAL",
             "PRAGMA synchronous=NORMAL",
@@ -83,7 +83,7 @@ class ProxyMonitor:
         log_system_event("Proxy monitor database initialized", db_path=self.db_path)
 
     async def _migrate_proxy_blocks(self) -> None:
-        """proxy_blocksテーブルからproxy_logsへデータをマイグレーション."""
+        """Migrate rows from the proxy_blocks table into proxy_logs."""
         assert self.db is not None
 
         cursor = await self.db.execute(
@@ -128,7 +128,7 @@ class ProxyMonitor:
         squid_result: str,
         action: str,
     ) -> None:
-        """プロキシアクセスイベントをDBに記録."""
+        """Record a proxy access event in the database."""
         if not self.db:
             return
 
@@ -158,9 +158,9 @@ class ProxyMonitor:
             )
 
     def _parse_squid_log_line(self, line: str) -> dict | None:
-        """Squidログ行をパース.
+        """Parse a Squid log line.
 
-        Squidログフォーマット:
+        Squid log format:
         timestamp elapsed client_ip result_code/status bytes method URL - hierarchy/peername type
         """
         match = SQUID_LOG_PATTERN.match(line)
@@ -187,7 +187,7 @@ class ProxyMonitor:
         }
 
     async def _follow_log(self) -> None:
-        """Squidログを監視（tail -f相当）."""
+        """Follow the Squid log (equivalent to tail -f)."""
         try:
             with open(self.log_path) as f:
                 f.seek(0, 2)
@@ -215,7 +215,7 @@ class ProxyMonitor:
             )
 
     async def start(self) -> None:
-        """プロキシモニターを開始."""
+        """Start the proxy monitor."""
         if self.running:
             return
 
@@ -232,7 +232,7 @@ class ProxyMonitor:
             self.running = False
 
     async def stop(self) -> None:
-        """プロキシモニターを停止."""
+        """Stop the proxy monitor."""
         if not self.running:
             return
 

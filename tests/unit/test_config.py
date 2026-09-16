@@ -286,7 +286,7 @@ def describe_load_config_function():
 
 
 def describe_domain_handlers():
-    """domain_handlers / relay（中継関所）の設定."""
+    """domain_handlers / relay (the relay) configuration."""
 
     def it_defaults_to_empty_and_no_relay_ports(sample_config_data):
         config = Config(**sample_config_data)
@@ -336,7 +336,7 @@ def describe_domain_handlers():
     def it_rejects_two_git_relay_domains_on_the_same_ssh_port():
         from pydantic import ValidationError
 
-        # ssh_port を省いた 2 つは同じ 22 になる
+        # Two entries without an ssh_port both land on 22
         with pytest.raises(ValidationError, match="both listen on ssh port 22"):
             Config(
                 domain_handlers={
@@ -353,7 +353,7 @@ def describe_domain_handlers():
             )
 
     def it_splits_multiple_git_relay_domains_by_ssh_port():
-        # 0.2.0: 2 つ目以降の上流は別ポートで受け、firewall の INPUT にもそのポートを開ける
+        # 0.2.0: every upstream after the first listens on its own port, and the firewall opens that port in INPUT
         config = Config(
             domain_handlers={
                 "github.com": {"handler": "git-relay"},
@@ -361,7 +361,7 @@ def describe_domain_handlers():
                     "handler": "git-relay",
                     "ssh_port": 2222,
                     "upstream": "ghe.example.com",
-                    "oauth_client_id": "abc",  # relay だけが読むキーは無視される
+                    "oauth_client_id": "abc",  # Keys only the relay reads are ignored here
                 },
             }
         )
@@ -369,7 +369,7 @@ def describe_domain_handlers():
         assert config.git_relay_ssh_ports() == {"github.com": 22, "ghe.example.com": 2222}
         assert config.relay_input_ports() == [22, 2222, 8420, 443]
         assert config.domain_handlers["ghe.example.com"].upstream == "ghe.example.com"
-        # ssh_port を明示した 1 つだけでも動く（listen ポートと同じなら重複しない）
+        # A single entry with an explicit ssh_port works too (no duplicate when it matches the listen port)
         one = Config(domain_handlers={"github.com": {"handler": "git-relay", "ssh_port": 22}})
         assert one.relay_input_ports() == [22, 8420, 443]
 
@@ -386,7 +386,7 @@ def describe_domain_handlers():
             },
         )
         assert config.relay.https == "reject"
-        # reject でも 443 は開ける（relay が受けて即切断する。INPUT で落とすと無言タイムアウト）
+        # Even with reject, 443 stays open: the relay accepts and closes immediately, whereas dropping it in INPUT would time out silently
         assert config.relay_input_ports() == [2222, 9000, 443]
 
     def it_needs_no_ports_for_deny_or_splice_only():
@@ -431,8 +431,8 @@ def describe_allowed_ports_config():
 
         assert Config().network.allowed_ports == []
         cfg = Config(network={"allowed_ports": [443, 80, 443]})
-        assert cfg.network.allowed_ports == [443, 80]  # 重複は落とす、順序は保つ
-        # 文字列の数字は pydantic が int に寄せる（YAML の "443" も受ける）
+        assert cfg.network.allowed_ports == [443, 80]  # Duplicates are dropped, order is preserved
+        # pydantic coerces numeric strings to int (so YAML's "443" is accepted)
         assert Config(network={"allowed_ports": ["443"]}).network.allowed_ports == [443]
         for bad in ([0], [70000], ["https"]):
             with pytest.raises(ValidationError):
@@ -440,7 +440,7 @@ def describe_allowed_ports_config():
 
 
 def describe_https_relay_handler():
-    """0.2.2: https-relay（443 だけ関所を通す）と送信上限 max_upload_bytes（-1 = 無制限）."""
+    """0.2.2: https-relay (only 443 goes through the relay) and the max_upload_bytes upload cap (-1 = unlimited)."""
 
     def it_accepts_https_relay_next_to_git_relay_and_validates_caps():
         from pydantic import ValidationError
@@ -454,7 +454,7 @@ def describe_https_relay_handler():
         )
         assert cfg.https_relay_domains() == ["ghcr.io", "registry-1.docker.io"]
         assert cfg.relay_domains() == ["github.com", "ghcr.io", "registry-1.docker.io"]
-        assert cfg.git_relay_ssh_ports() == {"github.com": 22}  # https-relay に SSH ポートは無い
+        assert cfg.git_relay_ssh_ports() == {"github.com": 22}  # https-relay has no SSH port
         assert cfg.relay_input_ports() == [22, 8420, 443]
         for bad in (0, -2):
             with pytest.raises(ValidationError, match="max_upload_bytes"):
@@ -464,6 +464,6 @@ def describe_https_relay_handler():
                         "github.com": {"handler": "git-relay"},
                     }
                 )
-        # git-relay 無しの https-relay は設定エラー
+        # https-relay without a git-relay is a configuration error
         with pytest.raises(ValidationError, match="needs at least one git-relay"):
             Config(domain_handlers={"ghcr.io": {"handler": "https-relay"}})

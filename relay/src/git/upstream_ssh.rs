@@ -1,8 +1,8 @@
-//! 上流 git を OpenSSH クライアントで起動する。
+//! Spawning the upstream git through the OpenSSH client.
 //!
-//! `git-receive-pack <url>` は無効（ディレクトリしか受けない）。正しい上流の呼び方は
-//! `ssh git@<host> git-receive-pack 'Org/Repo.git'`。`SSH_AUTH_SOCK` を子プロセスに渡し、
-//! 依頼者の agent で認証する（鍵は Mac から出ない）。
+//! `git-receive-pack <url>` does not work (it only accepts a directory). The correct way to call upstream is
+//! `ssh git@<host> git-receive-pack 'Org/Repo.git'`. We pass `SSH_AUTH_SOCK` to the child process and
+//! authenticate with the operator's agent, so the key never leaves the Mac.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -21,7 +21,7 @@ pub struct OpenSshUpstream {
     pub ssh_config: Option<PathBuf>,
     pub auth_sock: Option<PathBuf>,
     pub ssh_bin: String,
-    /// 0.2.1: 設定からの追加 `-o`（ProxyJump 等）。関所が強制するオプションの後ろに並べる（先に指定した値が勝つ）
+    /// 0.2.1: extra `-o` options from config (ProxyJump and the like). They come after the options the relay enforces, and the first value given wins
     pub extra_options: Vec<String>,
 }
 
@@ -38,13 +38,13 @@ impl OpenSshUpstream {
         }
     }
 
-    /// 0.2.1: 設定の `ssh_options` を足す（検証は config 側で済んでいる）。
+    /// 0.2.1: add the `ssh_options` from config (already validated on the config side).
     pub fn with_options(mut self, opts: Vec<String>) -> Self {
         self.extra_options = opts;
         self
     }
 
-    /// known_hosts に上流ホストの行があるか。ハッシュ化行（`|1|…`）は照合できないので「ある」とみなす。
+    /// Whether known_hosts has a line for the upstream host. Hashed lines (`|1|…`) cannot be matched, so we assume they do.
     pub fn known_hosts_has_upstream(&self) -> Result<bool, std::io::Error> {
         let text = match std::fs::read_to_string(&self.known_hosts) {
             Ok(t) => t,
@@ -109,7 +109,7 @@ impl OpenSshUpstream {
         }
         cmd.arg("-o")
             .arg(format!("UserKnownHostsFile={}", self.known_hosts.display()));
-        // 設定からの追加オプション。ssh は先に指定した値を使うので、上の強制オプションは上書きされない
+        // Extra options from config. ssh honors the first value given, so they cannot override the enforced options above.
         for opt in &self.extra_options {
             cmd.arg("-o").arg(opt);
         }
@@ -162,7 +162,7 @@ impl UpstreamGit for OpenSshUpstream {
     }
 
     async fn spawn(&self, auth: &GitAuthorized<'_>) -> Result<UpstreamProcess, UpstreamError> {
-        // リポジトリ名は config の正規名。policy が [A-Za-z0-9._-] に制限しているので引用は安全
+        // The repository name is the canonical one from config; policy restricts it to [A-Za-z0-9._-], so quoting is safe.
         let remote = format!("{} '{}.git'", auth.verb().as_str(), auth.repo());
         let child = self.command(&remote).spawn().map_err(|e| UpstreamError {
             kind: "spawn",
@@ -239,7 +239,7 @@ mod tests {
         let up = OpenSshUpstream::new("ghe.example.com", 22, &dir.path().join("kh"), None)
             .with_options(vec![
                 "ProxyJump=bastion.example.com".into(),
-                "StrictHostKeyChecking=no".into(), // config 側で弾かれるが、通っても後ろなので効かない
+                "StrictHostKeyChecking=no".into(), // config rejects this, and even if it got through it comes later and has no effect
             ]);
         let cmd = up.command("git-upload-pack 'Org/Repo.git'");
         let args: Vec<String> = cmd

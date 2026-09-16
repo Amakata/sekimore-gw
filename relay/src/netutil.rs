@@ -1,4 +1,4 @@
-//! ネットワークの小道具: HTTP CONNECT トンネル、base64（依存を増やさない）。
+//! Small networking helpers: HTTP CONNECT tunnelling and base64 (to avoid extra dependencies).
 
 use std::io;
 
@@ -35,7 +35,7 @@ pub fn base64_encode(input: &[u8]) -> String {
     out
 }
 
-/// 上位プロキシに `CONNECT host:port` を送り、確立したストリームを返す。
+/// Sends `CONNECT host:port` to the upstream proxy and returns the established stream.
 pub async fn http_connect_tunnel(
     proxy: &ProxySpec,
     host: &str,

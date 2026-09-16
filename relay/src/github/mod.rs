@@ -1,12 +1,12 @@
-//! 上流（github.com / GHES）API クライアント。
+//! Upstream (github.com / GHES) API client.
 //!
-//! **全メソッドが `&Authorized<'_>` を要求する**のが要点。ポリシー検査を通さずに上流を叩くコードは
-//! コンパイルできない。GraphQL（Projects v2）は関所がクエリを組み立てるので、エージェントは GraphQL を書かない。
+//! The key point: **every method requires an `&Authorized<'_>`**, so code that reaches upstream without
+//! passing a policy check will not compile. For GraphQL (Projects v2) the relay builds the query itself, so agents never write GraphQL.
 //!
 //! ```compile_fail
 //! # use sekimore_relay::github::GitHub;
 //! # async fn f(gh: &GitHub) {
-//! // 検査を通さずリポジトリ名だけで呼ぶことはできない
+//! // You cannot call this with just a repository name, bypassing the policy check.
 //! let _ = gh.create_pull_request("Attacker/evil", "x", "main", "t", "").await;
 //! # }
 //! ```
@@ -30,7 +30,7 @@ use upstream_token::{TokenError, UpstreamTokenStore};
 
 pub const API_VERSION: &str = "2022-11-28";
 const RESPONSE_CAP: usize = 1 << 20;
-/// CI ログは大きい。関所側で末尾を切って返すが、取得上限は 16 MiB とする。
+/// CI logs are large. The relay truncates them to the tail before returning, but caps the fetch at 16 MiB.
 const CI_LOG_CAP: usize = 16 << 20;
 
 #[derive(Debug)]
@@ -85,7 +85,7 @@ impl From<reqwest::Error> for GhError {
 }
 
 impl GhError {
-    /// 上流に到達する前の拒否か（監査・HTTP ステータスの判定に使う）。
+    /// Whether this was a denial before reaching upstream (used to decide the audit entry and HTTP status).
     pub fn is_denied(&self) -> bool {
         matches!(self, GhError::Denied(_))
     }
@@ -100,18 +100,18 @@ pub struct PrResult {
     pub node_id: String,
 }
 
-/// PR の CI チェック 1 件（check-run または commit status を正規化した形）。
+/// A single CI check on a PR (a check-run or commit status, normalized to one shape).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CheckItem {
     pub name: String,
-    /// success / failure / pending / neutral / skipped / … （GitHub の conclusion / state をそのまま）
+    /// success / failure / pending / neutral / skipped / … (GitHub's conclusion / state, verbatim)
     pub state: String,
     pub source: String, // "check-run" | "status"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
 
-/// PR とそのチェックの集計。
+/// A PR and the rollup of its checks.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PrStatus {
     pub number: u64,
@@ -120,7 +120,7 @@ pub struct PrStatus {
     pub merged: bool,
     pub mergeable: Option<bool>,
     pub checks: Vec<CheckItem>,
-    /// 全チェックの総合。success / failure / pending / none
+    /// Rollup over all checks: success / failure / pending / none
     pub rollup: String,
 }
 
@@ -188,7 +188,7 @@ impl GitHub {
         })
     }
 
-    /// 同じ head/base の open PR を探す（`refs/for` の再 push で既存 PR を報告するため）。
+    /// Find an open PR with the same head/base, so a re-push to `refs/for` can report the existing PR.
     pub async fn find_pull_request(
         &self,
         auth: &Authorized<'_>,
@@ -208,48 +208,48 @@ impl GitHub {
     }
 }
 
-/// CI ログの 1 ページ。末尾からのウィンドウ。
+/// One page of a CI log: a window counted back from the end.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CiLogPage {
     pub job_id: u64,
     pub job_name: String,
     pub conclusion: String,
-    /// このジョブのログ総行数
+    /// Total number of log lines for this job
     pub total_lines: usize,
-    /// 返している範囲 [start, end)（0 始まり、行番号）
+    /// The range being returned, [start, end) as zero-based line numbers
     pub start: usize,
     pub end: usize,
     pub lines: Vec<String>,
-    /// さらに前 (古い方) があるか。あれば --before start で遡れる
+    /// Whether older lines exist before this window; if so, --before start walks further back
     pub has_more_before: bool,
 }
 
-/// ある ref (タグ / ブランチ / SHA) に紐づく Actions の run。タグ push で走る Docker Publish 等は PR に紐づかないので、
-/// PR 番号ではなく ref から辿る。
+/// An Actions run attached to a ref (tag / branch / SHA). Runs triggered by a tag push, such as Docker Publish,
+/// have no PR, so they are reached through the ref rather than a PR number.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CiRun {
     pub id: u64,
-    pub name: String,       // workflow 名
+    pub name: String,       // workflow name
     pub event: String,      // push / pull_request / workflow_dispatch …
     pub status: String,     // queued / in_progress / completed
-    pub conclusion: String, // success / failure / "" (未完)
+    pub conclusion: String, // success / failure / "" (not finished)
     pub head_sha: String,
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
 
-/// PR の CI ジョブ一覧（どれが失敗したか）。
+/// The CI jobs of a PR (to see which ones failed).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CiJob {
     pub id: u64,
     pub name: String,
     pub status: String,     // queued / in_progress / completed
-    pub conclusion: String, // success / failure / "" (未完)
+    pub conclusion: String, // success / failure / "" (not finished)
 }
 
 impl GitHub {
-    /// PR の状態と CI チェックを集計する。check-runs（GitHub Actions 等）と commit statuses（外部 CI）の両方を見る。
+    /// Summarize a PR's state and CI checks, covering both check-runs (GitHub Actions and friends) and commit statuses (external CI).
     pub async fn pull_request_status(
         &self,
         auth: &Authorized<'_>,
@@ -290,7 +290,7 @@ impl GitHub {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string();
-                    // 完了していれば conclusion、実行中なら status（queued / in_progress）を pending 扱いに
+                    // Use the conclusion once finished; while running, treat the status (queued / in_progress) as pending.
                     let state = match r.get("conclusion").and_then(Value::as_str) {
                         Some(c) if !c.is_empty() => c.to_string(),
                         _ => "pending".to_string(),
@@ -306,7 +306,7 @@ impl GitHub {
                     });
                 }
             }
-            // commit statuses（Travis 等の古い Status API。context 単位で最新だけ）
+            // Commit statuses (the older Status API used by Travis and others: only the latest per context)
             let st: Value = self
                 .rest(
                     "GET",
@@ -347,7 +347,7 @@ impl GitHub {
             rollup,
         })
     }
-    /// ref (タグ名 / ブランチ名 / SHA) を SHA に解決する。`GET /repos/{repo}/commits/{ref}` は 3 種類とも受ける。
+    /// Resolve a ref (tag name / branch name / SHA) to a SHA. `GET /repos/{repo}/commits/{ref}` accepts all three forms.
     async fn resolve_sha(&self, repo: &str, git_ref: &str) -> Result<String, GhError> {
         let c: Value = self
             .rest(
@@ -362,7 +362,7 @@ impl GitHub {
             .ok_or_else(|| GhError::Parse(format!("no sha for ref {git_ref:?}")))
     }
 
-    /// ref に紐づく Actions の run 一覧（新しい順）。タグ push の Docker Publish など PR に紐づかない run を見るのに使う。
+    /// Actions runs attached to a ref, newest first. Used to see runs with no PR, such as Docker Publish on a tag push.
     pub async fn ci_runs(
         &self,
         auth: &Authorized<'_>,
@@ -401,7 +401,7 @@ impl GitHub {
         Ok(out)
     }
 
-    /// run のジョブ一覧。
+    /// The jobs of a run.
     pub async fn ci_jobs_for_run(
         &self,
         auth: &Authorized<'_>,
@@ -431,7 +431,7 @@ impl GitHub {
         Ok(out)
     }
 
-    /// PR の最新コミットに紐づく最新の Actions run のジョブ一覧。失敗ジョブの job_id を得るのに使う。
+    /// Jobs of the latest Actions runs for a PR's head commit. Used to get the job_id of a failing job.
     pub async fn ci_jobs(&self, auth: &Authorized<'_>, number: u64) -> Result<Vec<CiJob>, GhError> {
         auth.ensure(Resource::Ci, Action::Read)?;
         let repo = auth.repo();
@@ -446,8 +446,8 @@ impl GitHub {
         if head_sha.is_empty() {
             return Ok(Vec::new());
         }
-        // 1 つの SHA に複数の workflow run (relay.yml / test.yml / lint.yml …) が付くので、全部のジョブを集める。
-        // 同じ workflow の再実行があれば最新 (created_at 降順の先頭) だけ採る
+        // A single SHA can have several workflow runs (relay.yml / test.yml / lint.yml …), so collect jobs from all of them.
+        // If a workflow was re-run, keep only the newest one (first by descending created_at).
         let runs = self.ci_runs(auth, &head_sha).await?;
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut out = Vec::new();
@@ -465,8 +465,8 @@ impl GitHub {
         Ok(out)
     }
 
-    /// ジョブのログの 1 ページ (末尾から window 行、before より前)。before=None は末尾から。
-    /// GitHub の job logs はプレーンテキスト全体を返すので、関所側で行に切って窓を返す。
+    /// One page of a job's log: `window` lines ending just before `before`; `before=None` means from the end.
+    /// GitHub returns job logs as one plain-text blob, so the relay splits it into lines and returns the window.
     pub async fn ci_job_log(
         &self,
         auth: &Authorized<'_>,
@@ -506,7 +506,7 @@ impl GitHub {
         body: &str,
     ) -> Result<(), GhError> {
         auth.ensure(Resource::Pr, Action::Comment)?;
-        // PR も Issue も同じエンドポイント。だからパスでは制御できず、呼び出し側の意図（リソース種別）で判定する
+        // PRs and issues share this endpoint, so the path cannot gate access; the caller's intent (the resource kind) decides.
         self.rest::<Value>(
             "POST",
             &format!("/repos/{}/issues/{number}/comments", auth.repo()),
@@ -565,7 +565,7 @@ impl GitHub {
 
     // ---- Issue ----
 
-    /// ラベル付与は別権限。付けるなら `label_auth`（`issue:label` の証明）も要る。
+    /// Applying labels is a separate permission: doing so also requires `label_auth` (proof of `issue:label`).
     pub async fn create_issue(
         &self,
         auth: &Authorized<'_>,
@@ -660,7 +660,7 @@ impl GitHub {
         Ok(())
     }
 
-    // ---- Projects v2 (GraphQL のみ) ----
+    // ---- Projects v2 (GraphQL only) ----
 
     pub async fn add_project_item(
         &self,
@@ -712,9 +712,9 @@ impl GitHub {
             .await
     }
 
-    // ---- 操作者向け（証明不要。エージェント経路からは呼ばない） ----
+    // ---- For the operator (no proof required; never called from the agent path) ----
 
-    /// 関所がどの上流 identity として動くか。
+    /// Which upstream identity the relay acts as.
     pub async fn whoami(&self) -> Result<String, GhError> {
         let out: Value = self.rest("GET", "/user", None).await?;
         out.get("login")
@@ -723,7 +723,7 @@ impl GitHub {
             .ok_or_else(|| GhError::Parse("no login in /user".into()))
     }
 
-    /// 上流 SSH ホスト鍵（`GET /meta` の `ssh_keys`）。known_hosts の生成に使う。
+    /// Upstream SSH host keys (`ssh_keys` from `GET /meta`). Used to generate known_hosts.
     pub async fn meta_ssh_keys(&self) -> Result<Vec<String>, GhError> {
         let out: Value = self.rest("GET", "/meta", None).await?;
         Ok(out
@@ -738,7 +738,7 @@ impl GitHub {
             .unwrap_or_default())
     }
 
-    // ---- 下位層 ----
+    // ---- Lower layer ----
 
     fn api_url(&self, path: &str) -> String {
         format!(
@@ -770,7 +770,7 @@ impl GitHub {
         self.send(req, method, path).await
     }
 
-    /// プレーンテキストを返すエンドポイント (Actions のジョブログ等)。リダイレクトは reqwest が追う。
+    /// Endpoints that return plain text (Actions job logs and the like). reqwest follows the redirects.
     async fn rest_text(&self, method: &str, path: &str) -> Result<String, GhError> {
         let token = self.tokens.token()?;
         let m = reqwest::Method::from_bytes(method.as_bytes())
@@ -836,7 +836,7 @@ impl GitHub {
         let resp = req.send().await?;
         let status = resp.status().as_u16();
         let body = read_limited(resp, RESPONSE_CAP).await?;
-        // クエリ文字列は監査に不要（値が長い）
+        // The query string is not worth auditing (the values are long).
         let audit_path = path.split('?').next().unwrap_or(path);
         self.audit.log(
             "api_call",
@@ -856,7 +856,7 @@ impl GitHub {
             });
         }
         if body.is_empty() {
-            // 204 等。呼び出し側が Value を期待していれば null
+            // 204 and similar: yield null if the caller expects a Value.
             return serde_json::from_value(Value::Null).map_err(|e| GhError::Parse(e.to_string()));
         }
         serde_json::from_slice(&body)
@@ -864,8 +864,8 @@ impl GitHub {
     }
 }
 
-/// チェック集合の総合判定。1 つでも失敗系なら failure、pending があれば pending、
-/// 全部 success/neutral/skipped なら success、チェックが無ければ none。
+/// Roll up a set of checks: failure if any check failed, otherwise pending if any is pending,
+/// success if all are success/neutral/skipped, and none if there are no checks at all.
 fn rollup_state(checks: &[CheckItem]) -> String {
     if checks.is_empty() {
         return "none".to_string();
@@ -929,7 +929,7 @@ mod tests {
             .authorize("Org/Repo", Resource::Pr, Action::Create)
             .unwrap();
         let g = gh();
-        // pr:create の証明で merge は叩けない（上流にも、トークンストアにも到達しない）
+        // Proof of pr:create cannot drive a merge (it reaches neither upstream nor the token store).
         assert!(matches!(
             g.merge_pull_request(&auth, 1).await,
             Err(GhError::Denied(_))
@@ -938,7 +938,7 @@ mod tests {
             g.comment_issue(&auth, 1, "x").await,
             Err(GhError::Denied(_))
         ));
-        // 正しい証明でも上流トークンが無ければ Token エラー（ネットワークには出ない）
+        // Even with the right proof, a missing upstream token is a Token error (nothing hits the network).
         assert!(matches!(
             g.create_pull_request(&auth, "h", "main", "t", "").await,
             Err(GhError::Token(_))
@@ -947,7 +947,7 @@ mod tests {
 
     #[tokio::test]
     async fn pr_status_requires_pr_read() {
-        // pr:create だけでは pr status は叩けない（Read の証明が要る）。上流にも出ない
+        // pr:create alone cannot query pr status (that needs proof of Read), and never reaches upstream.
         let p = Project::new("case-a")
             .with_repo("Org/Repo", Mode::ReadWrite, &[])
             .grant("pr:create");
@@ -958,7 +958,7 @@ mod tests {
             gh().pull_request_status(&auth, 1).await,
             Err(GhError::Denied(_))
         ));
-        // pr:read を付ければ証明は通り、上流トークンが無い段階まで進む
+        // With pr:read the proof passes and we get as far as the missing upstream token.
         let p = Project::new("case-a")
             .with_repo("Org/Repo", Mode::ReadOnly, &[])
             .grant("pr:read");
@@ -980,7 +980,7 @@ mod tests {
         assert_eq!(rollup_state(&[]), "none");
         assert_eq!(rollup_state(&[mk("success"), mk("skipped")]), "success");
         assert_eq!(rollup_state(&[mk("success"), mk("in_progress")]), "pending");
-        // failure は pending より優先（1 つでも壊れていれば failure）
+        // failure wins over pending: one broken check makes the rollup failure.
         assert_eq!(rollup_state(&[mk("in_progress"), mk("failure")]), "failure");
         assert_eq!(rollup_state(&[mk("success"), mk("timed_out")]), "failure");
         assert_eq!(rollup_state(&[mk("neutral"), mk("cancelled")]), "failure");
@@ -988,7 +988,7 @@ mod tests {
 
     #[tokio::test]
     async fn ci_requires_ci_read() {
-        // pr:read だけでは ci は叩けない
+        // pr:read alone cannot query ci.
         let p = Project::new("case-a")
             .with_repo("Org/Repo", Mode::ReadOnly, &[])
             .grant("pr:read");
@@ -997,7 +997,7 @@ mod tests {
             gh().ci_jobs(&auth, 1).await,
             Err(GhError::Denied(_))
         ));
-        // ci:read があれば証明は通り、上流トークン段階まで進む
+        // With ci:read the proof passes and we get as far as the upstream token.
         let p = Project::new("case-a")
             .with_repo("Org/Repo", Mode::ReadOnly, &[])
             .grant("ci:read");
@@ -1011,7 +1011,7 @@ mod tests {
                 .await,
             Err(GhError::Token(_))
         ));
-        // ref / run_id 経路も同じ証明で、上流トークン段階まで進む
+        // The ref / run_id paths take the same proof and likewise reach the upstream token stage.
         assert!(matches!(
             gh().ci_runs(&auth, "v0.1.6").await,
             Err(GhError::Token(_))
@@ -1020,7 +1020,7 @@ mod tests {
             gh().ci_jobs_for_run(&auth, 1).await,
             Err(GhError::Token(_))
         ));
-        // pr:read だけの証明では拒否
+        // Proof of pr:read alone is denied.
         let p = Project::new("case-a")
             .with_repo("Org/Repo", Mode::ReadOnly, &[])
             .grant("pr:read");

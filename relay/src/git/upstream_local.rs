@@ -1,7 +1,7 @@
-//! テスト用の上流: ローカルの bare リポジトリに対して `git receive-pack` / `git upload-pack` を直接起動する。
+//! A test upstream: spawns `git receive-pack` / `git upload-pack` directly against a local bare repository.
 //!
-//! pkt-line / side-band の書き換え経路全体を、実物の git クライアント・サーバで検証するための足場。
-//! feature `test-hooks` でのみ有効。イメージビルドには含めない。
+//! Scaffolding that exercises the whole pkt-line / side-band rewrite path against a real git client and server.
+//! Enabled only under the `test-hooks` feature; it is not part of the image build.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

@@ -1,13 +1,14 @@
 # syntax=docker/dockerfile:1.7
 
 # ---- sekimore-relay (Rust) ----
-# ビルドはランナーの CPU (BUILDPLATFORM) で native に走らせ、TARGETARCH 向けの静的 musl バイナリを
-# cargo-zigbuild でクロスコンパイルする。arm64 を QEMU で回すと 40 分超かかるため。
-# 静的 musl なので glibc 世代に依存せず、devcontainer base イメージへ COPY --from してもそのまま動く。
+# Build natively on the runner's CPU (BUILDPLATFORM) and cross-compile a static musl binary for
+# TARGETARCH with cargo-zigbuild, because building arm64 under QEMU takes over 40 minutes.
+# Being static musl, it does not depend on the glibc generation and works as-is when COPY --from'd
+# into the devcontainer base image.
 FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.20.1 AS relay-builder
 ARG TARGETARCH
 WORKDIR /build
-# rust-toolchain.toml の版を先に入れておく (ソース変更で無効化されないレイヤ)
+# Install the toolchain version from rust-toolchain.toml first (a layer source changes do not invalidate)
 COPY relay/rust-toolchain.toml ./
 RUN CHANNEL="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" \
     && rustup toolchain install "$CHANNEL" --profile minimal --component rustfmt --component clippy \
@@ -17,14 +18,14 @@ RUN case "$TARGETARCH" in \
       arm64) echo aarch64-unknown-linux-musl > /tmp/t ;; \
       *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
     esac
-# 依存だけ先にコンパイルする層 (Cargo.toml/lock だけで、src はダミー)。src 変更でこの層は無効化されない
+# Layer that compiles only the dependencies (just Cargo.toml/lock, with a dummy src); src changes do not invalidate it
 COPY relay/Cargo.toml relay/Cargo.lock ./
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
     && cargo zigbuild --release --locked --target "$(cat /tmp/t)" || true \
     && rm -rf src
-# 本ソースをコピーして本ビルド (依存は上でキャッシュ済み)。ダミーの成果物は消して確実に本体を再ビルド
+# Copy the real sources and do the real build (dependencies are cached above); drop the dummy artifacts so the binary is definitely rebuilt
 COPY relay/src ./src
-# sekimore guide (AI エージェント向けの使い方) はバイナリに埋め込む (include_str!)
+# The sekimore guide (usage notes for AI agents) is embedded in the binary via include_str!
 COPY relay/share ./share
 RUN T="$(cat /tmp/t)" \
     && rm -f "target/$T/release/deps/sekimore_relay"* "target/$T/release/sekimore-relay" 2>/dev/null || true; \
@@ -35,7 +36,7 @@ RUN T="$(cat /tmp/t)" \
 FROM python:3.13-slim
 
 # System package installation
-# openssh-client: relay が上流 git へ出るときの ssh / ssh-add / ssh-keyscan / ssh-keygen
+# openssh-client: ssh / ssh-add / ssh-keyscan / ssh-keygen, used when the relay reaches out to the upstream git
 RUN apt-get update && apt-get install -y \
     iptables \
     ipset \

@@ -1,4 +1,4 @@
-"""運用コマンド src.maint（DB の状態確認・削除・リセット）."""
+"""The src.maint operations command (inspect, prune, and reset the DB)."""
 
 import sqlite3
 import time
@@ -78,8 +78,8 @@ def describe_db_prune_and_reset():
         deleted = maint.prune(str(db), before_days=30, vacuum=True)
         assert deleted == {"dns_queries": 4, "firewall_blocks": 4, "proxy_logs": 4}
         s = maint.stats(str(db))
-        assert s["tables"]["dns_queries"]["rows"] == 1  # 新しい 1 件は残る
-        assert s["tables"]["cache_stats"]["rows"] == 1  # prune は cache_stats に触らない
+        assert s["tables"]["dns_queries"]["rows"] == 1  # The one recent row survives
+        assert s["tables"]["cache_stats"]["rows"] == 1  # prune leaves cache_stats alone
 
     def it_requires_yes_for_destructive_commands(tmp_path, capsys):
         db = tmp_path / "gw.db"
@@ -87,7 +87,7 @@ def describe_db_prune_and_reset():
         assert maint.main(["--db", str(db), "db-prune", "--before-days", "1"]) == 2
         assert "--yes" in capsys.readouterr().out
         assert maint.main(["--db", str(db), "db-reset"]) == 2
-        assert maint.stats(str(db))["tables"]["dns_queries"]["rows"] == 1  # 何も消えていない
+        assert maint.stats(str(db))["tables"]["dns_queries"]["rows"] == 1  # Nothing was deleted
 
     def it_resets_everything_and_vacuums(tmp_path, capsys):
         db = tmp_path / "gw.db"
@@ -97,7 +97,7 @@ def describe_db_prune_and_reset():
         assert "dns_queries" in out and "deleted 50 rows" in out and "vacuumed" in out
         s = maint.stats(str(db))
         assert all(info["rows"] == 0 for info in s["tables"].values())
-        # テーブルと索引は残る（gateway は動き続ける）
+        # Tables and indexes survive, so the gateway keeps running
         assert "idx_dns_timestamp" in s["tables"]["dns_queries"]["indexes"]
 
     def it_fails_cleanly_when_the_db_is_missing(tmp_path):
