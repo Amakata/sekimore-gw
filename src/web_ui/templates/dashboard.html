@@ -1135,8 +1135,13 @@
 
                 document.getElementById('relay-config-list').innerHTML = [
                     relayKV('Status', 'Enabled', relayBadge('ON', 'badge-allowed')),
-                    relayKV('Domain (git-relay)', cfg.domain),
+                    relayKV('Domain (git-relay)', (cfg.upstreams || []).length > 1 ? `${cfg.domain} (default of ${cfg.upstreams.length})` : cfg.domain),
                     relayKV('Upstream', cfg.upstream),
+                    // 0.2.0: 複数上流はポートで分かれる。上流ごとの listen ポート / token / known_hosts
+                    ...((cfg.upstreams || []).length > 1 ? cfg.upstreams.map(u =>
+                        relayKV(`↳ ${u.domain}${u.default ? ' (default)' : ''}`,
+                            `→ ${u.upstream} · ssh :${u.ssh_port} · ${u.api_base} · known_hosts ${u.known_hosts_count ?? 0}`,
+                            relayBadge(u.token_present ? 'TOKEN OK' : 'NO TOKEN', u.token_present ? 'badge-allowed' : 'badge-blocked'))) : []),
                     relayKV('Project', cfg.project || '-'),
                     relayKV('SSH listen', cfg.ssh_listen),
                     relayKV('API listen', cfg.api_listen),
@@ -1162,10 +1167,11 @@
                         : relayKV(p, granted.has(p) ? 'allowed (default)' : 'not granted', relayBadge(granted.has(p) ? 'ALLOW' : 'DENY', granted.has(p) ? 'badge-allowed' : 'badge-blocked-default'))
                 ).join('');
 
+                const multiUpstream = (cfg.upstreams || []).length > 1;
                 document.getElementById('relay-repos').innerHTML = cfg.repos.length ? cfg.repos.map(r => `
                     <div class="domain-item">
                         <div>
-                            <span class="domain-name">${escapeHtml(r.name)}</span>
+                            <span class="domain-name">${escapeHtml(multiUpstream && r.host ? `${r.host}/${r.name}` : r.name)}</span>
                             <div class="domain-stats" style="margin-top: 4px;">
                                 <span class="domain-stat">PR bases: <strong>${escapeHtml(r.bases.join(', ') || '-')}</strong></span>
                                 <span class="domain-stat">direct push: <strong>${escapeHtml(r.push.join(', ') || '-')}</strong></span>

@@ -79,7 +79,10 @@ database_path: "/data/security_gateway.db"
 # 詳細: doc/sekimore-gw/requirements/04-relay.md, doc/sekimore-gw/design/relay.md
 # domain_handlers:
 #   github.com:
-#     handler: git-relay          # 完全一致 FQDN。git-relay は 1 つのみ（splice / deny も指定可）
+#     handler: git-relay          # 完全一致 FQDN（splice / deny も指定可）
+#   # ghe.example.com:            # 0.2.0〜 複数の上流も可。2 つ目以降は別の SSH ポートで受ける
+#   #   handler: git-relay        #   (repos の name は ghe.example.com/Org/Repo で上流を明示)
+#   #   ssh_port: 2222
 # relay:
 #   https: passthrough            # 同一ドメインの 443: passthrough | reject
 #   bootstrap: auto               # 使い捨て鍵の登録 + 案件トークン発行を POST /bootstrap で自動化: auto | manual

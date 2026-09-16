@@ -1184,3 +1184,26 @@ relay:
         with patch("src.orchestrator.log_error") as mock_err:
             assert await orch._warn_if_relay_not_listening(22, delay=0) is True
         assert not mock_err.called
+
+
+def describe_relay_settings_change_detection():
+    """0.2.0: handler の ssh_port が変わっても「再起動が必要」と判定する (INPUT のポートが変わる)."""
+
+    def it_detects_ssh_port_changes():
+        from src.config import Config
+        from src.orchestrator import _relay_settings_changed
+
+        base = {
+            "github.com": {"handler": "git-relay"},
+            "ghe.example.com": {"handler": "git-relay", "ssh_port": 2222},
+        }
+        old = Config(domain_handlers=base)
+        same = Config(domain_handlers=base)
+        moved = Config(
+            domain_handlers={
+                **base,
+                "ghe.example.com": {"handler": "git-relay", "ssh_port": 2223},
+            }
+        )
+        assert _relay_settings_changed(old, same) is False
+        assert _relay_settings_changed(old, moved) is True

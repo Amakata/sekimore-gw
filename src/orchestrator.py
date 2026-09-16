@@ -103,10 +103,15 @@ def _relay_ports_of(config: object) -> list[int]:
 
 
 def _relay_settings_changed(old: object, new: object) -> bool:
-    """domain_handlers / relay に差分があるか（再起動が必要な変更）."""
-    return _domain_handlers_of(old) != _domain_handlers_of(new) or getattr(
-        old, "relay", None
-    ) != getattr(new, "relay", None)
+    """domain_handlers / relay に差分があるか（再起動が必要な変更）.
+
+    0.2.0: handler の ssh_port（INPUT で開けるポート）が変わった場合も再起動が必要。
+    """
+    return (
+        _domain_handlers_of(old) != _domain_handlers_of(new)
+        or _relay_ports_of(old) != _relay_ports_of(new)
+        or getattr(old, "relay", None) != getattr(new, "relay", None)
+    )
 
 
 class SecurityGatewayOrchestrator:
