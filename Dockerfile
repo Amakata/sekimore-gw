@@ -25,8 +25,10 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
     && rm -rf src
 # Copy the real sources and do the real build (dependencies are cached above); drop the dummy artifacts so the binary is definitely rebuilt
 COPY relay/src ./src
-# The sekimore guide (usage notes for AI agents) is embedded in the binary via include_str!
+# The sekimore guide (usage notes for AI agents) and the CLI locale dictionaries are embedded
+# in the binary via include_str!, so both have to be here before the build
 COPY relay/share ./share
+COPY relay/locales ./locales
 RUN T="$(cat /tmp/t)" \
     && rm -f "target/$T/release/deps/sekimore_relay"* "target/$T/release/sekimore-relay" 2>/dev/null || true; \
     cargo zigbuild --release --locked --target "$T" \
