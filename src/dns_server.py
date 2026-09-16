@@ -159,6 +159,20 @@ class DNSCache:
         log_system_event("DNS cache cleared")
 
 
+async def _apply_pragmas(db: "aiosqlite.Connection") -> None:
+    """WAL + synchronous=NORMAL + busy_timeout。失敗しても起動は止めない（読み取り専用 FS 等）."""
+    for pragma in (
+        "PRAGMA journal_mode=WAL",
+        "PRAGMA synchronous=NORMAL",
+        "PRAGMA busy_timeout=5000",
+    ):
+        try:
+            cursor = await db.execute(pragma)
+            await cursor.close()
+        except Exception as e:  # pragma: no cover - 環境依存
+            log_error(ComponentType.DNS, f"{pragma} failed: {e}")
+
+
 class DNSMapping:
     """DNS解決結果のマッピング管理."""
 
@@ -174,6 +188,9 @@ class DNSMapping:
     async def init_db(self) -> None:
         """データベース初期化."""
         self.db = await aiosqlite.connect(self.db_path)
+        # 0.2.3: 書き込み（クエリごとの commit）と Web UI の読み取りが待ち合わないように WAL。
+        # synchronous=NORMAL は WAL では十分安全（電源断で直近の数トランザクションだけ失う可能性）
+        await _apply_pragmas(self.db)
         await self.db.execute(
             """
             CREATE TABLE IF NOT EXISTS dns_queries (
@@ -196,6 +213,13 @@ class DNSMapping:
             """
             CREATE INDEX IF NOT EXISTS idx_query_domain ON dns_queries(query_domain)
             """
+        )
+        # 0.2.3: Web UI の「新着」「直近 24h の集計」「最新 N 件」が全表走査にならないように
+        await self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dns_timestamp ON dns_queries(timestamp)"
+        )
+        await self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dns_status_timestamp ON dns_queries(status, timestamp)"
         )
         await self.db.commit()
         log_system_event("DNS mapping database initialized", db_path=self.db_path)

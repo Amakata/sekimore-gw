@@ -39,6 +39,17 @@ class ProxyMonitor:
     async def init_db(self) -> None:
         """データベース初期化（proxy_logsテーブル作成 + proxy_blocksからのマイグレーション）."""
         self.db = await aiosqlite.connect(self.db_path)
+        # 0.2.3: WAL（DNSMapping と同じ DB。設定は冪等）と busy_timeout
+        for pragma in (
+            "PRAGMA journal_mode=WAL",
+            "PRAGMA synchronous=NORMAL",
+            "PRAGMA busy_timeout=5000",
+        ):
+            try:
+                cursor = await self.db.execute(pragma)
+                await cursor.close()
+            except Exception:  # pragma: no cover
+                pass
 
         await self.db.execute(
             """

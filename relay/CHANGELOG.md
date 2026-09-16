@@ -3,7 +3,14 @@
 各版の設計判断と詳細は workspace リポジトリの
 [doc/sekimore-gw/design/relay.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sekimore-gw/design/relay.md) にあります。
 
-## 0.2.2（未リリース）
+## 0.2.3（未リリース。sekimore-gw 本体の性能と運用。relay 本体の変更なし）
+
+- Web UI: WebSocket は接続ごとの全表走査をやめ、1 本のポーラが rowid カーソルで新着だけを読んで 1 メッセージ（配列）で配信。1 件でも即時、多ければまとめて届く。接続時と非表示から戻ったときは最新 50 件の snapshot。ログ 1 件ごとの `/api/stats` 取得をやめ、新着後 3 秒に 1 回に
+- SQLite: `journal_mode=WAL` / `synchronous=NORMAL` / `busy_timeout`、`dns_queries(timestamp)` と `(status, timestamp)` の索引。記録は削除しない（永続化）
+- `python -m src.maint db-stats | db-prune | db-reset | db-vacuum`（操作者が明示的に実行）。Dev Containers の `mise run gw:db-*`
+- Relay タブ: 単一上流でもその上流の送信上限を表示
+
+## 0.2.2（2026-09-16）
 
 - 持ち出し対策: 443 passthrough に dev → 上流の送信上限（`relay.https_max_upload_bytes`、既定 1 MiB、`-1` で無制限）。超えた接続は切断して監査 `https_upload_capped`
 - `handler: https-relay`: 443 だけを関所の passthrough で通し、宛先ごとに `max_upload_bytes` を掛ける（自分で image を push する宛先は `-1`）

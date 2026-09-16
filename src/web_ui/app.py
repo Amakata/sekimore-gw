@@ -2,7 +2,6 @@
 
 # NOTE: proxy_blocks テーブルは proxy_logs に統合済み（ProxyMonitor.init_db で自動マイグレーション）
 
-import asyncio
 import contextlib
 import os
 import subprocess
@@ -21,6 +20,7 @@ from .. import __version__ as core_version
 from .. import constants
 from ..logger import ComponentType, log_error, log_system_event
 from . import __version__ as webui_version
+from .log_stream import LogStreamer, parse_client_message
 
 
 class DomainRequest(BaseModel):
@@ -198,6 +198,10 @@ async def get_db() -> aiosqlite.Connection:
     """
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
+    # 書き込み側（DNS / monitor）と衝突したら少し待つ（0.2.3。WAL は DNSMapping.init_db が設定する）
+    with contextlib.suppress(Exception):
+        cursor = await db.execute("PRAGMA busy_timeout=5000")
+        await cursor.close()  # 開いたままの statement は読み取りを古いスナップショットに固定する
     return db
 
 
@@ -773,165 +777,53 @@ async def get_blocked_ips(limit: int = 100) -> list[BlockedIPInfo]:
         await db.close()
 
 
+_streamer: LogStreamer | None = None
+
+
+def get_streamer() -> LogStreamer:
+    """全 WebSocket 接続で共有するポーラ（DB_PATH が差し替えられていれば作り直す）."""
+    global _streamer
+    if _streamer is None or _streamer.db_path != DB_PATH:
+        _streamer = LogStreamer(
+            DB_PATH,
+            broadcast=manager.broadcast,
+            has_clients=lambda: bool(manager.active_connections),
+        )
+    return _streamer
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     """WebSocketエンドポイント - リアルタイムログ配信（DNS + Firewall + Proxy）.
+
+    0.2.3: 接続時に snapshot（最新 50 件）を 1 メッセージで送り、以後は共有ポーラが 1 秒おきに新着を
+    ``{"type": "logs", "entries": [...]}`` でまとめて配信する。クライアントの ``{"type": "resync"}`` には
+    snapshot を返す（タブが非表示から戻ったとき）。以前の「接続ごとの全表走査 + 1 件ずつ送信」を置き換えた。
 
     Args:
         websocket: WebSocketインスタンス
     """
     await manager.connect(websocket)
-    last_timestamp = 0.0
-
+    streamer = get_streamer()
     try:
         try:
-            dns_logs = await get_logs(limit=20)
-            fw_logs = await get_firewall_blocks(limit=15)
-            proxy_logs = await get_proxy_logs(limit=15)
-
-            all_logs = sorted(
-                dns_logs + fw_logs + proxy_logs,
-                key=lambda x: x.timestamp,
-                reverse=False,
-            )
-
-            for log in all_logs[:50]:
-                await websocket.send_json(log.model_dump())
-                if log.timestamp > last_timestamp:
-                    last_timestamp = log.timestamp
+            await websocket.send_json(await streamer.snapshot())
         except Exception as e:
             print(f"Warning: Failed to send initial logs: {e}")
-
-        # 新しいログを定期的にポーリング
+        streamer.start()
         while True:
-            try:
-                # 1秒ごとに新しいログをチェック
-                await asyncio.sleep(1)
-
-                # 最後のタイムスタンプより新しいログを取得
-                db = await get_db()
-                try:
-                    # DNSクエリログ（ignoredを除外）
-                    cursor = await db.execute(
-                        """
-                        SELECT timestamp, client_ip, query_domain, response_ips, status
-                        FROM dns_queries
-                        WHERE timestamp > ? AND status != 'ignored'
-                        ORDER BY timestamp ASC
-                        """,
-                        (last_timestamp,),
-                    )
-
-                    ws_action_map = {
-                        "allowed": "ALLOWED",
-                        "blocked": "BLOCKED",
-                        "ignored": "IGNORED",
-                    }
-
-                    new_logs = []
-                    async for row in cursor:
-                        status = row[4] if len(row) > 4 else "allowed"
-                        log_entry = LogEntry(
-                            timestamp=row[0],
-                            component="DNS",
-                            action=ws_action_map.get(status, "BLOCKED"),
-                            src_ip=row[1],
-                            domain=row[2],
-                            dst_ip=row[3].split(",")[0] if row[3] else None,
-                        )
-                        new_logs.append(log_entry)
-                        if row[0] > last_timestamp:
-                            last_timestamp = row[0]
-
-                    # ファイアウォールブロックログ
-                    cursor = await db.execute(
-                        """
-                        SELECT timestamp, src_ip, dst_ip, dst_port, protocol
-                        FROM firewall_blocks
-                        WHERE timestamp > ?
-                        ORDER BY timestamp ASC
-                        """,
-                        (last_timestamp,),
-                    )
-
-                    async for row in cursor:
-                        # Docker環境ではログ詳細が取得できないため、カウンターモード表示
-                        src_ip = row[1] if row[1] and row[1] != "blocked" else None
-                        dst_ip = row[2] if row[2] and row[2] != "blocked" else None
-                        protocol = row[4] if row[4] and row[4] != "IP" else "IP"
-
-                        # 詳細情報が取得できている場合とそうでない場合で表示を分ける
-                        if src_ip and dst_ip:
-                            reason = f"{protocol} traffic blocked by firewall"
-                        else:
-                            reason = "Traffic blocked by firewall (counter-based detection)"
-
-                        log_entry = LogEntry(
-                            timestamp=row[0],
-                            component="FIREWALL",
-                            action="BLOCKED",
-                            src_ip=src_ip,
-                            dst_ip=dst_ip,
-                            dst_port=row[3],
-                            reason=reason,
-                        )
-                        new_logs.append(log_entry)
-                        if row[0] > last_timestamp:
-                            last_timestamp = row[0]
-
-                    # プロキシアクセスログ
-                    try:
-                        cursor = await db.execute(
-                            """
-                            SELECT timestamp, client_ip, method, url, status_code,
-                                   squid_result, action
-                            FROM proxy_logs
-                            WHERE timestamp > ?
-                            ORDER BY timestamp ASC
-                            """,
-                            (last_timestamp,),
-                        )
-
-                        async for row in cursor:
-                            action_str = "ALLOWED" if row[6] == "allowed" else "BLOCKED"
-                            if row[6] == "allowed":
-                                reason = f"{row[2]} via proxy ({row[5]})"
-                            else:
-                                reason = f"{row[2]} blocked by proxy ({row[5]}/{row[4]})"
-                            log_entry = LogEntry(
-                                timestamp=row[0],
-                                component="PROXY",
-                                action=action_str,
-                                src_ip=row[1],
-                                domain=row[3],
-                                reason=reason,
-                            )
-                            new_logs.append(log_entry)
-                            if row[0] > last_timestamp:
-                                last_timestamp = row[0]
-                    except Exception:
-                        pass
-
-                    # タイムスタンプ順にソートして送信
-                    new_logs.sort(key=lambda x: x.timestamp)
-                    for log in new_logs:
-                        await websocket.send_json(log.model_dump())
-
-                finally:
-                    await db.close()
-
-            except TimeoutError:
-                continue
-            except Exception as e:
-                # ポーリング中のエラーは継続
-                print(f"Warning: WebSocket polling error: {e}")
-                continue
-
+            text = await websocket.receive_text()
+            if parse_client_message(text) == "resync":
+                await websocket.send_json(await streamer.snapshot())
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        pass
     except Exception as e:
         print(f"Error: WebSocket connection error: {e}")
-        manager.disconnect(websocket)
+    finally:
+        if websocket in manager.active_connections:
+            manager.disconnect(websocket)
+        if not manager.active_connections:
+            await streamer.stop()
 
 
 @app.get("/api/domains/allowed", response_model=list[str])
