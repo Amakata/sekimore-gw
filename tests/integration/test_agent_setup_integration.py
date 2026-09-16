@@ -609,6 +609,49 @@ esac
         assert calls.count("bootstrap-called") == 1
         assert "whoami-ok" not in calls
 
+    def it_writes_a_host_block_and_known_hosts_entry_per_git_domain(tmp_path):
+        # 0.2.0: /bootstrap の git_domains (既定が先頭) から、上流ごとに Host ブロックとポート別 known_hosts を作る
+        multi = (
+            '{"ok":true,"fingerprint":"SHA256:x","added":true,"token":"' + token + '",'
+            '"token_expires":"2026-01-01T00:00:00Z","project":"case-m",'
+            '"repos":["LibOrg/awesome-lib","ghe.example.com/Corp/Internal"],"git_domain":"github.com",'
+            '"upstream":"github.com","git_domains":['
+            '{"domain":"github.com","ssh_port":22,"upstream":"github.com","default":true},'
+            '{"domain":"ghe.example.com","ssh_port":2222,"upstream":"ghe.example.com","default":false}]}'
+        )
+        shim, log = _shims(tmp_path, valid_token=token, bootstrap_json=multi)
+        proc, home = _run(tmp_path, shim)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+
+        text = (tmp_path / "etc" / "env").read_text()
+        assert "SEKIMORE_GIT_DOMAIN=github.com" in text
+        assert "SEKIMORE_GIT_DOMAINS=github.com:22,ghe.example.com:2222" in text
+
+        kh = sorted((home / ".ssh" / "known_hosts").read_text().splitlines())
+        assert len(kh) == 2, kh
+        assert kh[0].startswith(f"[ghe.example.com]:2222,[{gw}]:2222 ssh-ed25519 "), kh
+        assert kh[1].startswith(f"github.com,{gw} ssh-ed25519 "), kh
+        calls = log.read_text()
+        assert f"ssh-keyscan -T 3 -p 22 {gw}" in calls and f"ssh-keyscan -T 3 -p 2222 {gw}" in calls
+
+        cfg = (home / ".ssh" / "config").read_text()
+        assert (
+            cfg.count("# >>> sekimore-relay >>>") == 1
+            and cfg.count("# <<< sekimore-relay <<<") == 1
+        )
+        blocks = re.findall(r"Host (\S+)\n  User git\n  Port (\d+)\n", cfg)
+        assert blocks == [("github.com", "22"), ("ghe.example.com", "2222")], cfg
+
+        # 2 回目 (トークン有効 → bootstrap 無し) でも env の SEKIMORE_GIT_DOMAINS から同じ結果を再現し、重複しない
+        proc, home = _run(tmp_path, shim)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (
+            "bootstrap-called" in log.read_text() and log.read_text().count("bootstrap-called") == 1
+        )
+        assert len((home / ".ssh" / "known_hosts").read_text().splitlines()) == 2
+        cfg = (home / ".ssh" / "config").read_text()
+        assert cfg.count("Host ghe.example.com") == 1 and cfg.count("Host github.com") == 1
+
     def it_is_idempotent_and_keeps_a_valid_token(tmp_path):
         shim, log = _shims(tmp_path)
         proc, home = _run(tmp_path, shim)

@@ -22,7 +22,7 @@ use crate::git::agent_check::{auth_sock_from_env, preflight_agent};
 use crate::git::upstream_ssh::OpenSshUpstream;
 use crate::git::{GitContext, UpstreamGit};
 use crate::github::GitHub;
-use crate::passthrough::Passthrough;
+use crate::passthrough::{Passthrough, SniTarget};
 use crate::ssh::authorized_keys::AuthorizedKeys;
 use crate::ssh::{load_or_create_host_key, server_config, SshServer};
 use crate::tokens::TokenStore;
@@ -138,10 +138,19 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         r.relay.bootstrap
     );
 
-    // 443 は既定上流へ（複数上流の SNI 振り分けは 0.2.0-b）
+    // 443: 複数上流なら ClientHello の SNI で上流を選ぶ。無い / 一致しなければ既定上流
     let pt = Arc::new(Passthrough {
         upstream: r.upstream.clone(),
         port: 443,
+        upstreams: r
+            .upstreams
+            .iter()
+            .map(|u| SniTarget {
+                domain: u.domain.clone(),
+                host: u.host.clone(),
+                port: 443,
+            })
+            .collect(),
         mode: r.relay.https,
         proxy: r.proxy.clone(),
         idle: r.relay.limits.idle_timeout,
@@ -156,6 +165,8 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         "https on {}: {}",
         r.relay.https_listen,
         match r.relay.https {
+            HttpsMode::Passthrough if r.upstreams.len() > 1 =>
+                "TCP passthrough to <upstream by SNI>:443",
             HttpsMode::Passthrough => "TCP passthrough to upstream:443",
             HttpsMode::Reject => "reject (RST + audit)",
         }
