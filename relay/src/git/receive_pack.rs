@@ -108,8 +108,6 @@ pub fn plan_push(
     auth: &GitAuthorized<'_>,
     section: &CommandSection<'_>,
     adv: &HashMap<String, String>,
-    allow_delete: bool,
-    allow_tags: bool,
 ) -> Result<PushPlan, Denied> {
     let policy = auth.policy();
     let mut commands = Vec::new();
@@ -164,7 +162,7 @@ pub fn plan_push(
                 name: upstream_ref,
             });
         } else if let Some(branch) = u.name.strip_prefix("refs/heads/") {
-            if u.is_delete() && !allow_delete {
+            if u.is_delete() && !policy.delete {
                 return Err(Denied::DeleteNotAllowed {
                     name: u.name.to_string(),
                 });
@@ -180,17 +178,16 @@ pub fn plan_push(
                 new: u.new.to_string(),
                 name: u.name.to_string(),
             });
-        } else if u.name.starts_with("refs/tags/") {
-            if u.is_delete() && !allow_delete {
+        } else if let Some(tag) = u.name.strip_prefix("refs/tags/") {
+            if u.is_delete() && !policy.delete {
                 return Err(Denied::DeleteNotAllowed {
                     name: u.name.to_string(),
                 });
             }
-            if !allow_tags {
+            if !policy.allows_tag(tag) {
                 return Err(Denied::RefNotAllowed {
                     name: u.name.to_string(),
-                    reason:
-                        "tags cannot be pushed (set relay.allow_tags: true to allow release tags)",
+                    reason: "tag is not allowed for this repository (relay.project.tags / repos[].tags globs; default deny)",
                 });
             }
             commands.push(OwnedCommand::Update {
@@ -355,14 +352,7 @@ pub async fn relay_receive_pack(
     let push_options =
         caps_contain(client_caps, "push-options") && caps_contain(&server_caps, "push-options");
 
-    let plan = match plan_push(
-        &ctx.project,
-        auth,
-        &section,
-        &adv,
-        ctx.allow_delete,
-        ctx.allow_tags,
-    ) {
+    let plan = match plan_push(&ctx.project, auth, &section, &adv) {
         Ok(p) => p,
         Err(d) => {
             let _ = proc.child.start_kill();
@@ -782,13 +772,32 @@ mod tests {
         allow_delete: bool,
         allow_tags: bool,
     ) -> Result<PushPlan, Denied> {
-        let p = project();
+        plan_with_tags(
+            lines,
+            adv,
+            allow_delete,
+            if allow_tags { &["*"] } else { &[] },
+        )
+    }
+
+    /// 0.1.9: タグ / 削除は repo の policy (project.tags / repos[].tags, delete) で決まる
+    fn plan_with_tags(
+        lines: &[String],
+        adv: &HashMap<String, String>,
+        allow_delete: bool,
+        tag_globs: &[&str],
+    ) -> Result<PushPlan, Denied> {
+        let mut p = project();
+        for r in &mut p.repos {
+            r.delete = allow_delete;
+            r.tags = tag_globs.iter().map(|s| s.to_string()).collect();
+        }
         let auth = p
             .authorize_git(GitVerb::ReceivePack, "LibOrg/awesome-lib.git")
             .unwrap();
         let data = section_of(lines);
         let sec = parse_receive_pack(&data).unwrap();
-        plan_push(&p, &auth, &sec, adv, allow_delete, allow_tags)
+        plan_push(&p, &auth, &sec, adv)
     }
 
     #[test]
@@ -864,7 +873,7 @@ mod tests {
         let data = section_of(&[format!("{ZERO} {SHA} refs/for/main")]);
         let sec = parse_receive_pack(&data).unwrap();
         assert!(matches!(
-            plan_push(&p, &auth, &sec, &HashMap::new(), false, false),
+            plan_push(&p, &auth, &sec, &HashMap::new()),
             Err(Denied::NotPermitted {
                 resource: "pr",
                 action: "create"
@@ -909,6 +918,23 @@ mod tests {
                 true
             ),
             Err(Denied::DeleteNotAllowed { .. })
+        ));
+        // tags は glob: ["v*"] なら v1 は通り release-1 は拒否
+        assert!(plan_with_tags(
+            &[format!("{ZERO} {SHA} refs/tags/v1")],
+            &HashMap::new(),
+            false,
+            &["v*"]
+        )
+        .is_ok());
+        assert!(matches!(
+            plan_with_tags(
+                &[format!("{ZERO} {SHA} refs/tags/release-1")],
+                &HashMap::new(),
+                false,
+                &["v*"]
+            ),
+            Err(Denied::RefNotAllowed { .. })
         ));
         assert!(matches!(
             plan(

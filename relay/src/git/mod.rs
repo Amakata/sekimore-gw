@@ -106,8 +106,6 @@ pub struct GitContext {
     pub github: Option<Arc<GitHub>>,
     pub audit: Arc<Audit>,
     pub limits: Limits,
-    pub allow_delete: bool,
-    pub allow_tags: bool,
 }
 
 /// `git-upload-pack 'Org/Repo.git'` を分解する。

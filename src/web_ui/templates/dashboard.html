@@ -1145,7 +1145,8 @@
                         relayBadge(cfg.bootstrap_disabled ? 'OFF' : 'ON', cfg.bootstrap_disabled ? 'badge-blocked' : 'badge-allowed')),
                     relayKV('Token TTL', cfg.token_ttl),
                     relayKV('Allow delete (refs)', cfg.allow_delete ? 'yes' : 'no'),
-                    relayKV('Allow tags (push)', cfg.allow_tags ? 'yes' : 'no'),
+                    relayKV('Tags (default globs)', cfg.tags && cfg.tags.length ? cfg.tags.join(', ') : 'deny'),
+                    relayKV('Delete (default)', cfg.allow_delete ? 'yes' : 'no'),
                     relayKV('State dir', cfg.state_dir),
                 ].join('');
 
@@ -1153,9 +1154,12 @@
                     'pr:close', 'pr:comment', 'pr:create', 'pr:merge', 'pr:read', 'pr:review',
                     'project:add_item', 'project:read', 'project:update_item', 'repo:read', 'ci:read'];
                 const granted = new Set(cfg.permissions);
+                const denied = new Set(cfg.permissions_deny || []);
                 cfg.permissions.forEach(p => allPerms.includes(p) || allPerms.push(p));
                 document.getElementById('relay-permissions').innerHTML = allPerms.map(p =>
-                    relayKV(p, granted.has(p) ? 'allowed' : 'denied', relayBadge(granted.has(p) ? 'ALLOW' : 'DENY', granted.has(p) ? 'badge-allowed' : 'badge-blocked-default'))
+                    denied.has(p)
+                        ? relayKV(p, 'denied (project deny, wins over repo allow)', relayBadge('DENY', 'badge-blocked'))
+                        : relayKV(p, granted.has(p) ? 'allowed (default)' : 'not granted', relayBadge(granted.has(p) ? 'ALLOW' : 'DENY', granted.has(p) ? 'badge-allowed' : 'badge-blocked-default'))
                 ).join('');
 
                 document.getElementById('relay-repos').innerHTML = cfg.repos.length ? cfg.repos.map(r => `
@@ -1165,6 +1169,9 @@
                             <div class="domain-stats" style="margin-top: 4px;">
                                 <span class="domain-stat">PR bases: <strong>${escapeHtml(r.bases.join(', ') || '-')}</strong></span>
                                 <span class="domain-stat">direct push: <strong>${escapeHtml(r.push.join(', ') || '-')}</strong></span>
+                                <span class="domain-stat">tags: <strong>${escapeHtml((r.tags || []).join(', ') || 'deny')}</strong></span>
+                                <span class="domain-stat">delete: <strong>${r.delete ? 'yes' : 'no'}</strong></span>
+                                <span class="domain-stat">permissions: <strong>${escapeHtml((r.permissions || []).join(' ') || '(none)')}</strong></span>
                             </div>
                         </div>
                         <div>${relayBadge(r.mode, r.mode === 'read-write' ? 'badge-mixed' : 'badge-ignored')}</div>

@@ -40,11 +40,23 @@ relay:
   token_ttl: 12h
   project:
     name: case-a
+    # 案件の既定。repo 側に書けば上書き / 差分になる（0.1.9〜）
+    permissions:                                                 # `[…]`（allow だけ）でも書ける
+      allow: [pr:create, pr:read, ci:read, issue:create]         # 書かないものは全て拒否
+      deny: [issue:label]                                        # deny はどの階層に書いても allow より勝つ
+    push: ["sekimore/*"]                                         # 直接 push を許すブランチ glob の既定
+    tags: []                                                     # push を許すタグ glob の既定（空 = 拒否）
+    delete: false                                                # ブランチ / タグ削除の既定
     repos:
-      - { name: Org/Repo, mode: read-write, bases: [main] }      # bases = PR の base に許可するブランチ
-      - { name: VendorOrg/reference-impl, mode: read-only }
-    permissions: [pr:create, issue:create, project:read]         # 書かないものは全て拒否
+      - { name: Org/Repo, mode: read-write, bases: [main], tags: ["v*"], permissions: { allow: [pr:merge] } }
+        # ↑ この repo だけ v* タグと pr:merge を許す（bases = PR の base に許可するブランチ）
+      - { name: VendorOrg/reference-impl, mode: read-only, permissions: { deny: [issue:create] } }
 ```
+
+権限の考え方は GitHub と同じ向き: **allow は加算（role / fine-grained PAT のスコープ）、deny は rulesets のように加算より優先して制限する**。
+`mode: read-only` は書き込み系（PR 作成・push など）を丸ごと止める最上位のゲート。タグの glob は GitHub rulesets の
+`refs/tags/v*` と同じ fnmatch 風（`*` `?`）。repo の実効権限は `sekimore-relay check` と Web UI の Relay タブで確認できる。
+旧 `relay.allow_tags` / `relay.allow_delete` は非推奨（読めば既定に畳み込んで警告）。
 
 `relay:` 配下の未知キーはエラー（typo で権限が緩まない）。全キーは `src/config.rs`。
 
@@ -174,9 +186,9 @@ docker compose exec sekimore-gw tail -f /data/relay/audit.jsonl          # 全�
 | `sekimore: known_hosts … has no entry for github.com` | 上流のホスト鍵が無い | `sekimore-relay login`（`/meta` から生成）か `ssh-keyscan` |
 | `sekimore: repository "X" is not in project "P"` | 案件外 | `relay.project.repos` に追加する（意図した拒否なら何もしない） |
 | `sekimore: push to refs/heads/main is not allowed` | 名前空間外への直接 push | `refs/for/main` で PR にする。必要なら `repos[].push` に glob を足す |
-| `sekimore: tags cannot be pushed (set relay.allow_tags: true …)` | タグの push は既定拒否 | AI にリリースタグまで打たせる案件なら `relay.allow_tags: true`（再起動が要る） |
+| `sekimore: push to refs/tags/… is not allowed: tag is not allowed for this repository` | タグの push は既定拒否 | その repo の `tags: ["v*"]`（または案件の `tags`）に glob を足す（再起動が要る）。削除は `delete` |
 | `Permission denied (publickey)`（関所から） | エージェントの鍵が未登録（0.1.3 からバナーは出さない。理由は監査の `ssh_auth_denied`） | `agent bootstrap` または操作者の `add-key`。`bootstrap.disabled` の有無 |
-| `! [remote rejected] … (sekimore: push to … is not allowed)` | ポリシーで拒否した push（0.1.3 から report-status の `ng` で返す。以前は切断して "remote end hung up" だった） | メッセージの案内どおり（`refs/for/<base>`、`repos[].push`、`allow_delete`） |
+| `! [remote rejected] … (sekimore: push to … is not allowed)` | ポリシーで拒否した push（0.1.3 から report-status の `ng` で返す。以前は切断して "remote end hung up" だった） | メッセージの案内どおり（`refs/for/<base>`、`repos[].push`、`delete`） |
 | `sekimore: denied: token expired at …` | 案件トークンの期限切れ（`token_ttl`、既定 12h） | `sekimore` ラッパー（base 0.2.1）が自動で bootstrap をやり直す。古い環境は `sudo sekimore-agent-setup.sh` |
 | `no upstream token … run sekimore-relay login` | device flow 未実施 / logout 後 | `sekimore-relay login` |
 | `git ls-remote` が無言で止まる | DNS は関所を向いたが INPUT で落ちている | `iptables-legacy -S INPUT` に `--dport 22` があるか。無ければ relay 未起動（`[relay]` の起動ログと `needs-relay` の終了コード） |
