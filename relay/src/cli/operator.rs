@@ -18,11 +18,30 @@ use crate::github::device_flow::DeviceFlow;
 use crate::github::http::{build_client, HttpOptions};
 use crate::github::upstream_token::UpstreamTokenStore;
 use crate::github::GitHub;
+use crate::i18n::{t, tf};
 use crate::policy::all_permission_keys;
 use crate::ssh::authorized_keys::{fingerprint, Added, AuthorizedKeys};
 use crate::tokens::TokenStore;
 
 pub const DEVICE_FLOW_SCOPES: &[&str] = &["repo", "project"];
+
+/// Pad a label to `width` display columns (CJK characters count as two).
+fn pad_label(label: &str, width: usize) -> String {
+    let shown: usize = label.chars().map(|c| if is_wide(c) { 2 } else { 1 }).sum();
+    let mut out = label.to_string();
+    for _ in shown..width {
+        out.push(' ');
+    }
+    out
+}
+
+/// Rough East Asian Wide / Fullwidth test, enough for the labels we print.
+fn is_wide(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x115F | 0x2E80..=0x303E | 0x3041..=0x33FF | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF | 0xA000..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE6F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 | 0x20000..=0x3FFFD)
+}
 
 /// entrypoint.sh 用。0 = 起動 / 1 = 不要 / 2 = 設定不正。
 pub fn needs_relay(path: &Path) -> anyhow::Result<i32> {
@@ -120,26 +139,42 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let audit = open_audit(&r)?;
     let (gh, store, http) = build_github_for(&r, &up, audit.clone())?;
     if r.upstreams.len() > 1 {
+        let mark = if up.is_default {
+            t("op.login.default_mark")
+        } else {
+            String::new()
+        };
         println!(
-            "upstream: {} ({}){}",
-            up.domain,
-            up.host,
-            if up.is_default { " [default]" } else { "" }
+            "{}",
+            tf(
+                "op.login.upstream",
+                &[
+                    ("domain", &up.domain),
+                    ("host", &up.host),
+                    ("default", &mark),
+                ]
+            )
         );
     }
     let flow = DeviceFlow::new(&up.host, &up.oauth_client_id, DEVICE_FLOW_SCOPES, http)?;
     let (token, scope) = flow
         .authenticate(|code, url| {
             println!();
-            println!("  Open: {url}");
-            println!("  Code: {code}");
+            println!("{}", tf("op.login.open", &[("url", url)]));
+            println!("{}", tf("op.login.code", &[("code", code)]));
             println!();
         })
         .await?;
     store.save(&up.host, &token, &scope)?;
     println!(
-        "stored upstream token in {} (scopes={scope})",
-        up.upstream_token.display()
+        "{}",
+        tf(
+            "op.login.stored",
+            &[
+                ("path", &up.upstream_token.display().to_string()),
+                ("scopes", &scope)
+            ]
+        )
     );
     audit.log(
         "login",
@@ -155,25 +190,42 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
         Ok(keys) if !keys.is_empty() => {
             let n = merge_known_hosts(&up.known_hosts, &up.host, up.upstream_ssh_port, &keys)?;
             println!(
-                "known_hosts: {} host key(s) for {} ({} new) → {}",
-                keys.len(),
-                up.host,
-                n,
-                up.known_hosts.display()
+                "{}",
+                tf(
+                    "op.login.known_hosts",
+                    &[
+                        ("n", &keys.len().to_string()),
+                        ("host", &up.host),
+                        ("new", &n.to_string()),
+                        ("path", &up.known_hosts.display().to_string()),
+                    ]
+                )
             );
         }
         Ok(_) => eprintln!(
-            "warning: GET /meta returned no ssh_keys; populate {} with ssh-keyscan",
-            up.known_hosts.display()
+            "{}",
+            tf(
+                "op.login.no_meta_keys",
+                &[("path", &up.known_hosts.display().to_string())]
+            )
         ),
         Err(e) => eprintln!(
-            "warning: could not fetch upstream ssh host keys ({e}); populate {} with ssh-keyscan",
-            up.known_hosts.display()
+            "{}",
+            tf(
+                "op.login.meta_failed",
+                &[
+                    ("error", &e.to_string()),
+                    ("path", &up.known_hosts.display().to_string())
+                ]
+            )
         ),
     }
     match gh.whoami().await {
-        Ok(login) => println!("upstream identity: {login}"),
-        Err(e) => eprintln!("warning: token stored but /user failed: {e}"),
+        Ok(login) => println!("{}", tf("op.login.identity", &[("login", &login)])),
+        Err(e) => eprintln!(
+            "{}",
+            tf("op.login.user_failed", &[("error", &e.to_string())])
+        ),
     }
     Ok(())
 }
@@ -255,19 +307,30 @@ pub fn keyscan(path: &Path, host: &str, port: u16, upstream: Option<&str>) -> an
     let text = String::from_utf8_lossy(&out.stdout);
     let keys: Vec<String> = parse_keyscan(&text).into_iter().map(|(_, k)| k).collect();
     if keys.is_empty() {
-        bail!(
-            "ssh-keyscan returned no host keys for {host}:{port} ({})",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        bail!(tf(
+            "op.keyscan.none",
+            &[
+                ("host", host),
+                ("port", &port.to_string()),
+                ("stderr", String::from_utf8_lossy(&out.stderr).trim()),
+            ]
+        ));
     }
     println!(
-        "host keys of {host}:{port} — verify these fingerprints out of band before trusting them:"
+        "{}",
+        tf(
+            "op.keyscan.header",
+            &[("host", host), ("port", &port.to_string())]
+        )
     );
     for k in &keys {
         let kind = k.split_whitespace().next().unwrap_or("");
         match PublicKey::from_openssh(k) {
             Ok(pk) => println!("  {kind:<20} {}", fingerprint(&pk)),
-            Err(e) => println!("  {kind:<20} (unparseable: {e})"),
+            Err(e) => println!(
+                "  {kind:<20} {}",
+                tf("op.keyscan.unparseable", &[("error", &e.to_string())])
+            ),
         }
     }
     if let Some(dir) = up.known_hosts.parent() {
@@ -275,10 +338,18 @@ pub fn keyscan(path: &Path, host: &str, port: u16, upstream: Option<&str>) -> an
     }
     let n = merge_known_hosts(&up.known_hosts, host, port, &keys)?;
     println!(
-        "known_hosts: {} key(s) for {host}:{port} ({n} new) → {} (upstream {})",
-        keys.len(),
-        up.known_hosts.display(),
-        up.domain
+        "{}",
+        tf(
+            "op.keyscan.result",
+            &[
+                ("n", &keys.len().to_string()),
+                ("host", host),
+                ("port", &port.to_string()),
+                ("new", &n.to_string()),
+                ("path", &up.known_hosts.display().to_string()),
+                ("domain", &up.domain),
+            ]
+        )
     );
     audit.log(
         "known_hosts_added",
@@ -299,14 +370,20 @@ pub fn logout(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let audit = open_audit(&r)?;
     let store = UpstreamTokenStore::new(&up.upstream_token, r.relay.upstream_token_cache_ttl);
     if store.delete()? {
-        println!("removed upstream token {}", up.upstream_token.display());
+        println!(
+            "{}",
+            tf(
+                "op.logout.removed",
+                &[("path", &up.upstream_token.display().to_string())]
+            )
+        );
         audit.log(
             "logout",
             Actor::Operator,
             &[("host", &up.host), ("domain", &up.domain)],
         );
     } else {
-        println!("no upstream token stored for {}", up.domain);
+        println!("{}", tf("op.logout.none", &[("domain", &up.domain)]));
     }
     Ok(())
 }
@@ -317,75 +394,127 @@ pub async fn whoami(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let audit = open_audit(&r)?;
     let (gh, _, _) = build_github_for(&r, up, audit)?;
     let login = gh.whoami().await?;
-    println!("upstream identity: {login} (host={})", up.host);
-    println!("note: the gateway acts as this identity. GitHub cannot distinguish");
-    println!("      agent actions from yours — the gateway audit log is the only record.");
+    println!(
+        "{}",
+        tf(
+            "op.whoami.identity",
+            &[("login", &login), ("host", &up.host)]
+        )
+    );
+    println!("{}", t("op.whoami.note1"));
+    println!("{}", t("op.whoami.note2"));
     Ok(())
 }
 
 pub async fn check(path: &Path) -> anyhow::Result<()> {
     let r = resolve(path)?;
-    println!("project:      {}", r.project.name);
+    println!(
+        "{}{}",
+        pad_label(&t("op.check.project"), 14),
+        r.project.name
+    );
     let multi = r.upstreams.len() > 1;
     for up in &r.upstreams {
         if multi {
             println!(
-                "domain:       {} (git-relay{})",
+                "{}{} (git-relay{})",
+                pad_label(&t("op.check.domain"), 14),
                 up.domain,
-                if up.is_default { ", default" } else { "" }
+                if up.is_default {
+                    t("op.check.default")
+                } else {
+                    String::new()
+                }
             );
         } else {
-            println!("domain:       {} (git-relay)", up.domain);
+            println!(
+                "{}{} (git-relay)",
+                pad_label(&t("op.check.domain"), 14),
+                up.domain
+            );
         }
         println!(
-            "  upstream:   {} (ssh port {})",
-            up.host, up.upstream_ssh_port
+            "{}{} {}",
+            pad_label(&t("op.check.upstream"), 14),
+            up.host,
+            tf(
+                "op.check.ssh_port",
+                &[("port", &up.upstream_ssh_port.to_string())]
+            )
         );
-        println!("  rest:       {}", up.api_base);
-        println!("  graphql:    {}", up.graphql_base);
-        println!("  ssh listen: {}", up.listen);
+        println!("{}{}", pad_label(&t("op.check.rest"), 14), up.api_base);
+        println!(
+            "{}{}",
+            pad_label(&t("op.check.graphql"), 14),
+            up.graphql_base
+        );
+        println!("{}{}", pad_label(&t("op.check.ssh_listen"), 14), up.listen);
         if !up.ssh_options.is_empty() {
-            println!("  ssh options: {}", up.ssh_options.join(" "));
+            println!(
+                "{}{}",
+                pad_label(&t("op.check.ssh_options"), 14),
+                up.ssh_options.join(" ")
+            );
         }
     }
-    println!("api listen:   {}", r.relay.api_listen);
     println!(
-        "https:        {:?} on {}",
-        r.relay.https, r.relay.https_listen
+        "{}{}",
+        pad_label(&t("op.check.api_listen"), 14),
+        r.relay.api_listen
     );
-    for t in &r.https_targets {
+    println!(
+        "{}{}",
+        pad_label(&t("op.check.https"), 14),
+        tf(
+            "op.check.https_on",
+            &[
+                ("mode", &format!("{:?}", r.relay.https)),
+                ("addr", &r.relay.https_listen.to_string()),
+            ]
+        )
+    );
+    for target in &r.https_targets {
+        let cap = target
+            .max_upload
+            .map(|c| tf("op.check.bytes", &[("n", &c.to_string())]))
+            .unwrap_or_else(|| t("op.check.unlimited"));
         println!(
-            "  443 target: {:<32} → {:<28} {} upload cap {}",
-            t.domain,
-            t.host,
-            match t.kind {
+            "{}{:<32} → {:<28} {} {}",
+            pad_label(&t("op.check.target"), 14),
+            target.domain,
+            target.host,
+            match target.kind {
                 HandlerKind::HttpsRelay => "(https-relay)",
                 _ => "(git-relay)   ",
             },
-            t.max_upload
-                .map(|c| format!("{c} bytes"))
-                .unwrap_or_else(|| "unlimited".to_string())
+            tf("op.check.upload_cap", &[("cap", &cap)])
         );
     }
-    println!("state dir:    {}", r.paths.state_dir.display());
     println!(
-        "token ttl:    {}",
+        "{}{}",
+        pad_label(&t("op.check.state_dir"), 14),
+        r.paths.state_dir.display()
+    );
+    println!(
+        "{}{}",
+        pad_label(&t("op.check.token_ttl"), 14),
         humantime::format_duration(r.relay.token_ttl)
     );
     println!(
-        "bootstrap:    {:?}{}",
+        "{}{:?}{}",
+        pad_label(&t("op.check.bootstrap"), 14),
         r.relay.bootstrap,
         if r.paths.bootstrap_disabled.exists() {
-            " (DISABLED by kill-switch)"
+            t("op.check.bootstrap_disabled")
         } else {
-            ""
+            String::new()
         }
     );
     // 0.1.9: タグ / 削除 / 権限は案件の既定 + repo の差分。repo ごとの実効値は下の repos に出す
     if let Some(px) = &r.proxy {
-        println!("proxy:        {}", px.url);
+        println!("{}{}", pad_label(&t("op.check.proxy"), 14), px.url);
     }
-    println!("\npermissions (default deny):");
+    println!("\n{}", t("op.check.permissions"));
     let granted = r.project.granted();
     let denied = r.project.denied();
     for k in all_permission_keys() {
@@ -399,11 +528,11 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
         println!("  [{mark}] {k}");
     }
     if !denied.is_empty() {
-        println!("  ([-] = project deny; wins over any allow)");
+        println!("{}", t("op.check.deny_note"));
     }
     // 0.2.1: 上流層（案件既定と repo の間）
     if !r.relay.project.upstreams.is_empty() {
-        println!("\nupstreams (layer between project defaults and repos):");
+        println!("\n{}", t("op.check.upstreams"));
         for (name, up) in &r.relay.project.upstreams {
             let mut parts = Vec::new();
             if let Some(p) = &up.permissions {
@@ -427,7 +556,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 "  {:<40} {} ({} repo(s))",
                 name,
                 if parts.is_empty() {
-                    "(no overrides)".to_string()
+                    t("op.check.no_overrides")
                 } else {
                     parts.join(" ")
                 },
@@ -435,7 +564,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             );
         }
     }
-    println!("\nrepos (effective = project defaults + upstream layer + repo allow - deny):");
+    println!("\n{}", t("op.check.repos"));
     for rp in &r.project.repos {
         let shown = if multi {
             format!("{}/{}", r.project.host_of(rp), rp.full_name)
@@ -453,26 +582,34 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
         );
         let eff = r.project.effective_keys(rp);
         if eff != granted || !rp.allow.is_empty() || !rp.deny.is_empty() {
-            println!(
-                "    permissions: {}",
-                if eff.is_empty() {
-                    "(none)".to_string()
-                } else {
-                    eff.join(" ")
-                }
-            );
+            let perms = if eff.is_empty() {
+                t("op.check.none")
+            } else {
+                eff.join(" ")
+            };
+            println!("{}", tf("op.check.repo_permissions", &[("perms", &perms)]));
         }
     }
-    println!("\nstate:");
+    println!("\n{}", t("op.check.state"));
     let sock = auth_sock_from_env();
     match preflight_agent(sock.as_deref()).await {
         Ok(n) => println!(
-            "  ssh-agent:       ok ({n} identities at {})",
-            sock.as_deref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default()
+            "{}",
+            tf(
+                "op.check.agent_ok",
+                &[
+                    ("n", &n.to_string()),
+                    (
+                        "sock",
+                        &sock
+                            .as_deref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default()
+                    ),
+                ]
+            )
         ),
-        Err(e) => println!("  ssh-agent:       NOT USABLE — {e}"),
+        Err(e) => println!("{}", tf("op.check.agent_bad", &[("error", &e.to_string())])),
     }
     for u in &r.upstreams {
         if multi {
@@ -489,9 +626,24 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             println!("  ssh options:     {}", u.ssh_options.join(" "));
         }
         match up.known_hosts_has_upstream() {
-            Ok(true) => println!("  known_hosts:     ok ({})", u.known_hosts.display()),
-            Ok(false) => println!("  known_hosts:     MISSING — {}", up.known_hosts_remedy()),
-            Err(e) => println!("  known_hosts:     ERROR — {e}"),
+            Ok(true) => println!(
+                "{}",
+                tf(
+                    "op.check.known_hosts_ok",
+                    &[("path", &u.known_hosts.display().to_string())]
+                )
+            ),
+            Ok(false) => println!(
+                "{}",
+                tf(
+                    "op.check.known_hosts_missing",
+                    &[("remedy", &up.known_hosts_remedy())]
+                )
+            ),
+            Err(e) => println!(
+                "{}",
+                tf("op.check.known_hosts_error", &[("error", &e.to_string())])
+            ),
         }
         let store = UpstreamTokenStore::new(&u.upstream_token, r.relay.upstream_token_cache_ttl);
         let login_hint = if u.is_default {
@@ -500,28 +652,56 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             format!("sekimore-relay login --upstream {}", u.domain)
         };
         match store.load() {
-            Ok(Some(t)) => println!(
-                "  upstream token:  present (scope={}, obtained {})",
-                t.scope,
-                humantime::format_rfc3339_seconds(t.obtained_at)
+            Ok(Some(tok)) => println!(
+                "{}",
+                tf(
+                    "op.check.token_present",
+                    &[
+                        ("scope", &tok.scope),
+                        (
+                            "when",
+                            &humantime::format_rfc3339_seconds(tok.obtained_at).to_string()
+                        ),
+                    ]
+                )
             ),
-            Ok(None) => println!("  upstream token:  MISSING — run `{login_hint}`"),
-            Err(e) => println!("  upstream token:  ERROR — {e}"),
+            Ok(None) => println!("{}", tf("op.check.token_missing", &[("hint", &login_hint)])),
+            Err(e) => println!(
+                "{}",
+                tf("op.check.token_error", &[("error", &e.to_string())])
+            ),
         }
     }
     let keys = AuthorizedKeys::new(&r.paths.authorized_keys, 64);
     println!(
-        "  authorized_keys: {} key(s) ({})",
-        keys.count(),
-        r.paths.authorized_keys.display()
+        "{}",
+        tf(
+            "op.check.keys",
+            &[
+                ("n", &keys.count().to_string()),
+                ("path", &r.paths.authorized_keys.display().to_string()),
+            ]
+        )
     );
     let tokens = TokenStore::new(&r.paths.tokens);
     let now = SystemTime::now();
     let list = tokens.list().unwrap_or_default();
     println!(
-        "  project tokens:  {} active / {} total",
-        list.iter().filter(|t| t.state(now) == "active").count(),
-        list.len()
+        "{}",
+        tf(
+            "op.check.tokens",
+            &[
+                (
+                    "active",
+                    &list
+                        .iter()
+                        .filter(|tok| tok.state(now) == "active")
+                        .count()
+                        .to_string()
+                ),
+                ("total", &list.len().to_string()),
+            ]
+        )
     );
     Ok(())
 }

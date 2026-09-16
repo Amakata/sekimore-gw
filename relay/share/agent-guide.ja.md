@@ -64,12 +64,3 @@ sekimore issue create --title "…" --body="…" [--labels a,b]
 - 署名鍵の GitHub への登録（コミットの Verified 表示に必要）
 - 上流トークンの更新（`sekimore-relay login`）や known_hosts の追加
 
----
-
-## Summary (English)
-
-- All git (SSH) and GitHub API traffic in this environment goes through the sekimore relay. You hold only a disposable SSH key, a signing key and a project token; the operator's credentials are not here — do not look for them.
-- Only repositories registered for the project are reachable. Denials are printed as `sekimore: …` on stderr and explain the next step.
-- Push targets: `HEAD:refs/for/<base>` (auto PR) or `HEAD:refs/heads/sekimore/<topic>` (then `sekimore pr create`). Direct pushes to `main`, tags, deletions and HTTPS git are refused unless explicitly allowed.
-- Use `sekimore whoami`, `sekimore pr create|status|merge`, `sekimore ci runs|jobs|log`, `sekimore issue create`. Write `--body="…"` when the value starts with `-`. Use `--repo host/Org/Repo` when several upstreams exist.
-- Outbound HTTPS is capped and audited; do not try to bypass the relay. Ask a human for new permissions, repos, tags or credentials.

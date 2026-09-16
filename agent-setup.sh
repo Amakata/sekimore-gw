@@ -2,30 +2,30 @@
 set -ex
 
 # ---------------------------------------------------------------------------
-# sekimore-relay (git / GitHub API の中継関所) のエージェント側セットアップ
+# Agent-side setup for sekimore-relay (the relay for git and the GitHub API)
 #
-# gateway に relay が居る (http://<gw>:8420/healthz が応答する) ときだけ動く。居なければ何もしない。
-# postStartCommand は毎起動で走るので、全ての書き込みは冪等 (生成は存在チェック、追記は置換、env は atomic)。
+# Runs only when the gateway has a relay (http://<gw>:8420/healthz answers). Otherwise it does nothing.
+# postStartCommand runs on every start, so every write is idempotent (create if absent, replace instead of append, atomic env file).
 #
-#   - 使い捨て認証鍵   <home>/.ssh/sekimore/id_ed25519        (関所にしか通用しない)
-#   - AI 専用署名鍵    <home>/.ssh/sekimore/signing_ed25519   (公開鍵を GitHub に Signing Key として登録する)
-#   - 案件トークン     /etc/sekimore-agent/env の SEKIMORE_TOKEN (POST /bootstrap で受け取る。既存が有効なら再利用)
-#   - known_hosts      関所のホスト鍵を <git_domain> として登録
-#   - ~/.ssh/config    Host <git_domain> → 使い捨て鍵 (マーカー付きブロックを置換)
+#   - disposable auth key  <home>/.ssh/sekimore/id_ed25519       (only valid against the relay)
+#   - AI signing key       <home>/.ssh/sekimore/signing_ed25519  (register the public key with GitHub as a signing key)
+#   - project token        SEKIMORE_TOKEN in /etc/sekimore-agent/env (from POST /bootstrap; reused while still valid)
+#   - known_hosts          the relay's host key registered under <git_domain>
+#   - ~/.ssh/config        Host <git_domain> pointing at the disposable key (a marked block, replaced in place)
 #   - git config       gpg.format ssh / user.signingkey / commit.gpgsign / gpg.ssh.allowedSignersFile
 #
-# 環境変数 (任意):
-#   SEKIMORE_AGENT_USER      鍵と設定の所有者 (既定 vscode。無ければ現在のユーザー)
-#   SEKIMORE_AGENT_HOME      上記ユーザーのホーム (既定 getent)
-#   SEKIMORE_KEY_DIR         鍵の置き場 (既定 <home>/.ssh/sekimore。volume にすると再ビルドでも鍵が変わらない)
-#   SEKIMORE_AGENT_ENV_FILE  env ファイル (既定 /etc/sekimore-agent/env)
-#   SEKIMORE_BOOTSTRAP       auto (既定) | manual  — manual なら鍵登録もトークン取得もせず、操作者に任せる
-#   SEKIMORE_GIT_DOMAIN      relay に向けたドメイン (既定は /bootstrap の応答、無ければ github.com)
-#   SEKIMORE_RELAY_API_PORT / SEKIMORE_RELAY_SSH_PORT  (既定 8420 / 22)
-#   SEKIMORE_SIGNING_KEY_COMMENT  署名鍵のコメント (GitHub 登録時の Title)。既定は "sekimore-agent-signing: <SEKIMORE_PROJECT> / <git user.name> <user.email>"
-#   SEKIMORE_PROJECT         上の案件名 (compose から渡す。無ければ省略)
+# Optional environment variables:
+#   SEKIMORE_AGENT_USER      owner of the keys and settings (default vscode, else the current user)
+#   SEKIMORE_AGENT_HOME      that user's home (default: from getent)
+#   SEKIMORE_KEY_DIR         where the keys live (default <home>/.ssh/sekimore; a volume keeps them across rebuilds)
+#   SEKIMORE_AGENT_ENV_FILE  the env file (default /etc/sekimore-agent/env)
+#   SEKIMORE_BOOTSTRAP       auto (default) | manual — manual registers no key and fetches no token; the operator does it
+#   SEKIMORE_GIT_DOMAIN      the domain pointed at the relay (default: from the /bootstrap response, else github.com)
+#   SEKIMORE_RELAY_API_PORT / SEKIMORE_RELAY_SSH_PORT  (default 8420 / 22)
+#   SEKIMORE_SIGNING_KEY_COMMENT  comment on the signing key (the title shown in GitHub). Default: "sekimore-agent-signing: <SEKIMORE_PROJECT> / <git user.name> <user.email>"
+#   SEKIMORE_PROJECT         the project name used above (passed from compose; omitted when unset)
 # ---------------------------------------------------------------------------
-# 署名鍵を用意する。$1 = 鍵ディレクトリ、$2 = コメント。無ければ生成、旧既定コメントのままなら更新 (fingerprint は変わらない)
+# Prepare the signing key. $1 = key directory, $2 = comment. Generated when absent; an old default comment is updated (the fingerprint does not change).
 sekimore_ensure_signing_key() {
   local keydir=$1 comment=$2 current
   if [ ! -f "$keydir/signing_ed25519" ]; then
@@ -34,18 +34,18 @@ sekimore_ensure_signing_key() {
   fi
   current=$(cut -d' ' -f3- "$keydir/signing_ed25519.pub" 2>/dev/null || true)
   if [ -n "${SEKIMORE_SIGNING_KEY_COMMENT:-}" ]; then
-    # 操作者が明示したコメントは既存鍵にも反映する (違うときだけ書き換え。鍵は不変)
+    # A comment the operator set explicitly is applied to an existing key too (rewritten only when it differs; the key itself is untouched)
     if [ "$current" != "$comment" ]; then
       ssh-keygen -q -c -C "$comment" -P '' -f "$keydir/signing_ed25519" >/dev/null 2>&1 || true
     fi
   elif [ "${current#sekimore-agent-signing@}" != "$current" ] && [ "${comment#sekimore-agent-signing@}" = "$comment" ]; then
-    # 旧既定 (…@<hostname>) のままなら名前入りに更新する
+    # Update the old default (…@<hostname>) to the form that carries the name
     ssh-keygen -q -c -C "$comment" -P '' -f "$keydir/signing_ed25519" >/dev/null 2>&1 || true
   fi
 }
 
 
-# 署名鍵のコメントを組む。$1 = 対象ユーザーの HOME (git の global 設定を読む)
+# Build the signing key comment. $1 = the target user's HOME (its global git config is read)
 sekimore_signing_key_comment() {
   if [ -n "${SEKIMORE_SIGNING_KEY_COMMENT:-}" ]; then printf '%s' "$SEKIMORE_SIGNING_KEY_COMMENT"; return 0; fi
   local home=$1 name email project
@@ -63,11 +63,11 @@ sekimore_signing_key_comment() {
   printf '%s' "$c"
 }
 
-# AI エージェント向けの使い方 (sekimore guide) を、各ツールが自動で読む場所に置く。
-#   Claude Code: <home>/.claude/skills/sekimore-relay/SKILL.md (関連する作業のときに読み込まれる)
-#   Codex CLI:   <home>/.codex/AGENTS.md のマーカー付きブロック (常に読まれるので要点 + guide への誘導)
-# 他のツールは `sekimore guide` の出力をその規約の場所に置けばよい。
-# SEKIMORE_AGENT_INSTRUCTIONS=claude,codex (既定) / none で無効。冪等 (再実行で置き換える)。
+# Put the agent guide (sekimore guide) where each tool reads it automatically.
+#   Claude Code: <home>/.claude/skills/sekimore-relay/SKILL.md (loaded when the work is related)
+#   Codex CLI:   a marked block in <home>/.codex/AGENTS.md (always read, so it carries the essentials and points at the guide)
+# For any other tool, put the output of `sekimore guide` wherever that tool expects it.
+# SEKIMORE_AGENT_INSTRUCTIONS=claude,codex (default), or none to disable. Idempotent: a re-run replaces the block.
 sekimore_agent_instructions() {
   local home=$1 own=$2
   local targets=${SEKIMORE_AGENT_INSTRUCTIONS:-claude,codex}
@@ -76,8 +76,13 @@ sekimore_agent_instructions() {
     echo "[agent] relay: sekimore-relay not found; skipping agent instructions"
     return 0
   fi
-  local guide
-  guide=$(sekimore-relay agent guide 2>/dev/null) || guide=""
+  # The guide goes to an AI agent, so it defaults to English; SEKIMORE_GUIDE_LANG overrides it.
+  # --lang was added in 0.2.4, so fall back to the plain form on an older CLI.
+  local guide lang=${SEKIMORE_GUIDE_LANG:-en}
+  guide=$(sekimore-relay agent guide --lang "$lang" 2>/dev/null) || guide=""
+  if [ -z "$guide" ]; then
+    guide=$(sekimore-relay agent guide 2>/dev/null) || guide=""
+  fi
   if [ -z "$guide" ]; then
     echo "[agent] relay: sekimore-relay agent guide is not available (old CLI); skipping agent instructions"
     return 0
@@ -91,7 +96,7 @@ sekimore_agent_instructions() {
       {
         echo "---"
         echo "name: sekimore-relay"
-        echo "description: この環境の git push / PR 作成 / CI 確認 / Issue / GitHub API は sekimore-relay (関所) を経由する。git push、PR、CI の確認、GitHub 操作の前に読む。sekimore-relay ${version:-unknown}"
+        echo "description: In this environment git push, pull requests, CI checks, issues and the GitHub API all go through sekimore-relay. Read this before pushing, opening a PR, checking CI or calling GitHub. sekimore-relay ${version:-unknown}"
         echo "---"
         echo
         printf '%s\n' "$guide"
@@ -110,11 +115,11 @@ sekimore_agent_instructions() {
       awk '/^<!-- >>> sekimore-relay >>> -->/{skip=1} /^<!-- <<< sekimore-relay <<< -->/{skip=0; next} !skip' "$agents" > "$tmpa"
       {
         echo "<!-- >>> sekimore-relay >>> -->"
-        echo "## sekimore-relay (git / GitHub は関所経由)"
+        echo "## sekimore-relay (git and GitHub go through the relay)"
         echo
-        echo "この環境の git push、PR、CI 確認、GitHub API は sekimore-relay (関所) を経由する。作業を始める前に \`sekimore guide\` を実行して使い方を読むこと。"
-        echo "要点: push 先は \`HEAD:refs/heads/sekimore/<topic>\` (PR は \`sekimore pr create\`) か \`HEAD:refs/for/<base>\`。main への直接 push・タグ・削除・HTTPS git は拒否される。"
-        echo "権限と repo は \`sekimore whoami\`。拒否理由は stderr の \`sekimore: …\` を読む。依頼者の資格情報はこの環境に無い。回避を試みない。"
+        echo "In this environment git push, pull requests, CI checks and the GitHub API all go through sekimore-relay. Run \`sekimore guide\` before you start working."
+        echo "In short: push to \`HEAD:refs/heads/sekimore/<topic>\` (then \`sekimore pr create\`) or to \`HEAD:refs/for/<base>\`. Direct pushes to main, tags, deletions and HTTPS git are refused."
+        echo "Check your permissions and repositories with \`sekimore whoami\`. Denials are printed on stderr as \`sekimore: …\`. The operator's credentials are not in this environment; do not try to work around the relay."
         echo "<!-- <<< sekimore-relay <<< -->"
       } >> "$tmpa"
       mv -f "$tmpa" "$agents"
@@ -149,7 +154,7 @@ sekimore_relay_setup() {
     fi
   done
 
-  # 対象ユーザー
+  # The target user
   local user=${SEKIMORE_AGENT_USER:-vscode}
   if ! getent passwd "$user" >/dev/null 2>&1; then
     echo "[agent] relay: user '$user' not found, using $(id -un)"
@@ -163,18 +168,18 @@ sekimore_relay_setup() {
   chown "$own" "$home/.ssh" "$keydir"
   install -d -m 755 "$(dirname "$env_file")"
 
-  # 鍵 (存在すれば生成しない)
+  # Keys (not regenerated when they already exist)
   if [ ! -f "$keydir/id_ed25519" ]; then
     ssh-keygen -q -t ed25519 -N '' -C "sekimore-agent@$(hostname)" -f "$keydir/id_ed25519"
   fi
-  # 署名鍵のコメントは GitHub に Signing Key として登録するときの Title になるので、誰の・どの案件の AI 鍵か分かる形にする
-  # (sekimore_signing_key_comment)。既存の鍵が旧既定 "sekimore-agent-signing@<hostname>" のままなら名前入りに更新する (鍵は不変)
+  # The signing key comment becomes the title in GitHub, so it says whose AI key this is and for which project
+  # (sekimore_signing_key_comment). An existing key still on the old default "sekimore-agent-signing@<hostname>" is updated to carry the name (the key is unchanged)
   sekimore_ensure_signing_key "$keydir" "$(sekimore_signing_key_comment "$home")"
   chown -R "$own" "$keydir"
   chmod 600 "$keydir/id_ed25519" "$keydir/signing_ed25519"
   chmod 644 "$keydir/id_ed25519.pub" "$keydir/signing_ed25519.pub"
 
-  # ---- 案件トークン (トレースに出さない) ----
+  # ---- project token (kept out of the trace) ----
   local xtrace=0
   case $- in *x*) xtrace=1 ;; esac
   set +x
@@ -184,7 +189,7 @@ sekimore_relay_setup() {
     token_expires=$(sed -n 's/^SEKIMORE_TOKEN_EXPIRES=//p' "$env_file" | head -1)
     repo=$(sed -n 's/^SEKIMORE_REPO=//p' "$env_file" | head -1)
     git_domain=$(sed -n 's/^SEKIMORE_GIT_DOMAIN=//p' "$env_file" | head -1)
-    # 0.2.0: 複数上流 ("domain:port,domain:port"。先頭が既定)。bootstrap を呼ばない再実行でも Host ブロックを再現できるように保存してある
+    # 0.2.0: several upstreams ("domain:port,domain:port", the first is the default). Stored so a re-run that skips bootstrap can still rebuild the Host blocks.
     git_domains=$(sed -n 's/^SEKIMORE_GIT_DOMAINS=//p' "$env_file" | head -1)
   fi
   if [ -n "$token" ] && curl -fsS -m 5 -o /dev/null -X POST -H "Authorization: Bearer $token" \
@@ -225,14 +230,14 @@ sekimore_relay_setup() {
     fi
   fi
   git_domain=${git_domain:-${SEKIMORE_GIT_DOMAIN:-github.com}}
-  # 一覧が無い (0.1.x の関所 / 手動) なら既定ドメインだけ。既定ドメインが一覧に無ければ先頭に足す
+  # Without a list (a 0.1.x relay, or manual setup) use the default domain alone; if the list omits it, put it first
   if [ -z "$git_domains" ]; then git_domains="$git_domain:$ssh_port"; fi
   case ",$git_domains," in
     *",$git_domain:"*) ;;
     *) git_domains="$git_domain:$ssh_port,$git_domains" ;;
   esac
 
-  # env ファイル (atomic、0600、所有者は対象ユーザー)
+  # The env file (atomic, 0600, owned by the target user)
   local tmp="$env_file.tmp.$$"
   {
     echo "# generated by sekimore-agent-setup.sh — re-run the setup to refresh"
@@ -242,7 +247,7 @@ sekimore_relay_setup() {
     echo "SEKIMORE_GIT_DOMAINS=$git_domains"
     if [ -n "$repo" ]; then echo "SEKIMORE_REPO=$repo"; fi
     if [ -n "$token" ]; then echo "SEKIMORE_TOKEN=$token"; fi
-    # 以下 2 つは `sekimore` ラッパーの自動更新用 (期限切れなら bootstrap をやり直す)
+    # The next two let the `sekimore` wrapper renew by itself (it re-runs bootstrap once the token expires)
     if [ -n "$token_expires" ]; then echo "SEKIMORE_TOKEN_EXPIRES=$token_expires"; fi
     echo "SEKIMORE_AGENT_KEY=$keydir/id_ed25519.pub"
   } > "$tmp"
@@ -254,8 +259,8 @@ sekimore_relay_setup() {
   unset token token_expires resp
   if [ "$xtrace" = 1 ]; then set -x; fi
 
-  # ---- known_hosts: 関所のホスト鍵を <git_domain> として登録 (置換なので鍵が変わっても追従) ----
-  # 0.2.0: 上流ごとに関所側ポートが違う。ポートごとに keyscan し、"[domain]:port,[gw]:port" で登録する
+  # ---- known_hosts: register the relay's host key under <git_domain> (replaced, so a new key is picked up) ----
+  # 0.2.0: each upstream has its own relay-side port. keyscan each one and register it as "[domain]:port,[gw]:port"
   local kh="$home/.ssh/known_hosts"
   touch "$kh"
   ssh-keygen -q -R "$gw" -f "$kh" >/dev/null 2>&1 || true
@@ -280,14 +285,14 @@ sekimore_relay_setup() {
       return 1
     fi
     if [ "$p" = 22 ]; then hostnames="$d,$gw"; else hostnames="[$d]:$p,[$gw]:$p"; fi
-    # keyscan の先頭フィールド ("<ip>" または "[<ip>]:<port>") を差し替える
+    # Replace the first field of the keyscan output ("<ip>" or "[<ip>]:<port>")
     printf '%s\n' "$scan" | grep -v '^#' | awk -v h="$hostnames" '{ $1 = h; print }' >> "$kh"
   done
   rm -f "$kh.old"
   chown "$own" "$kh"
   chmod 644 "$kh"
 
-  # ---- ~/.ssh/config: マーカー付きブロックを置換 (上流ごとに Host ブロック、鍵は同じ使い捨て鍵) ----
+  # ---- ~/.ssh/config: replace the marked block (one Host block per upstream, all using the same disposable key) ----
   local cfg="$home/.ssh/config"
   touch "$cfg"
   local tmpc="$cfg.tmp.$$"
@@ -310,7 +315,7 @@ sekimore_relay_setup() {
   chmod 600 "$cfg"
   chown "$own" "$cfg"
 
-  # ---- git: AI 専用鍵で署名 (依頼者の鍵では署名しない) ----
+  # ---- git: sign with the AI key (never with the operator's key) ----
   mkdir -p "$home/.config/git"
   if [ -O "$home/.config" ]; then chown "$own" "$home/.config"; fi
   chown "$own" "$home/.config/git"
@@ -330,7 +335,7 @@ sekimore_relay_setup() {
   chown "$own" "$signers"
   if [ -f "$home/.gitconfig" ]; then chown "$own" "$home/.gitconfig"; fi
 
-  # ---- AI エージェント向けの使い方を各ツールの場所に置く (Claude Code skill / Codex AGENTS.md) ----
+  # ---- put the agent guide where each tool reads it (Claude Code skill / Codex AGENTS.md) ----
   sekimore_agent_instructions "$home" "$own" || echo "[agent] relay: WARNING: could not write agent instructions"
 
   echo "[agent] relay: ready — git via $git_domains → $gw, API $endpoint, env $env_file $token_note"
@@ -340,7 +345,7 @@ sekimore_relay_setup() {
   return 0
 }
 
-# テストから関数だけ読み込むためのガード (SEKIMORE_AGENT_SETUP_SOURCE_ONLY=1 で source する)
+# Guard so tests can source the functions alone (source it with SEKIMORE_AGENT_SETUP_SOURCE_ONLY=1)
 if [ -n "${SEKIMORE_AGENT_SETUP_SOURCE_ONLY:-}" ]; then
   return 0 2>/dev/null || exit 0
 fi
@@ -665,7 +670,7 @@ else
   echo "[agent] WARNING: DNS resolution via sekimore-gw failed"
 fi
 
-# sekimore-relay (git / GitHub API 中継関所)。gateway に relay が居なければ何もしない。失敗しても DNS / ルートは維持する
+# sekimore-relay (the relay for git and the GitHub API). Does nothing when the gateway has no relay; a failure still leaves DNS and routes in place
 sekimore_relay_setup "$SEKIMORE_IP" || echo "[agent] WARNING: relay setup failed; git through the relay will not work until it is fixed"
 
 echo "[agent] Setup complete"

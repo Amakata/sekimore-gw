@@ -9,6 +9,7 @@ pub mod config;
 pub mod fsutil;
 pub mod git;
 pub mod github;
+pub mod i18n;
 pub mod netutil;
 pub mod passthrough;
 pub mod pktline;

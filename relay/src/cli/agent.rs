@@ -1,6 +1,8 @@
 //! エージェント側 CLI。関所の素直なエンドポイントを叩くだけ（gh 互換は目指さない）。
 //!
 //! エージェントが持つのは案件トークンのみ（上流では無効な文字列）。
+//!
+//! 0.2.4: ヘルプ文は `relay/locales/*.json` から実行時に引く（`crate::i18n`）。
 
 use std::path::PathBuf;
 
@@ -9,189 +11,195 @@ use clap::{Args, Subcommand};
 use serde_json::Value;
 
 use crate::api::types::{ApiRequest, ApiResponse, BootstrapRequest, BootstrapResponse};
+use crate::i18n::t;
 
 pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:8420";
 
 #[derive(Subcommand, Debug)]
 pub enum AgentCmd {
-    /// 自分の案件・権限・リポジトリを確認する
+    #[command(about = t("agent.whoami"))]
     Whoami,
-    /// AI エージェント向けの使い方（関所の前提、push の作法、sekimore コマンド、拒否メッセージの読み方）を表示する
-    Guide,
-    /// Pull Request 操作
+    #[command(about = t("agent.guide"))]
+    Guide {
+        #[arg(long, help = t("agent.guide.lang"))]
+        lang: Option<String>,
+    },
+    #[command(about = t("agent.pr"))]
     Pr {
         #[command(subcommand)]
         cmd: PrCmd,
     },
-    /// Issue 操作
+    #[command(about = t("agent.issue"))]
     Issue {
         #[command(subcommand)]
         cmd: IssueCmd,
     },
-    /// CI (GitHub Actions) の状態とログ
+    #[command(about = t("agent.ci"))]
     Ci {
         #[command(subcommand)]
         cmd: CiCmd,
     },
-    /// Projects v2 操作（関所が GraphQL を組み立てる）
+    #[command(about = t("agent.project"))]
     Project {
         #[command(subcommand)]
         cmd: ProjectCmd,
     },
-    /// 使い捨て SSH 公開鍵を登録し、案件トークンを受け取る（agent-setup.sh が使う）
+    #[command(about = t("agent.bootstrap"))]
     Bootstrap {
-        #[arg(long)]
+        #[arg(long, help = t("agent.bootstrap.pubkey_file"))]
         pubkey_file: PathBuf,
-        #[arg(long)]
+        #[arg(long, help = t("agent.bootstrap.label"))]
         label: Option<String>,
     },
 }
 
 #[derive(Args, Debug, Default)]
 pub struct Number {
-    #[arg(long)]
+    #[arg(long, help = t("agent.number"))]
     pub number: u64,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum PrCmd {
+    #[command(about = t("agent.pr.create"))]
     Create {
-        #[arg(long)]
+        #[arg(long, help = t("agent.pr.create.head"))]
         head: String,
-        #[arg(long)]
+        #[arg(long, help = t("agent.pr.create.base"))]
         base: String,
-        #[arg(long)]
+        #[arg(long, help = t("agent.pr.create.title"))]
         title: String,
-        #[arg(long, default_value = "")]
+        #[arg(long, default_value = "", help = t("agent.pr.create.body"))]
         body: String,
     },
+    #[command(about = t("agent.pr.comment"))]
     Comment {
-        #[arg(long)]
+        #[arg(long, help = t("agent.number"))]
         number: u64,
-        #[arg(long)]
+        #[arg(long, help = t("agent.body"))]
         body: String,
     },
+    #[command(about = t("agent.pr.review"))]
     Review {
-        #[arg(long)]
+        #[arg(long, help = t("agent.number"))]
         number: u64,
-        /// APPROVE / REQUEST_CHANGES / COMMENT
-        #[arg(long, default_value = "COMMENT")]
+        #[arg(long, default_value = "COMMENT", help = t("agent.pr.review.event"))]
         event: String,
-        #[arg(long, default_value = "")]
+        #[arg(long, default_value = "", help = t("agent.body"))]
         body: String,
     },
+    #[command(about = t("agent.pr.merge"))]
     Merge {
-        #[arg(long)]
+        #[arg(long, help = t("agent.number"))]
         number: u64,
     },
+    #[command(about = t("agent.pr.close"))]
     Close {
-        #[arg(long)]
+        #[arg(long, help = t("agent.number"))]
         number: u64,
     },
-    /// PR の状態と CI チェックを表示する
+    #[command(about = t("agent.pr.status"))]
     Status {
-        #[arg(long)]
+        #[arg(long, help = t("agent.number"))]
         number: u64,
-        /// JSON をそのまま出す（既定は 1 行サマリ + チェック一覧）
-        #[arg(long)]
+        #[arg(long, help = t("agent.pr.status.json"))]
         json: bool,
     },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum CiCmd {
-    /// ref (タグ / ブランチ / SHA) に紐づく workflow run 一覧 (タグ push の Docker Publish 等、PR に紐づかない run 用)
+    #[command(about = t("agent.ci.runs"))]
     Runs {
-        /// タグ名 / ブランチ名 / SHA (例: v0.1.6, main)
-        #[arg(long = "ref")]
+        #[arg(long = "ref", help = t("agent.ci.runs.ref"))]
         git_ref: String,
     },
-    /// run のジョブ一覧 (どれが失敗したか、job_id)。--number (PR の最新 run) か --run-id (ci runs で得る)
+    #[command(about = t("agent.ci.jobs"))]
     Jobs {
-        #[arg(long)]
+        #[arg(long, help = t("agent.number"))]
         number: Option<u64>,
-        #[arg(long)]
+        #[arg(long, help = t("agent.ci.run_id"))]
         run_id: Option<u64>,
     },
-    /// ジョブのログを末尾から表示する。--before でさらに前へ遡る
+    #[command(about = t("agent.ci.log"))]
     Log {
-        /// PR 番号 (最新 run の失敗ジョブを自動選択)
-        #[arg(long)]
+        #[arg(long, help = t("agent.ci.log.number"))]
         number: Option<u64>,
-        /// run ID (ci runs で得る。その run の失敗ジョブを自動選択)
-        #[arg(long)]
+        #[arg(long, help = t("agent.ci.log.run_id"))]
         run_id: Option<u64>,
-        /// ジョブ ID を直接指定 (ci jobs で得る)
-        #[arg(long)]
+        #[arg(long, help = t("agent.ci.log.job_id"))]
         job_id: Option<u64>,
-        /// 表示行数 (末尾から。既定 200)
-        #[arg(long, default_value = "200")]
+        #[arg(long, default_value = "200", help = t("agent.ci.log.window"))]
         window: u64,
-        /// この行番号より前を表示 (前ページの start を渡す)
-        #[arg(long)]
+        #[arg(long, help = t("agent.ci.log.before"))]
         before: Option<u64>,
-        /// JSON をそのまま出す
-        #[arg(long)]
+        #[arg(long, help = t("agent.ci.log.json"))]
         json: bool,
     },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum IssueCmd {
+    #[command(about = t("agent.issue.create"))]
     Create {
-        #[arg(long)]
+        #[arg(long, help = t("agent.issue.title"))]
         title: String,
-        #[arg(long, default_value = "")]
+        #[arg(long, default_value = "", help = t("agent.body"))]
         body: String,
-        /// カンマ区切り
-        #[arg(long)]
+        #[arg(long, help = t("agent.issue.labels"))]
         labels: Option<String>,
     },
+    #[command(about = t("agent.issue.comment"))]
     Comment {
-        #[arg(long)]
+        #[arg(long, help = t("agent.number"))]
         number: u64,
-        #[arg(long)]
+        #[arg(long, help = t("agent.body"))]
         body: String,
     },
+    #[command(about = t("agent.issue.close"))]
     Close {
-        #[arg(long)]
+        #[arg(long, help = t("agent.number"))]
         number: u64,
     },
+    #[command(about = t("agent.issue.label"))]
     Label {
-        #[arg(long)]
+        #[arg(long, help = t("agent.number"))]
         number: u64,
-        #[arg(long)]
+        #[arg(long, help = t("agent.issue.labels"))]
         labels: String,
     },
+    #[command(about = t("agent.issue.assign"))]
     Assign {
-        #[arg(long)]
+        #[arg(long, help = t("agent.number"))]
         number: u64,
-        #[arg(long)]
+        #[arg(long, help = t("agent.issue.assignees"))]
         assignees: String,
     },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum ProjectCmd {
+    #[command(about = t("agent.project.add_item"))]
     AddItem {
-        #[arg(long)]
+        #[arg(long, help = t("agent.project.project_id"))]
         project_id: String,
-        #[arg(long)]
+        #[arg(long, help = t("agent.project.content_id"))]
         content_id: String,
     },
+    #[command(about = t("agent.project.update_item"))]
     UpdateItem {
-        #[arg(long)]
+        #[arg(long, help = t("agent.project.project_id"))]
         project_id: String,
-        #[arg(long)]
+        #[arg(long, help = t("agent.project.item_id"))]
         item_id: String,
-        #[arg(long)]
+        #[arg(long, help = t("agent.project.field_id"))]
         field_id: String,
-        /// JSON か文字列（文字列は {"text": …} になる）
-        #[arg(long)]
+        #[arg(long, help = t("agent.project.update_item.value"))]
         value: String,
     },
+    #[command(about = t("agent.project.list"))]
     List {
-        #[arg(long)]
+        #[arg(long, help = t("agent.project.project_id"))]
         project_id: String,
         #[arg(long, default_value_t = 20)]
         first: u32,
@@ -279,13 +287,25 @@ impl AgentClient {
     }
 }
 
-/// `sekimore guide` の本文。バイナリに埋め込むので CLI と版がずれない（relay/share/agent-guide.md が正本）。
-pub const AGENT_GUIDE: &str = include_str!("../../share/agent-guide.md");
+/// `sekimore guide` の本文。バイナリに埋め込むので CLI と版がずれない（relay/share/agent-guide.*.md が正本）。
+pub const AGENT_GUIDE_EN: &str = include_str!("../../share/agent-guide.en.md");
+pub const AGENT_GUIDE_JA: &str = include_str!("../../share/agent-guide.ja.md");
+
+/// 指定があればその言語、無ければ環境の言語。未対応の指定は英語に落とす。
+pub fn guide_for(lang: Option<&str>) -> &'static str {
+    let chosen = lang
+        .and_then(crate::i18n::normalize)
+        .unwrap_or_else(crate::i18n::lang);
+    match chosen {
+        "ja" => AGENT_GUIDE_JA,
+        _ => AGENT_GUIDE_EN,
+    }
+}
 
 pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
-    if matches!(cmd, AgentCmd::Guide) {
+    if let AgentCmd::Guide { lang } = &cmd {
         // 接続情報もトークンも要らない（ネットワークに出ない）
-        print!("{AGENT_GUIDE}");
+        print!("{}", guide_for(lang.as_deref()));
         return Ok(0);
     }
     let client = AgentClient::from_env()?;
@@ -296,7 +316,7 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
     };
     let path = match cmd {
         AgentCmd::Whoami => "/whoami",
-        AgentCmd::Guide => unreachable!("guide is handled before connecting"),
+        AgentCmd::Guide { .. } => unreachable!("guide is handled before connecting"),
         AgentCmd::Bootstrap { pubkey_file, label } => {
             let key = std::fs::read_to_string(&pubkey_file)
                 .with_context(|| format!("read {}", pubkey_file.display()))?;
