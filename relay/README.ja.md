@@ -7,19 +7,31 @@ sekimore-gw のイメージに同梱され、`config.yml` に `handler: git-rela
 無ければ何も変わりません。
 
 - 変更履歴: [CHANGELOG.md](CHANGELOG.md)
-- 要件・設計とエージェント側の自動化は別の非公開リポジトリで管理しています。公開されている参照はこの README です。
 
 ## 全体像
 
 ```
-dev (AI)                          sekimore-gw                              上流
-────────                          ───────────                              ────
-git@github.com:Org/Repo.git ─DNS→ 関所 IP:22 (SSH, 使い捨て鍵) ─┐
-                                    案件リポジトリ検証            ├─ ssh git@github.com (依頼者の ssh-agent) → GitHub
-                                    refs/for/<base> → PR 作成    ┘   POST /repos/…/pulls (device flow トークン)
-sekimore … ─HTTP→ 関所 IP:8420 (skm_ トークン) ──────────────── リソース×アクション判定 → GitHub API
-https://github.com/…  ─DNS→ 関所 IP:443 ─────────────────────── TCP 素通し（既定。TLS は終端しない）
+  dev (AI)                      sekimore-gw                      上流
+  ========                      ===========                      ====
+
+  git clone / push       ─DNS→  :22  SSH                  ─ssh→   GitHub
+  git@github.com:Org/Repo        ・使い捨て鍵を認証する
+                                 ・この repo は案件に入っているか
+                                 ・refs/for/<base> をブランチ + PR にする
+                                                    使う資格情報: 操作者の ssh-agent
+
+  sekimore pr create     ─HTTP→  :8420  REST API          ─API→   GitHub
+  sekimore ci log                ・案件トークン skm_ を検証する
+                                 ・このリソース × アクションは許可されているか
+                                                    使う資格情報: device flow のトークン
+
+  https://github.com/…   ─DNS→   :443  TCP passthrough    ─TCP→   GitHub
+                                 ・TLS は終端しない。バイト数だけ数える
+                                 ・送信上限を掛ける
 ```
+
+関所が経路に入るのは DNS のおかげです。ゲートウェイがそれらのドメインに自分のアドレスを返し、
+本当のアドレスはファイアウォールの許可リストに入りません。だから上流へ出る道は、上の 3 本だけです。
 
 エージェントが持つのは次の 3 つだけです。どれも上流ではそのまま使えません。
 

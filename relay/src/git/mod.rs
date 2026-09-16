@@ -1,6 +1,6 @@
 //! The git path: take an SSH exec request, run the policy check, then relay to the upstream git.
 //!
-//! The flow (the state machine in `doc/sekimore-gw/design/relay.md`):
+//! The flow (the receive-pack state machine):
 //!   P0 parse exec → P1 `authorize_git` → P2 preflight → P3 spawn upstream → relay → P9 exit code
 //!
 //! `UpstreamGit::spawn`, the only way to reach upstream, accepts nothing but a `GitAuthorized`.

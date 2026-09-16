@@ -316,8 +316,6 @@ and forwards to the real upstream with the operator's ssh-agent and a device-flo
 Without `domain_handlers` nothing changes.
 
 Setup, agent-side steps, daily usage and troubleshooting: **[relay/README.md](relay/README.md)**.
-Requirements and design live in the workspace repository (`doc/sekimore-gw/requirements/04-relay.md`,
-`doc/sekimore-gw/design/relay.md`).
 
 ## Troubleshooting
 

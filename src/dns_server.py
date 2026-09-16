@@ -355,7 +355,7 @@ class DNSServer:
         self.running = False
         self.lan_subnets = lan_subnets or constants.DEFAULT_LAN_SUBNETS
         self.ignored_domains = ignored_domains or []
-        # The relay: git-relay domains resolve to the relay's own IP (doc/sekimore-gw/design/relay.md)
+        # The relay: git-relay domains resolve to the relay's own IP (see relay/README.md)
         self.domain_handlers: dict[str, str] = dict(domain_handlers or {})
         self._relay_ip_warned = False
 

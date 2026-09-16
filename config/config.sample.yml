@@ -84,7 +84,7 @@ database_path: "/data/security_gateway.db"
 
 # ---- the relay (sekimore-relay). Omit this and the relay does not start; nothing else changes ----
 # Takes git@github.com:Org/Repo.git on the relay's SSH port (22) and forwards it upstream under the
-# project's policy. Details: doc/sekimore-gw/requirements/04-relay.md, doc/sekimore-gw/design/relay.md
+# project's policy. See relay/README.md for the details.
 # domain_handlers:
 #   github.com:
 #     handler: git-relay          # an exact FQDN (splice and deny work here too)

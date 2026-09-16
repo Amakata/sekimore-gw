@@ -7,19 +7,32 @@ It ships inside the sekimore-gw image and only starts when `config.yml` contains
 Without that, nothing changes.
 
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
-- Requirements, design notes and the agent-side automation are kept in a separate, private repository. This README is the public reference.
 
 ## The big picture
 
 ```
-dev (AI)                          sekimore-gw                              upstream
-────────                          ───────────                              ────────
-git@github.com:Org/Repo.git ─DNS→ relay IP:22 (SSH, disposable key) ────┐
-                                    project repo check                  ├─ ssh git@github.com (operator's ssh-agent) → GitHub
-                                    refs/for/<base> → open a PR         ┘  POST /repos/…/pulls (device flow token)
-sekimore … ─HTTP→ relay IP:8420 (skm_ token) ───────────────────────────── resource × action check → GitHub API
-https://github.com/… ─DNS→ relay IP:443 ────────────────────────────────── TCP passed through unchanged (default; TLS is not terminated)
+  dev (the AI)                  sekimore-gw                      upstream
+  ============                  ===========                      ========
+
+  git clone / push       ─DNS→  :22  SSH                  ─ssh→   GitHub
+  git@github.com:Org/Repo        · authenticates the disposable key
+                                 · is this repo in the project?
+                                 · refs/for/<base> becomes a branch + PR
+                                                    uses: the operator's ssh-agent
+
+  sekimore pr create     ─HTTP→  :8420  REST API          ─API→   GitHub
+  sekimore ci log                · validates the skm_ project token
+                                 · is this resource × action allowed?
+                                                    uses: the device flow token
+
+  https://github.com/…   ─DNS→   :443  TCP passthrough    ─TCP→   GitHub
+                                 · TLS is not terminated; bytes are counted
+                                 · the upload cap applies
 ```
+
+DNS is what puts the relay in the path: the gateway answers those domains with its own
+address, and the real address never enters the firewall's allowlist. So nothing reaches
+the upstream except through one of the three lanes above.
 
 The agent holds exactly three things, and none of them work against the upstream:
 

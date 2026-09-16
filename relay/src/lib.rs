@@ -1,6 +1,6 @@
 //! sekimore-relay — a relay that mediates an AI agent's git / GitHub API operations under per-project policy.
 //!
-//! See `doc/sekimore-gw/design/relay.md` for the module layout.
+//! See `relay/README.md` for the module layout.
 
 pub mod api;
 pub mod audit;

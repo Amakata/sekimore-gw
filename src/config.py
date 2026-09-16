@@ -189,7 +189,7 @@ class Config(BaseModel):
         default="/data/security_gateway.db", description="Path of the SQLite database"
     )
 
-    # The relay. Absent, behaviour is unchanged (doc/sekimore-gw/requirements/04-relay.md).
+    # The relay. Absent, behaviour is unchanged (see relay/README.md).
     domain_handlers: dict[str, DomainHandlerConfig] = Field(
         default_factory=dict,
         description="Per-domain handler (git-relay / deny / splice). An exact FQDN",

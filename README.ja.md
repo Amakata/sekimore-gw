@@ -303,8 +303,7 @@ COMPOSE_PROJECT_NAME=sekimore-org-b docker-compose up -d
 
 任意の機能です。`config.yml` に `domain_handlers: { github.com: { handler: git-relay } }` があると、ゲートウェイはイメージに同梱された Rust 製の `sekimore-relay` を起動します。DNS は `github.com` をゲートウェイに向け、関所はポート 22 で使い捨てのエージェント鍵による SSH の `git` を受け、案件単位のポリシー（許可リポジトリ、読み取り専用 / 読み書き、PR のベースブランチ、`pr:create` / `issue:comment` などの権限）を適用し、`git push HEAD:refs/for/main` をブランチ + プルリクエストに変換して、操作者の ssh-agent とエージェントには見えない device flow のトークンで本物の上流へ中継します。`domain_handlers` が無ければ何も変わりません。
 
-セットアップ、エージェント側の手順、日々の使い方、トラブルシュート: **[relay/README.md](relay/README.md)**。
-要件と設計は workspace リポジトリにあります（`doc/sekimore-gw/requirements/04-relay.md`、`doc/sekimore-gw/design/relay.md`）。
+セットアップ、エージェント側の手順、日々の使い方、トラブルシュート: **[relay/README.ja.md](relay/README.ja.md)**。
 
 ## トラブルシューティング
 
