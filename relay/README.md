@@ -134,7 +134,7 @@ sekimore-relay agent pr create --head sekimore/main-abc1234 --base main --title 
 sekimore-relay agent issue create --title T --labels bug     # ラベル付きは issue:label も要る
 sekimore pr status --number 12                   # PR の CI チェックが通ったか（pr:read）。--json で機械可読
 sekimore ci runs --ref v0.1.6                    # タグ / ブランチ / SHA に紐づく workflow run 一覧（タグ push の Docker Publish 等、PR に紐づかない run）（ci:read）
-sekimore ci jobs --number 12                     # PR の最新 run のジョブ一覧（どれが失敗したか / job_id）。--run-id <run> でも（ci:read）
+sekimore ci jobs --number 12                     # PR の head SHA の全 workflow run のジョブ一覧（"<workflow> / <job>"、どれが失敗したか / job_id）。--run-id <run> でも（ci:read）
 sekimore ci log  --number 12                     # 失敗ジョブのログを末尾から。--run-id / --job-id でも。--before <start> でさらに前へ、--window で行数
 sekimore-relay agent project add-item --project-id P --content-id C
 ```

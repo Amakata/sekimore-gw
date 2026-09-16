@@ -52,6 +52,8 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          # attestation (provenance) の unknown/unknown マニフェストを作らない (base と揃える)
+          provenance: false
           # マニフェストは付けず digest だけ push。タグ付けは merge ジョブでまとめて行う
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_LC }},push-by-digest=true,name-canonical=true,push=true
           # キャッシュはアーキごとに分ける (scope) と汚染しない

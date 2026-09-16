@@ -446,11 +446,23 @@ impl GitHub {
         if head_sha.is_empty() {
             return Ok(Vec::new());
         }
+        // 1 つの SHA に複数の workflow run (relay.yml / test.yml / lint.yml …) が付くので、全部のジョブを集める。
+        // 同じ workflow の再実行があれば最新 (created_at 降順の先頭) だけ採る
         let runs = self.ci_runs(auth, &head_sha).await?;
-        let Some(latest) = runs.first() else {
-            return Ok(Vec::new());
-        };
-        self.ci_jobs_for_run(auth, latest.id).await
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for run in &runs {
+            if !seen.insert(run.name.clone()) {
+                continue;
+            }
+            for mut j in self.ci_jobs_for_run(auth, run.id).await? {
+                if !run.name.is_empty() {
+                    j.name = format!("{} / {}", run.name, j.name);
+                }
+                out.push(j);
+            }
+        }
+        Ok(out)
     }
 
     /// ジョブのログの 1 ページ (末尾から window 行、before より前)。before=None は末尾から。
