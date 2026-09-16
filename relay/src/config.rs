@@ -34,10 +34,39 @@ pub enum HandlerKind {
 pub struct DomainHandler {
     #[serde(default = "default_handler")]
     pub handler: HandlerKind,
+    /// 0.2.0: この上流を受ける関所側 SSH ポート。省略時は `relay.ssh_listen` のポート（既定上流用）。
+    /// 2 つ目以降の git-relay ドメインは別ポートが必須（SSH の exec にホスト名が無いのでポートで区別する）
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
+    /// 0.2.0: 上流ホスト。省略時はドメイン名（GHES の API は `https://<upstream>/api/v3` に派生）
+    #[serde(default)]
+    pub upstream: Option<String>,
+    /// 0.2.0: 上流の SSH ポート。省略時は `relay.upstream_ssh_port`
+    #[serde(default)]
+    pub upstream_ssh_port: Option<u16>,
+    /// 0.2.0: device flow の OAuth client id。省略時は `relay.oauth_client_id`（GHES では別 app になる）
+    #[serde(default)]
+    pub oauth_client_id: Option<String>,
+    /// 0.2.0: 既定上流にする（`Org/Repo` と書いた repo はこの上流）。省略時は `ssh_port` を省いたもの、無ければ辞書順の先頭
+    #[serde(default)]
+    pub default: bool,
 }
 
 fn default_handler() -> HandlerKind {
     HandlerKind::Splice
+}
+
+impl Default for DomainHandler {
+    fn default() -> Self {
+        DomainHandler {
+            handler: default_handler(),
+            ssh_port: None,
+            upstream: None,
+            upstream_ssh_port: None,
+            oauth_client_id: None,
+            default: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -255,6 +284,10 @@ pub struct RelayConfig {
     /// テスト専用: 上流 ssh の代わりに実行するコマンド（`["git", "receive-pack", "<bare-dir>"]` の親ディレクトリ）
     #[cfg(feature = "test-hooks")]
     pub upstream_local_root: Option<PathBuf>,
+    /// テスト専用（0.2.0）: 上流ドメインごとの local root。無いドメインは `upstream_local_root`
+    #[cfg(feature = "test-hooks")]
+    #[serde(default)]
+    pub upstream_local_roots: BTreeMap<String, PathBuf>,
 }
 
 fn d_ssh_listen() -> SocketAddr {
@@ -302,7 +335,6 @@ pub enum ConfigError {
         key: String,
         reason: &'static str,
     },
-    MultipleGitRelayDomains(Vec<String>),
     NoGitRelayDomain,
     NoRelaySection,
     Invalid(String),
@@ -316,12 +348,6 @@ impl fmt::Display for ConfigError {
             ConfigError::InvalidDomainKey { key, reason } => {
                 write!(f, "domain_handlers key {key:?} is invalid: {reason}")
             }
-            ConfigError::MultipleGitRelayDomains(domains) => write!(
-                f,
-                "domain_handlers has {} git-relay entries ({}); only one is supported because the SSH exec request carries only the repository path, not the hostname",
-                domains.len(),
-                domains.join(", ")
-            ),
             ConfigError::NoGitRelayDomain => {
                 write!(f, "no domain_handlers entry with handler: git-relay (relay is not needed)")
             }
@@ -343,6 +369,8 @@ pub struct Loaded {
     pub gateway: GatewayConfig,
     /// 正規化済み（lower、末尾 `.` 除去）の handler マップ
     handlers: BTreeMap<String, HandlerKind>,
+    /// 同じキーで handler の全項目（0.2.0: ssh_port / upstream など）
+    handler_specs: BTreeMap<String, DomainHandler>,
 }
 
 /// ファイルから読む。存在しなければ空設定（Python の `load_config` と同じ振る舞い）。
@@ -370,6 +398,7 @@ pub fn parse(path: &Path, text: &str) -> Result<Loaded, ConfigError> {
         })?
     };
     let mut handlers = BTreeMap::new();
+    let mut handler_specs = BTreeMap::new();
     for (key, h) in &gateway.domain_handlers {
         let norm = key.trim().trim_end_matches('.').to_ascii_lowercase();
         if norm.is_empty() {
@@ -390,11 +419,13 @@ pub fn parse(path: &Path, text: &str) -> Result<Loaded, ConfigError> {
                 reason: "duplicate after normalization",
             });
         }
+        handler_specs.insert(norm, h.clone());
     }
     Ok(Loaded {
         path: path.to_path_buf(),
         gateway,
         handlers,
+        handler_specs,
     })
 }
 
@@ -411,44 +442,156 @@ impl Loaded {
             .collect()
     }
 
-    /// relay を起動すべきか（`git-relay` handler が 1 つ以上）。複数ある場合はエラー（設定不正）。
+    /// relay を起動すべきか（`git-relay` handler が 1 つ以上）。
+    /// 0.2.0: 複数の git-relay ドメインはポートで分ける。ポート重複などは設定不正（Err）。
     pub fn needs_relay(&self) -> Result<bool, ConfigError> {
-        let domains = self.git_relay_domains();
-        match domains.len() {
-            0 => Ok(false),
-            1 => {
-                if self.gateway.relay.is_none() {
-                    return Err(ConfigError::NoRelaySection);
-                }
-                Ok(true)
-            }
-            _ => Err(ConfigError::MultipleGitRelayDomains(domains)),
+        if self.git_relay_domains().is_empty() {
+            return Ok(false);
         }
+        let relay = self
+            .gateway
+            .relay
+            .as_ref()
+            .ok_or(ConfigError::NoRelaySection)?;
+        self.resolve_upstreams(relay)?;
+        Ok(true)
+    }
+
+    /// git-relay ドメインごとの上流を組み立てる（0.2.0）。
+    ///
+    /// - 既定上流: `default: true` の handler → 無ければ `ssh_port` を省いたもの → 無ければ辞書順の先頭
+    /// - 既定上流は `relay.ssh_listen` で listen し、`relay.upstream` / `api_base` / `graphql_base` /
+    ///   `paths.upstream_token` / `paths.known_hosts` を使う（0.1.x と同じ）
+    /// - それ以外は `ssh_port` 必須（`relay.ssh_listen` と同じ IP で listen）。state は `upstreams/<host>/`
+    fn resolve_upstreams(&self, relay: &RelayConfig) -> Result<Vec<Upstream>, ConfigError> {
+        let domains = self.git_relay_domains();
+        if domains.is_empty() {
+            return Err(ConfigError::NoGitRelayDomain);
+        }
+        let spec = |d: &str| self.handler_specs.get(d).cloned().unwrap_or_default();
+        let explicit_default: Vec<&String> = domains.iter().filter(|d| spec(d).default).collect();
+        if explicit_default.len() > 1 {
+            return Err(ConfigError::Invalid(format!(
+                "domain_handlers: more than one git-relay entry has default: true ({})",
+                explicit_default
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        let no_port: Vec<&String> = domains
+            .iter()
+            .filter(|d| spec(d).ssh_port.is_none())
+            .collect();
+        let default_domain = match explicit_default.first() {
+            Some(d) => (*d).clone(),
+            None => match no_port.as_slice() {
+                [] => domains[0].clone(),
+                [one] => (*one).clone(),
+                many => {
+                    return Err(ConfigError::Invalid(format!(
+                        "domain_handlers has {} git-relay entries without ssh_port ({}); every git-relay domain but the default one needs its own ssh_port because the SSH exec request carries only the repository path, not the hostname",
+                        many.len(),
+                        many.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                    )))
+                }
+            },
+        };
+        let base_dir = relay.state_dir.join("upstreams");
+        let mut out = Vec::new();
+        for d in &domains {
+            let h = spec(d);
+            let is_default = *d == default_domain;
+            let host = h
+                .upstream
+                .clone()
+                .or_else(|| {
+                    if is_default {
+                        relay.upstream.clone()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| d.clone())
+                .trim()
+                .to_ascii_lowercase();
+            if host.is_empty() || host.contains('/') || host.contains(':') {
+                return Err(ConfigError::Invalid(format!(
+                    "domain_handlers.{d}.upstream {host:?} must be a bare hostname"
+                )));
+            }
+            let listen = match h.ssh_port {
+                Some(port) => SocketAddr::new(relay.ssh_listen.ip(), port),
+                None => relay.ssh_listen,
+            };
+            let (api_base, graphql_base) = if is_default {
+                derive_api_bases(&host, relay.api_base.clone(), relay.graphql_base.clone())?
+            } else {
+                derive_api_bases(&host, None, None)?
+            };
+            let (upstream_token, known_hosts) = if is_default {
+                let p = Paths::under(&relay.state_dir);
+                (p.upstream_token, p.known_hosts)
+            } else {
+                let dir = base_dir.join(&host);
+                (dir.join("upstream_token"), dir.join("known_hosts"))
+            };
+            out.push(Upstream {
+                domain: d.clone(),
+                host,
+                listen,
+                upstream_ssh_port: h.upstream_ssh_port.unwrap_or(relay.upstream_ssh_port),
+                api_base,
+                graphql_base,
+                oauth_client_id: h
+                    .oauth_client_id
+                    .clone()
+                    .unwrap_or_else(|| relay.oauth_client_id.clone()),
+                upstream_token,
+                known_hosts,
+                is_default,
+            });
+        }
+        // 既定上流を先頭に
+        out.sort_by_key(|u| !u.is_default);
+        for (i, a) in out.iter().enumerate() {
+            for b in &out[i + 1..] {
+                if a.listen.port() == b.listen.port() {
+                    return Err(ConfigError::Invalid(format!(
+                        "git-relay domains {} and {} would both listen on ssh port {}; give one of them a different ssh_port",
+                        a.domain,
+                        b.domain,
+                        a.listen.port()
+                    )));
+                }
+                if a.host == b.host {
+                    return Err(ConfigError::Invalid(format!(
+                        "git-relay domains {} and {} both point at upstream {}; each domain needs its own upstream",
+                        a.domain, b.domain, a.host
+                    )));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// relay の実行に必要な全てを解決する。
     pub fn resolve(&self) -> Result<Resolved, ConfigError> {
-        let domains = self.git_relay_domains();
-        let domain = match domains.len() {
-            0 => return Err(ConfigError::NoGitRelayDomain),
-            1 => domains[0].clone(),
-            _ => return Err(ConfigError::MultipleGitRelayDomains(domains)),
-        };
+        if self.git_relay_domains().is_empty() {
+            return Err(ConfigError::NoGitRelayDomain);
+        }
         let relay = self
             .gateway
             .relay
             .clone()
             .ok_or(ConfigError::NoRelaySection)?;
-        let upstream = relay
-            .upstream
-            .clone()
-            .unwrap_or_else(|| domain.clone())
-            .to_ascii_lowercase();
-        let (api_base, graphql_base) = derive_api_bases(
-            &upstream,
-            relay.api_base.clone(),
-            relay.graphql_base.clone(),
-        )?;
+        let upstreams = self.resolve_upstreams(&relay)?;
+        let default_up = upstreams[0].clone();
+        let domain = default_up.domain.clone();
+        let upstream = default_up.host.clone();
+        let api_base = default_up.api_base.clone();
+        let graphql_base = default_up.graphql_base.clone();
 
         // 案件の既定（旧 relay.allow_tags / allow_delete は既定へ畳み込む。0.1.9 で project 配下に移した）
         let pc = &relay.project;
@@ -468,7 +611,31 @@ impl Loaded {
         let mut repos = Vec::new();
         for r in &pc.repos {
             let mode = Mode::parse(&r.mode).map_err(ConfigError::Invalid)?;
-            let mut rp = RepoPolicy::new(r.name.trim(), mode);
+            // 0.2.0: `host/Org/Repo` で上流を明示できる。`Org/Repo` は既定上流
+            let (host, full_name) = split_repo_host(r.name.trim());
+            let host = match host {
+                Some(h) => {
+                    let h = h.to_ascii_lowercase();
+                    let up = upstreams
+                        .iter()
+                        .find(|u| u.domain == h || u.host == h)
+                        .ok_or_else(|| {
+                            ConfigError::Invalid(format!(
+                                "repo {:?}: {h:?} is not a git-relay domain (known: {})",
+                                r.name,
+                                upstreams
+                                    .iter()
+                                    .map(|u| u.domain.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ))
+                        })?;
+                    up.domain.clone()
+                }
+                None => domain.clone(),
+            };
+            let mut rp = RepoPolicy::new(full_name, mode);
+            rp.host = host;
             rp.bases = r.bases.clone();
             rp.push = r.push.clone().unwrap_or_else(|| default_push.clone());
             rp.tags = r.tags.clone().unwrap_or_else(|| default_tags.clone());
@@ -479,15 +646,28 @@ impl Loaded {
             }
             repos.push(rp);
         }
-        let project = Project::try_new_rules(
+        let mut project = Project::try_new_rules(
             pc.name.clone(),
             repos,
             pc.permissions.allow(),
             pc.permissions.deny(),
         )
         .map_err(ConfigError::Invalid)?;
+        project.set_default_host(&domain);
         if project.name.trim().is_empty() {
             return Err(ConfigError::Invalid("project.name is required".into()));
+        }
+        // 同名の Org/Repo が複数の上流にあるときは、`Org/Repo` だけの API 指定が既定上流に解ける旨を知らせる
+        for (i, a) in project.repos.iter().enumerate() {
+            if project.repos[i + 1..]
+                .iter()
+                .any(|b| b.full_name.eq_ignore_ascii_case(&a.full_name))
+            {
+                eprintln!(
+                    "[relay] NOTE: {} exists on more than one upstream; API calls must name the host ({}/{}) unless they mean the default upstream {}",
+                    a.full_name, a.host, a.full_name, domain
+                );
+            }
         }
 
         let proxy = resolve_proxy(&self.gateway.proxy)?;
@@ -501,7 +681,21 @@ impl Loaded {
             proxy,
             project,
             relay,
+            upstreams,
         })
+    }
+}
+
+/// `host/Org/Repo` → (Some(host), "Org/Repo")、`Org/Repo` → (None, "Org/Repo")。
+/// 先頭要素に `.` が含まれる 3 要素のときだけ host と見なす（GitHub の org 名に `.` は使えない）。
+pub fn split_repo_host(name: &str) -> (Option<&str>, &str) {
+    let trimmed = name.trim_start_matches('/');
+    let parts: Vec<&str> = trimmed.split('/').collect();
+    if parts.len() == 3 && parts[0].contains('.') {
+        let rest = &trimmed[parts[0].len() + 1..];
+        (Some(parts[0]), rest)
+    } else {
+        (None, trimmed)
     }
 }
 
@@ -601,12 +795,33 @@ impl Paths {
     }
 }
 
-/// relay の実行に必要な解決済み設定。
-#[derive(Debug, Clone)]
-pub struct Resolved {
-    /// DNS で関所に向けられるドメイン
+/// 1 つの上流（git-relay ドメイン）。0.2.0 で複数持てるようになった。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Upstream {
+    /// DNS で関所に向けられるドメイン（agent が URL に書く名前。repo の host 表記もこれ）
     pub domain: String,
     /// 上流 git / API のホスト
+    pub host: String,
+    /// 関所がこの上流向けの SSH を受けるアドレス
+    pub listen: SocketAddr,
+    pub upstream_ssh_port: u16,
+    pub api_base: Url,
+    pub graphql_base: Url,
+    pub oauth_client_id: String,
+    pub upstream_token: PathBuf,
+    pub known_hosts: PathBuf,
+    pub is_default: bool,
+}
+
+/// relay の実行に必要な解決済み設定。
+///
+/// `domain` / `upstream` / `api_base` / `graphql_base` / `paths` は **既定上流** のもの（0.1.x 互換）。
+/// 全上流は `upstreams`（先頭が既定）。
+#[derive(Debug, Clone)]
+pub struct Resolved {
+    /// DNS で関所に向けられるドメイン（既定上流）
+    pub domain: String,
+    /// 上流 git / API のホスト（既定上流）
     pub upstream: String,
     pub api_base: Url,
     pub graphql_base: Url,
@@ -614,6 +829,21 @@ pub struct Resolved {
     pub proxy: Option<ProxySpec>,
     pub project: Project,
     pub relay: RelayConfig,
+    /// 0.2.0: 全上流。先頭が既定上流
+    pub upstreams: Vec<Upstream>,
+}
+
+impl Resolved {
+    pub fn default_upstream(&self) -> &Upstream {
+        &self.upstreams[0]
+    }
+    /// ドメイン名または上流ホスト名で探す。
+    pub fn upstream_named(&self, name: &str) -> Option<&Upstream> {
+        let want = name.trim().trim_end_matches('.').to_ascii_lowercase();
+        self.upstreams
+            .iter()
+            .find(|u| u.domain == want || u.host == want)
+    }
 }
 
 #[cfg(test)]
@@ -704,6 +934,18 @@ relay:
         );
         assert_eq!(r.paths.tokens, PathBuf::from("/data/relay/tokens.json"));
         assert!(r.proxy.is_none());
+        // 0.2.0: 単一上流は upstreams が 1 件で、0.1.x のフィールドと同じ値
+        assert_eq!(r.upstreams.len(), 1);
+        let u = r.default_upstream();
+        assert_eq!(
+            (u.domain.as_str(), u.host.as_str()),
+            ("github.com", "github.com")
+        );
+        assert_eq!(u.listen, r.relay.ssh_listen);
+        assert_eq!(u.upstream_token, r.paths.upstream_token);
+        assert_eq!(u.known_hosts, r.paths.known_hosts);
+        assert_eq!(u.api_base, r.api_base);
+        assert!(r.project.repos.iter().all(|rp| rp.host == "github.com"));
     }
 
     #[test]
@@ -719,12 +961,127 @@ relay:
     }
 
     #[test]
-    fn two_git_relay_domains_is_an_error_with_explanation() {
+    fn two_git_relay_domains_without_ports_is_an_error_with_explanation() {
         let text = "domain_handlers:\n  github.com: { handler: git-relay }\n  ghe.example.com: { handler: git-relay }\nrelay:\n  project: { name: x }\n";
         let err = p(text).unwrap().needs_relay().unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("2 git-relay entries"), "{msg}");
-        assert!(msg.contains("only one is supported"), "{msg}");
+        assert!(
+            msg.contains("2 git-relay entries without ssh_port"),
+            "{msg}"
+        );
+        assert!(msg.contains("needs its own ssh_port"), "{msg}");
+        // 同じポートを明示しても拒否
+        let text = "domain_handlers:\n  github.com: { handler: git-relay }\n  ghe.example.com: { handler: git-relay, ssh_port: 22 }\nrelay:\n  project: { name: x }\n";
+        let msg = p(text).unwrap().needs_relay().unwrap_err().to_string();
+        assert!(msg.contains("both listen on ssh port 22"), "{msg}");
+    }
+
+    #[test]
+    fn multiple_upstreams_are_split_by_port() {
+        let text = r#"
+domain_handlers:
+  github.com: { handler: git-relay }
+  ghe.example.com: { handler: git-relay, ssh_port: 2222, oauth_client_id: abc123 }
+relay:
+  project:
+    name: x
+    repos:
+      - { name: Org/App, mode: read-write, bases: [main] }
+      - { name: ghe.example.com/Corp/Internal, mode: read-write, bases: [main] }
+      - { name: Org/App, mode: read-only }   # DUP
+"#;
+        // 3 つ目は github.com 側の Org/App と重複 → 起動時エラー
+        assert!(p(text).unwrap().resolve().is_err());
+        let text = text.replace("      - { name: Org/App, mode: read-only }   # DUP\n", "");
+        let l = p(&text).unwrap();
+        assert!(l.needs_relay().unwrap());
+        let r = l.resolve().unwrap();
+        // 既定上流は ssh_port を省いた github.com（0.1.x のフィールドはそのまま既定上流を指す）
+        assert_eq!(r.domain, "github.com");
+        assert_eq!(r.upstream, "github.com");
+        assert_eq!(r.api_base.as_str(), "https://api.github.com/");
+        assert_eq!(r.upstreams.len(), 2);
+        let gh = &r.upstreams[0];
+        let ghe = &r.upstreams[1];
+        assert!(gh.is_default && !ghe.is_default);
+        assert_eq!(gh.listen.port(), 22);
+        assert_eq!(
+            gh.upstream_token,
+            PathBuf::from("/data/relay/upstream_token")
+        );
+        assert_eq!(gh.known_hosts, PathBuf::from("/data/relay/known_hosts"));
+        assert_eq!(ghe.domain, "ghe.example.com");
+        assert_eq!(ghe.host, "ghe.example.com");
+        assert_eq!(ghe.listen.port(), 2222);
+        assert_eq!(ghe.api_base.as_str(), "https://ghe.example.com/api/v3");
+        assert_eq!(ghe.oauth_client_id, "abc123");
+        assert_eq!(
+            ghe.upstream_token,
+            PathBuf::from("/data/relay/upstreams/ghe.example.com/upstream_token")
+        );
+        assert_eq!(
+            ghe.known_hosts,
+            PathBuf::from("/data/relay/upstreams/ghe.example.com/known_hosts")
+        );
+        assert_eq!(
+            r.upstream_named("GHE.example.com").map(|u| u.listen.port()),
+            Some(2222)
+        );
+        // repo の host
+        let app = r.project.find_repo("Org/App").unwrap();
+        assert_eq!(app.host, "github.com");
+        let internal = r
+            .project
+            .find_repo("ghe.example.com/Corp/Internal")
+            .unwrap();
+        assert_eq!(internal.host, "ghe.example.com");
+        assert_eq!(internal.full_name, "Corp/Internal");
+        // host 無しでも一意なら解ける。SSH 経路（上流固定）では他方の上流から見えない
+        assert!(r.project.find_repo("Corp/Internal").is_ok());
+        assert!(r
+            .project
+            .find_repo_on("github.com", "Corp/Internal")
+            .is_err());
+        assert!(r
+            .project
+            .find_repo_on("ghe.example.com", "Corp/Internal")
+            .is_ok());
+        assert!(r
+            .project
+            .find_repo_on("ghe.example.com", "Org/App")
+            .is_err());
+        // 知らない host は起動時エラー
+        let bad = "domain_handlers:\n  github.com: { handler: git-relay }\nrelay:\n  project:\n    name: x\n    repos: [{ name: other.example.com/Org/A, mode: read-only }]\n";
+        assert!(matches!(
+            p(bad).unwrap().resolve(),
+            Err(ConfigError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn default_upstream_can_be_chosen_explicitly() {
+        // 全部に ssh_port があるときは default: true が既定上流。relay.upstream は既定上流にだけ効く
+        let text = "domain_handlers:\n  a.example.com: { handler: git-relay, ssh_port: 2201 }\n  b.example.com: { handler: git-relay, ssh_port: 2202, default: true, upstream: b-internal.example.com }\nrelay:\n  ssh_listen: 0.0.0.0:22\n  project: { name: x }\n";
+        let r = p(text).unwrap().resolve().unwrap();
+        assert_eq!(r.domain, "b.example.com");
+        assert_eq!(r.upstream, "b-internal.example.com");
+        assert_eq!(r.default_upstream().listen.port(), 2202);
+        assert_eq!(r.upstreams[1].domain, "a.example.com");
+        // default を 2 つは不可
+        let text = "domain_handlers:\n  a.example.com: { handler: git-relay, default: true }\n  b.example.com: { handler: git-relay, ssh_port: 2202, default: true }\nrelay:\n  project: { name: x }\n";
+        assert!(p(text).unwrap().resolve().is_err());
+    }
+
+    #[test]
+    fn split_repo_host_only_when_first_segment_is_a_hostname() {
+        assert_eq!(split_repo_host("Org/Repo"), (None, "Org/Repo"));
+        assert_eq!(split_repo_host("/Org/Repo"), (None, "Org/Repo"));
+        assert_eq!(
+            split_repo_host("ghe.example.com/Org/Repo"),
+            (Some("ghe.example.com"), "Org/Repo")
+        );
+        // 3 要素でも先頭に `.` が無ければ host ではない（そのまま Org/Repo 検証で落ちる）
+        assert_eq!(split_repo_host("a/b/c"), (None, "a/b/c"));
     }
 
     #[test]

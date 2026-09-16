@@ -8,7 +8,7 @@ use anyhow::{anyhow, bail, Context};
 
 use super::BootstrapAction;
 use crate::audit::{Actor, Audit};
-use crate::config::{self, ConfigError, Resolved};
+use crate::config::{self, ConfigError, Resolved, Upstream};
 use crate::fsutil::{atomic_write, ensure_dir_0700, read_optional};
 use crate::git::agent_check::{auth_sock_from_env, preflight_agent};
 use crate::git::upstream_ssh::OpenSshUpstream;
@@ -59,8 +59,18 @@ pub fn open_audit(r: &Resolved) -> anyhow::Result<Arc<Audit>> {
     Ok(Arc::new(Audit::new(Some(&r.paths.audit), false)?))
 }
 
+/// 既定上流の GitHub client（0.1.x 互換）。
 pub fn build_github(
     r: &Resolved,
+    audit: Arc<Audit>,
+) -> anyhow::Result<(Arc<GitHub>, Arc<UpstreamTokenStore>, reqwest::Client)> {
+    build_github_for(r, r.default_upstream(), audit)
+}
+
+/// 上流ごとの GitHub client（api_base / graphql_base / upstream_token はその上流のもの。0.2.0）。
+pub fn build_github_for(
+    r: &Resolved,
+    up: &Upstream,
     audit: Arc<Audit>,
 ) -> anyhow::Result<(Arc<GitHub>, Arc<UpstreamTokenStore>, reqwest::Client)> {
     let http = build_client(&HttpOptions {
@@ -68,13 +78,16 @@ pub fn build_github(
         proxy: r.proxy.as_ref(),
         ..Default::default()
     })?;
+    if let Some(dir) = up.upstream_token.parent() {
+        ensure_dir_0700(dir).with_context(|| format!("upstream state dir {}", dir.display()))?;
+    }
     let store = Arc::new(UpstreamTokenStore::new(
-        &r.paths.upstream_token,
+        &up.upstream_token,
         r.relay.upstream_token_cache_ttl,
     ));
     let gh = Arc::new(GitHub::new(
-        r.api_base.clone(),
-        r.graphql_base.clone(),
+        up.api_base.clone(),
+        up.graphql_base.clone(),
         http.clone(),
         store.clone(),
         audit,
@@ -82,16 +95,37 @@ pub fn build_github(
     Ok((gh, store, http))
 }
 
-pub async fn login(path: &Path) -> anyhow::Result<()> {
+/// `--upstream` の解決。省略時は既定上流。
+pub fn pick_upstream<'a>(r: &'a Resolved, name: Option<&str>) -> anyhow::Result<&'a Upstream> {
+    match name {
+        None => Ok(r.default_upstream()),
+        Some(n) => r.upstream_named(n).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown upstream {n:?}; git-relay domains are: {}",
+                r.upstreams
+                    .iter()
+                    .map(|u| u.domain.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }),
+    }
+}
+
+pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let r = resolve(path)?;
+    let up = pick_upstream(&r, upstream)?.clone();
     let audit = open_audit(&r)?;
-    let (gh, store, http) = build_github(&r, audit.clone())?;
-    let flow = DeviceFlow::new(
-        &r.upstream,
-        &r.relay.oauth_client_id,
-        DEVICE_FLOW_SCOPES,
-        http,
-    )?;
+    let (gh, store, http) = build_github_for(&r, &up, audit.clone())?;
+    if r.upstreams.len() > 1 {
+        println!(
+            "upstream: {} ({}){}",
+            up.domain,
+            up.host,
+            if up.is_default { " [default]" } else { "" }
+        );
+    }
+    let flow = DeviceFlow::new(&up.host, &up.oauth_client_id, DEVICE_FLOW_SCOPES, http)?;
     let (token, scope) = flow
         .authenticate(|code, url| {
             println!();
@@ -100,40 +134,39 @@ pub async fn login(path: &Path) -> anyhow::Result<()> {
             println!();
         })
         .await?;
-    store.save(&r.upstream, &token, &scope)?;
+    store.save(&up.host, &token, &scope)?;
     println!(
         "stored upstream token in {} (scopes={scope})",
-        r.paths.upstream_token.display()
+        up.upstream_token.display()
     );
     audit.log(
         "login",
         Actor::Operator,
-        &[("host", &r.upstream), ("scopes", &scope)],
+        &[
+            ("host", &up.host),
+            ("domain", &up.domain),
+            ("scopes", &scope),
+        ],
     );
 
     match gh.meta_ssh_keys().await {
         Ok(keys) if !keys.is_empty() => {
-            let n = merge_known_hosts(
-                &r.paths.known_hosts,
-                &r.upstream,
-                r.relay.upstream_ssh_port,
-                &keys,
-            )?;
+            let n = merge_known_hosts(&up.known_hosts, &up.host, up.upstream_ssh_port, &keys)?;
             println!(
                 "known_hosts: {} host key(s) for {} ({} new) → {}",
                 keys.len(),
-                r.upstream,
+                up.host,
                 n,
-                r.paths.known_hosts.display()
+                up.known_hosts.display()
             );
         }
         Ok(_) => eprintln!(
             "warning: GET /meta returned no ssh_keys; populate {} with ssh-keyscan",
-            r.paths.known_hosts.display()
+            up.known_hosts.display()
         ),
         Err(e) => eprintln!(
             "warning: could not fetch upstream ssh host keys ({e}); populate {} with ssh-keyscan",
-            r.paths.known_hosts.display()
+            up.known_hosts.display()
         ),
     }
     match gh.whoami().await {
@@ -175,28 +208,31 @@ pub fn merge_known_hosts(
     Ok(added)
 }
 
-pub fn logout(path: &Path) -> anyhow::Result<()> {
+pub fn logout(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let r = resolve(path)?;
+    let up = pick_upstream(&r, upstream)?;
     let audit = open_audit(&r)?;
-    let store = UpstreamTokenStore::new(&r.paths.upstream_token, r.relay.upstream_token_cache_ttl);
+    let store = UpstreamTokenStore::new(&up.upstream_token, r.relay.upstream_token_cache_ttl);
     if store.delete()? {
-        println!(
-            "removed upstream token {}",
-            r.paths.upstream_token.display()
+        println!("removed upstream token {}", up.upstream_token.display());
+        audit.log(
+            "logout",
+            Actor::Operator,
+            &[("host", &up.host), ("domain", &up.domain)],
         );
-        audit.log("logout", Actor::Operator, &[("host", &r.upstream)]);
     } else {
-        println!("no upstream token stored");
+        println!("no upstream token stored for {}", up.domain);
     }
     Ok(())
 }
 
-pub async fn whoami(path: &Path) -> anyhow::Result<()> {
+pub async fn whoami(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let r = resolve(path)?;
+    let up = pick_upstream(&r, upstream)?;
     let audit = open_audit(&r)?;
-    let (gh, _, _) = build_github(&r, audit)?;
+    let (gh, _, _) = build_github_for(&r, up, audit)?;
     let login = gh.whoami().await?;
-    println!("upstream identity: {login} (host={})", r.upstream);
+    println!("upstream identity: {login} (host={})", up.host);
     println!("note: the gateway acts as this identity. GitHub cannot distinguish");
     println!("      agent actions from yours — the gateway audit log is the only record.");
     Ok(())
@@ -205,14 +241,25 @@ pub async fn whoami(path: &Path) -> anyhow::Result<()> {
 pub async fn check(path: &Path) -> anyhow::Result<()> {
     let r = resolve(path)?;
     println!("project:      {}", r.project.name);
-    println!("domain:       {} (git-relay)", r.domain);
-    println!(
-        "upstream:     {} (ssh port {})",
-        r.upstream, r.relay.upstream_ssh_port
-    );
-    println!("  rest:       {}", r.api_base);
-    println!("  graphql:    {}", r.graphql_base);
-    println!("ssh listen:   {}", r.relay.ssh_listen);
+    let multi = r.upstreams.len() > 1;
+    for up in &r.upstreams {
+        if multi {
+            println!(
+                "domain:       {} (git-relay{})",
+                up.domain,
+                if up.is_default { ", default" } else { "" }
+            );
+        } else {
+            println!("domain:       {} (git-relay)", up.domain);
+        }
+        println!(
+            "  upstream:   {} (ssh port {})",
+            up.host, up.upstream_ssh_port
+        );
+        println!("  rest:       {}", up.api_base);
+        println!("  graphql:    {}", up.graphql_base);
+        println!("  ssh listen: {}", up.listen);
+    }
     println!("api listen:   {}", r.relay.api_listen);
     println!(
         "https:        {:?} on {}",
@@ -254,9 +301,14 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
     }
     println!("\nrepos (effective = project defaults + repo allow - deny):");
     for rp in &r.project.repos {
+        let shown = if multi {
+            format!("{}/{}", r.project.host_of(rp), rp.full_name)
+        } else {
+            rp.full_name.clone()
+        };
         println!(
             "  {:<40} {:<11} bases={:?} push={:?} tags={:?} delete={}",
-            rp.full_name,
+            shown,
             rp.mode.as_str(),
             rp.bases,
             rp.push,
@@ -286,26 +338,36 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
         ),
         Err(e) => println!("  ssh-agent:       NOT USABLE — {e}"),
     }
-    let up = OpenSshUpstream::new(
-        &r.upstream,
-        r.relay.upstream_ssh_port,
-        &r.paths.known_hosts,
-        r.relay.ssh_config.as_deref(),
-    );
-    match up.known_hosts_has_upstream() {
-        Ok(true) => println!("  known_hosts:     ok ({})", r.paths.known_hosts.display()),
-        Ok(false) => println!("  known_hosts:     MISSING — {}", up.known_hosts_remedy()),
-        Err(e) => println!("  known_hosts:     ERROR — {e}"),
-    }
-    let store = UpstreamTokenStore::new(&r.paths.upstream_token, r.relay.upstream_token_cache_ttl);
-    match store.load() {
-        Ok(Some(t)) => println!(
-            "  upstream token:  present (scope={}, obtained {})",
-            t.scope,
-            humantime::format_rfc3339_seconds(t.obtained_at)
-        ),
-        Ok(None) => println!("  upstream token:  MISSING — run `sekimore-relay login`"),
-        Err(e) => println!("  upstream token:  ERROR — {e}"),
+    for u in &r.upstreams {
+        if multi {
+            println!("  [{}]", u.domain);
+        }
+        let up = OpenSshUpstream::new(
+            &u.host,
+            u.upstream_ssh_port,
+            &u.known_hosts,
+            r.relay.ssh_config.as_deref(),
+        );
+        match up.known_hosts_has_upstream() {
+            Ok(true) => println!("  known_hosts:     ok ({})", u.known_hosts.display()),
+            Ok(false) => println!("  known_hosts:     MISSING — {}", up.known_hosts_remedy()),
+            Err(e) => println!("  known_hosts:     ERROR — {e}"),
+        }
+        let store = UpstreamTokenStore::new(&u.upstream_token, r.relay.upstream_token_cache_ttl);
+        let login_hint = if u.is_default {
+            "sekimore-relay login".to_string()
+        } else {
+            format!("sekimore-relay login --upstream {}", u.domain)
+        };
+        match store.load() {
+            Ok(Some(t)) => println!(
+                "  upstream token:  present (scope={}, obtained {})",
+                t.scope,
+                humantime::format_rfc3339_seconds(t.obtained_at)
+            ),
+            Ok(None) => println!("  upstream token:  MISSING — run `{login_hint}`"),
+            Err(e) => println!("  upstream token:  ERROR — {e}"),
+        }
     }
     let keys = AuthorizedKeys::new(&r.paths.authorized_keys, 64);
     println!(

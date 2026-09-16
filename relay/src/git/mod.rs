@@ -101,6 +101,8 @@ pub trait UpstreamGit: Send + Sync {
 /// git 経路の共有コンテキスト。
 pub struct GitContext {
     pub project: Project,
+    /// 0.2.0: この listener が受ける上流（git-relay ドメイン）。空なら上流を区別しない（単一上流のテスト）
+    pub host: String,
     pub upstream: Arc<dyn UpstreamGit>,
     /// PR 作成に使う。None なら `refs/for` は「push は通るが PR は作れない」旨を返す
     pub github: Option<Arc<GitHub>>,
@@ -229,7 +231,7 @@ pub async fn handle_exec(mut io: GitIo<'_>, cmdline: &str, ctx: &GitContext, pee
         }
     };
     // P1（案件外リポジトリへの到達を拒否する唯一の防壁）
-    let auth = match ctx.project.authorize_git(verb, &repo_path) {
+    let auth = match ctx.project.authorize_git_on(&ctx.host, verb, &repo_path) {
         Ok(a) => a,
         Err(d) => {
             say(&mut *io.stderr, &d.to_string()).await;
@@ -239,6 +241,7 @@ pub async fn handle_exec(mut io: GitIo<'_>, cmdline: &str, ctx: &GitContext, pee
                 &d.to_string(),
                 &[
                     ("repo", &repo_path),
+                    ("upstream", &ctx.host),
                     ("verb", verb.as_str()),
                     ("kind", d.kind()),
                     ("peer", peer),
@@ -311,6 +314,7 @@ pub async fn handle_exec(mut io: GitIo<'_>, cmdline: &str, ctx: &GitContext, pee
     };
     let mut fields: Vec<(&str, &str)> = vec![
         ("repo", auth.repo()),
+        ("upstream", &ctx.host),
         ("verb", verb.as_str()),
         ("peer", peer),
         ("ms", &ms),

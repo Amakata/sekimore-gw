@@ -333,16 +333,45 @@ def describe_domain_handlers():
         with pytest.raises(ValidationError):
             Config(domain_handlers="github.com")
 
-    def it_rejects_two_git_relay_domains():
+    def it_rejects_two_git_relay_domains_on_the_same_ssh_port():
         from pydantic import ValidationError
 
-        with pytest.raises(ValidationError, match="only one is supported"):
+        # ssh_port を省いた 2 つは同じ 22 になる
+        with pytest.raises(ValidationError, match="both listen on ssh port 22"):
             Config(
                 domain_handlers={
                     "a.example.com": {"handler": "git-relay"},
                     "b.example.com": {"handler": "git-relay"},
                 }
             )
+        with pytest.raises(ValidationError, match="both listen on ssh port 2222"):
+            Config(
+                domain_handlers={
+                    "a.example.com": {"handler": "git-relay", "ssh_port": 2222},
+                    "b.example.com": {"handler": "git-relay", "ssh_port": 2222},
+                }
+            )
+
+    def it_splits_multiple_git_relay_domains_by_ssh_port():
+        # 0.2.0: 2 つ目以降の上流は別ポートで受け、firewall の INPUT にもそのポートを開ける
+        config = Config(
+            domain_handlers={
+                "github.com": {"handler": "git-relay"},
+                "ghe.example.com": {
+                    "handler": "git-relay",
+                    "ssh_port": 2222,
+                    "upstream": "ghe.example.com",
+                    "oauth_client_id": "abc",  # relay だけが読むキーは無視される
+                },
+            }
+        )
+        assert config.git_relay_domains() == ["github.com", "ghe.example.com"]
+        assert config.git_relay_ssh_ports() == {"github.com": 22, "ghe.example.com": 2222}
+        assert config.relay_input_ports() == [22, 2222, 8420, 443]
+        assert config.domain_handlers["ghe.example.com"].upstream == "ghe.example.com"
+        # ssh_port を明示した 1 つだけでも動く（listen ポートと同じなら重複しない）
+        one = Config(domain_handlers={"github.com": {"handler": "git-relay", "ssh_port": 22}})
+        assert one.relay_input_ports() == [22, 8420, 443]
 
     def it_reads_relay_ports_and_ignores_relay_only_keys():
         config = Config(

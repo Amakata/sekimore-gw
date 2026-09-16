@@ -637,7 +637,7 @@ async fn create_pr(
         return false;
     };
     // 証明を再取得（plan_push で検査済み。ここで失敗するのはポリシーが変わった場合のみ）
-    let api_auth = match ctx.project.authorize_pr(auth.repo(), &pr.base) {
+    let api_auth = match ctx.project.authorize_pr_for(auth, &pr.base) {
         Ok(a) => a,
         Err(d) => {
             say(io, &format!("push ok but PR creation refused: {d}")).await;

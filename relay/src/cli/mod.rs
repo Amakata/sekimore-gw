@@ -35,11 +35,21 @@ pub enum Command {
     /// SSH（git）と HTTP（API）、443 passthrough を起動する
     Serve,
     /// device flow で上流に認証し、トークンと known_hosts を保存する
-    Login,
+    Login {
+        /// 対象の上流（git-relay ドメイン）。省略時は既定上流。複数上流のときに使う（0.2.0）
+        #[arg(long)]
+        upstream: Option<String>,
+    },
     /// 上流トークンを削除する
-    Logout,
+    Logout {
+        #[arg(long)]
+        upstream: Option<String>,
+    },
     /// 関所がどの上流 identity として動くか
-    Whoami,
+    Whoami {
+        #[arg(long)]
+        upstream: Option<String>,
+    },
     /// 解決済みポリシーと状態（agent / known_hosts / token / keys）を表示する
     Check,
     /// 案件トークンを発行する
@@ -90,9 +100,15 @@ pub async fn run(cli: Cli) -> i32 {
     let result: anyhow::Result<i32> = match cli.cmd {
         Command::NeedsRelay => operator::needs_relay(&cli.config),
         Command::Serve => serve::serve(&cli.config).await.map(|_| 0),
-        Command::Login => operator::login(&cli.config).await.map(|_| 0),
-        Command::Logout => operator::logout(&cli.config).map(|_| 0),
-        Command::Whoami => operator::whoami(&cli.config).await.map(|_| 0),
+        Command::Login { upstream } => operator::login(&cli.config, upstream.as_deref())
+            .await
+            .map(|_| 0),
+        Command::Logout { upstream } => {
+            operator::logout(&cli.config, upstream.as_deref()).map(|_| 0)
+        }
+        Command::Whoami { upstream } => operator::whoami(&cli.config, upstream.as_deref())
+            .await
+            .map(|_| 0),
         Command::Check => operator::check(&cli.config).await.map(|_| 0),
         Command::Token { ttl } => operator::token(&cli.config, ttl.as_deref()).map(|_| 0),
         Command::Tokens => operator::tokens(&cli.config).map(|_| 0),

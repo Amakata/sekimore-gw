@@ -1,7 +1,7 @@
 //! 統合テストの共通フィクスチャ: 一時 state dir、mock GitHub、API サーバ起動、HTTP ヘルパ。
 #![allow(dead_code)]
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -189,7 +189,7 @@ pub async fn start_api(
     let ctx = Arc::new(ApiContext {
         project,
         tokens,
-        github: Some(gh),
+        githubs: HashMap::from([("github.com".to_string(), gh)]),
         audit,
         keys: Arc::new(AuthorizedKeys::new(&dir.path().join("authorized_keys"), 8)),
         bootstrap,
@@ -199,6 +199,7 @@ pub async fn start_api(
         rate: Mutex::new(VecDeque::new()),
         git_domain: "github.com".into(),
         upstream: "github.com".into(),
+        git_domains: vec![],
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

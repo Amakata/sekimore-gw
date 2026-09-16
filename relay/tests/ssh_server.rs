@@ -82,6 +82,7 @@ async fn start(project: Project) -> Server {
     let reached = Arc::new(AtomicBool::new(false));
     let ctx = Arc::new(GitContext {
         project,
+        host: String::new(),
         upstream: Arc::new(FailingUpstream {
             reached: reached.clone(),
         }),

@@ -68,6 +68,16 @@ class DomainHandlerConfig(BaseModel):
         default="splice",
         description="splice=従来どおり / git-relay=関所の SSH で受ける（DNS は関所 IP）/ deny=拒否",
     )
+    # 0.2.0: 複数の git-relay ドメインはポートで分ける（SSH の exec はリポジトリパスしか運ばない）
+    ssh_port: int | None = Field(
+        default=None,
+        ge=1,
+        le=65535,
+        description="git-relay: 関所側 SSH ポート。省略時は relay.ssh_listen のポート（既定上流）",
+    )
+    upstream: str | None = Field(
+        default=None, description="git-relay: 上流ホスト。省略時はドメイン名（残りは relay が読む）"
+    )
 
 
 class RelayConfig(BaseModel):
@@ -154,15 +164,31 @@ class Config(BaseModel):
         return out
 
     @model_validator(mode="after")
-    def validate_single_git_relay(self) -> "Config":
-        """git-relay は 1 ドメインのみ（SSH の exec はリポジトリパスしか運ばない）."""
-        relays = self.git_relay_domains()
-        if len(relays) > 1:
-            raise ValueError(
-                f"domain_handlers has {len(relays)} git-relay entries ({', '.join(relays)}); "
-                "only one is supported because the SSH exec request carries only the repository path"
-            )
+    def validate_git_relay_ports(self) -> "Config":
+        """複数の git-relay ドメインは別々の SSH ポートで受ける（0.2.0）.
+
+        SSH の exec はリポジトリパスしか運ばないので、上流はポートで区別する。
+        ssh_port を省いたエントリは relay.ssh_listen のポート（既定上流）になり、1 つまで。
+        """
+        seen: dict[int, str] = {}
+        for domain, port in self.git_relay_ssh_ports().items():
+            if port in seen:
+                raise ValueError(
+                    f"domain_handlers: git-relay domains {seen[port]!r} and {domain!r} would both "
+                    f"listen on ssh port {port}; every git-relay domain but the default one needs "
+                    "its own ssh_port because the SSH exec request carries only the repository path"
+                )
+            seen[port] = domain
         return self
+
+    def git_relay_ssh_ports(self) -> dict[str, int]:
+        """git-relay ドメイン → 関所側 SSH ポート（ssh_port 省略時は relay.ssh_listen のポート）."""
+        default_port = _port_of(self.relay.ssh_listen, 22)
+        return {
+            d: (h.ssh_port if h.ssh_port is not None else default_port)
+            for d, h in self.domain_handlers.items()
+            if h.handler == "git-relay"
+        }
 
     def git_relay_domains(self) -> list[str]:
         """handler が git-relay のドメイン."""
@@ -179,8 +205,12 @@ class Config(BaseModel):
         """
         if not self.has_git_relay():
             return []
+        ssh_ports: list[int] = [_port_of(self.relay.ssh_listen, 22)]
+        for port in self.git_relay_ssh_ports().values():
+            if port not in ssh_ports:
+                ssh_ports.append(port)
         return [
-            _port_of(self.relay.ssh_listen, 22),
+            *ssh_ports,
             _port_of(self.relay.api_listen, 8420),
             _port_of(self.relay.https_listen, 443),
         ]
