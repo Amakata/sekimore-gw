@@ -3,7 +3,13 @@
 各版の設計判断と詳細は workspace リポジトリの
 [doc/sekimore-gw/design/relay.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sekimore-gw/design/relay.md) にあります。
 
-## 0.2.3（未リリース。sekimore-gw 本体の性能と運用。relay 本体の変更なし）
+## 0.2.4（未リリース。ローカライズ）
+
+- Web UI: 文言を `src/locales/{en,ja}.json` に移し、既定を英語に。言語は `?lang=` → cookie（画面の切替）→ `config.yml` の `ui.language`（`auto` / `en` / `ja`）→ ブラウザの `Accept-Language` → 英語の順で決める。`/api/i18n`
+- `python -m src.maint`: `--help` とメッセージを `SEKIMORE_LANG` / `LC_ALL` / `LC_MESSAGES` / `LANG` で切替（既定は英語）
+- 拒否理由（`sekimore: …`）と監査ログは英語のまま固定
+
+## 0.2.3（2026-09-16。sekimore-gw 本体の性能と運用。relay 本体の変更なし）
 
 - Web UI: WebSocket は接続ごとの全表走査をやめ、1 本のポーラが rowid カーソルで新着だけを読んで 1 メッセージ（配列）で配信。1 件でも即時、多ければまとめて届く。接続時と非表示から戻ったときは最新 50 件の snapshot。ログ 1 件ごとの `/api/stats` 取得をやめ、新着後 3 秒に 1 回に
 - SQLite: `journal_mode=WAL` / `synchronous=NORMAL` / `busy_timeout`、`dns_queries(timestamp)` と `(status, timestamp)` の索引。記録は削除しない（永続化）

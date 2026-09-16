@@ -63,6 +63,10 @@ proxy:
   upstream_proxy_password: null           # Upstream proxy password (env var recommended)
 
 # Network Configuration
+# Web UI の言語 (0.2.4〜)。auto = ブラウザの Accept-Language (画面の切替は cookie で優先)。en / ja で固定も可
+# ui:
+#   language: auto
+
 network:
   # allowed_ports: [80, 443]     # 0.2.2〜 許可ドメイン / 許可 IP へ通す宛先 TCP ポート。空 (既定) は全ポート = 従来どおり
   # LAN-side network subnets

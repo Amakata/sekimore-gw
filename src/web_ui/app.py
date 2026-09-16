@@ -12,12 +12,12 @@ from pathlib import Path
 
 import aiosqlite
 import yaml
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from .. import __version__ as core_version
-from .. import constants
+from .. import constants, i18n
 from ..logger import ComponentType, log_error, log_system_event
 from . import __version__ as webui_version
 from .log_stream import LogStreamer, parse_client_message
@@ -376,6 +376,31 @@ async def get_config() -> ConfigResponse:
         proxy=proxy_response,
         squid=squid_response,
         iptables=iptables_response,
+    )
+
+
+class I18nResponse(BaseModel):
+    """Web UI の文言辞書（0.2.4）."""
+
+    lang: str
+    supported: list[str]
+    strings: dict[str, str]
+
+
+@app.get("/api/i18n", response_model=I18nResponse)
+async def get_i18n(request: Request, lang: str | None = None) -> I18nResponse:
+    """言語を決めて文言辞書を返す（?lang= → cookie → config の ui.language → Accept-Language → en）."""
+    config = load_config()
+    ui = config.get("ui") if isinstance(config, dict) else None
+    configured = ui.get("language", "auto") if isinstance(ui, dict) else "auto"
+    resolved = i18n.resolve_lang(
+        explicit=lang,
+        cookie=request.cookies.get(i18n.COOKIE_NAME),
+        accept_language=request.headers.get("accept-language"),
+        configured=str(configured),
+    )
+    return I18nResponse(
+        lang=resolved, supported=list(i18n.SUPPORTED), strings=i18n.strings(resolved)
     )
 
 
