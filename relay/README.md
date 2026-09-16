@@ -1,38 +1,39 @@
 # sekimore-relay
 
-AI エージェントの git 操作（SSH）と GitHub API 操作を、案件単位のポリシーで中継する関所です。
-sekimore-gw のイメージに同梱され、`config.yml` に `handler: git-relay` があるときだけ起動します。
-無ければ何も変わりません。
+*[日本語版](README.ja.md)*
 
-- 変更履歴: [CHANGELOG.md](CHANGELOG.md)
-- 要件と設計（workspace リポジトリ）: [requirements/04-relay.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sekimore-gw/requirements/04-relay.md)、[design/relay.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sekimore-gw/design/relay.md)
-- エージェント側の自動化（agent-setup / devcontainer base）: [design/sekimore-relay-agent.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sgw-devcontainer-base/design/sekimore-relay-agent.md)
+A relay that brokers an AI agent's git (SSH) and GitHub API traffic under a per-project policy.
+It ships inside the sekimore-gw image and only starts when `config.yml` contains `handler: git-relay`.
+Without that, nothing changes.
 
-## 全体像
+- Changelog: [CHANGELOG.md](CHANGELOG.md)
+- Requirements, design notes and the agent-side automation are kept in a separate, private repository. This README is the public reference.
+
+## The big picture
 
 ```
-dev (AI)                          sekimore-gw                              上流
-────────                          ───────────                              ────
-git@github.com:Org/Repo.git ─DNS→ 関所 IP:22 (SSH, 使い捨て鍵) ─┐
-                                    案件リポジトリ検証            ├─ ssh git@github.com (依頼者の ssh-agent) → GitHub
-                                    refs/for/<base> → PR 作成    ┘   POST /repos/…/pulls (device flow トークン)
-sekimore … ─HTTP→ 関所 IP:8420 (skm_ トークン) ──────────────── リソース×アクション判定 → GitHub API
-https://github.com/…  ─DNS→ 関所 IP:443 ─────────────────────── TCP 素通し（既定。TLS は終端しない）
+dev (AI)                          sekimore-gw                              upstream
+────────                          ───────────                              ────────
+git@github.com:Org/Repo.git ─DNS→ relay IP:22 (SSH, disposable key) ────┐
+                                    project repo check                  ├─ ssh git@github.com (operator's ssh-agent) → GitHub
+                                    refs/for/<base> → open a PR         ┘  POST /repos/…/pulls (device flow token)
+sekimore … ─HTTP→ relay IP:8420 (skm_ token) ───────────────────────────── resource × action check → GitHub API
+https://github.com/… ─DNS→ relay IP:443 ────────────────────────────────── TCP passed through unchanged (default; TLS is not terminated)
 ```
 
-エージェントが持つのは次の 3 つだけです。どれも上流ではそのまま使えません。
+The agent holds exactly three things, and none of them work against the upstream:
 
-- 使い捨て SSH 鍵（関所への認証）
-- AI 専用の署名鍵（コミット署名）
-- 案件トークン `skm_…`（関所の API）
+- a disposable SSH key (to authenticate to the relay)
+- a signing key reserved for the AI (commit signatures)
+- a project token, `skm_…` (for the relay's API)
 
-上流の資格情報（依頼者の ssh-agent、device flow トークン）は sekimore-gw の中にしかありません。
+The upstream credentials — the operator's ssh-agent and the device flow token — never leave sekimore-gw.
 
-## 導入手順（操作者）
+## Setup (operator)
 
-### 1. 関所を有効にする
+### 1. Turn the relay on
 
-`config.yml`（`/etc/sekimore/config.yml` にマウント）に追記します。最小構成は次のとおりです。
+Add this to `config.yml` (mounted at `/etc/sekimore/config.yml`). The minimal form is:
 
 ```yaml
 domain_handlers:
@@ -46,171 +47,171 @@ relay:
       - { name: Org/Repo, mode: read-write, bases: [main] }
 ```
 
-キーの意味と全体の例は「設定リファレンス」を見てください。
-`relay:` 配下の未知キーはエラーになります（typo で権限が緩まないため）。
+See "Configuration reference" for what each key means and a fuller example.
+An unknown key under `relay:` is an error, so a typo can never loosen a permission.
 
-### 2. 依頼者の ssh-agent を関所に渡す
+### 2. Hand the operator's ssh-agent to the relay
 
-関所は上流 git に依頼者の ssh-agent で認証します。鍵はホストから出ません。
+The relay authenticates to the upstream git with the operator's ssh-agent. The keys never leave the host.
 
 ```yaml
-# docker-compose.yml の sekimore-gw
+# the sekimore-gw service in docker-compose.yml
     volumes:
       - ${SEKIMORE_AGENT_SOCK:-/run/host-services/ssh-auth.sock}:/ssh-agent/agent.sock:ro
     environment:
       - SSH_AUTH_SOCK=/ssh-agent/agent.sock
 ```
 
-- Docker Desktop（Mac）: 既定値のままで動きます。Mac 側の `ssh-add -l` に鍵が出ていることを確認してください。
-- Vagrant VM: 固定パスに socket を用意し、`SEKIMORE_AGENT_SOCK` に書きます。
-  例: `ssh -N -o StreamLocalBindUnlink=yes -R /home/vagrant/.ssh-agent/agent.sock:$SSH_AUTH_SOCK <vm>`
+- Docker Desktop (Mac): the defaults just work. Check that `ssh-add -l` on the Mac lists your keys.
+- Vagrant VM: put the socket at a fixed path and point `SEKIMORE_AGENT_SOCK` at it.
+  For example: `ssh -N -o StreamLocalBindUnlink=yes -R /home/vagrant/.ssh-agent/agent.sock:$SSH_AUTH_SOCK <vm>`
 
-### 3. 再起動して確認する
+### 3. Restart and check
 
-`domain_handlers` と `relay` の変更はコンテナの再作成で反映されます。hot reload は警告を出して旧値を維持します。
+Changes to `domain_handlers` and `relay` only take effect when the container is recreated. A hot reload warns and keeps the old values.
 
 ```bash
-docker compose up -d --force-recreate sekimore-gw      # Dev Containers 構成なら: mise run gw:recreate
-docker compose exec sekimore-gw sekimore-relay check   # ポリシーと状態（agent / known_hosts / token / 鍵）
+docker compose up -d --force-recreate sekimore-gw      # with Dev Containers: mise run gw:recreate
+docker compose exec sekimore-gw sekimore-relay check   # policy and state (agent / known_hosts / token / keys)
 ```
 
-### 4. 上流に認証する（初回のみ）
+### 4. Authenticate to the upstream (once)
 
 ```bash
-docker compose exec sekimore-gw sekimore-relay login   # Dev Containers 構成なら: mise run gw:login
+docker compose exec sekimore-gw sekimore-relay login   # with Dev Containers: mise run gw:login
 #   Open: https://github.com/login/device
-#   Code: XXXX-XXXX          ← ブラウザで承認
+#   Code: XXXX-XXXX          ← approve it in the browser
 ```
 
-- トークンは `/data/relay/upstream_token`（0600）に保存されます。上流の SSH ホスト鍵も同時に known_hosts に入ります。
-- 上流が複数あるときは `--upstream <domain>` で上流ごとに実行します（`logout` / `whoami` も同じ）。
-- `sekimore-relay whoami` で、関所がどの GitHub identity として動くかを確認できます。
+- The token is stored in `/data/relay/upstream_token` (0600). The upstream's SSH host keys are added to known_hosts at the same time.
+- With more than one upstream, run it per upstream with `--upstream <domain>` (same for `logout` and `whoami`).
+- `sekimore-relay whoami` shows which GitHub identity the relay acts as.
 
-device flow トークンは `repo` スコープです。GitHub 側の認可には頼れず、`repos` と `permissions` が唯一の防壁になります。
-GitHub の監査ログではエージェントと人間の操作を区別できないので、関所の `/data/relay/audit.jsonl` が区別できる唯一の記録です。
+The device flow token carries the `repo` scope. GitHub's own authorization gives you nothing here — `repos` and `permissions` are the only barrier.
+GitHub's audit log cannot tell the agent's actions from a human's, so the relay's `/data/relay/audit.jsonl` is the only record that can.
 
-## エージェント側の準備（dev コンテナ内）
+## Agent-side setup (inside the dev container)
 
-`agent-setup.sh`（sgw-devcontainer-base では `/usr/local/bin/sekimore-agent-setup.sh`、postStartCommand で毎起動）が、関所を見つけたら自動で行います。
+`agent-setup.sh` (in sgw-devcontainer-base, `/usr/local/bin/sekimore-agent-setup.sh`, run from postStartCommand on every start) does all of this automatically once it finds the relay.
 
-- 使い捨て認証鍵 `~/.ssh/sekimore/id_ed25519` と署名鍵 `~/.ssh/sekimore/signing_ed25519` を生成します（あれば再利用）。
-- `POST /bootstrap` で公開鍵を登録し、案件トークンを受け取ります。有効なトークンがあれば再発行しません。
-- `/etc/sekimore-agent/env`（0600）に接続情報を書きます。`sekimore` ラッパーはこのファイルを読み、期限切れなら自動で取り直します。
-- 上流ごとに `~/.ssh/config` の `Host` ブロックと known_hosts を書きます。
-- コミット署名を AI 専用鍵に設定します。署名鍵の公開鍵は GitHub に「Signing Key」として手で登録してください（ログに表示されます）。
-- AI エージェント向けの使い方（`sekimore guide`）を Claude Code の skill と Codex の `AGENTS.md` に置きます。
+- Generates a disposable authentication key `~/.ssh/sekimore/id_ed25519` and a signing key `~/.ssh/sekimore/signing_ed25519` (reusing them if they exist).
+- Registers the public keys with `POST /bootstrap` and receives a project token. It does not reissue while a valid token exists.
+- Writes the connection details to `/etc/sekimore-agent/env` (0600). The `sekimore` wrapper reads that file and renews the token automatically when it expires.
+- Writes a `Host` block in `~/.ssh/config` and a known_hosts entry per upstream.
+- Points commit signing at the AI's own key. Register that signing key's public half on GitHub as a "Signing Key" by hand — it is printed in the log.
+- Installs the agent-facing usage guide (`sekimore guide`) as a Claude Code skill and in Codex's `AGENTS.md`.
 
-調整用の環境変数:
+Environment variables for tuning:
 
-| 変数 | 意味 |
+| Variable | Meaning |
 |---|---|
-| `SEKIMORE_BOOTSTRAP=manual` | 鍵登録とトークン発行を操作者が行う（`add-key` と `token`） |
-| `SEKIMORE_PROJECT` / `SEKIMORE_SIGNING_KEY_COMMENT` | 署名鍵のコメント（GitHub 登録時の Title） |
-| `SEKIMORE_AGENT_USER` / `SEKIMORE_KEY_DIR` / `SEKIMORE_AGENT_ENV_FILE` | 対象ユーザーと保存先 |
+| `SEKIMORE_BOOTSTRAP=manual` | The operator registers the key and issues the token (`add-key` and `token`) |
+| `SEKIMORE_PROJECT` / `SEKIMORE_SIGNING_KEY_COMMENT` | The signing key's comment (its Title when registered on GitHub) |
+| `SEKIMORE_AGENT_USER` / `SEKIMORE_KEY_DIR` / `SEKIMORE_AGENT_ENV_FILE` | Target user and where things are stored |
 
-## 日常の使い方（エージェント）
+## Everyday use (agent)
 
 ```bash
-git clone git@github.com:Org/Repo.git           # URL はそのまま。関所が透過的に中継する
-git push origin HEAD:refs/for/main              # sekimore/main-<sha7> に push され、PR（base=main）が作られる
-git push origin HEAD:refs/heads/sekimore/x      # 自分の名前空間 sekimore/* への直接 push
+git clone git@github.com:Org/Repo.git           # the URL is unchanged; the relay brokers it transparently
+git push origin HEAD:refs/for/main              # pushes to sekimore/main-<sha7> and opens a PR (base=main)
+git push origin HEAD:refs/heads/sekimore/x      # a direct push inside your own namespace, sekimore/*
 
-sekimore whoami                                 # 自分の権限と repo
+sekimore whoami                                 # your permissions and repos
 sekimore pr create --head sekimore/x --base main --title T --body="…"
-sekimore pr status --number 12                  # PR の CI チェック（--json で機械可読）
+sekimore pr status --number 12                  # the PR's CI checks (--json for machine-readable output)
 sekimore pr merge --number 12
-sekimore ci runs --ref v0.2.0                   # タグ / ブランチ / SHA に紐づく workflow run
-sekimore ci jobs --number 12                    # PR の全 run のジョブ一覧（失敗と job_id が分かる）
-sekimore ci log --number 12                     # 失敗ジョブのログを末尾から。--before / --window で前へ
-sekimore issue create --title T --labels bug    # ラベル付きは issue:label も要る
+sekimore ci runs --ref v0.2.0                   # workflow runs for a tag / branch / SHA
+sekimore ci jobs --number 12                    # every job across the PR's runs (shows failures and job_id)
+sekimore ci log --number 12                     # a failed job's log, from the end. --before / --window to go back
+sekimore issue create --title T --labels bug    # labels also need issue:label
 ```
 
-AI エージェント向けの使い方は `sekimore guide` で表示できます（CLI に埋め込み。正本は `relay/share/agent-guide.md`）。
-agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimore-relay/SKILL.md`）と Codex CLI の `~/.codex/AGENTS.md`（マーカー付きブロック）に置くので、
-これらのツールは自動で読みます。他のツールは `sekimore guide` の出力をそのツールの規約の場所に置いてください。`SEKIMORE_AGENT_INSTRUCTIONS=none` で無効、`claude` や `codex` だけの指定も可能です。
+Run `sekimore guide` to print the usage guide written for AI agents (embedded in the CLI; the sources of truth are `relay/share/agent-guide.en.md` and `agent-guide.ja.md`).
+agent-setup installs the same text as a Claude Code skill (`~/.claude/skills/sekimore-relay/SKILL.md`) and as a marked block in Codex CLI's `~/.codex/AGENTS.md`,
+so those tools pick it up on their own. For anything else, put the output of `sekimore guide` wherever that tool expects it. `SEKIMORE_AGENT_INSTRUCTIONS=none` disables it, and you can name just `claude` or just `codex`.
 
-`sekimore` は `sekimore-relay agent` のラッパーです。repo は `--repo Org/Repo` で指定し、上流が複数あるときは `host/Org/Repo` と書けます。
-`--body` の値が `-` で始まるときは `--body="…"` の形にしてください。
+`sekimore` is a wrapper around `sekimore-relay agent`. Name a repo with `--repo Org/Repo`, or `host/Org/Repo` when there is more than one upstream.
+When the value of `--body` starts with `-`, write it as `--body="…"`.
 
-既定で拒否されるもの: 案件外のリポジトリ、read-only への push、`bases` に無い base への `refs/for`、`sekimore/*` 以外への直接 push、タグ、削除、許可していない API 操作。理由は stderr に `sekimore: …` で出ます。
+Denied by default: repositories outside the project, pushes to a read-only repo, `refs/for` against a base that is not in `bases`, direct pushes outside `sekimore/*`, tags, deletions, and any API action you have not allowed. The reason goes to stderr as `sekimore: …`.
 
-## 設定リファレンス
+## Configuration reference
 
 ### `domain_handlers.<domain>`
 
-キーは完全一致の FQDN です。`git-relay` を複数書くと上流が複数になります。
+Keys are exact FQDN matches. Listing `git-relay` more than once gives you more than one upstream.
 
-| キー | 既定 | 意味 |
+| Key | Default | Meaning |
 |---|---|---|
-| `handler` | `splice` | `git-relay` で関所が受ける。`https-relay` は 443 だけを関所の passthrough で通す（送信上限を掛けたい宛先用）。`deny` は拒否、`splice` は従来どおり |
-| `ssh_port` | `relay.ssh_listen` のポート | 関所側の SSH ポート。2 つ目以降の上流では必須 |
-| `upstream` | ドメイン名 | 実際の上流ホスト |
-| `upstream_ssh_port` | `relay.upstream_ssh_port` | 上流の SSH ポート |
-| `ssh_options` | `[]` | 上流 ssh に `-o` で渡す（`ProxyJump=bastion` など）。強制オプションは上書き不可 |
-| `api_base` / `graphql_base` | 上流から派生 | GitHub API の宛先。`upstream` を転送先にしたときに使う |
-| `oauth_client_id` | `relay.oauth_client_id` | device flow の OAuth app（GHES では別） |
-| `default` | `false` | 既定上流にする。省略時は `ssh_port` を省いた 1 つが既定 |
-| `max_upload_bytes` | `relay.https_max_upload_bytes` | 443 passthrough で dev から上流へ送れる 1 接続あたりの上限。`-1` で無制限、`0` は不可 |
+| `handler` | `splice` | `git-relay` makes the relay handle the domain. `https-relay` passes only 443 through the relay's passthrough (for destinations you want an upload cap on). `deny` rejects, `splice` behaves as before |
+| `ssh_port` | the port from `relay.ssh_listen` | The relay's SSH port. Required for the second and later upstreams |
+| `upstream` | the domain name | The real upstream host |
+| `upstream_ssh_port` | `relay.upstream_ssh_port` | The upstream's SSH port |
+| `ssh_options` | `[]` | Passed to the upstream ssh as `-o` (`ProxyJump=bastion`, for example). Enforced options cannot be overridden |
+| `api_base` / `graphql_base` | derived from `upstream` | Where the GitHub API lives. Use it when you point `upstream` somewhere else |
+| `oauth_client_id` | `relay.oauth_client_id` | The device flow OAuth app (different on GHES) |
+| `default` | `false` | Make this the default upstream. If omitted, the one without an `ssh_port` is the default |
+| `max_upload_bytes` | `relay.https_max_upload_bytes` | Per-connection cap on what dev may send upstream through the 443 passthrough. `-1` means unlimited; `0` is not allowed |
 
 ### `relay`
 
-| キー | 既定 | 意味 |
+| Key | Default | Meaning |
 |---|---|---|
-| `ssh_listen` / `api_listen` / `https_listen` | `0.0.0.0:22` / `0.0.0.0:8420` / `0.0.0.0:443` | listen アドレス |
-| `https` | `passthrough` | 443 の扱い。`reject` で即切断 |
-| `https_max_upload_bytes` | `1048576` | 443 passthrough の送信上限の既定（バイト）。`-1` で無制限。超えた接続は切断して監査 `https_upload_capped` |
-| `state_dir` | `/data/relay` | 状態ファイルの置き場 |
-| `token_ttl` | `12h` | 案件トークンの寿命 |
-| `bootstrap` | `auto` | `POST /bootstrap` を許すか。`manual` なら操作者が登録する |
-| `ssh_options` | `[]` | 全上流共通の `-o` |
-| `ssh_config` | 無し | 上流 ssh に `-F` で渡すファイル（上級者向け） |
-| `upstream` / `upstream_ssh_port` / `api_base` / `graphql_base` / `oauth_client_id` | | 既定上流用。handler 側に書くのが新しい書き方 |
-| `limits` | | セッション数やタイムアウト |
-| `project` | 必須 | 案件（下記） |
+| `ssh_listen` / `api_listen` / `https_listen` | `0.0.0.0:22` / `0.0.0.0:8420` / `0.0.0.0:443` | Listen addresses |
+| `https` | `passthrough` | What to do with 443. `reject` drops the connection immediately |
+| `https_max_upload_bytes` | `1048576` | Default upload cap for the 443 passthrough, in bytes. `-1` means unlimited. A connection that exceeds it is cut and audited as `https_upload_capped` |
+| `state_dir` | `/data/relay` | Where state files live |
+| `token_ttl` | `12h` | How long a project token lives |
+| `bootstrap` | `auto` | Whether `POST /bootstrap` is allowed. With `manual`, the operator registers keys |
+| `ssh_options` | `[]` | `-o` options shared by all upstreams |
+| `ssh_config` | none | A file passed to the upstream ssh as `-F` (advanced) |
+| `upstream` / `upstream_ssh_port` / `api_base` / `graphql_base` / `oauth_client_id` | | For the default upstream. Setting these on the handler is the newer style |
+| `limits` | | Session counts and timeouts |
+| `project` | required | The project (below) |
 
 ### `relay.project`
 
-| キー | 既定 | 意味 |
+| Key | Default | Meaning |
 |---|---|---|
-| `name` | 必須 | 案件名。トークンとログに出る |
-| `permissions` | `[]` | 案件の既定権限。`[…]` か `{allow, deny}` |
-| `push` | `["sekimore/*"]` | 直接 push を許すブランチ glob |
-| `tags` | `[]` | push を許すタグ glob。空は拒否 |
-| `delete` | `false` | ブランチとタグの削除 |
-| `repos` | `[]` | リポジトリ。`Org/Repo` は既定上流、`host/Org/Repo` で上流を明示 |
-| `upstreams.<domain>` | | 上流ごとの層。`permissions`（差分）、`push` / `tags` / `delete`（その上流の既定）、`repos` |
+| `name` | required | The project name. It appears in tokens and logs |
+| `permissions` | `[]` | The project's default permissions. Either `[…]` or `{allow, deny}` |
+| `push` | `["sekimore/*"]` | Branch globs that may be pushed to directly |
+| `tags` | `[]` | Tag globs that may be pushed. Empty means denied |
+| `delete` | `false` | Deleting branches and tags |
+| `repos` | `[]` | Repositories. `Org/Repo` means the default upstream; `host/Org/Repo` names one explicitly |
+| `upstreams.<domain>` | | A per-upstream layer: `permissions` (a delta), `push` / `tags` / `delete` (that upstream's defaults), and `repos` |
 
 ### `repos[]`
 
-| キー | 既定 | 意味 |
+| Key | Default | Meaning |
 |---|---|---|
-| `name` | 必須 | `Org/Repo`（`upstreams.<domain>.repos` の中では host 不要） |
-| `mode` | 必須 | `read-only` か `read-write`。read-only は書き込み系を全て止める |
-| `bases` | 全て | `refs/for/<base>` と PR の base に許すブランチ |
-| `push` / `tags` / `delete` | 上位の既定 | この repo だけ上書き |
-| `permissions` | 差分なし | `{allow, deny}` で足す / 消す。list は allow の追加 |
+| `name` | required | `Org/Repo` (no host needed inside `upstreams.<domain>.repos`) |
+| `mode` | required | `read-only` or `read-write`. read-only blocks every write |
+| `bases` | all | Branches allowed for `refs/for/<base>` and as a PR base |
+| `push` / `tags` / `delete` | the layer above | Override for this repo only |
+| `permissions` | no delta | `{allow, deny}` to add or remove. A plain list adds to allow |
 
-### 権限の決まり方
+### How permissions resolve
 
-- 実効権限 = (案件 allow ∪ 上流 allow ∪ repo allow) − (案件 deny ∪ 上流 deny ∪ repo deny)。deny はどの層に書いても勝ちます。
-- `push` / `tags` / `delete` は 案件 → 上流 → repo の順で上書きされます。glob は `*` と `?` が使えます。
-- 権限キーは 16 個: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:merge` `pr:close`、`issue:create` `issue:comment` `issue:close` `issue:label` `issue:assign`、`project:read` `project:add_item` `project:update_item`、`repo:read`、`ci:read`。
-- 実効値は `sekimore-relay check` と Web UI の Relay タブで確認できます。
+- Effective permissions = (project allow ∪ upstream allow ∪ repo allow) − (project deny ∪ upstream deny ∪ repo deny). A deny wins at any layer.
+- `push` / `tags` / `delete` are overridden in the order project → upstream → repo. Globs support `*` and `?`.
+- There are 16 permission keys: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:merge` `pr:close`, `issue:create` `issue:comment` `issue:close` `issue:label` `issue:assign`, `project:read` `project:add_item` `project:update_item`, `repo:read`, `ci:read`.
+- Check the effective values with `sekimore-relay check` or the Relay tab in the Web UI.
 
-### 例: github.com と GHES を同時に扱う
+### Example: github.com and GHES side by side
 
 ```yaml
 domain_handlers:
-  github.com: { handler: git-relay }                    # 既定上流（ssh_port 省略）
+  github.com: { handler: git-relay }                    # the default upstream (ssh_port omitted)
   ghe.example.com:
     handler: git-relay
-    ssh_port: 2222                                      # 2 つ目以降は別ポート
-    ssh_options: [ProxyJump=bastion.example.com]        # 踏み台経由なら
+    ssh_port: 2222                                      # the second and later upstreams need their own port
+    ssh_options: [ProxyJump=bastion.example.com]        # if it sits behind a bastion
 
 relay:
   project:
     name: case-a
-    permissions: [pr:read, ci:read]                     # 全上流に共通
+    permissions: [pr:read, ci:read]                     # shared by every upstream
     upstreams:
       github.com:
         permissions: { allow: [pr:create, pr:merge] }
@@ -218,97 +219,112 @@ relay:
         repos:
           - { name: Org/App, mode: read-write, bases: [main] }
       ghe.example.com:
-        permissions: { allow: [pr:create], deny: [pr:merge] }   # GHES ではマージさせない
+        permissions: { allow: [pr:create], deny: [pr:merge] }   # no merging on GHES
         repos:
           - { name: Corp/Internal, mode: read-write, bases: [main] }
 ```
 
-### 持ち出し対策: 443 の送信上限と `https-relay`
+### Exfiltration controls: the 443 upload cap and `https-relay`
 
-関所は依頼者の資格情報を AI に使わせませんが、プロンプトに埋め込まれた他人の資格情報で HTTPS push する持ち出しは TLS の中身を見ない限り区別できません。
-そのため 443 passthrough には dev から上流へ送れるバイト数の上限があります（既定 1 MiB、ダウンロードは数えません）。
-通常の GET や API 呼び出しの送信量はこれよりはるかに小さく、`git push` などの大きな送信だけが止まります。
+The relay never lets the AI use the operator's credentials, but an HTTPS push with someone else's credentials pasted into a prompt is indistinguishable from normal traffic unless you look inside the TLS.
+So the 443 passthrough caps how many bytes dev may send upstream (1 MiB by default; downloads are not counted).
+Ordinary GETs and API calls send far less than that, and only large uploads such as a `git push` are stopped.
 
 ```yaml
 domain_handlers:
-  github.com: { handler: git-relay, max_upload_bytes: 262144 }   # 256 KiB。HTTPS push は関所経由の SSH を使うので不要
-  ghcr.io:    { handler: https-relay, max_upload_bytes: -1 }     # 自分で image を push する宛先は無制限
-  registry-1.docker.io: { handler: https-relay }                 # 既定 (relay.https_max_upload_bytes) を使う
+  github.com: { handler: git-relay, max_upload_bytes: 262144 }   # 256 KiB. HTTPS push is unnecessary — SSH goes through the relay
+  ghcr.io:    { handler: https-relay, max_upload_bytes: -1 }     # unlimited where you push your own images
+  registry-1.docker.io: { handler: https-relay }                 # use the default (relay.https_max_upload_bytes)
 relay:
   https_max_upload_bytes: 1048576
 network:
-  allowed_ports: [80, 443]      # 許可ドメインへ通す宛先ポート（sekimore-gw 本体の設定。IP 直指定の SSH などを止める）
+  allowed_ports: [80, 443]      # destination ports allowed through to permitted domains (a sekimore-gw setting; blocks things like SSH to a bare IP)
 ```
 
-- `https-relay` のドメインは DNS で関所に向き、443 だけが関所の passthrough を通ります。他のポートは届きません。
-- 上限を超えた接続は切断され、監査に `https_upload_capped` が残ります。Relay タブでは 1 MiB 以上を送った接続に LARGE UPLOAD の印が付き、24 時間の件数が出ます。
-- `allow_domains` に残したドメインは関所を通らず上限も掛かりません。上限を掛けたいものだけ handler に移します。
+- A `https-relay` domain resolves to the relay through DNS, and only 443 goes through the relay's passthrough. Nothing else reaches it.
+- A connection over the cap is cut and leaves `https_upload_capped` in the audit log. The Relay tab marks connections that sent 1 MiB or more with LARGE UPLOAD and shows 24-hour counts.
+- Domains left in `allow_domains` bypass the relay entirely and get no cap. Move only the ones you want capped over to a handler.
 
-複数上流の仕組み: SSH の exec にはホスト名が無いので、関所は上流ごとに別ポートで listen し、接続を受けたポートで上流を決めます。
-agent-setup が `~/.ssh/config` に上流ごとの `Host` と `Port` を書くので、エージェントの URL は変わりません。
-443 は TLS の SNI で上流を選びます。関所の ssh はホスト側の `~/.ssh/config` を読まないので、踏み台やプロキシは `ssh_options` に書きます。
-踏み台のホスト鍵は `sekimore-relay keyscan bastion.example.com --upstream ghe.example.com` で入れます。
+How multiple upstreams work: an SSH exec carries no host name, so the relay listens on a separate port per upstream and picks the upstream from the port the connection arrived on.
+agent-setup writes a `Host` and `Port` per upstream into `~/.ssh/config`, so the agent's URLs stay the same.
+On 443 the upstream comes from the TLS SNI. The relay's ssh does not read the host's `~/.ssh/config`, so bastions and proxies belong in `ssh_options`.
+Add a bastion's host key with `sekimore-relay keyscan bastion.example.com --upstream ghe.example.com`.
 
-## 運用（操作者）
+## Language (0.2.4)
 
-Web UI（ホストの http://localhost:8090）の Relay タブで、設定・権限・トークン・アクセス履歴・ブロック履歴を閲覧できます（閲覧のみ）。
-Dev Containers 構成では `mise run gw:tokens` / `gw:revoke-project` / `gw:audit` / `gw -- <args>` が用意されています。
-
-| コマンド | 用途 |
-|---|---|
-| `sekimore-relay check` | ポリシーと状態の一覧 |
-| `sekimore-relay tokens` | 発行済みトークン（ラベル / 期限 / 使用回数 / 状態） |
-| `sekimore-relay revoke --label skm_xxxxxxxx` | 1 つ失効 |
-| `sekimore-relay revoke-project` | 案件の全トークンを失効（案件終了時） |
-| `sekimore-relay bootstrap disable` / `enable` | 自動登録の kill-switch |
-| `sekimore-relay add-key "ssh-ed25519 AAAA…"` | 公開鍵の手動登録 |
-| `sekimore-relay keyscan <host> [--port N] [--upstream <domain>]` | 上流や踏み台のホスト鍵を known_hosts に追加（fingerprint を表示） |
-| `sekimore-relay login` / `logout` / `whoami` `[--upstream <domain>]` | 上流トークン |
-| `tail -f /data/relay/audit.jsonl` | 全ての操作と拒否の記録 |
-
-`/data/relay` は gateway のボリューム（0700）で、AI コンテナからは見えません。
-同じ鍵からの再 bootstrap は前のトークンを失効させるので、鍵 1 本につき有効トークンは 1 つです。
-期限切れから 7 日過ぎたトークンの記録は自動で消えます。恒久的な記録は `audit.jsonl` です。
-
-## 困ったとき
-
-| 症状 | 意味 | 対処 |
-|---|---|---|
-| `SSH_AUTH_SOCK is not set in the gateway container` | agent socket が関所に渡っていない | 手順 2 のマウントと環境変数。Mac 側の `ssh-add -l` |
-| `ssh-agent socket … does not exist` / `cannot connect` | 転送が切れた、または権限 | 転送を張り直す。EACCES なら socket の所有者 |
-| `known_hosts … has no entry for <host>` | 上流のホスト鍵が無い | `sekimore-relay login` か `sekimore-relay keyscan <host>` |
-| `repository "X" is not in project "P"` | 案件外 | `repos` に追加する。意図した拒否なら何もしない |
-| `push to refs/heads/main is not allowed` | 名前空間外への直接 push | `refs/for/main` で PR にする。必要なら `push` に glob を足す |
-| `tag is not allowed for this repository` | タグの push は既定拒否 | その repo か上流の `tags` に glob を足す |
-| `Permission denied (publickey)`（関所から） | エージェントの鍵が未登録 | `sekimore bootstrap …` か操作者の `add-key`。`bootstrap.disabled` の有無 |
-| `! [remote rejected] … (sekimore: …)` | ポリシーで拒否した push | メッセージの案内どおり |
-| `denied: token expired at …` | 案件トークンの期限切れ | `sekimore` ラッパーが自動で取り直す。古い環境は `sudo sekimore-agent-setup.sh` |
-| `no upstream token … run sekimore-relay login` | device flow 未実施、または logout 後 | `sekimore-relay login` |
-| `git ls-remote` が無言で止まる | DNS は関所を向いたが INPUT で落ちている | `iptables-legacy -S INPUT` に `--dport 22` があるか。無ければ relay 未起動 |
-| `https://github.com/…` が失敗 | `https: reject`、または上流に届かない | 既定の `passthrough` に戻す。audit の `https_failed` |
-| HTTPS git で `could not read Username` | HTTPS 認証を意図的に塞いでいる（依頼者の認証が関所を迂回しないため） | `git@github.com:` の SSH を使う |
-| post-create の「ssh-agent が転送されています」が消えない | macOS の `code` は launchd の環境を継ぐ | VS Code を完全終了して `mise run vscode` |
-
-## 開発
+The CLI's strings live in `relay/locales/en.json` and `relay/locales/ja.json`, embedded in the binary.
+The language comes from `SEKIMORE_LANG`, then `LC_ALL`, `LC_MESSAGES`, `LANG`: `ja*` selects Japanese, anything else English (English is the default).
+A key missing from a dictionary falls back to English, and then to the key name.
 
 ```bash
-mise use rust@1.89                                  # または rustup
-cargo test --features test-hooks                    # e2e は git / ssh が必要（CI では SEKIMORE_E2E_REQUIRED=1）
-cargo clippy --all-targets --features test-hooks -- -D warnings
-cargo fmt --check
-cargo audit                                         # .cargo/audit.toml の ignore は理由付き
-cargo tree -i aws-lc-rs; cargo tree -i openssl-sys  # どちらも無いこと
+sekimore-relay check                     # English (default)
+SEKIMORE_LANG=ja sekimore-relay check    # Japanese
+sekimore guide --lang ja                 # print just the guide in Japanese
 ```
 
-sekimore-gw のルートで `mise run ci` を実行すると、Rust と Python の lint・テストが並列で走ります。
-`test-hooks` feature は `LocalGitUpstream`（ローカル bare repo への `git receive-pack`）を有効にします。イメージビルドには含めません。
+This covers `--help`, operator-facing output, and `sekimore guide`.
+The guide takes `--lang en|ja`, and its sources of truth are `relay/share/agent-guide.en.md` and `relay/share/agent-guide.ja.md`.
+Denial reasons (`sekimore: …`) and the audit log `audit.jsonl` stay English on purpose, so that tooling and agents can match on them.
 
-## ビルド（イメージ）
+## Operations (operator)
 
-`sekimore-gw/Dockerfile` の `relay-builder` 段が、`cargo-zigbuild` で静的 musl バイナリを作ります（CI はアーキごとの native runner）。
-glibc 世代に依存しないので、devcontainer base イメージへ `COPY --from` してそのまま動きます。
+The Relay tab in the Web UI (http://localhost:8090 on the host) shows the configuration, permissions, tokens, access history and blocked attempts (read-only).
+Under Dev Containers you also get `mise run gw:tokens` / `gw:revoke-project` / `gw:audit` / `gw -- <args>`.
 
-## 変更履歴
+| Command | Purpose |
+|---|---|
+| `sekimore-relay check` | List the policy and current state |
+| `sekimore-relay tokens` | Issued tokens (label / expiry / use count / state) |
+| `sekimore-relay revoke --label skm_xxxxxxxx` | Revoke one |
+| `sekimore-relay revoke-project` | Revoke every token for the project (when the engagement ends) |
+| `sekimore-relay bootstrap disable` / `enable` | Kill switch for automatic registration |
+| `sekimore-relay add-key "ssh-ed25519 AAAA…"` | Register a public key by hand |
+| `sekimore-relay keyscan <host> [--port N] [--upstream <domain>]` | Add an upstream's or bastion's host key to known_hosts (prints the fingerprint) |
+| `sekimore-relay login` / `logout` / `whoami` `[--upstream <domain>]` | Upstream tokens |
+| `tail -f /data/relay/audit.jsonl` | Every action and every denial |
 
-[CHANGELOG.md](CHANGELOG.md) にあります。設計判断の詳細は workspace リポジトリの
-[design/relay.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sekimore-gw/design/relay.md) を参照してください。
+`/data/relay` is the gateway's volume (0700) and is invisible from the AI container.
+Re-bootstrapping with the same key revokes the previous token, so one key ever has one valid token.
+Token records are swept 7 days after they expire. The permanent record is `audit.jsonl`.
+
+## Troubleshooting
+
+| Symptom | What it means | What to do |
+|---|---|---|
+| `SSH_AUTH_SOCK is not set in the gateway container` | The agent socket never reached the relay | Check the mount and environment from step 2, and `ssh-add -l` on the Mac |
+| `ssh-agent socket … does not exist` / `cannot connect` | Forwarding dropped, or a permission problem | Re-establish the forward. On EACCES, check who owns the socket |
+| `known_hosts … has no entry for <host>` | The upstream's host key is missing | `sekimore-relay login` or `sekimore-relay keyscan <host>` |
+| `repository "X" is not in project "P"` | Outside the project | Add it to `repos`. If the denial was intended, do nothing |
+| `push to refs/heads/main is not allowed` | A direct push outside the namespace | Use `refs/for/main` to open a PR, or add a glob to `push` if you really need it |
+| `tag is not allowed for this repository` | Tag pushes are denied by default | Add a glob to `tags` on that repo or upstream |
+| `Permission denied (publickey)` (from the relay) | The agent's key is not registered | `sekimore bootstrap …`, or `add-key` by the operator. Check for `bootstrap.disabled` |
+| `! [remote rejected] … (sekimore: …)` | A push the policy denied | Follow what the message says |
+| `denied: token expired at …` | The project token expired | The `sekimore` wrapper renews it automatically. On an older environment, run `sudo sekimore-agent-setup.sh` |
+| `no upstream token … run sekimore-relay login` | The device flow was never run, or you logged out | `sekimore-relay login` |
+| `git ls-remote` hangs silently | DNS points at the relay but INPUT is dropping it | Look for `--dport 22` in `iptables-legacy -S INPUT`. If it is missing, the relay did not start |
+| `https://github.com/…` fails | `https: reject`, or the upstream is unreachable | Put it back to the default `passthrough`. Check `https_failed` in the audit log |
+| `could not read Username` on HTTPS git | HTTPS authentication is blocked on purpose, so the operator's credentials cannot bypass the relay | Use SSH: `git@github.com:` |
+| post-create keeps saying the ssh-agent is being forwarded | `code` on macOS inherits launchd's environment | Quit VS Code completely and run `mise run vscode` |
+
+## Development
+
+```bash
+mise use rust@1.89                                  # or rustup
+cargo test --features test-hooks                    # the e2e tests need git and ssh (CI sets SEKIMORE_E2E_REQUIRED=1)
+cargo clippy --all-targets --features test-hooks -- -D warnings
+cargo fmt --check
+cargo audit                                         # every ignore in .cargo/audit.toml has a reason
+cargo tree -i aws-lc-rs; cargo tree -i openssl-sys  # neither should be present
+```
+
+Running `mise run ci` at the root of sekimore-gw runs the Rust and Python lints and tests in parallel.
+The `test-hooks` feature enables `LocalGitUpstream` (`git receive-pack` against a local bare repo). It is not part of the image build.
+
+## Building the image
+
+The `relay-builder` stage of `sekimore-gw/Dockerfile` produces a static musl binary with `cargo-zigbuild` (CI uses a native runner per architecture).
+It does not depend on a glibc generation, so `COPY --from` into the devcontainer base image is all it takes.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).

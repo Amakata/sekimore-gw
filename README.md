@@ -1,5 +1,7 @@
 # sekimore-gw
 
+*[日本語版](README.ja.md)*
+
 [![Lint](https://github.com/Amakata/sekimore-gw/actions/workflows/lint.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/lint.yml)
 [![Test](https://github.com/Amakata/sekimore-gw/actions/workflows/test.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/test.yml)
 [![Docker Publish](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml)
@@ -30,6 +32,7 @@ A security gateway designed for AI agent environments running in Docker. Provide
 - **Packet Logging**: NFLOG-based firewall logging with ulogd2
 - **SQLite Database**: Persistent storage for access logs and statistics (WAL, indexed; records are kept until an operator prunes them)
 - **Maintenance CLI** (0.2.3): `python -m src.maint db-stats | db-prune --before-days N --yes | db-reset --yes | db-vacuum` inside the gateway container. Safe while the gateway is running. The relay audit (`/data/relay/audit.jsonl`) is separate and untouched. Dev Containers setups expose these as `mise run gw:db-stats` / `gw:db-prune` / `gw:db-reset`
+- **Localized UI** (0.2.4): the Web UI ships in English and Japanese, chosen per viewer. See [Localization](#localization-024)
 
 ### Optional Components
 
@@ -144,6 +147,56 @@ proxy:
   cache_size_mb: 1000
   upstream_proxy: "proxy.company.com:8080"  # Optional
 ```
+
+## Localization (0.2.4)
+
+English is the primary language. Japanese is available everywhere a human reads text; anything a machine reads stays English.
+
+### Web UI
+
+The dashboard is translated from `src/locales/<lang>.json` (`en`, `ja`). `/api/i18n` resolves the language and returns the
+dictionary, which the page applies through `data-i18n` attributes. The language selector in the header sets a
+`sekimore_lang` cookie (one year, `SameSite=Lax`) and reloads.
+
+Resolution order, first match wins:
+
+| Order | Source | Notes |
+|-------|--------|-------|
+| 1 | `?lang=en` / `?lang=ja` query parameter | One-off override, handy for links and screenshots |
+| 2 | `sekimore_lang` cookie | What the language selector sets; per viewer |
+| 3 | `ui.language` in `config.yml` | Only when it is not `auto` - pins the language for everyone |
+| 4 | `Accept-Language` | The browser's preference |
+| 5 | English | Default |
+
+Pin the language in `config/config.yml` if you do not want it to follow the browser:
+
+```yaml
+ui:
+  language: auto   # auto | en | ja  (default: auto)
+```
+
+Unsupported tags fall back to English, and a key missing from a translation falls back to the English string, so a
+partial translation never leaves a blank in the UI.
+
+### CLI
+
+Command-line tools follow the environment instead of the config file: `SEKIMORE_LANG`, then `LC_ALL`, `LC_MESSAGES`,
+`LANG`, defaulting to English. This covers `python -m src.maint` in the gateway container and the Rust `sekimore-relay`
+binary.
+
+```bash
+SEKIMORE_LANG=ja python -m src.maint db-stats
+```
+
+### What stays English
+
+Denial messages (the `sekimore: ...` lines the relay writes to stderr) and the audit log are always English, whatever the
+locale. Scripts, CI and AI agents match on that text, so it must not shift with the operator's language.
+
+### Documentation
+
+Docs are English-primary with `*.ja.md` translations alongside - this file and [README.ja.md](README.ja.md),
+[relay/README.md](relay/README.md) and [relay/README.ja.md](relay/README.ja.md).
 
 ## Architecture
 
@@ -301,4 +354,4 @@ Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 
 ## Version
 
-v0.0.1 (Initial Release)
+0.2.4. The relay has its own changelog in [relay/CHANGELOG.md](relay/CHANGELOG.md).
