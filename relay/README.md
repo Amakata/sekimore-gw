@@ -137,7 +137,7 @@ sekimore issue create --title T --labels bug    # ラベル付きは issue:label
 
 | キー | 既定 | 意味 |
 |---|---|---|
-| `handler` | `splice` | `git-relay` で関所が受ける。`deny` は拒否、`splice` は従来どおり |
+| `handler` | `splice` | `git-relay` で関所が受ける。`https-relay` は 443 だけを関所の passthrough で通す（送信上限を掛けたい宛先用）。`deny` は拒否、`splice` は従来どおり |
 | `ssh_port` | `relay.ssh_listen` のポート | 関所側の SSH ポート。2 つ目以降の上流では必須 |
 | `upstream` | ドメイン名 | 実際の上流ホスト |
 | `upstream_ssh_port` | `relay.upstream_ssh_port` | 上流の SSH ポート |
@@ -145,6 +145,7 @@ sekimore issue create --title T --labels bug    # ラベル付きは issue:label
 | `api_base` / `graphql_base` | 上流から派生 | GitHub API の宛先。`upstream` を転送先にしたときに使う |
 | `oauth_client_id` | `relay.oauth_client_id` | device flow の OAuth app（GHES では別） |
 | `default` | `false` | 既定上流にする。省略時は `ssh_port` を省いた 1 つが既定 |
+| `max_upload_bytes` | `relay.https_max_upload_bytes` | 443 passthrough で dev から上流へ送れる 1 接続あたりの上限。`-1` で無制限、`0` は不可 |
 
 ### `relay`
 
@@ -152,6 +153,7 @@ sekimore issue create --title T --labels bug    # ラベル付きは issue:label
 |---|---|---|
 | `ssh_listen` / `api_listen` / `https_listen` | `0.0.0.0:22` / `0.0.0.0:8420` / `0.0.0.0:443` | listen アドレス |
 | `https` | `passthrough` | 443 の扱い。`reject` で即切断 |
+| `https_max_upload_bytes` | `1048576` | 443 passthrough の送信上限の既定（バイト）。`-1` で無制限。超えた接続は切断して監査 `https_upload_capped` |
 | `state_dir` | `/data/relay` | 状態ファイルの置き場 |
 | `token_ttl` | `12h` | 案件トークンの寿命 |
 | `bootstrap` | `auto` | `POST /bootstrap` を許すか。`manual` なら操作者が登録する |
@@ -215,6 +217,27 @@ relay:
         repos:
           - { name: Corp/Internal, mode: read-write, bases: [main] }
 ```
+
+### 持ち出し対策: 443 の送信上限と `https-relay`
+
+関所は依頼者の資格情報を AI に使わせませんが、プロンプトに埋め込まれた他人の資格情報で HTTPS push する持ち出しは TLS の中身を見ない限り区別できません。
+そのため 443 passthrough には dev から上流へ送れるバイト数の上限があります（既定 1 MiB、ダウンロードは数えません）。
+通常の GET や API 呼び出しの送信量はこれよりはるかに小さく、`git push` などの大きな送信だけが止まります。
+
+```yaml
+domain_handlers:
+  github.com: { handler: git-relay, max_upload_bytes: 262144 }   # 256 KiB。HTTPS push は関所経由の SSH を使うので不要
+  ghcr.io:    { handler: https-relay, max_upload_bytes: -1 }     # 自分で image を push する宛先は無制限
+  registry-1.docker.io: { handler: https-relay }                 # 既定 (relay.https_max_upload_bytes) を使う
+relay:
+  https_max_upload_bytes: 1048576
+network:
+  allowed_ports: [80, 443]      # 許可ドメインへ通す宛先ポート（sekimore-gw 本体の設定。IP 直指定の SSH などを止める）
+```
+
+- `https-relay` のドメインは DNS で関所に向き、443 だけが関所の passthrough を通ります。他のポートは届きません。
+- 上限を超えた接続は切断され、監査に `https_upload_capped` が残ります。Relay タブでは 1 MiB 以上を送った接続に LARGE UPLOAD の印が付き、24 時間の件数が出ます。
+- `allow_domains` に残したドメインは関所を通らず上限も掛かりません。上限を掛けたいものだけ handler に移します。
 
 複数上流の仕組み: SSH の exec にはホスト名が無いので、関所は上流ごとに別ポートで listen し、接続を受けたポートで上流を決めます。
 agent-setup が `~/.ssh/config` に上流ごとの `Host` と `Port` を書くので、エージェントの URL は変わりません。

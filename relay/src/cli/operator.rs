@@ -10,7 +10,7 @@ use super::BootstrapAction;
 use russh::keys::PublicKey;
 
 use crate::audit::{Actor, Audit};
-use crate::config::{self, ConfigError, Resolved, Upstream};
+use crate::config::{self, ConfigError, HandlerKind, Resolved, Upstream};
 use crate::fsutil::{atomic_write, ensure_dir_0700, read_optional};
 use crate::git::agent_check::{auth_sock_from_env, preflight_agent};
 use crate::git::upstream_ssh::OpenSshUpstream;
@@ -353,6 +353,20 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
         "https:        {:?} on {}",
         r.relay.https, r.relay.https_listen
     );
+    for t in &r.https_targets {
+        println!(
+            "  443 target: {:<32} → {:<28} {} upload cap {}",
+            t.domain,
+            t.host,
+            match t.kind {
+                HandlerKind::HttpsRelay => "(https-relay)",
+                _ => "(git-relay)   ",
+            },
+            t.max_upload
+                .map(|c| format!("{c} bytes"))
+                .unwrap_or_else(|| "unlimited".to_string())
+        );
+    }
     println!("state dir:    {}", r.paths.state_dir.display());
     println!(
         "token ttl:    {}",

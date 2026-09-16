@@ -3,6 +3,13 @@
 各版の設計判断と詳細は workspace リポジトリの
 [doc/sekimore-gw/design/relay.md](https://github.com/Amakata/sgw-devcontainer/blob/main/doc/sekimore-gw/design/relay.md) にあります。
 
+## 0.2.2（未リリース）
+
+- 持ち出し対策: 443 passthrough に dev → 上流の送信上限（`relay.https_max_upload_bytes`、既定 1 MiB、`-1` で無制限）。超えた接続は切断して監査 `https_upload_capped`
+- `handler: https-relay`: 443 だけを関所の passthrough で通し、宛先ごとに `max_upload_bytes` を掛ける（自分で image を push する宛先は `-1`）
+- `network.allowed_ports`（sekimore-gw 本体）: 許可ドメイン / 許可 IP へ通す宛先ポートを絞る。未設定は従来どおり全ポート
+- Web UI: 宛先ごとの上限、1 MiB 以上を送った passthrough 接続に LARGE UPLOAD、24 時間の件数（大きな送信 / 上限超過）
+
 ## 0.2.1（2026-09-16）
 
 - `project.upstreams.<domain>`: 案件既定と repo の間に上流ごとの層（`permissions` の差分、`push` / `tags` / `delete` の既定、`repos`）

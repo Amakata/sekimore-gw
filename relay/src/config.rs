@@ -24,6 +24,8 @@ pub const DEFAULT_OAUTH_CLIENT_ID: &str = "178c6fc778ccc68e1d6a";
 pub enum HandlerKind {
     Splice,
     GitRelay,
+    /// 0.2.2: 443 だけを関所の passthrough で通す（送信上限を掛けたいドメイン用）。SSH / API は無い
+    HttpsRelay,
     Deny,
     /// Python 側が将来足す種類。relay は関知しない
     #[serde(other)]
@@ -59,6 +61,10 @@ pub struct DomainHandler {
     pub api_base: Option<Url>,
     #[serde(default)]
     pub graphql_base: Option<Url>,
+    /// 0.2.2: 443 passthrough で dev → 上流へ送れる 1 接続あたりの上限バイト数（git-relay / https-relay）。
+    /// 省略時は `relay.https_max_upload_bytes`。`-1` で無制限。`0` は設定エラー
+    #[serde(default)]
+    pub max_upload_bytes: Option<i64>,
 }
 
 fn default_handler() -> HandlerKind {
@@ -77,6 +83,7 @@ impl Default for DomainHandler {
             ssh_options: Vec::new(),
             api_base: None,
             graphql_base: None,
+            max_upload_bytes: None,
         }
     }
 }
@@ -283,6 +290,12 @@ pub struct RelayConfig {
     pub https_listen: SocketAddr,
     #[serde(default = "d_https")]
     pub https: HttpsMode,
+    /// 0.2.2: 443 passthrough で dev → 上流へ送れる 1 接続あたりの上限バイト数の既定（ダウンロードは数えない）。
+    /// 超えたら切断して監査 `https_upload_capped`。`-1` で無制限、既定 1 MiB。handler の `max_upload_bytes` で上書き。
+    /// 攻撃的プロンプトで持ち込まれた資格情報による HTTPS push（持ち出し）を止めるための上限で、
+    /// 通常の GET / API 呼び出しの送信量ははるかに小さい
+    #[serde(default = "d_https_max_upload")]
+    pub https_max_upload_bytes: i64,
     #[serde(default = "d_state_dir")]
     pub state_dir: PathBuf,
     /// 上流ホスト。省略時は git-relay ドメイン
@@ -335,6 +348,9 @@ fn d_https_listen() -> SocketAddr {
 }
 fn d_https() -> HttpsMode {
     HttpsMode::Passthrough
+}
+fn d_https_max_upload() -> i64 {
+    1024 * 1024
 }
 fn d_state_dir() -> PathBuf {
     PathBuf::from("/data/relay")
@@ -476,12 +492,33 @@ impl Loaded {
             .collect()
     }
 
+    /// 0.2.2: `https-relay` handler のドメイン（443 だけを関所の passthrough で通す）。
+    pub fn https_relay_domains(&self) -> Vec<String> {
+        self.handlers
+            .iter()
+            .filter(|(_, k)| **k == HandlerKind::HttpsRelay)
+            .map(|(d, _)| d.clone())
+            .collect()
+    }
+
     /// relay を起動すべきか（`git-relay` handler が 1 つ以上）。
     /// 0.2.0: 複数の git-relay ドメインはポートで分ける。ポート重複などは設定不正（Err）。
+    /// 0.2.2: `https-relay` だけで git-relay が無い構成は設定不正（443 passthrough は git-relay と一緒に起動する）。
     pub fn needs_relay(&self) -> Result<bool, ConfigError> {
         if self.git_relay_domains().is_empty() {
+            if !self.https_relay_domains().is_empty() {
+                return Err(ConfigError::Invalid(
+                    "https-relay needs at least one git-relay domain in this version (the 443 passthrough is started with it)".into(),
+                ));
+            }
             return Ok(false);
         }
+        let relay = self
+            .gateway
+            .relay
+            .as_ref()
+            .ok_or(ConfigError::NoRelaySection)?;
+        self.resolve_https_targets(relay, &self.resolve_upstreams(relay)?)?;
         let relay = self
             .gateway
             .relay
@@ -601,6 +638,10 @@ impl Loaded {
                 upstream_token,
                 known_hosts,
                 ssh_options,
+                max_upload: upload_cap(
+                    h.max_upload_bytes.unwrap_or(relay.https_max_upload_bytes),
+                    &format!("domain_handlers.{d}"),
+                )?,
                 is_default,
             });
         }
@@ -778,6 +819,7 @@ impl Loaded {
             }
         }
 
+        let https_targets = self.resolve_https_targets(&relay, &upstreams)?;
         let proxy = resolve_proxy(&self.gateway.proxy)?;
         let paths = Paths::under(&relay.state_dir);
         Ok(Resolved {
@@ -790,7 +832,68 @@ impl Loaded {
             project,
             relay,
             upstreams,
+            https_targets,
         })
+    }
+
+    /// 0.2.2: 443 passthrough の宛先。git-relay の上流（その上限）+ https-relay のドメイン。
+    fn resolve_https_targets(
+        &self,
+        relay: &RelayConfig,
+        upstreams: &[Upstream],
+    ) -> Result<Vec<HttpsTarget>, ConfigError> {
+        let mut out: Vec<HttpsTarget> = upstreams
+            .iter()
+            .map(|u| HttpsTarget {
+                domain: u.domain.clone(),
+                host: u.host.clone(),
+                max_upload: u.max_upload,
+                kind: HandlerKind::GitRelay,
+            })
+            .collect();
+        for d in self.https_relay_domains() {
+            let h = self.handler_specs.get(&d).cloned().unwrap_or_default();
+            let host = h
+                .upstream
+                .clone()
+                .unwrap_or_else(|| d.clone())
+                .trim()
+                .to_ascii_lowercase();
+            if host.is_empty() || host.contains('/') || host.contains(':') {
+                return Err(ConfigError::Invalid(format!(
+                    "domain_handlers.{d}.upstream {host:?} must be a bare hostname"
+                )));
+            }
+            if h.ssh_port.is_some() || !h.ssh_options.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "domain_handlers.{d}: ssh_port / ssh_options only apply to git-relay (https-relay carries 443 only)"
+                )));
+            }
+            out.push(HttpsTarget {
+                domain: d.clone(),
+                host,
+                max_upload: upload_cap(
+                    h.max_upload_bytes.unwrap_or(relay.https_max_upload_bytes),
+                    &format!("domain_handlers.{d}"),
+                )?,
+                kind: HandlerKind::HttpsRelay,
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// `max_upload_bytes` を上限に変換する。`-1` = 無制限（None）、正 = バイト数。`0` とそれ以外はエラー。
+pub fn upload_cap(v: i64, what: &str) -> Result<Option<u64>, ConfigError> {
+    match v {
+        -1 => Ok(None),
+        n if n > 0 => Ok(Some(n as u64)),
+        0 => Err(ConfigError::Invalid(format!(
+            "{what}: max_upload_bytes 0 would block every HTTPS request (TLS itself sends bytes); use -1 for unlimited or a positive size"
+        ))),
+        n => Err(ConfigError::Invalid(format!(
+            "{what}: max_upload_bytes {n} is invalid; use -1 for unlimited or a positive size"
+        ))),
     }
 }
 
@@ -952,7 +1055,19 @@ pub struct Upstream {
     pub known_hosts: PathBuf,
     /// 0.2.1: 上流 ssh に足す `-o` オプション（relay.ssh_options + handler.ssh_options）
     pub ssh_options: Vec<String>,
+    /// 0.2.2: 443 passthrough の送信上限（None = 無制限）
+    pub max_upload: Option<u64>,
     pub is_default: bool,
+}
+
+/// 0.2.2: 443 passthrough の宛先 1 つ分（git-relay の上流 + https-relay のドメイン）。SNI で選ぶ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpsTarget {
+    pub domain: String,
+    pub host: String,
+    /// 送信上限（None = 無制限）
+    pub max_upload: Option<u64>,
+    pub kind: HandlerKind,
 }
 
 /// relay の実行に必要な解決済み設定。
@@ -973,6 +1088,8 @@ pub struct Resolved {
     pub relay: RelayConfig,
     /// 0.2.0: 全上流。先頭が既定上流
     pub upstreams: Vec<Upstream>,
+    /// 0.2.2: 443 passthrough の宛先（git-relay の上流 + https-relay。SNI で選ぶ）
+    pub https_targets: Vec<HttpsTarget>,
 }
 
 impl Resolved {
@@ -1067,6 +1184,9 @@ relay:
         assert_eq!(r.relay.ssh_listen.port(), 22);
         assert_eq!(r.relay.api_listen.port(), 8420);
         assert_eq!(r.relay.https, HttpsMode::Passthrough);
+        assert_eq!(r.relay.https_max_upload_bytes, 1024 * 1024);
+        assert_eq!(r.https_targets.len(), 1);
+        assert_eq!(r.https_targets[0].max_upload, Some(1024 * 1024));
         assert_eq!(r.relay.bootstrap, BootstrapMode::Auto);
         assert_eq!(r.relay.token_ttl, Duration::from_secs(12 * 3600));
         assert_eq!(r.project.name, "case-a");
@@ -1332,6 +1452,65 @@ relay:
             assert!(err.contains("ssh_options"), "{bad}: {err}");
         }
         assert!(validate_ssh_option("ProxyCommand=nc -X connect -x proxy:3128 %h %p").is_ok());
+    }
+
+    #[test]
+    fn https_relay_targets_and_upload_caps() {
+        let text = r#"
+domain_handlers:
+  github.com: { handler: git-relay, max_upload_bytes: 262144 }
+  ghcr.io: { handler: https-relay, max_upload_bytes: -1 }
+  registry-1.docker.io: { handler: https-relay }
+  telemetry.example.com: { handler: deny }
+relay:
+  https_max_upload_bytes: 4194304
+  project: { name: x }
+"#;
+        let l = p(text).unwrap();
+        assert!(l.needs_relay().unwrap());
+        assert_eq!(
+            l.https_relay_domains(),
+            vec!["ghcr.io".to_string(), "registry-1.docker.io".to_string()]
+        );
+        let r = l.resolve().unwrap();
+        // SSH の上流は github.com だけ。443 の宛先は 3 つ
+        assert_eq!(r.upstreams.len(), 1);
+        let caps: Vec<(&str, Option<u64>, HandlerKind)> = r
+            .https_targets
+            .iter()
+            .map(|t| (t.domain.as_str(), t.max_upload, t.kind))
+            .collect();
+        assert_eq!(
+            caps,
+            vec![
+                ("github.com", Some(262144), HandlerKind::GitRelay),
+                ("ghcr.io", None, HandlerKind::HttpsRelay),
+                (
+                    "registry-1.docker.io",
+                    Some(4194304),
+                    HandlerKind::HttpsRelay
+                ),
+            ]
+        );
+        assert_eq!(r.default_upstream().max_upload, Some(262144));
+        // 0 は設定エラー（-1 が無制限）
+        let bad = text.replace("max_upload_bytes: -1", "max_upload_bytes: 0");
+        let err = p(&bad).unwrap().resolve().unwrap_err().to_string();
+        assert!(err.contains("max_upload_bytes 0"), "{err}");
+        let bad = text.replace(
+            "https_max_upload_bytes: 4194304",
+            "https_max_upload_bytes: -5",
+        );
+        assert!(p(&bad).unwrap().resolve().is_err());
+        // https-relay に ssh_port は書けない
+        let bad = text.replace(
+            "{ handler: https-relay }",
+            "{ handler: https-relay, ssh_port: 2222 }",
+        );
+        assert!(p(&bad).unwrap().resolve().is_err());
+        // https-relay だけ（git-relay 無し）は設定不正
+        let only = "domain_handlers:\n  ghcr.io: { handler: https-relay }\nrelay:\n  project: { name: x }\n";
+        assert!(p(only).unwrap().needs_relay().is_err());
     }
 
     #[test]

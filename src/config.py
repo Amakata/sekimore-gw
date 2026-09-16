@@ -59,15 +59,52 @@ class NetworkConfig(BaseModel):
         default_factory=lambda: ["10.100.0.0/16"],
         description="LAN側ネットワークサブネット（docker-compose.yml の lan ネットワークと一致）",
     )
+    # 0.2.2: 許可ドメイン / 許可 IP へ通す宛先 TCP ポート。空なら従来どおり全ポート。
+    # IP 直指定の SSH など、別プロトコルで関所を迂回する経路を塞ぐ（例: [80, 443]）。変更は再起動で反映
+    allowed_ports: list[int] = Field(
+        default_factory=list,
+        description="許可ドメイン・許可 IP へ通す宛先 TCP ポート（空 = 全ポート）。例: [80, 443]",
+    )
+
+    @field_validator("allowed_ports")
+    @classmethod
+    def validate_allowed_ports(cls, v: list[int]) -> list[int]:
+        """1〜65535 の整数、重複なし."""
+        out: list[int] = []
+        for p in v:
+            if not isinstance(p, int) or isinstance(p, bool) or not 1 <= p <= 65535:
+                raise ValueError(f"network.allowed_ports: {p!r} is not a TCP port (1-65535)")
+            if p not in out:
+                out.append(p)
+        return out
 
 
 class DomainHandlerConfig(BaseModel):
     """domain_handlers の 1 エントリ（中継関所）."""
 
-    handler: Literal["splice", "git-relay", "deny"] = Field(
+    handler: Literal["splice", "git-relay", "https-relay", "deny"] = Field(
         default="splice",
-        description="splice=従来どおり / git-relay=関所の SSH で受ける（DNS は関所 IP）/ deny=拒否",
+        description=(
+            "splice=従来どおり / git-relay=関所の SSH で受ける（DNS は関所 IP）/ "
+            "https-relay=443 だけを関所の passthrough で通す（送信上限を掛ける。0.2.2）/ deny=拒否"
+        ),
     )
+    # 0.2.2: 443 passthrough の送信上限（バイト）。省略時は relay.https_max_upload_bytes、-1 で無制限。relay が読む
+    max_upload_bytes: int | None = Field(
+        default=None,
+        description="443 passthrough で dev → 上流へ送れる 1 接続あたりの上限バイト数。-1 で無制限。省略時は relay の既定",
+    )
+
+    @field_validator("max_upload_bytes")
+    @classmethod
+    def validate_max_upload_bytes(cls, v: int | None) -> int | None:
+        if v is not None and (v == 0 or v < -1):
+            raise ValueError(
+                "max_upload_bytes must be -1 (unlimited) or a positive number of bytes; "
+                "0 would block every HTTPS request"
+            )
+        return v
+
     # 0.2.0: 複数の git-relay ドメインはポートで分ける（SSH の exec はリポジトリパスしか運ばない）
     ssh_port: int | None = Field(
         default=None,
@@ -170,6 +207,11 @@ class Config(BaseModel):
         SSH の exec はリポジトリパスしか運ばないので、上流はポートで区別する。
         ssh_port を省いたエントリは relay.ssh_listen のポート（既定上流）になり、1 つまで。
         """
+        if self.https_relay_domains() and not self.git_relay_domains():
+            raise ValueError(
+                "domain_handlers: https-relay needs at least one git-relay domain in this version "
+                "(the relay's 443 passthrough is started with it)"
+            )
         seen: dict[int, str] = {}
         for domain, port in self.git_relay_ssh_ports().items():
             if port in seen:
@@ -193,6 +235,14 @@ class Config(BaseModel):
     def git_relay_domains(self) -> list[str]:
         """handler が git-relay のドメイン."""
         return [d for d, h in self.domain_handlers.items() if h.handler == "git-relay"]
+
+    def https_relay_domains(self) -> list[str]:
+        """handler が https-relay のドメイン（0.2.2。443 だけ関所を通す）."""
+        return [d for d, h in self.domain_handlers.items() if h.handler == "https-relay"]
+
+    def relay_domains(self) -> list[str]:
+        """DNS で関所 IP を返すドメイン（git-relay + https-relay）."""
+        return self.git_relay_domains() + self.https_relay_domains()
 
     def has_git_relay(self) -> bool:
         return bool(self.git_relay_domains())

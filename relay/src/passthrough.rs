@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 
@@ -25,6 +25,8 @@ pub struct SniTarget {
     pub domain: String,
     pub host: String,
     pub port: u16,
+    /// 0.2.2: この宛先への送信上限（None = 無制限）
+    pub max_upload: Option<u64>,
 }
 
 /// ClientHello を待つ上限。TLS でない / 遅いクライアントは読めた分だけで既定上流へ流す。
@@ -38,6 +40,8 @@ pub struct Passthrough {
     pub port: u16,
     /// 0.2.0: SNI で選ぶ上流の一覧（既定上流も含めてよい）。空なら常に既定上流
     pub upstreams: Vec<SniTarget>,
+    /// 0.2.2: 既定上流（SNI 無し / 不一致）への送信上限。None = 無制限
+    pub max_upload: Option<u64>,
     pub mode: HttpsMode,
     pub proxy: Option<ProxySpec>,
     pub idle: Duration,
@@ -148,16 +152,16 @@ async fn read_client_hello(stream: &mut TcpStream, timeout: Duration) -> (Option
 }
 
 impl Passthrough {
-    /// SNI から接続先を選ぶ。(host, port, 一致したか)。
-    pub fn select(&self, sni: Option<&str>) -> (&str, u16, bool) {
+    /// SNI から接続先を選ぶ。(host, port, 送信上限, 一致したか)。
+    pub fn select(&self, sni: Option<&str>) -> (&str, u16, Option<u64>, bool) {
         if let Some(name) = sni {
             for t in &self.upstreams {
                 if t.domain.eq_ignore_ascii_case(name) || t.host.eq_ignore_ascii_case(name) {
-                    return (&t.host, t.port, true);
+                    return (&t.host, t.port, t.max_upload, true);
                 }
             }
         }
-        (&self.upstream, self.port, false)
+        (&self.upstream, self.port, self.max_upload, false)
     }
 
     /// 既定上流へ接続する（0.1.x 互換）。
@@ -232,11 +236,30 @@ impl Passthrough {
                 } else {
                     (None, Vec::new())
                 };
-                let (host, port, _matched) = this.select(sni.as_deref());
+                let (host, port, cap, _matched) = this.select(sni.as_deref());
                 let host = host.to_string();
+                let cap_s = cap
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "unlimited".to_string());
                 let sni_s = sni.clone().unwrap_or_else(|| "-".to_string());
                 match this.connect_upstream_to(&host, port).await {
                     Ok(mut up) => {
+                        // 先読みした ClientHello だけで上限を超えるなら、上流へ何も送らずに切る
+                        if cap.is_some_and(|c| prefix.len() as u64 > c) {
+                            this.audit.deny(
+                                "https_upload_capped",
+                                Actor::Agent,
+                                "upload exceeded max_upload_bytes; connection closed",
+                                &[
+                                    ("peer", &peer_s),
+                                    ("upstream", &host),
+                                    ("sni", &sni_s),
+                                    ("bytes_in", &prefix.len().to_string()),
+                                    ("cap", &cap_s),
+                                ],
+                            );
+                            return;
+                        }
                         if !prefix.is_empty() {
                             if let Err(e) = up.write_all(&prefix).await {
                                 this.audit.deny(
@@ -248,7 +271,27 @@ impl Passthrough {
                                 return;
                             }
                         }
-                        let (bi, bo) = this.pump(stream, up).await;
+                        let already = prefix.len() as u64;
+                        let (bi, bo, capped) = this.pump(stream, up, already, cap).await;
+                        let bytes_in = (bi + already).to_string();
+                        if capped {
+                            this.audit.deny(
+                                "https_upload_capped",
+                                Actor::Agent,
+                                "upload exceeded max_upload_bytes; connection closed",
+                                &[
+                                    ("peer", &peer_s),
+                                    ("upstream", &host),
+                                    ("sni", &sni_s),
+                                    ("bytes_in", &bytes_in),
+                                    ("cap", &cap_s),
+                                ],
+                            );
+                            log::warn!(
+                                "https passthrough to {host} from {peer_s}: upload exceeded {cap_s} bytes; closed"
+                            );
+                            return;
+                        }
                         this.audit.log(
                             "https_passthrough",
                             Actor::Agent,
@@ -256,7 +299,7 @@ impl Passthrough {
                                 ("peer", &peer_s),
                                 ("upstream", &host),
                                 ("sni", &sni_s),
-                                ("bytes_in", &(bi + prefix.len() as u64).to_string()),
+                                ("bytes_in", &bytes_in),
                                 ("bytes_out", &bo.to_string()),
                             ],
                         );
@@ -275,18 +318,78 @@ impl Passthrough {
         }
     }
 
-    async fn pump(&self, client: TcpStream, upstream: TcpStream) -> (u64, u64) {
+    /// 双方向に流す。返り値は (dev → 上流のバイト数, 上流 → dev のバイト数, 上限で切ったか)。
+    /// `already` は先読み（ClientHello）で既に上流へ送ったバイト数で、上限に数える。`cap` None は無制限。
+    async fn pump(
+        &self,
+        client: TcpStream,
+        upstream: TcpStream,
+        already: u64,
+        cap: Option<u64>,
+    ) -> (u64, u64, bool) {
         let wd = Watchdog::new(self.idle);
         wd.touch();
-        let (mut cr, mut cw) = client.into_split();
-        let (mut ur, mut uw) = upstream.into_split();
-        let a = copy_touch(&mut cr, &mut uw, &wd, true);
-        let b = copy_touch(&mut ur, &mut cw, &wd, true);
+        let (cr, cw) = client.into_split();
+        let (ur, uw) = upstream.into_split();
+        let wd_down = wd.clone();
+        // 上流 → dev は別タスクで流し続ける（上限に達したら abort して接続ごと閉じる）
+        let down =
+            tokio::spawn(async move { copy_touch(ur, cw, &wd_down, true).await.unwrap_or(0) });
+        let up = copy_capped(cr, uw, &wd, cap, already);
         tokio::select! {
-            r = async { tokio::join!(a, b) } => (r.0.unwrap_or(0), r.1.unwrap_or(0)),
-            _ = wd.expired() => (0, 0),
+            (sent, capped) = up => {
+                if capped {
+                    down.abort();
+                    return (sent, 0, true);
+                }
+                // dev 側が送り終えた。応答が流れ終わるまで（idle 監視付きで）待つ
+                tokio::select! {
+                    r = down => (sent, r.unwrap_or(0), false),
+                    _ = wd.expired() => (sent, 0, false),
+                }
+            }
+            _ = wd.expired() => {
+                down.abort();
+                (0, 0, false)
+            }
         }
     }
+}
+
+/// dev → 上流のコピー。`cap`（None = 無制限）を超える分は送らずに止め、(送ったバイト数, 上限に達したか) を返す。
+/// `already` は既に送った分（上限に数える）。
+async fn copy_capped<R, W>(
+    mut reader: R,
+    mut writer: W,
+    wd: &Watchdog,
+    cap: Option<u64>,
+    already: u64,
+) -> (u64, bool)
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut total = already;
+    loop {
+        let n = match reader.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        if let Some(cap) = cap {
+            if total + n as u64 > cap {
+                let _ = writer.shutdown().await;
+                return (total - already, true);
+            }
+        }
+        if writer.write_all(&buf[..n]).await.is_err() {
+            break;
+        }
+        total += n as u64;
+        wd.touch();
+    }
+    let _ = writer.shutdown().await;
+    (total - already, false)
 }
 
 #[cfg(test)]
@@ -298,6 +401,7 @@ mod tests {
             upstream: upstream.to_string(),
             port,
             upstreams: Vec::new(),
+            max_upload: None,
             mode: HttpsMode::Passthrough,
             proxy: None,
             idle: Duration::from_secs(5),
@@ -305,6 +409,117 @@ mod tests {
             audit: Arc::new(Audit::disabled()),
             allow_local,
         })
+    }
+
+    async fn echo_server() -> u16 {
+        let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = echo.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = echo.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let (mut r, mut w) = s.split();
+                    let _ = tokio::io::copy(&mut r, &mut w).await;
+                });
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn upload_cap_closes_the_connection_and_forwards_at_most_cap_bytes() {
+        let echo_port = echo_server().await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut p = pt("127.0.0.1", echo_port, true);
+        Arc::get_mut(&mut p).unwrap().max_upload = Some(1024);
+        tokio::spawn(p.run(listener));
+
+        let mut c = TcpStream::connect(addr).await.unwrap();
+        // 700 バイトは通り、次の 700 バイトで上限 1024 を超える → 切断
+        let chunk = vec![b'x'; 700];
+        c.write_all(&chunk).await.unwrap();
+        let mut got = Vec::new();
+        let mut buf = [0u8; 4096];
+        while got.len() < 700 {
+            let n = tokio::time::timeout(Duration::from_secs(3), c.read(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(n > 0);
+            got.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(got.len(), 700);
+        let _ = c.write_all(&chunk).await;
+        // 2 つ目は転送されず、接続が閉じられる（read が 0 かエラーで終わる）
+        let mut extra = 0usize;
+        loop {
+            match tokio::time::timeout(Duration::from_secs(3), c.read(&mut buf)).await {
+                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                Ok(Ok(n)) => extra += n,
+            }
+        }
+        assert_eq!(extra, 0, "bytes beyond the cap must not be forwarded");
+    }
+
+    #[tokio::test]
+    async fn per_target_cap_is_chosen_by_sni() {
+        let echo_port = echo_server().await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut p = pt("127.0.0.1", echo_port, true);
+        {
+            let p = Arc::get_mut(&mut p).unwrap();
+            p.max_upload = Some(64);
+            p.upstreams = vec![
+                SniTarget {
+                    domain: "small.test".into(),
+                    host: "127.0.0.1".into(),
+                    port: echo_port,
+                    max_upload: Some(64),
+                },
+                SniTarget {
+                    domain: "big.test".into(),
+                    host: "127.0.0.1".into(),
+                    port: echo_port,
+                    max_upload: None,
+                },
+            ];
+        }
+        assert_eq!(p.select(Some("big.test")).2, None);
+        assert_eq!(p.select(Some("small.test")).2, Some(64));
+        assert_eq!(p.select(None).2, Some(64));
+        tokio::spawn(p.run(listener));
+
+        // big.test: ClientHello (>64 バイト) + 続きが全部エコーされる
+        let hello = client_hello(Some("big.test"));
+        let mut c = TcpStream::connect(addr).await.unwrap();
+        c.write_all(&hello).await.unwrap();
+        c.write_all(&vec![b'y'; 3000]).await.unwrap();
+        let want = hello.len() + 3000;
+        let mut got = 0usize;
+        let mut buf = [0u8; 4096];
+        while got < want {
+            let n = tokio::time::timeout(Duration::from_secs(5), c.read(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(n > 0);
+            got += n;
+        }
+        assert_eq!(got, want);
+        // small.test: ClientHello 自体が 64 バイトを超えるので即座に切られる
+        let hello = client_hello(Some("small.test"));
+        let mut c = TcpStream::connect(addr).await.unwrap();
+        let _ = c.write_all(&hello).await;
+        let mut extra = 0usize;
+        loop {
+            match tokio::time::timeout(Duration::from_secs(3), c.read(&mut buf)).await {
+                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                Ok(Ok(n)) => extra += n,
+            }
+        }
+        assert_eq!(extra, 0);
     }
 
     /// 最小の TLS 1.2 ClientHello（拡張は SNI だけ、あれば）。
@@ -412,13 +627,16 @@ mod tests {
                     domain: "a.test".into(),
                     host: "127.0.0.1".into(),
                     port: a,
+                    max_upload: None,
                 },
                 SniTarget {
                     domain: "b.test".into(),
                     host: "127.0.0.1".into(),
                     port: b,
+                    max_upload: None,
                 },
             ],
+            max_upload: None,
             mode: HttpsMode::Passthrough,
             proxy: None,
             idle: Duration::from_secs(5),
@@ -426,9 +644,9 @@ mod tests {
             audit: Arc::new(Audit::disabled()),
             allow_local: true,
         });
-        assert_eq!(p.select(Some("b.test")), ("127.0.0.1", b, true));
-        assert_eq!(p.select(Some("nope.test")), ("127.0.0.1", a, false));
-        assert_eq!(p.select(None), ("127.0.0.1", a, false));
+        assert_eq!(p.select(Some("b.test")), ("127.0.0.1", b, None, true));
+        assert_eq!(p.select(Some("nope.test")), ("127.0.0.1", a, None, false));
+        assert_eq!(p.select(None), ("127.0.0.1", a, None, false));
         tokio::spawn(p.run(listener));
 
         assert_eq!(roundtrip(addr, &client_hello(Some("b.test"))).await, b"B");
@@ -489,11 +707,13 @@ mod tests {
                 domain: "x.test".into(),
                 host: "127.0.0.1".into(),
                 port: echo_port,
+                max_upload: None,
             },
             SniTarget {
                 domain: "y.test".into(),
                 host: "127.0.0.1".into(),
                 port: echo_port,
+                max_upload: None,
             },
         ];
         tokio::spawn(p.run(listener));
