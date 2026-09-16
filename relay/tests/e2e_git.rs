@@ -18,7 +18,7 @@ use sekimore_relay::git::upstream_local::LocalGitUpstream;
 use sekimore_relay::git::GitContext;
 use sekimore_relay::github::upstream_token::UpstreamTokenStore;
 use sekimore_relay::github::GitHub;
-use sekimore_relay::policy::{Mode, Project};
+use sekimore_relay::policy::{Mode, Project, RepoPolicy};
 use sekimore_relay::ssh::authorized_keys::AuthorizedKeys;
 use sekimore_relay::ssh::{load_or_create_host_key, server_config, SshServer};
 use tokio::net::TcpListener;
@@ -177,6 +177,7 @@ async fn setup(grants: &[&str]) -> E2e {
     }
     let ctx = Arc::new(GitContext {
         project,
+        host: String::new(),
         upstream: Arc::new(LocalGitUpstream::new(&root)),
         github: Some(gh),
         audit: audit.clone(),
@@ -493,4 +494,225 @@ async fn empty_push_is_harmless() {
     // 何も変わらない push（up to date）
     let o = e.git(&work, &["push", "origin", "HEAD:refs/heads/sekimore/same"]);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+}
+
+// ---- 0.2.0: 複数上流をポートで分ける ----
+
+fn init_bare(bare: &Path) {
+    std::fs::create_dir_all(bare).unwrap();
+    let o = Command::new("git")
+        .args(["init", "-q", "--bare", "-b", "main"])
+        .current_dir(bare)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    Command::new("git")
+        .args(["config", "receive.advertisePushOptions", "true"])
+        .current_dir(bare)
+        .output()
+        .unwrap();
+}
+
+fn bare_ref_at(bare: &Path, r: &str) -> Option<String> {
+    let o = Command::new("git")
+        .args(["rev-parse", "--verify", "-q", r])
+        .current_dir(bare)
+        .output()
+        .unwrap();
+    o.status
+        .success()
+        .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+fn seed_main_at(e: &E2e, bare: &Path, name: &str) {
+    let seed = e.dir.path().join(name);
+    std::fs::create_dir_all(&seed).unwrap();
+    e.ok(&seed, &["init", "-q", "-b", "main"]);
+    e.commit_file(&seed, "README.md", b"hello\n");
+    e.ok(
+        &seed,
+        &["push", "-q", bare.to_str().unwrap(), "HEAD:refs/heads/main"],
+    );
+}
+
+/// 2 上流: `github.test`（既定、`e.addr` / `e.root`）と `ghe.test`（別ポート、戻り値の addr / root）。
+/// `LibOrg/awesome-lib` は両方にあり、github 側は read-write、ghe 側は read-only。`Corp/internal` は ghe だけ。
+async fn setup_multi(grants: &[&str]) -> (E2e, SocketAddr, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("upstream-github");
+    let ghe_root = dir.path().join("upstream-ghe");
+    init_bare(&root.join("LibOrg/awesome-lib.git"));
+    init_bare(&ghe_root.join("Corp/internal.git"));
+    init_bare(&ghe_root.join("LibOrg/awesome-lib.git"));
+
+    let key_path = dir.path().join("id_ed25519");
+    let o = Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(&key_path)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let pubkey = std::fs::read_to_string(dir.path().join("id_ed25519.pub")).unwrap();
+    let keys = Arc::new(AuthorizedKeys::new(&dir.path().join("authorized_keys"), 8));
+    keys.add(&pubkey).unwrap();
+    let host_key = load_or_create_host_key(&dir.path().join("host_key")).unwrap();
+    let audit_path = dir.path().join("audit.jsonl");
+    let audit = Arc::new(Audit::new(Some(&audit_path), false).unwrap());
+
+    let (api_base, recorder) = common::mock_github().await;
+    let graphql = Url::parse(&format!(
+        "{}/graphql",
+        api_base.as_str().trim_end_matches("/api/v3").to_string() + "/api"
+    ))
+    .unwrap();
+    let store = Arc::new(UpstreamTokenStore::new(
+        &dir.path().join("upstream_token"),
+        Duration::from_secs(60),
+    ));
+    store.save("upstream.test", "gho_test", "repo").unwrap();
+    let http = reqwest::Client::builder().no_proxy().build().unwrap();
+    let gh = Arc::new(GitHub::new(api_base, graphql, http, store, audit.clone()));
+
+    let mut lib = RepoPolicy::new("LibOrg/awesome-lib", Mode::ReadWrite);
+    lib.host = "github.test".into();
+    lib.bases = vec!["main".into()];
+    let mut internal = RepoPolicy::new("Corp/internal", Mode::ReadWrite);
+    internal.host = "ghe.test".into();
+    internal.bases = vec!["main".into()];
+    let mut lib_ghe = RepoPolicy::new("LibOrg/awesome-lib", Mode::ReadOnly);
+    lib_ghe.host = "ghe.test".into();
+    let grants: Vec<String> = grants.iter().map(|s| s.to_string()).collect();
+    let mut project = Project::try_new("case-m", vec![lib, internal, lib_ghe], &grants).unwrap();
+    project.set_default_host("github.test");
+
+    let config = Arc::new(server_config(host_key, Duration::from_secs(120)));
+    let sessions = Arc::new(tokio::sync::Semaphore::new(8));
+    let mk = |host: &str, root: &Path| {
+        Arc::new(GitContext {
+            project: project.clone(),
+            host: host.into(),
+            upstream: Arc::new(LocalGitUpstream::new(root)),
+            github: Some(gh.clone()),
+            audit: audit.clone(),
+            limits: Limits {
+                idle_timeout: Duration::from_secs(20),
+                ..Limits::default()
+            },
+        })
+    };
+    let gh_server = SshServer::shared(
+        config.clone(),
+        mk("github.test", &root),
+        keys.clone(),
+        audit.clone(),
+        sessions.clone(),
+    );
+    let ghe_server = SshServer::shared(config, mk("ghe.test", &ghe_root), keys, audit, sessions);
+    let l1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let l2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l1.local_addr().unwrap();
+    let ghe_addr = l2.local_addr().unwrap();
+    tokio::spawn(gh_server.run(l1));
+    tokio::spawn(ghe_server.run(l2));
+    (
+        E2e {
+            dir,
+            addr,
+            root,
+            key_path,
+            recorder,
+            audit_path,
+        },
+        ghe_addr,
+        ghe_root,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_upstreams_are_kept_apart_by_listen_port() {
+    require_tools!();
+    let (e, ghe_addr, ghe_root) = setup_multi(&["pr:create"]).await;
+    let ghe_url = |repo: &str| format!("ssh://git@127.0.0.1:{}/{repo}.git", ghe_addr.port());
+    seed_main(&e, "LibOrg/awesome-lib");
+    seed_main_at(&e, &ghe_root.join("Corp/internal.git"), "seed-ghe-internal");
+    seed_main_at(&e, &ghe_root.join("LibOrg/awesome-lib.git"), "seed-ghe-lib");
+
+    // 1. ghe ポート: Corp/internal を clone → refs/for/main → ghe 側 bare にだけブランチができ PR も作られる
+    let work = e.dir.path().join("work-ghe");
+    let o = e.git(
+        e.dir.path(),
+        &[
+            "clone",
+            "-q",
+            &ghe_url("Corp/internal"),
+            work.to_str().unwrap(),
+        ],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let sha = e.commit_file(&work, "f.txt", b"x\n");
+    let o = e.git(&work, &["push", "origin", "HEAD:refs/for/main"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    assert!(err.contains("sekimore: created PR #42"), "{err}");
+    let branch = format!("refs/heads/sekimore/main-{}", &sha[..7]);
+    assert_eq!(
+        bare_ref_at(&ghe_root.join("Corp/internal.git"), &branch).as_deref(),
+        Some(sha.as_str())
+    );
+    assert!(!e.root.join("Corp/internal.git").exists());
+
+    // 2. github ポート: Corp/internal は案件外（別上流のリポジトリには届かない）
+    let o = e.git(e.dir.path(), &["ls-remote", &e.url("Corp/internal")]);
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("is not in project"), "{err}");
+
+    // 3. 同名 LibOrg/awesome-lib: github 側は read-write（push が github 側 bare にだけ届く）
+    let work2 = clone(&e, "LibOrg/awesome-lib", "work-gh");
+    let sha2 = e.commit_file(&work2, "g.txt", b"y\n");
+    let o = e.git(
+        &work2,
+        &["push", "origin", "HEAD:refs/heads/sekimore/topic"],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(
+        e.bare_ref("LibOrg/awesome-lib", "refs/heads/sekimore/topic")
+            .as_deref(),
+        Some(sha2.as_str())
+    );
+    assert!(bare_ref_at(
+        &ghe_root.join("LibOrg/awesome-lib.git"),
+        "refs/heads/sekimore/topic"
+    )
+    .is_none());
+    // ghe 側は read-only: clone は通るが push は拒否（github 側の read-write と取り違えない）
+    let work3 = e.dir.path().join("work-ghe-lib");
+    let o = e.git(
+        e.dir.path(),
+        &[
+            "clone",
+            "-q",
+            &ghe_url("LibOrg/awesome-lib"),
+            work3.to_str().unwrap(),
+        ],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    e.commit_file(&work3, "h.txt", b"z\n");
+    let o = e.git(
+        &work3,
+        &["push", "origin", "HEAD:refs/heads/sekimore/topic"],
+    );
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("read-only"), "{err}");
+    assert!(bare_ref_at(
+        &ghe_root.join("LibOrg/awesome-lib.git"),
+        "refs/heads/sekimore/topic"
+    )
+    .is_none());
+
+    // 監査にはどの上流だったかが載る
+    let audit = std::fs::read_to_string(&e.audit_path).unwrap();
+    assert!(audit.contains("ghe.test"), "{audit}");
+    assert!(audit.contains("github.test"), "{audit}");
 }

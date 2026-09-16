@@ -1,19 +1,27 @@
 //! `serve`: SSH（git）+ HTTP（API）+ 443 passthrough を起動する。
+//!
+//! 0.2.0: git-relay ドメイン（上流）ごとに SSH listener を 1 本ずつ持つ。SSH の exec にはホスト名が
+//! 無いので、接続を受けたポートで上流を決め、その上流専用の `GitContext`（上流 git / GitHub client /
+//! known_hosts）でセッションを処理する。上流が 1 つなら 0.1.x と同じ構成になる。
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
-use super::operator::{build_github, open_audit, resolve};
+use super::operator::{build_github_for, open_audit, resolve};
+use crate::api::types::GitDomain;
 use crate::api::{self, ApiContext};
 use crate::audit::Actor;
-use crate::config::HttpsMode;
+use crate::config::{HttpsMode, Resolved, Upstream};
 use crate::git::agent_check::{auth_sock_from_env, preflight_agent};
 use crate::git::upstream_ssh::OpenSshUpstream;
 use crate::git::{GitContext, UpstreamGit};
+use crate::github::GitHub;
 use crate::passthrough::Passthrough;
 use crate::ssh::authorized_keys::AuthorizedKeys;
 use crate::ssh::{load_or_create_host_key, server_config, SshServer};
@@ -24,12 +32,17 @@ pub const MAX_AUTHORIZED_KEYS: usize = 64;
 pub async fn serve(path: &Path) -> anyhow::Result<()> {
     let r = resolve(path)?;
     let audit = open_audit(&r)?;
+    let upstreams_summary = r
+        .upstreams
+        .iter()
+        .map(|u| format!("{}→{} (ssh :{})", u.domain, u.host, u.listen.port()))
+        .collect::<Vec<_>>()
+        .join(", ");
     log::info!(
-        "sekimore-relay {} starting (project={}, domain={}, upstream={})",
+        "sekimore-relay {} starting (project={}, upstreams: {})",
         env!("CARGO_PKG_VERSION"),
         r.project.name,
-        r.domain,
-        r.upstream
+        upstreams_summary
     );
 
     let host_key = load_or_create_host_key(&r.paths.host_key)?;
@@ -37,54 +50,74 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         &r.paths.authorized_keys,
         MAX_AUTHORIZED_KEYS,
     ));
-    let (github, upstream_tokens, _http) = build_github(&r, audit.clone())?;
 
-    // 起動を止めない警告（agent / known_hosts / token / keys）
+    // 起動を止めない警告（agent / keys。上流ごとのものは下のループで）
     let sock = auth_sock_from_env();
     match preflight_agent(sock.as_deref()).await {
         Ok(n) => log::info!("ssh-agent: {n} identities"),
         Err(e) => log::warn!("ssh-agent not usable yet: {e}"),
     }
-    let upstream: Arc<dyn UpstreamGit> = build_upstream(&r);
-    if let Err(e) = upstream.preflight().await {
-        log::warn!("upstream preflight: {}", e.message);
-    }
-    if upstream_tokens.load()?.is_none() {
-        log::warn!(
-            "no upstream API token in {}; PR/API operations will fail until `sekimore-relay login`",
-            r.paths.upstream_token.display()
-        );
-    }
     if keys.count() == 0 {
         log::warn!("authorized_keys is empty; agents must bootstrap (POST /bootstrap) or the operator must `add-key`");
     }
 
-    let git_ctx = Arc::new(GitContext {
-        project: r.project.clone(),
-        upstream,
-        github: Some(github.clone()),
-        audit: audit.clone(),
-        limits: r.relay.limits.clone(),
-    });
-    let ssh = SshServer::new(
-        server_config(host_key, r.relay.limits.session_timeout),
-        git_ctx,
-        keys.clone(),
-        audit.clone(),
-        r.relay.limits.max_sessions,
-    );
-    let ssh_listener = TcpListener::bind(r.relay.ssh_listen)
-        .await
-        .with_context(|| format!("bind ssh {}", r.relay.ssh_listen))?;
-    log::info!(
-        "ssh listening on {} (git-upload-pack / git-receive-pack only)",
-        r.relay.ssh_listen
-    );
+    // 上流ごと: GitHub client / 上流 git / SSH listener。russh 設定・鍵・セッション上限は共有
+    let ssh_config = Arc::new(server_config(host_key, r.relay.limits.session_timeout));
+    let sessions = Arc::new(Semaphore::new(r.relay.limits.max_sessions.max(1)));
+    let mut githubs: HashMap<String, Arc<GitHub>> = HashMap::new();
+    let mut ssh_servers = Vec::new();
+    for up in &r.upstreams {
+        let (github, upstream_tokens, _http) = build_github_for(&r, up, audit.clone())?;
+        if upstream_tokens.load()?.is_none() {
+            log::warn!(
+                "[{}] no upstream API token in {}; PR/API operations will fail until `sekimore-relay login{}`",
+                up.domain,
+                up.upstream_token.display(),
+                if up.is_default {
+                    String::new()
+                } else {
+                    format!(" --upstream {}", up.domain)
+                }
+            );
+        }
+        let upstream: Arc<dyn UpstreamGit> = build_upstream(&r, up);
+        if let Err(e) = upstream.preflight().await {
+            log::warn!("[{}] upstream preflight: {}", up.domain, e.message);
+        }
+        githubs.insert(up.domain.clone(), github.clone());
+
+        let git_ctx = Arc::new(GitContext {
+            project: r.project.clone(),
+            host: up.domain.clone(),
+            upstream,
+            github: Some(github),
+            audit: audit.clone(),
+            limits: r.relay.limits.clone(),
+        });
+        let ssh = SshServer::shared(
+            ssh_config.clone(),
+            git_ctx,
+            keys.clone(),
+            audit.clone(),
+            sessions.clone(),
+        );
+        let listener = TcpListener::bind(up.listen)
+            .await
+            .with_context(|| format!("bind ssh {} for {}", up.listen, up.domain))?;
+        log::info!(
+            "ssh listening on {} for {} → {}:{} (git-upload-pack / git-receive-pack only)",
+            up.listen,
+            up.domain,
+            up.host,
+            up.upstream_ssh_port
+        );
+        ssh_servers.push((ssh, listener));
+    }
 
     let api_ctx = Arc::new(ApiContext {
         project: r.project.clone(),
         tokens: TokenStore::new(&r.paths.tokens),
-        github: Some(github),
+        githubs,
         audit: audit.clone(),
         keys,
         bootstrap: r.relay.bootstrap,
@@ -94,6 +127,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         rate: Mutex::new(VecDeque::new()),
         git_domain: r.domain.clone(),
         upstream: r.upstream.clone(),
+        git_domains: git_domains(&r),
     });
     let api_listener = TcpListener::bind(r.relay.api_listen)
         .await
@@ -104,6 +138,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         r.relay.bootstrap
     );
 
+    // 443 は既定上流へ（複数上流の SNI 振り分けは 0.2.0-b）
     let pt = Arc::new(Passthrough {
         upstream: r.upstream.clone(),
         port: 443,
@@ -132,12 +167,17 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
             ("project", &r.project.name),
             ("domain", &r.domain),
             ("upstream", &r.upstream),
+            ("upstreams", &upstreams_summary),
         ],
     );
 
+    let mut ssh_tasks = JoinSet::new();
+    for (ssh, listener) in ssh_servers {
+        ssh_tasks.spawn(ssh.run(listener));
+    }
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
-        r = ssh.run(ssh_listener) => r.context("ssh server")?,
+        Some(r) = ssh_tasks.join_next() => r.context("ssh task")?.context("ssh server")?,
         r = api::serve(api_ctx, api_listener) => r.context("api server")?,
         r = pt.run(https_listener) => r.context("https passthrough")?,
         _ = tokio::signal::ctrl_c() => log::info!("SIGINT: shutting down"),
@@ -147,19 +187,40 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_upstream(r: &crate::config::Resolved) -> Arc<dyn UpstreamGit> {
+/// `/bootstrap` の応答に載せる全 git ドメイン（先頭が既定上流）。
+fn git_domains(r: &Resolved) -> Vec<GitDomain> {
+    r.upstreams
+        .iter()
+        .map(|u| GitDomain {
+            domain: u.domain.clone(),
+            ssh_port: u.listen.port(),
+            upstream: u.host.clone(),
+            default: u.is_default,
+        })
+        .collect()
+}
+
+fn build_upstream(r: &Resolved, up: &Upstream) -> Arc<dyn UpstreamGit> {
     #[cfg(feature = "test-hooks")]
-    if let Some(root) = &r.relay.upstream_local_root {
-        log::warn!(
-            "test-hooks: using local git upstream under {}",
-            root.display()
-        );
-        return Arc::new(crate::git::upstream_local::LocalGitUpstream::new(root));
+    {
+        let root = r
+            .relay
+            .upstream_local_roots
+            .get(&up.domain)
+            .or(r.relay.upstream_local_root.as_ref());
+        if let Some(root) = root {
+            log::warn!(
+                "test-hooks: [{}] using local git upstream under {}",
+                up.domain,
+                root.display()
+            );
+            return Arc::new(crate::git::upstream_local::LocalGitUpstream::new(root));
+        }
     }
     Arc::new(OpenSshUpstream::new(
-        &r.upstream,
-        r.relay.upstream_ssh_port,
-        &r.paths.known_hosts,
+        &up.host,
+        up.upstream_ssh_port,
+        &up.known_hosts,
         r.relay.ssh_config.as_deref(),
     ))
 }

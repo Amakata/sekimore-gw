@@ -89,6 +89,23 @@ impl SshServer {
         })
     }
 
+    /// 0.2.0: 複数の listener（上流ごと）で russh 設定・authorized_keys・セッション上限を共有する。
+    pub fn shared(
+        config: Arc<russh::server::Config>,
+        ctx: Arc<GitContext>,
+        keys: Arc<AuthorizedKeys>,
+        audit: Arc<Audit>,
+        sessions: Arc<Semaphore>,
+    ) -> Arc<Self> {
+        Arc::new(SshServer {
+            config,
+            ctx,
+            keys,
+            audit,
+            sessions,
+        })
+    }
+
     /// accept ループ。接続ごとに russh のセッションを spawn する。
     pub async fn run(self: Arc<Self>, listener: TcpListener) -> anyhow::Result<()> {
         loop {

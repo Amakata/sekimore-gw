@@ -32,7 +32,9 @@ https://github.com/…  ─DNS→ 関所 IP:443 ──────────�
 
 ```yaml
 domain_handlers:
-  github.com: { handler: git-relay }      # 完全一致 FQDN。git-relay は 1 つのみ（GHES ならそのホスト名）
+  github.com: { handler: git-relay }      # 完全一致 FQDN（GHES ならそのホスト名）
+  # 0.2.0〜 複数の上流を同時に扱える。2 つ目以降は別の SSH ポートで受ける（SSH の exec にホスト名が無いため）。
+  # ghe.example.com: { handler: git-relay, ssh_port: 2222 }   # upstream / upstream_ssh_port / oauth_client_id / default も指定可
 
 relay:
   https: passthrough                      # 同一ドメインの 443: passthrough（既定）| reject
@@ -51,6 +53,7 @@ relay:
       - { name: Org/Repo, mode: read-write, bases: [main], tags: ["v*"], permissions: { allow: [pr:merge] } }
         # ↑ この repo だけ v* タグと pr:merge を許す（bases = PR の base に許可するブランチ）
       - { name: VendorOrg/reference-impl, mode: read-only, permissions: { deny: [issue:create] } }
+      # - { name: ghe.example.com/Corp/Internal, mode: read-write, bases: [main] }   # 0.2.0〜 host 付きで上流を明示
 ```
 
 権限の考え方は GitHub と同じ向き: **allow は加算（role / fine-grained PAT のスコープ）、deny は rulesets のように加算より優先して制限する**。
@@ -59,6 +62,12 @@ relay:
 旧 `relay.allow_tags` / `relay.allow_delete` は非推奨（読めば既定に畳み込んで警告）。
 
 `relay:` 配下の未知キーはエラー（typo で権限が緩まない）。全キーは `src/config.rs`。
+
+**複数上流（0.2.0〜）**: `domain_handlers` に git-relay を複数書くと、上流ごとに SSH listener が立つ。`ssh_port` を省いた
+1 つが既定上流（`relay.ssh_listen` で受ける。`Org/Repo` と書いた repo と、`relay.upstream` / `api_base` / `/data/relay/upstream_token`
+はこの上流のもの）。他は `ssh_port` 必須で、state は `/data/relay/upstreams/<host>/`。repo は `host/Org/Repo` で上流を明示できる
+（`Org/Repo` が 1 つの上流にしか無ければ省略可）。SSH 経路では接続ポートの上流に絞って repo を探すので、GHES の repo に
+github.com 側のポートから届くことはない。
 
 ### 2. 依頼者の ssh-agent を関所に渡す
 
@@ -94,6 +103,7 @@ docker compose exec sekimore-gw sekimore-relay check                 # ポリシ
 ```bash
 docker compose exec sekimore-gw sekimore-relay login
 # (sgw-devcontainer-base の sample / Dev Containers 構成なら: mise run gw:login)
+# 複数上流なら上流ごとに: sekimore-relay login --upstream ghe.example.com   (logout / whoami も同じ)
 #   Open: https://github.com/login/device
 #   Code: XXXX-XXXX          ← ブラウザで承認（組織の承認申請は発生しない）
 ```

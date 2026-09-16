@@ -120,4 +120,18 @@ pub struct BootstrapResponse {
     /// 上流ホスト（表示用）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
+    /// 0.2.0: 関所が受ける全 git ドメイン（ドメインごとの SSH ポート）。先頭が既定上流
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git_domains: Vec<GitDomain>,
+}
+
+/// 0.2.0: 関所が受ける git ドメイン 1 つ分（agent-setup が `Host <domain>` / `Port` を書くのに使う）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GitDomain {
+    pub domain: String,
+    pub ssh_port: u16,
+    #[serde(default)]
+    pub upstream: String,
+    #[serde(default)]
+    pub default: bool,
 }

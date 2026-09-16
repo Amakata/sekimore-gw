@@ -6,7 +6,7 @@
 pub mod handlers;
 pub mod types;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -34,7 +34,8 @@ use types::{ApiRequest, ApiResponse};
 pub struct ApiContext {
     pub project: Project,
     pub tokens: TokenStore,
-    pub github: Option<Arc<GitHub>>,
+    /// 上流ごとの GitHub client（キー = git-relay ドメイン）。0.2.0 で複数化
+    pub githubs: HashMap<String, Arc<GitHub>>,
     pub audit: Arc<Audit>,
     pub keys: Arc<AuthorizedKeys>,
     pub bootstrap: BootstrapMode,
@@ -42,9 +43,11 @@ pub struct ApiContext {
     pub token_ttl: Duration,
     pub body_cap: usize,
     pub rate: Mutex<VecDeque<Instant>>,
-    /// git-relay のドメインと上流（/bootstrap の応答でエージェントに伝える）
+    /// git-relay のドメインと上流（/bootstrap の応答でエージェントに伝える）。既定上流
     pub git_domain: String,
     pub upstream: String,
+    /// 0.2.0: 全 git ドメイン（先頭が既定）
+    pub git_domains: Vec<types::GitDomain>,
 }
 
 pub const BOOTSTRAP_RATE_PER_MINUTE: usize = 10;

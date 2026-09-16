@@ -11,15 +11,25 @@ use super::{read_body, ApiContext, ApiError};
 use crate::audit::Actor;
 use crate::config::BootstrapMode;
 use crate::github::GitHub;
-use crate::policy::{Action, Resource};
+use crate::policy::{Action, Authorized, Resource};
 use crate::ssh::authorized_keys::Added;
 use crate::tokens::TokenRecord;
 
-fn gh(ctx: &ApiContext) -> Result<&GitHub, ApiError> {
-    ctx.github.as_deref().ok_or_else(|| ApiError {
-        status: StatusCode::SERVICE_UNAVAILABLE,
-        message: "upstream API is not configured on the gateway".into(),
-    })
+/// 証明が指す repo の上流の GitHub client（上流ごとに token / API base が違う。0.2.0）。
+fn gh<'a>(ctx: &'a ApiContext, auth: &Authorized<'_>) -> Result<&'a GitHub, ApiError> {
+    let host = ctx.project.host_of(auth.policy());
+    let key = if host.is_empty() {
+        ctx.git_domain.as_str()
+    } else {
+        host
+    };
+    ctx.githubs
+        .get(key)
+        .map(|g| g.as_ref())
+        .ok_or_else(|| ApiError {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: format!("upstream API for {key} is not configured on the gateway"),
+        })
 }
 
 fn need(cond: bool, msg: &str) -> Result<(), ApiError> {
@@ -111,7 +121,7 @@ async fn pr_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
         "head, base and title are required",
     )?;
     let auth = ctx.project.authorize_pr(&req.repo, &req.base)?;
-    let pr = gh(ctx)?
+    let pr = gh(ctx, &auth)?
         .create_pull_request(&auth, &req.head, &req.base, &req.title, &req.body)
         .await?;
     Ok(ApiResponse {
@@ -131,7 +141,7 @@ async fn pr_comment(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, A
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Pr, Action::Comment)?;
-    gh(ctx)?
+    gh(ctx, &auth)?
         .comment_pull_request(&auth, req.number, &req.body)
         .await?;
     Ok(ApiResponse::default())
@@ -153,7 +163,7 @@ async fn pr_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Pr, Action::Review)?;
-    gh(ctx)?
+    gh(ctx, &auth)?
         .review_pull_request(&auth, req.number, &req.event, &req.body)
         .await?;
     Ok(ApiResponse::default())
@@ -165,7 +175,9 @@ async fn pr_merge(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Api
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Pr, Action::Merge)?;
-    gh(ctx)?.merge_pull_request(&auth, req.number).await?;
+    gh(ctx, &auth)?
+        .merge_pull_request(&auth, req.number)
+        .await?;
     Ok(ApiResponse::default())
 }
 
@@ -175,7 +187,9 @@ async fn pr_close(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Api
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Pr, Action::Close)?;
-    gh(ctx)?.close_pull_request(&auth, req.number).await?;
+    gh(ctx, &auth)?
+        .close_pull_request(&auth, req.number)
+        .await?;
     Ok(ApiResponse::default())
 }
 
@@ -185,7 +199,9 @@ async fn pr_status(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Pr, Action::Read)?;
-    let st = gh(ctx)?.pull_request_status(&auth, req.number).await?;
+    let st = gh(ctx, &auth)?
+        .pull_request_status(&auth, req.number)
+        .await?;
     let raw = serde_json::to_value(&st).unwrap_or(serde_json::Value::Null);
     let n = st.checks.len();
     let msg = format!(
@@ -214,7 +230,7 @@ async fn ci_runs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiE
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Ci, Action::Read)?;
-    let runs = gh(ctx)?.ci_runs(&auth, &req.git_ref).await?;
+    let runs = gh(ctx, &auth)?.ci_runs(&auth, &req.git_ref).await?;
     let raw = serde_json::to_value(&runs).unwrap_or(serde_json::Value::Null);
     let msg = runs
         .iter()
@@ -253,9 +269,9 @@ async fn ci_jobs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiE
         .project
         .authorize(&req.repo, Resource::Ci, Action::Read)?;
     let jobs = if req.run_id != 0 {
-        gh(ctx)?.ci_jobs_for_run(&auth, req.run_id).await?
+        gh(ctx, &auth)?.ci_jobs_for_run(&auth, req.run_id).await?
     } else {
-        gh(ctx)?.ci_jobs(&auth, req.number).await?
+        gh(ctx, &auth)?.ci_jobs(&auth, req.number).await?
     };
     let raw = serde_json::to_value(&jobs).unwrap_or(serde_json::Value::Null);
     let msg = jobs
@@ -302,9 +318,9 @@ async fn ci_log(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiEr
             "number, run_id or job_id is required",
         )?;
         let jobs = if req.run_id != 0 {
-            gh(ctx)?.ci_jobs_for_run(&auth, req.run_id).await?
+            gh(ctx, &auth)?.ci_jobs_for_run(&auth, req.run_id).await?
         } else {
-            gh(ctx)?.ci_jobs(&auth, req.number).await?
+            gh(ctx, &auth)?.ci_jobs(&auth, req.number).await?
         };
         let pick = jobs
             .iter()
@@ -313,7 +329,7 @@ async fn ci_log(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiEr
             .ok_or_else(|| ApiError::bad_request("no CI jobs for this PR"))?;
         (pick.id, pick.name.clone(), pick.conclusion.clone())
     };
-    let page = gh(ctx)?
+    let page = gh(ctx, &auth)?
         .ci_job_log(&auth, job_id, &name, &concl, window, before)
         .await?;
     let raw = serde_json::to_value(&page).unwrap_or(serde_json::Value::Null);
@@ -342,7 +358,7 @@ async fn issue_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
         )
     };
     let labels = label_auth.as_ref().map(|a| (a, req.labels.as_slice()));
-    let iss = gh(ctx)?
+    let iss = gh(ctx, &auth)?
         .create_issue(&auth, &req.title, &req.body, labels)
         .await?;
     Ok(ApiResponse {
@@ -362,7 +378,9 @@ async fn issue_comment(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Issue, Action::Comment)?;
-    gh(ctx)?.comment_issue(&auth, req.number, &req.body).await?;
+    gh(ctx, &auth)?
+        .comment_issue(&auth, req.number, &req.body)
+        .await?;
     Ok(ApiResponse::default())
 }
 
@@ -372,7 +390,7 @@ async fn issue_close(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, 
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Issue, Action::Close)?;
-    gh(ctx)?.close_issue(&auth, req.number).await?;
+    gh(ctx, &auth)?.close_issue(&auth, req.number).await?;
     Ok(ApiResponse::default())
 }
 
@@ -385,7 +403,9 @@ async fn issue_label(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, 
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Issue, Action::Label)?;
-    gh(ctx)?.label_issue(&auth, req.number, &req.labels).await?;
+    gh(ctx, &auth)?
+        .label_issue(&auth, req.number, &req.labels)
+        .await?;
     Ok(ApiResponse::default())
 }
 
@@ -398,7 +418,7 @@ async fn issue_assign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
     let auth = ctx
         .project
         .authorize(&req.repo, Resource::Issue, Action::Assign)?;
-    gh(ctx)?
+    gh(ctx, &auth)?
         .assign_issue(&auth, req.number, &req.assignees)
         .await?;
     Ok(ApiResponse::default())
@@ -415,7 +435,7 @@ async fn project_add_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespo
     let auth = ctx
         .project
         .authorize(anchor, Resource::Project, Action::AddItem)?;
-    let item = gh(ctx)?
+    let item = gh(ctx, &auth)?
         .add_project_item(&auth, &req.project_id, &req.content_id)
         .await?;
     Ok(ApiResponse {
@@ -434,7 +454,7 @@ async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRe
         .project
         .authorize(anchor, Resource::Project, Action::UpdateItem)?;
     let value = req.value.clone().unwrap_or(Value::Null);
-    gh(ctx)?
+    gh(ctx, &auth)?
         .update_project_item_field(&auth, &req.project_id, &req.item_id, &req.field_id, value)
         .await?;
     Ok(ApiResponse::default())
@@ -451,7 +471,7 @@ async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
     } else {
         req.first
     };
-    let raw = gh(ctx)?
+    let raw = gh(ctx, &auth)?
         .list_project_items(&auth, &req.project_id, first)
         .await?;
     Ok(ApiResponse {
@@ -560,6 +580,7 @@ pub async fn bootstrap(
             .collect(),
         git_domain: Some(ctx.git_domain.clone()),
         upstream: Some(ctx.upstream.clone()),
+        git_domains: ctx.git_domains.clone(),
     })
 }
 

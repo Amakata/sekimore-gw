@@ -196,6 +196,8 @@ pub const DEFAULT_PUSH_GLOBS: &[&str] = &["sekimore/*"];
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RepoPolicy {
     pub full_name: String,
+    /// 0.2.0: どの上流（git-relay ドメイン）のリポジトリか。空 = 案件の既定上流
+    pub host: String,
     pub mode: Mode,
     /// PR の base として許可するブランチ。空 = 全て
     pub bases: Vec<String>,
@@ -214,6 +216,7 @@ impl RepoPolicy {
     pub fn new(full_name: &str, mode: Mode) -> Self {
         RepoPolicy {
             full_name: full_name.to_string(),
+            host: String::new(),
             mode,
             bases: Vec::new(),
             push: DEFAULT_PUSH_GLOBS.iter().map(|s| s.to_string()).collect(),
@@ -262,6 +265,8 @@ pub struct Project {
     perms: HashSet<(Resource, Action)>,
     /// 案件の既定で消す権限（repo の allow より優先）
     denies: HashSet<(Resource, Action)>,
+    /// 0.2.0: `host` を書かない repo / `Org/Repo` だけの指定が指す上流ドメイン。空なら「唯一の上流」
+    default_host: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -403,6 +408,23 @@ impl Project {
             repos: Vec::new(),
             perms: HashSet::new(),
             denies: HashSet::new(),
+            default_host: String::new(),
+        }
+    }
+
+    /// 0.2.0: 既定上流のドメイン。`host` が空の repo はこの上流のものとして扱う。
+    pub fn set_default_host(&mut self, host: &str) {
+        self.default_host = host.trim().to_ascii_lowercase();
+    }
+    pub fn default_host(&self) -> &str {
+        &self.default_host
+    }
+    /// repo の実効 host（空なら既定上流）。
+    pub fn host_of<'a>(&'a self, repo: &'a RepoPolicy) -> &'a str {
+        if repo.host.is_empty() {
+            &self.default_host
+        } else {
+            &repo.host
         }
     }
 
@@ -447,11 +469,22 @@ impl Project {
             }
             if repos
                 .iter()
-                .filter(|o| o.full_name.eq_ignore_ascii_case(&r.full_name))
+                .filter(|o| {
+                    o.full_name.eq_ignore_ascii_case(&r.full_name)
+                        && o.host.eq_ignore_ascii_case(&r.host)
+                })
                 .count()
                 > 1
             {
-                return Err(format!("repo {:?} is listed more than once", r.full_name));
+                return Err(format!(
+                    "repo {:?} is listed more than once{}",
+                    r.full_name,
+                    if r.host.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" on {}", r.host)
+                    }
+                ));
             }
         }
         p.repos = repos;
@@ -521,11 +554,53 @@ impl Project {
     }
 
     /// 案件に含まれるリポジトリを探す。含まれなければ拒否 = 案件外への到達を拒否する唯一の防壁。
+    ///
+    /// API 経路用。`host/Org/Repo` なら host で絞り、`Org/Repo` なら
+    /// 一意ならそれ、複数の上流にあれば既定上流のもの（無ければ拒否）。
     pub fn find_repo(&self, path: &str) -> Result<&RepoPolicy, Denied> {
+        let want = path.trim_start_matches('/').trim_end_matches(".git");
+        let (host, name) = crate::config::split_repo_host(want);
+        let denied = || Denied::RepoNotInProject {
+            repo: want.to_string(),
+            project: self.name.clone(),
+        };
+        if let Some(h) = host {
+            return self
+                .repos
+                .iter()
+                .find(|r| {
+                    r.full_name.eq_ignore_ascii_case(name)
+                        && self.host_of(r).eq_ignore_ascii_case(h)
+                })
+                .ok_or_else(denied);
+        }
+        let mut hits = self
+            .repos
+            .iter()
+            .filter(|r| r.full_name.eq_ignore_ascii_case(name));
+        let first = hits.next().ok_or_else(denied)?;
+        if hits.next().is_none() {
+            return Ok(first);
+        }
+        // 同名が複数の上流にある: 既定上流のものだけ `Org/Repo` で指せる
+        self.repos
+            .iter()
+            .find(|r| {
+                r.full_name.eq_ignore_ascii_case(name)
+                    && self.host_of(r).eq_ignore_ascii_case(&self.default_host)
+            })
+            .ok_or_else(denied)
+    }
+
+    /// SSH 経路用（0.2.0）。接続を受けたポートで上流 `host` が決まっているので、
+    /// その上流のリポジトリだけを探す。`host/Org/Repo` 表記は受けない（exec にはパスしか来ない）。
+    pub fn find_repo_on(&self, host: &str, path: &str) -> Result<&RepoPolicy, Denied> {
         let want = path.trim_start_matches('/').trim_end_matches(".git");
         self.repos
             .iter()
-            .find(|r| r.full_name.eq_ignore_ascii_case(want))
+            .find(|r| {
+                r.full_name.eq_ignore_ascii_case(want) && self.host_of(r).eq_ignore_ascii_case(host)
+            })
             .ok_or_else(|| Denied::RepoNotInProject {
                 repo: want.to_string(),
                 project: self.name.clone(),
@@ -550,6 +625,16 @@ impl Project {
         }
         // 2. 案件に含まれるリポジトリか
         let found = self.find_repo(repo)?;
+        self.authorize_found(found, resource, action)
+    }
+
+    /// 見つかった repo に対する 3.〜4. の検査（`authorize` と `authorize_pr_for` が共有）。
+    fn authorize_found<'p>(
+        &'p self,
+        found: &'p RepoPolicy,
+        resource: Resource,
+        action: Action,
+    ) -> Result<Authorized<'p>, Denied> {
         // 3. その repo の実効権限（案件既定 + repo allow − deny。deny が勝つ）
         if !self.effective(found).contains(&(resource, action)) {
             return Err(Denied::NotPermitted {
@@ -583,13 +668,60 @@ impl Project {
         Ok(auth)
     }
 
+    /// git 経路で既に見つかっている repo（`GitAuthorized`）に対する PR 作成の証明。
+    /// 同名 repo が別上流にあっても取り違えない（0.2.0）。
+    pub fn authorize_pr_for<'p>(
+        &'p self,
+        git: &GitAuthorized<'p>,
+        base: &str,
+    ) -> Result<Authorized<'p>, Denied> {
+        if !self.granted_anywhere(Resource::Pr, Action::Create) {
+            return Err(Denied::NotPermitted {
+                resource: Resource::Pr.as_str(),
+                action: Action::Create.as_str(),
+            });
+        }
+        let auth = self.authorize_found(git.repo, Resource::Pr, Action::Create)?;
+        if !auth.repo.allows_base(base) {
+            return Err(Denied::BaseNotAllowed {
+                branch: base.to_string(),
+            });
+        }
+        Ok(auth)
+    }
+
     /// git 経路の唯一の入口。receive-pack は read-write を要求する。
+    /// 上流が 1 つのとき（テスト等）。複数上流では `authorize_git_on`。
     pub fn authorize_git(
         &self,
         verb: GitVerb,
         repo_path: &str,
     ) -> Result<GitAuthorized<'_>, Denied> {
         let found = self.find_repo(repo_path)?;
+        self.authorize_git_found(found, verb)
+    }
+
+    /// git 経路（0.2.0）: 接続ポートで決まった上流 `host` のリポジトリだけを対象にする。
+    /// `host` が空なら上流を区別しない（`authorize_git` と同じ）。
+    pub fn authorize_git_on(
+        &self,
+        host: &str,
+        verb: GitVerb,
+        repo_path: &str,
+    ) -> Result<GitAuthorized<'_>, Denied> {
+        let found = if host.is_empty() {
+            self.find_repo(repo_path)?
+        } else {
+            self.find_repo_on(host, repo_path)?
+        };
+        self.authorize_git_found(found, verb)
+    }
+
+    fn authorize_git_found<'p>(
+        &'p self,
+        found: &'p RepoPolicy,
+        verb: GitVerb,
+    ) -> Result<GitAuthorized<'p>, Denied> {
         if verb.is_write() && !found.can_write() {
             return Err(Denied::RepoReadOnly {
                 repo: found.full_name.clone(),
@@ -675,6 +807,82 @@ mod tests {
         assert!(p.find_repo("LibOrg/other-lib").is_err());
         assert!(p.find_repo("Attacker/evil-repo").is_err());
         assert!(p.find_repo("liborg/AWESOME-LIB.git").is_ok());
+    }
+
+    #[test]
+    fn repos_with_the_same_name_on_two_upstreams_are_told_apart_by_host() {
+        let mut lib = RepoPolicy::new("LibOrg/awesome-lib", Mode::ReadWrite);
+        lib.host = "github.com".into();
+        let mut ghe = RepoPolicy::new("LibOrg/awesome-lib", Mode::ReadOnly);
+        ghe.host = "ghe.example.com".into();
+        let mut only_ghe = RepoPolicy::new("Corp/internal", Mode::ReadWrite);
+        only_ghe.host = "ghe.example.com".into();
+        let mut p = Project::try_new(
+            "case-m",
+            vec![lib, ghe, only_ghe],
+            &["pr:create".to_string()],
+        )
+        .unwrap();
+        p.set_default_host("github.com");
+        // 同じ (host, name) の重複は拒否
+        let mut dup = RepoPolicy::new("LibOrg/awesome-lib", Mode::ReadOnly);
+        dup.host = "github.com".into();
+        let mut dup2 = RepoPolicy::new("LibOrg/awesome-lib", Mode::ReadOnly);
+        dup2.host = "github.com".into();
+        assert!(Project::try_new("d", vec![dup, dup2], &[]).is_err());
+
+        // API: host 無しは既定上流、host 付きはその上流
+        assert_eq!(
+            p.find_repo("LibOrg/awesome-lib").unwrap().host,
+            "github.com"
+        );
+        assert_eq!(
+            p.find_repo("ghe.example.com/LibOrg/awesome-lib")
+                .unwrap()
+                .host,
+            "ghe.example.com"
+        );
+        assert_eq!(
+            p.find_repo("Corp/internal").unwrap().host,
+            "ghe.example.com"
+        );
+        assert!(p.find_repo("github.com/Corp/internal").is_err());
+        assert!(p.find_repo("other.example.com/LibOrg/awesome-lib").is_err());
+        // SSH: 接続を受けた上流に絞る。read-only は GHES 側だけ
+        assert!(p
+            .authorize_git_on(
+                "ghe.example.com",
+                GitVerb::ReceivePack,
+                "LibOrg/awesome-lib.git"
+            )
+            .is_err());
+        assert!(p
+            .authorize_git_on("github.com", GitVerb::ReceivePack, "LibOrg/awesome-lib.git")
+            .is_ok());
+        assert!(matches!(
+            p.authorize_git_on("github.com", GitVerb::UploadPack, "Corp/internal"),
+            Err(Denied::RepoNotInProject { .. })
+        ));
+        // 空 host = 上流を区別しない（単一上流のテスト互換）
+        assert!(p
+            .authorize_git_on("", GitVerb::UploadPack, "Corp/internal")
+            .is_ok());
+        // GitAuthorized から PR 証明を取ると同じ repo を指す
+        let g = p
+            .authorize_git_on("ghe.example.com", GitVerb::UploadPack, "LibOrg/awesome-lib")
+            .unwrap();
+        // read-only なので PR 作成は拒否（取り違えて github.com 側の read-write を見ない）
+        assert!(matches!(
+            p.authorize_pr_for(&g, "main"),
+            Err(Denied::RepoReadOnly { .. })
+        ));
+        let g = p
+            .authorize_git_on("github.com", GitVerb::UploadPack, "LibOrg/awesome-lib")
+            .unwrap();
+        assert_eq!(
+            p.authorize_pr_for(&g, "main").unwrap().policy().host,
+            "github.com"
+        );
     }
 
     #[test]
