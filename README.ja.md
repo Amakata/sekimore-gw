@@ -340,4 +340,4 @@ Apache License 2.0 - 詳細は [LICENSE](LICENSE) を参照してください。
 
 ## バージョン
 
-0.2.4。関所側の変更履歴は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあります。
+0.2.5。関所側の変更履歴は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあります。

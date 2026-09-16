@@ -2,6 +2,10 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.5 (2026-09-16. Fixes the 0.2.4 image build)
+
+- Docker: copy `relay/locales` into the builder stage. The 0.2.4 CLI dictionaries are pulled in with `include_str!`, but only `relay/share` was copied, so the release build could not read `locales/ja.json` and the v0.2.4 image never published. No change to the relay itself; 0.2.4 and 0.2.5 are the same code.
+
 ## 0.2.4 (2026-09-16. Localization: English is primary, Japanese ships as a language file)
 
 - Web UI: strings moved into `src/locales/{en,ja}.json`, English by default. The language is resolved in this order: `?lang=` → cookie (the in-page switcher) → `ui.language` in `config.yml` (`auto` / `en` / `ja`) → the browser's `Accept-Language` → English. New `/api/i18n`
