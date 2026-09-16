@@ -2,6 +2,10 @@
 
 *[English](CHANGELOG.md)*
 
+## 0.2.7（2026-09-16。新しい handler 名での DNS 転送の修正）
+
+- DNS: `handler: github` でも関所へ転送するようにした。`git-relay` では従来どおり動いていたが、0.2.6 は handler を改名して設定層だけを追従させたため、`dns_server.py` が旧名としか比較しておらず、新しい書き方のドメインが実アドレスに解決されて関所を通らなかった。両方の綴りを受け、同じ結果になることをテストで固定した。`git-relay` のままだった場合は影響なし
+
 ## 0.2.6（2026-09-16。エージェントからの Release 作成と、handler 名を上流サービス名に）
 
 - `sekimore release create --tag vX.Y.Z [--title T] [--notes "…" | --notes-file F] [--generate-notes] [--draft] [--prerelease]`、`sekimore release view --tag vX.Y.Z`、`sekimore release list [--limit N]`。エンドポイントは `/release/create`、`/release/view`、`/release/list`

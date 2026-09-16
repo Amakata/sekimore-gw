@@ -702,7 +702,11 @@ class DNSServer:
             return reply.pack()  # type: ignore[no-any-return]
         # 0.2.2: https-relay (only 443 goes through the relay) also answers with the relay IP;
         # the real IP is never added to the ipset
-        if handler in ("git-relay", "https-relay") and not self._is_self_query(client_addr[0]):
+        # `github` is the handler name from 0.2.6; `git-relay` is its original spelling. The config
+        # layer normalizes to `github`, but a caller may hand us either, so accept both here.
+        if handler in ("github", "git-relay", "https-relay") and not self._is_self_query(
+            client_addr[0]
+        ):
             gateway_ip = getattr(self, "gateway_ip", None)
             if not gateway_ip or gateway_ip == "0.0.0.0":
                 # Fall back to normal resolution when the relay IP is unknown, rather than answering 0.0.0.0
