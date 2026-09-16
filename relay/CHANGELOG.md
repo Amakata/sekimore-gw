@@ -2,8 +2,10 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
-## 0.2.7 (2026-09-16. Fixes the DNS redirect under the new handler name)
+## 0.2.7 (2026-09-16. Security: a tag or ref could reach outside the project; the DNS redirect under the new handler name)
 
+- Security: a tag or CI ref supplied by the agent could walk out of its repository. Both land in the request path, and the URL parser resolves `..` when it builds the request, so `release view --tag '../../../Other/Secret/releases'` issued an authenticated read against a repository the project never granted, with the operator's token. The escaper allowed `/` and `.` through, which is right for a query value but not for a path segment; path segments now percent-encode both. The audit log recorded the in-project repository, not the one actually reached, so check the logs of any gateway that granted `ci:read` (the `--ref` path has been reachable since 0.1.7) or `release:read` (0.2.6)
+- `find_pull_request` asked for `pr:create` to perform a read. It is reachable only from the `refs/for` path, which holds that proof, so it was not exploitable — but it now accepts `pr:read` as well, which is the proof the operation actually needs
 - DNS: `handler: github` now redirects to the relay, as `git-relay` always did. 0.2.6 renamed the handler and updated the config layer, but `dns_server.py` still compared against the old spelling alone, so a domain written the new way resolved to its real address and never reached the relay. Both spellings are accepted there now, with a test that asserts they behave identically. Anyone who kept writing `git-relay` was unaffected
 
 ## 0.2.6 (2026-09-16. Releases from the agent, and the handler is named after the forge)

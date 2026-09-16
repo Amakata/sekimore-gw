@@ -96,8 +96,30 @@ pub async fn mock_github() -> (Url, Recorder) {
     (Url::parse(&format!("http://{addr}/api/v3")).unwrap(), rec)
 }
 
+/// Percent-decode a path so the mock can match on the tag or ref the caller meant. Real GitHub
+/// decodes the segment too; what matters for the traversal tests is the *raw* path recorded in the
+/// recorder, which stays encoded.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v as char);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i] as char);
+        i += 1;
+    }
+    out
+}
+
 fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, serde_json::Value) {
-    let p = path.split('?').next().unwrap_or(path);
+    let decoded = percent_decode(path);
+    let p = decoded.split('?').next().unwrap_or(&decoded);
     if method == "POST" && p.ends_with("/pulls") {
         if body.get("head").and_then(|h| h.as_str()) == Some("sekimore/main-dup0000") {
             return (

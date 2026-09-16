@@ -510,3 +510,53 @@ async fn a_release_outside_the_project_is_refused() {
     assert!(!resp.ok);
     assert!(recorded(&f.recorder).is_empty());
 }
+
+// ---- path traversal (0.2.7) ----
+
+/// A tag or ref is agent-supplied text that lands in the request path. The URL parser resolves
+/// `..` when it builds the request, so an unescaped `../` would walk out of the project's repo and
+/// reach another one with the operator's token. Both must stay inside `/repos/<repo>/`.
+#[tokio::test]
+async fn an_agent_cannot_escape_its_repository_through_a_tag() {
+    let f = start_api(
+        project_case_a(&["release:read", "ci:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    for evil in [
+        "../../../Other/Secret/releases",
+        "..%2f..%2fOther/Secret",
+        "v1.0.0/../../../Other/Secret",
+    ] {
+        let r = ApiRequest {
+            tag: evil.to_string(),
+            ..req("LibOrg/awesome-lib")
+        };
+        let (_, _) = post(f.addr, "/release/view", Some(&f.token), &r).await;
+        for call in recorded(&f.recorder) {
+            assert!(
+                call.path.starts_with("/api/v3/repos/LibOrg/awesome-lib/"),
+                "tag {evil:?} reached {} — outside the project",
+                call.path
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_agent_cannot_escape_its_repository_through_a_ci_ref() {
+    let f = start_api(project_case_a(&["ci:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        git_ref: "../../../Other/Secret/commits/main".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (_, _) = post(f.addr, "/ci/runs", Some(&f.token), &r).await;
+    for call in recorded(&f.recorder) {
+        assert!(
+            call.path.starts_with("/api/v3/repos/LibOrg/awesome-lib/"),
+            "ref reached {} — outside the project",
+            call.path
+        );
+    }
+}
