@@ -560,3 +560,99 @@ async fn an_agent_cannot_escape_its_repository_through_a_ci_ref() {
         );
     }
 }
+
+// ---- reviewer requests and project fields (0.2.7) ----
+
+#[tokio::test]
+async fn requesting_a_review_is_its_own_permission() {
+    // pr:review submits an opinion; pr:request_review notifies a human. Granting one must not
+    // grant the other.
+    let f = start_api(project_case_a(&["pr:review"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 42,
+        reviewers: vec!["alice".into()],
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/request-review", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp.error);
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn requesting_a_review_sends_people_and_teams() {
+    let f = start_api(
+        project_case_a(&["pr:request_review"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 42,
+        reviewers: vec!["alice".into(), "bob".into()],
+        team_reviewers: vec!["platform".into()],
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/request-review", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    assert_eq!(rec.len(), 1);
+    assert_eq!(
+        rec[0].path,
+        "/api/v3/repos/LibOrg/awesome-lib/pulls/42/requested_reviewers"
+    );
+    assert_eq!(rec[0].body["reviewers"][0], "alice");
+    assert_eq!(rec[0].body["team_reviewers"][0], "platform");
+    let msg = resp.message.unwrap_or_default();
+    assert!(msg.contains("alice") && msg.contains("@platform"), "{msg}");
+}
+
+#[tokio::test]
+async fn requesting_a_review_needs_somebody_to_ask() {
+    let f = start_api(
+        project_case_a(&["pr:request_review"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 42,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/pr/request-review", Some(&f.token), &r).await;
+    assert_eq!(code, 400);
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn project_fields_returns_the_option_ids_update_item_needs() {
+    let f = start_api(project_case_a(&["project:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        project_id: "PVT_board".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/fields", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let raw = resp.raw.expect("fields payload");
+    let nodes = raw["data"]["node"]["fields"]["nodes"]
+        .as_array()
+        .expect("field nodes");
+    assert_eq!(nodes[0]["id"], "PVTF_status");
+    // The option id is the part a human previously had to supply by hand
+    assert_eq!(nodes[0]["options"][0]["id"], "OPT_todo");
+}
+
+#[tokio::test]
+async fn project_fields_needs_project_read() {
+    let f = start_api(
+        project_case_a(&["project:add_item"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        project_id: "PVT_board".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/project/fields", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+}

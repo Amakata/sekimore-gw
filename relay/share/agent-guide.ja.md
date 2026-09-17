@@ -16,7 +16,8 @@
 - push 先は 2 種類だけです。
   - `git push origin HEAD:refs/for/<base>` — `sekimore/<base>-<sha7>` というブランチに置かれ、PR（base=`<base>`）が自動で作られます。PR のタイトルは定型なので、タイトルや本文を自分で書きたいときは次の方法を使ってください。
   - `git push origin HEAD:refs/heads/sekimore/<topic>` — 作業ブランチ。PR は `sekimore pr create` で作ります（推奨）。
-- `main` などへの直接 push、タグ、ブランチ削除、force push は既定で拒否されます。許可されている repo だけ通ります（`sekimore whoami` で確認）。
+- `main` などへの直接 push、タグ、ブランチ削除は既定で拒否されます。許可されている repo だけ通ります（`sekimore whoami` で確認）。
+- 自分の `sekimore/*` の中での force push は関所では止めません。必要な場所では上流のブランチ保護が拒否します。他の人が作業しているかもしれないブランチを書き換えないでください。
 - コミットは AI 専用鍵で自動署名されます。署名の設定を変えないでください。
 - リポジトリの HTTPS URL（`https://github.com/…`）での push / clone は使えません。SSH の URL を使ってください。
 
@@ -34,6 +35,7 @@ sekimore ci log --number N               # 失敗ジョブのログを末尾か�
 sekimore issue create --title "…" --body="…" [--labels a,b]
 sekimore release create --tag vX.Y.Z      # タグを push した後に。本文は GitHub が書く
 sekimore release view --tag vX.Y.Z        # タグに対応する Release
+sekimore pr request-review --number N --reviewers alice,bob   # レビューを依頼する
 ```
 
 - repo は `--repo Org/Repo` で指定します（省略時は `SEKIMORE_REPO`）。上流が複数あるときは `--repo ghe.example.com/Org/Repo` のようにホストを付けられます。

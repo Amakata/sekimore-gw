@@ -77,6 +77,8 @@ pub async fn dispatch(
         "/project/add-item" => project_add_item(ctx, req).await,
         "/project/update-item" => project_update_item(ctx, req).await,
         "/project/list" => project_list(ctx, req).await,
+        "/project/fields" => project_fields(ctx, req).await,
+        "/pr/request-review" => pr_request_review(ctx, req).await,
         "/release/create" => release_create(ctx, req).await,
         "/release/view" => release_view(ctx, req).await,
         "/release/list" => release_list(ctx, req).await,
@@ -574,6 +576,53 @@ async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
     Ok(ApiResponse {
         raw: Some(raw),
         ..Default::default()
+    })
+}
+
+/// 0.2.7: the board's fields and their option ids, which `project update-item` needs.
+async fn project_fields(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.project_id.is_empty(), "project_id is required")?;
+    let anchor = project_anchor(ctx, req)?;
+    let auth = ctx
+        .project
+        .authorize(anchor, Resource::Project, Action::Read)?;
+    let first = if req.first == 0 || req.first > 100 {
+        50
+    } else {
+        req.first
+    };
+    let raw = gh(ctx, &auth)?
+        .list_project_fields(&auth, &req.project_id, first)
+        .await?;
+    Ok(ApiResponse {
+        raw: Some(raw),
+        ..Default::default()
+    })
+}
+
+/// 0.2.7: ask people to review a pull request.
+async fn pr_request_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    need(req.number != 0, "number is required")?;
+    need(
+        !req.reviewers.is_empty() || !req.team_reviewers.is_empty(),
+        "at least one reviewer or team is required",
+    )?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Pr, Action::RequestReview)?;
+    gh(ctx, &auth)?
+        .request_reviewers(&auth, req.number, &req.reviewers, &req.team_reviewers)
+        .await?;
+    let mut who = req.reviewers.clone();
+    who.extend(req.team_reviewers.iter().map(|t| format!("@{t}")));
+    Ok(ApiResponse {
+        message: Some(format!(
+            "requested review on #{} from {}",
+            req.number,
+            who.join(", ")
+        )),
+        ..ApiResponse::ok()
     })
 }
 

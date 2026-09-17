@@ -2,8 +2,11 @@
 
 *[English](CHANGELOG.md)*
 
-## 0.2.7（2026-09-16。セキュリティ: タグと ref が案件の外へ到達できた。および新しい handler 名での DNS 転送の修正）
+## 0.2.7（2026-09-17。セキュリティ: タグと ref が案件の外へ到達できた。レビュー依頼、Project のフィールド一覧、DNS 転送）
 
+- `sekimore pr request-review --number N --reviewers alice,bob [--teams platform]` でレビューを依頼できる。権限は `pr:review` ではなく専用の `pr:request_review`。意見を出すことと人に通知することは別の権限だから
+- `sekimore project fields --project-id PVT_…` でボードのフィールドと single-select の option id を一覧できる。`project update-item` は `field_id` を、single-select では名前ではなく option の id を要求するため、これまでその id は人間から渡すしかなく、コマンド単体では使えなかった。権限は既存の `project:read`
+- ガイドは force push が既定で拒否されると書いていたが、実際には拒否していない。関所が見るのは ref 名であって早送りかどうかではないので、自分の `sekimore/*` の中では force push は通り、必要な場所では上流のブランチ保護が拒否する。関所側で forge と同じ検査を持つのではなく、ガイドの記述を実態に合わせた
 - セキュリティ: エージェントが渡すタグと CI の ref が、自分のリポジトリの外へ出られた。どちらもリクエストのパスに入り、URL を組み立てるときにパーサが `..` を解決するため、`release view --tag '../../../Other/Secret/releases'` が案件に無いリポジトリへ operator のトークンで認証付きの読み取りを飛ばしていた。エスケープが `/` と `.` を通していたのが原因で、クエリ値としては正しいがパス部品では誤り。パス部品では両方を符号化するようにした。監査ログには実際に触れたリポジトリではなく案件内のリポジトリが記録されるので、`ci:read`（`--ref` の経路は 0.1.7 から）や `release:read`（0.2.6 から）を許可していた gateway ではログを確認すること
 - `find_pull_request` が読み取りに `pr:create` を要求していた。到達経路は `refs/for` だけでその証明を持っているため悪用はできなかったが、本来必要な `pr:read` でも通るようにした
 - DNS: `handler: github` でも関所へ転送するようにした。`git-relay` では従来どおり動いていたが、0.2.6 は handler を改名して設定層だけを追従させたため、`dns_server.py` が旧名としか比較しておらず、新しい書き方のドメインが実アドレスに解決されて関所を通らなかった。両方の綴りを受け、同じ結果になることをテストで固定した。`git-relay` のままだった場合は影響なし
