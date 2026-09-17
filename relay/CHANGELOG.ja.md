@@ -2,6 +2,13 @@
 
 *[English](CHANGELOG.md)*
 
+## 0.2.10（2026-09-17）
+
+- `SEKIMORE_WEB_HOST`、`SEKIMORE_WEB_PORT`、`SEKIMORE_ULOG_PATH` は定数に読み込まれるだけで誰も使っておらず、設定しても効かなかった。効くようにした。`ULOG_FILE_PATH` の既定も `syslogemu.log` だったが実際に読むのは `firewall.log` で、ulogd が書くファイル名に合わせた
+- `login` が `proxy.upstream_proxy` 経由だったか直接だったかを示すようになった。到達できないプロキシと到達できない上流が同じタイムアウトになり、直す場所が違うのに区別できなかった
+- 未使用の依存を 5 つ削除。Rust の `thiserror` と `http`（`http::` は同名のローカルモジュールを指していた）、Python の `pydantic-settings`、`python-json-logger`、`jinja2`
+- 呼び出しの無い Rust の関数 7 つ、`bootstrap` エージェントサブコマンドと `bootstrap status`、Python の定義 4 つを削除。`agent-setup.sh` は `POST /bootstrap` を HTTP で叩くので、エンドポイントは残す
+
 ## 0.2.9（2026-09-17）
 
 - `sekimore pr merge` に `--method merge|squash|rebase`、`--title`、`--message`、`--delete-branch` を追加。squash 専用の repo は従来の空ボディを 405 で拒否していた

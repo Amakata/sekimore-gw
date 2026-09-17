@@ -2,6 +2,13 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.10 (2026-09-17)
+
+- `SEKIMORE_WEB_HOST`, `SEKIMORE_WEB_PORT` and `SEKIMORE_ULOG_PATH` were read into constants that nothing used, so setting them did nothing. They work now. `ULOG_FILE_PATH` also defaulted to `syslogemu.log` while the code read `firewall.log`; the default matches what ulogd writes
+- `login` now says whether it went through `proxy.upstream_proxy` or straight out. An unreachable proxy and an unreachable upstream produced the same timeout, and they are fixed in different places
+- Removed five unused dependencies: `thiserror` and `http` on the Rust side (the `http::` paths resolve to a local module of the same name), `pydantic-settings`, `python-json-logger` and `jinja2` on the Python side
+- Removed seven Rust functions, the `bootstrap` agent subcommand and `bootstrap status`, and four Python definitions, none of which had a caller. `agent-setup.sh` calls `POST /bootstrap` over HTTP, so the endpoint stays
+
 ## 0.2.9 (2026-09-17)
 
 - `sekimore pr merge` takes `--method merge|squash|rebase`, `--title`, `--message` and `--delete-branch`. A squash-only repository rejected the old empty body with 405
