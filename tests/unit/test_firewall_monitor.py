@@ -389,3 +389,63 @@ def describe_monitor_ulog_file():
 
         # Verify exception was handled and retry occurred
         assert call_count >= 2
+
+
+def describe_ulog_path_is_configurable():
+    """The followed file comes from constants.ULOG_FILE_PATH, not a literal."""
+
+    @pytest.mark.asyncio
+    @patch("asyncio.create_subprocess_exec")
+    async def it_tails_the_default_ulogd_file(mock_subprocess, tmp_path):
+        """By default that is /var/log/ulog/firewall.log, what ulogd writes."""
+        monitor = FirewallMonitor(db_path=str(tmp_path / "test_firewall.db"))
+        await monitor.init_db()
+
+        process_mock = AsyncMock()
+        process_mock.returncode = None
+
+        async def readline_side_effect():
+            monitor.running = False
+            return b""
+
+        process_mock.stdout.readline = AsyncMock(side_effect=readline_side_effect)
+        process_mock.terminate = Mock()
+        process_mock.wait = AsyncMock()
+        mock_subprocess.return_value = process_mock
+
+        await monitor.monitor_ulog_file()
+
+        assert mock_subprocess.call_args.args[-1] == "/var/log/ulog/firewall.log"
+
+    @pytest.mark.asyncio
+    @patch("asyncio.create_subprocess_exec")
+    async def it_tails_the_path_from_the_environment(mock_subprocess, tmp_path, monkeypatch):
+        """The configured path is what tail is pointed at.
+
+        SEKIMORE_ULOG_PATH feeds constants.ULOG_FILE_PATH at import time; this
+        asserts the monitor reads that constant instead of a literal.
+        """
+        from src import constants
+
+        # Patch the attribute rather than reloading the module: a reload would
+        # outlive monkeypatch's cleanup and leak the path into later tests.
+        monkeypatch.setattr(constants, "ULOG_FILE_PATH", "/tmp/custom-firewall.log")
+
+        monitor = FirewallMonitor(db_path=str(tmp_path / "test_firewall.db"))
+        await monitor.init_db()
+
+        process_mock = AsyncMock()
+        process_mock.returncode = None
+
+        async def readline_side_effect():
+            monitor.running = False
+            return b""
+
+        process_mock.stdout.readline = AsyncMock(side_effect=readline_side_effect)
+        process_mock.terminate = Mock()
+        process_mock.wait = AsyncMock()
+        mock_subprocess.return_value = process_mock
+
+        await monitor.monitor_ulog_file()
+
+        assert mock_subprocess.call_args.args[-1] == "/tmp/custom-firewall.log"

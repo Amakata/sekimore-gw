@@ -12,7 +12,7 @@ DB_PATH = os.getenv("SEKIMORE_DB_PATH", "/data/security_gateway.db")
 CONFIG_PATH = os.getenv("SEKIMORE_CONFIG_PATH", "/etc/sekimore/config.yml")
 
 # Log file path
-ULOG_FILE_PATH = os.getenv("SEKIMORE_ULOG_PATH", "/var/log/ulog/syslogemu.log")
+ULOG_FILE_PATH = os.getenv("SEKIMORE_ULOG_PATH", "/var/log/ulog/firewall.log")
 
 # Squid configuration paths
 SQUID_CONFIG_PATH = os.getenv("SEKIMORE_SQUID_CONFIG", "/etc/squid/squid.conf")
