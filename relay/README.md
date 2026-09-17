@@ -197,6 +197,7 @@ Keys are exact FQDN matches. Listing `github` more than once gives you more than
 | `push` | `["sekimore/*"]` | Branch globs that may be pushed to directly |
 | `tags` | `[]` | Tag globs that may be pushed. Empty means denied |
 | `delete` | `false` | Deleting branches and tags |
+| `boards` | `[]` | The Projects v2 boards this project may touch, written the way the URL reads: `{ org: acme, number: 3 }` for `github.com/orgs/acme/projects/3`, or `{ user: someone, number: 1 }`. Empty refuses every Projects operation |
 | `repos` | `[]` | Repositories. `Org/Repo` means the default upstream; `host/Org/Repo` names one explicitly |
 | `upstreams.<domain>` | | A per-upstream layer: `permissions` (a delta), `push` / `tags` / `delete` (that upstream's defaults), and `repos` |
 

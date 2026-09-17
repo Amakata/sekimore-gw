@@ -248,10 +248,29 @@ pub struct ApiFixture {
     pub audit_path: std::path::PathBuf,
 }
 
+/// The Projects v2 board the fixture allows by default, so tests that are not about board scoping
+/// do not have to care. Use `start_api_with_boards` to vary it.
+pub const TEST_BOARD: &str = "PVT_board";
+
 pub async fn start_api(
     project: Project,
     bootstrap: BootstrapMode,
     upstream_token: bool,
+) -> ApiFixture {
+    start_api_with_boards(
+        project,
+        bootstrap,
+        upstream_token,
+        vec![TEST_BOARD.to_string()],
+    )
+    .await
+}
+
+pub async fn start_api_with_boards(
+    project: Project,
+    bootstrap: BootstrapMode,
+    upstream_token: bool,
+    project_boards: Vec<String>,
 ) -> ApiFixture {
     let dir = tempfile::tempdir().unwrap();
     let (api_base, recorder) = mock_github().await;
@@ -289,6 +308,7 @@ pub async fn start_api(
         git_domain: "github.com".into(),
         upstream: "github.com".into(),
         git_domains: vec![],
+        project_boards,
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

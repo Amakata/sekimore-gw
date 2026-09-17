@@ -196,6 +196,7 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 | `push` | `["sekimore/*"]` | 直接 push を許すブランチ glob |
 | `tags` | `[]` | push を許すタグ glob。空は拒否 |
 | `delete` | `false` | ブランチとタグの削除 |
+| `boards` | `[]` | この案件が触れてよい Projects v2 のボード。URL のとおりに書く: `github.com/orgs/acme/projects/3` なら `{ org: acme, number: 3 }`、`{ user: someone, number: 1 }` も可。空なら Projects の操作を全て拒否 |
 | `repos` | `[]` | リポジトリ。`Org/Repo` は既定上流、`host/Org/Repo` で上流を明示 |
 | `upstreams.<domain>` | | 上流ごとの層。`permissions`（差分）、`push` / `tags` / `delete`（その上流の既定）、`repos` |
 

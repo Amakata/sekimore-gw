@@ -288,6 +288,57 @@ pub struct ProjectConfig {
     /// Default for deleting branches and tags; false when unset
     #[serde(default)]
     pub delete: bool,
+    /// 0.2.7: the Projects v2 boards this project may touch.
+    ///
+    /// A board is named the way it appears in its URL — `github.com/orgs/<org>/projects/<number>`
+    /// or `github.com/users/<user>/projects/<number>` — because the node id the API wants
+    /// (`PVT_…`) is opaque and appears nowhere a person can copy it from. The relay resolves each
+    /// entry to its node id at startup and accepts only those ids afterwards.
+    ///
+    /// Empty means no board at all: a project id is otherwise unbounded, so `project:add_item`
+    /// would reach any board the upstream token can see, whether or not it belongs to this project.
+    #[serde(default)]
+    pub boards: Vec<BoardRef>,
+}
+
+/// One Projects v2 board, written the way its URL reads.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BoardRef {
+    /// The organization that owns the board (`github.com/orgs/<org>/projects/<n>`)
+    #[serde(default)]
+    pub org: Option<String>,
+    /// The user that owns it (`github.com/users/<user>/projects/<n>`). Exactly one of org / user
+    #[serde(default)]
+    pub user: Option<String>,
+    /// The number in the URL
+    pub number: u32,
+}
+
+impl BoardRef {
+    /// `orgs/acme/projects/3`, for messages and for keying the resolved ids.
+    pub fn label(&self) -> String {
+        match (&self.org, &self.user) {
+            (Some(o), None) => format!("orgs/{o}/projects/{}", self.number),
+            (None, Some(u)) => format!("users/{u}/projects/{}", self.number),
+            _ => format!("projects/{}", self.number),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        match (&self.org, &self.user) {
+            (Some(_), Some(_)) => Err(format!(
+                "project board {}: give either org or user, not both",
+                self.number
+            )),
+            (None, None) => Err(format!(
+                "project board {}: needs an org or a user (from its URL)",
+                self.number
+            )),
+            _ if self.number == 0 => Err("project board: number must not be 0".to_string()),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// The `relay:` section. It is owned by the relay, so an unknown key is an error.
@@ -693,6 +744,9 @@ impl Loaded {
             .relay
             .clone()
             .ok_or(ConfigError::NoRelaySection)?;
+        for b in &relay.project.boards {
+            b.validate().map_err(ConfigError::Invalid)?;
+        }
         let upstreams = self.resolve_upstreams(&relay)?;
         let default_up = upstreams[0].clone();
         let domain = default_up.domain.clone();
@@ -1132,6 +1186,59 @@ mod tests {
 
     fn p(text: &str) -> Result<Loaded, ConfigError> {
         parse(Path::new("test.yml"), text)
+    }
+
+    /// 0.2.7: a Projects v2 board is written the way its URL reads, because the node id the API
+    /// wants appears nowhere a person can copy it from.
+    #[test]
+    fn project_boards_are_written_as_owner_and_number() {
+        let body = |boards: &str| {
+            format!(
+                r#"
+domain_handlers:
+  github.com: {{ handler: github }}
+relay:
+  project:
+    name: case-a
+    permissions: [project:read]
+    boards:
+{boards}
+    repos:
+      - {{ name: Org/App, mode: read-write, bases: [main] }}
+"#
+            )
+        };
+        let ok = p(&body(
+            "      - { org: acme, number: 3 }\n      - { user: someone, number: 1 }",
+        ))
+        .expect("org and user forms must parse")
+        .resolve()
+        .expect("and resolve");
+        assert_eq!(ok.relay.project.boards.len(), 2);
+        assert_eq!(ok.relay.project.boards[0].label(), "orgs/acme/projects/3");
+        assert_eq!(
+            ok.relay.project.boards[1].label(),
+            "users/someone/projects/1"
+        );
+
+        // Both owners, or neither, is a mistake worth catching at startup rather than at use
+        for bad in [
+            "      - { org: acme, user: someone, number: 3 }",
+            "      - { number: 3 }",
+            "      - { org: acme, number: 0 }",
+        ] {
+            assert!(
+                p(&body(bad)).and_then(|l| l.resolve()).is_err(),
+                "should reject {bad}"
+            );
+        }
+
+        // Omitting boards is allowed by the parser; the refusal happens at request time
+        let none = p(&body("      []"))
+            .expect("empty list parses")
+            .resolve()
+            .unwrap();
+        assert!(none.relay.project.boards.is_empty());
     }
 
     /// 0.2.6 renamed the handler to `github`. A config written for 0.1.x keeps working, and the two
