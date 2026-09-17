@@ -259,7 +259,7 @@ impl GitHub {
         match self
             .rest::<Value>(
                 "GET",
-                &format!("/repos/{}/releases/tags/{tag}", auth.repo()),
+                &format!("/repos/{}/releases/tags/{}", auth.repo(), path_segment(tag)),
                 None,
             )
             .await
@@ -292,13 +292,18 @@ impl GitHub {
     }
 
     /// Find an open PR with the same head/base, so a re-push to `refs/for` can report the existing PR.
+    ///
+    /// This reads, so `pr:read` is the right proof; the `refs/for` path holds `pr:create` and is
+    /// accepted too, since creating a PR implies seeing the one that already exists.
     pub async fn find_pull_request(
         &self,
         auth: &Authorized<'_>,
         head: &str,
         base: &str,
     ) -> Result<Option<PrResult>, GhError> {
-        auth.ensure(Resource::Pr, Action::Create)?;
+        if auth.ensure(Resource::Pr, Action::Read).is_err() {
+            auth.ensure(Resource::Pr, Action::Create)?;
+        }
         let owner = auth.repo().split('/').next().unwrap_or("");
         let path = format!(
             "/repos/{}/pulls?state=open&head={}&base={}",
@@ -455,7 +460,7 @@ impl GitHub {
         let c: Value = self
             .rest(
                 "GET",
-                &format!("/repos/{repo}/commits/{}", url_escape(git_ref)),
+                &format!("/repos/{repo}/commits/{}", path_segment(git_ref)),
                 None,
             )
             .await?;
@@ -989,6 +994,8 @@ fn rollup_state(checks: &[CheckItem]) -> String {
     }
 }
 
+/// Escape a value that goes into a query string. `/` and `.` are safe there, and `head=owner:branch`
+/// relies on `/` surviving.
 fn url_escape(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
@@ -996,6 +1003,21 @@ fn url_escape(s: &str) -> String {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
                 out.push(b as char)
             }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Escape one **path segment**. Unlike a query value, `/` and `.` must not survive here: the URL
+/// parser resolves `..` when it builds the request, so a tag or ref of `../../../Other/Repo/…`
+/// would otherwise walk out of `/repos/<owner>/<repo>/` and reach a repository the project never
+/// granted, using the operator's token. Percent-encoding both characters keeps the segment inert.
+fn path_segment(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'~' => out.push(b as char),
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
