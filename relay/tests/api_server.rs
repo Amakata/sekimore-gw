@@ -656,3 +656,109 @@ async fn project_fields_needs_project_read() {
     let (code, _) = post(f.addr, "/project/fields", Some(&f.token), &r).await;
     assert_eq!(code, 403);
 }
+
+// ---- project board scoping (0.2.7) ----
+
+/// Every Projects endpoint takes a node id, and a node id says nothing about who owns it. Without
+/// a declared list, `project:add_item` on one repo would reach any board the upstream token can
+/// see. Each endpoint is listed here so a new one cannot quietly skip the check.
+fn project_endpoints() -> Vec<(&'static str, ApiRequest)> {
+    let base = |id: &str| ApiRequest {
+        repo: "LibOrg/awesome-lib".into(),
+        project_id: id.into(),
+        ..Default::default()
+    };
+    vec![
+        (
+            "/project/add-item",
+            ApiRequest {
+                content_id: "I_1".into(),
+                ..base("PVT_elsewhere")
+            },
+        ),
+        (
+            "/project/update-item",
+            ApiRequest {
+                item_id: "PVTI_1".into(),
+                field_id: "PVTF_1".into(),
+                value: Some(serde_json::json!("x")),
+                ..base("PVT_elsewhere")
+            },
+        ),
+        ("/project/list", base("PVT_elsewhere")),
+        ("/project/fields", base("PVT_elsewhere")),
+    ]
+}
+
+#[tokio::test]
+async fn a_board_outside_the_project_is_refused_everywhere() {
+    let f = start_api(
+        project_case_a(&["project:read", "project:add_item", "project:update_item"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    for (path, r) in project_endpoints() {
+        let (code, resp) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(code, 403, "{path} allowed a board outside the project");
+        assert!(
+            resp.error
+                .unwrap_or_default()
+                .contains("not in this project"),
+            "{path} should say why"
+        );
+    }
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "nothing may reach upstream for a board outside the project"
+    );
+}
+
+#[tokio::test]
+async fn without_a_declared_board_every_project_call_is_refused() {
+    // Default deny: a project id is unbounded, so an empty list refuses rather than allows.
+    let f = start_api_with_boards(
+        project_case_a(&["project:read", "project:add_item", "project:update_item"]),
+        BootstrapMode::Auto,
+        true,
+        vec![],
+    )
+    .await;
+    for (path, mut r) in project_endpoints() {
+        r.project_id = TEST_BOARD.into();
+        let (code, resp) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(code, 403, "{path} should refuse with no board declared");
+        assert!(
+            resp.error
+                .unwrap_or_default()
+                .contains("relay.project.boards"),
+            "{path} should point at the setting to add"
+        );
+    }
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn a_declared_board_still_works() {
+    let f = start_api(project_case_a(&["project:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        project_id: TEST_BOARD.into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+}
+
+#[tokio::test]
+async fn the_permission_is_checked_before_the_board() {
+    // An agent without the permission should hear about the permission, not about boards.
+    let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        project_id: "PVT_elsewhere".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    let e = resp.error.unwrap_or_default();
+    assert!(e.contains("project:read"), "{e}");
+}

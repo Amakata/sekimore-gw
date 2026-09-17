@@ -863,6 +863,45 @@ impl GitHub {
             .await
     }
 
+    /// 0.2.7: resolve `orgs/<org>/projects/<n>` (or the user form) to its Projects v2 node id.
+    ///
+    /// The node id is what every Projects mutation takes, and it appears nowhere a person can copy
+    /// it from, so the operator writes the board the way its URL reads and the relay looks it up
+    /// once at startup. No agent proof: this runs before any agent is served, from the same place
+    /// that reads the configuration.
+    pub async fn resolve_project_board(
+        &self,
+        org: Option<&str>,
+        user: Option<&str>,
+        number: u32,
+    ) -> Result<String, GhError> {
+        const Q_ORG: &str = "query($login:String!,$number:Int!){ organization(login:$login){ projectV2(number:$number){ id } } }";
+        const Q_USER: &str = "query($login:String!,$number:Int!){ user(login:$login){ projectV2(number:$number){ id } } }";
+        let (q, login, owner_key) = match (org, user) {
+            (Some(o), None) => (Q_ORG, o, "organization"),
+            (None, Some(u)) => (Q_USER, u, "user"),
+            _ => {
+                return Err(GhError::Parse(
+                    "project board needs exactly one of org / user".into(),
+                ))
+            }
+        };
+        let out = self
+            .graphql(q, json!({"login": login, "number": number}))
+            .await?;
+        out.get("data")
+            .and_then(|d| d.get(owner_key))
+            .and_then(|o| o.get("projectV2"))
+            .and_then(|p| p.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                GhError::Parse(format!(
+                    "no Projects v2 board number {number} for {login}; check the number in its URL and that the upstream token can see it"
+                ))
+            })
+    }
+
     // ---- For the operator (no proof required; never called from the agent path) ----
 
     /// Which upstream identity the relay acts as.

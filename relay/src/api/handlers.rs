@@ -52,6 +52,22 @@ fn project_anchor<'a>(ctx: &'a ApiContext, req: &'a ApiRequest) -> Result<&'a st
         .ok_or_else(|| ApiError::forbidden("project has no repositories"))
 }
 
+/// 0.2.7: the board has to be one the project declared.
+///
+/// A Projects v2 node id is opaque and carries no owner, so nothing about the id itself says which
+/// board it is — without this check any board the upstream token can see would be reachable from
+/// `project:add_item`. The ids come from `relay.project.boards`, resolved at startup.
+fn allowed_board(ctx: &ApiContext, project_id: &str) -> Result<(), ApiError> {
+    if ctx.project_boards.iter().any(|b| b == project_id) {
+        return Ok(());
+    }
+    Err(ApiError::forbidden(if ctx.project_boards.is_empty() {
+        "no project board is allowed; add relay.project.boards (the org / user and the number from the board's URL)".to_string()
+    } else {
+        format!("project board {project_id} is not in this project")
+    }))
+}
+
 pub async fn dispatch(
     ctx: &ApiContext,
     path: &str,
@@ -534,6 +550,7 @@ async fn project_add_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespo
     let auth = ctx
         .project
         .authorize(anchor, Resource::Project, Action::AddItem)?;
+    allowed_board(ctx, &req.project_id)?;
     let item = gh(ctx, &auth)?
         .add_project_item(&auth, &req.project_id, &req.content_id)
         .await?;
@@ -552,6 +569,7 @@ async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRe
     let auth = ctx
         .project
         .authorize(anchor, Resource::Project, Action::UpdateItem)?;
+    allowed_board(ctx, &req.project_id)?;
     let value = req.value.clone().unwrap_or(Value::Null);
     gh(ctx, &auth)?
         .update_project_item_field(&auth, &req.project_id, &req.item_id, &req.field_id, value)
@@ -565,6 +583,7 @@ async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
     let auth = ctx
         .project
         .authorize(anchor, Resource::Project, Action::Read)?;
+    allowed_board(ctx, &req.project_id)?;
     let first = if req.first == 0 || req.first > 100 {
         20
     } else {
@@ -586,6 +605,7 @@ async fn project_fields(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespons
     let auth = ctx
         .project
         .authorize(anchor, Resource::Project, Action::Read)?;
+    allowed_board(ctx, &req.project_id)?;
     let first = if req.first == 0 || req.first > 100 {
         50
     } else {

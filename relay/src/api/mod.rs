@@ -48,6 +48,11 @@ pub struct ApiContext {
     pub upstream: String,
     /// 0.2.0: every git domain (the first is the default)
     pub git_domains: Vec<types::GitDomain>,
+    /// 0.2.7: node ids of the Projects v2 boards this project may touch, resolved at startup from
+    /// `relay.project.boards`. A project id the agent sends has to be one of these. Empty refuses
+    /// every board: a node id is opaque and unbounded, so without a list any board the upstream
+    /// token can see would be reachable.
+    pub project_boards: Vec<String>,
 }
 
 pub const BOOTSTRAP_RATE_PER_MINUTE: usize = 10;

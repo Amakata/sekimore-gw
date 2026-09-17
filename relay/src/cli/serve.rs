@@ -114,6 +114,47 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         ssh_servers.push((ssh, listener));
     }
 
+    // 0.2.7: resolve the configured Projects v2 boards to their node ids. The operator writes a
+    // board the way its URL reads; the API only speaks node ids. Resolving once here keeps the
+    // per-request path a plain comparison. A board that cannot be resolved (upstream down, wrong
+    // number, token cannot see it) is left out and logged rather than failing startup — the relay
+    // still serves git, and the effect is that the board stays refused.
+    let mut project_boards: Vec<String> = Vec::new();
+    if !r.relay.project.boards.is_empty() {
+        match githubs.get(&r.domain) {
+            Some(gh) => {
+                for b in &r.relay.project.boards {
+                    match gh
+                        .resolve_project_board(b.org.as_deref(), b.user.as_deref(), b.number)
+                        .await
+                    {
+                        Ok(id) => {
+                            log::info!("project board {} → {id}", b.label());
+                            project_boards.push(id);
+                        }
+                        Err(e) => log::warn!(
+                            "project board {} could not be resolved ({e}); it stays refused",
+                            b.label()
+                        ),
+                    }
+                }
+            }
+            None => log::warn!(
+                "no upstream client for {}; project boards stay refused",
+                r.domain
+            ),
+        }
+    } else if !r.project.granted().is_empty()
+        && r.project
+            .granted()
+            .iter()
+            .any(|k| k.starts_with("project:"))
+    {
+        log::warn!(
+            "project:* is granted but relay.project.boards is empty; every Projects operation will be refused"
+        );
+    }
+
     let api_ctx = Arc::new(ApiContext {
         project: r.project.clone(),
         tokens: TokenStore::new(&r.paths.tokens),
@@ -128,6 +169,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         git_domain: r.domain.clone(),
         upstream: r.upstream.clone(),
         git_domains: git_domains(&r),
+        project_boards,
     });
     let api_listener = TcpListener::bind(r.relay.api_listen)
         .await

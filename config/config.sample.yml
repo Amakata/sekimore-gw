@@ -114,6 +114,11 @@ database_path: "/data/security_gateway.db"
 #     #     repos:
 #     #       - { name: Corp/Internal, mode: read-write, bases: [main] }
 #     permissions: [pr:create, issue:create, release:create]   # resource:action. Anything not listed is denied. {allow: [...], deny: [...]} also works
+#     # boards:                 # 0.2.7+ the Projects v2 boards this project may touch. Written the way the URL reads,
+#     #   - { org: acme, number: 3 }      #   github.com/orgs/acme/projects/3
+#     #   - { user: someone, number: 1 }  #   github.com/users/someone/projects/1
+#     # Omitted or empty refuses every Projects operation: a board's node id is opaque and says nothing
+#     # about its owner, so without this list any board the upstream token can see would be reachable.
 #     tags: []                                  # default globs of tags that may be pushed (empty = denied). Override per repo with repos[].tags
 #     delete: false                             # default for deleting branches and tags. Override with repos[].delete
 #     # repos[] takes mode / bases / push / tags / delete / permissions ({allow, deny}, a diff against the project defaults; deny wins)

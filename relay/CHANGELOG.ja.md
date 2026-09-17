@@ -4,6 +4,7 @@
 
 ## 0.2.7（2026-09-17。セキュリティ: タグと ref が案件の外へ到達できた。レビュー依頼、Project のフィールド一覧、DNS 転送）
 
+- セキュリティ、および Projects を使っている場合の破壊的変更: Projects v2 の node ID は不透明で、どのボードの所有者かを何も示さない。そのため 1 つの repo に対する `project:add_item` があれば、案件の内外を問わず上流トークンから見える**任意の**ボードに到達できた。触れてよいボードを `relay.project.boards` に宣言する形にした。書き方は URL のとおりで、`github.com/orgs/acme/projects/3` なら `{ org: acme, number: 3 }`、個人のボードなら `user:`。関所が起動時に node ID へ解決し、それ以外は受け付けない。省略または空なら Projects の操作を全て拒否する。宣言の無い設定で穴を開けたままにするより、使っている案件に一覧を書いてもらう方を選んだ
 - `sekimore pr request-review --number N --reviewers alice,bob [--teams platform]` でレビューを依頼できる。権限は `pr:review` ではなく専用の `pr:request_review`。意見を出すことと人に通知することは別の権限だから
 - `sekimore project fields --project-id PVT_…` でボードのフィールドと single-select の option id を一覧できる。`project update-item` は `field_id` を、single-select では名前ではなく option の id を要求するため、これまでその id は人間から渡すしかなく、コマンド単体では使えなかった。権限は既存の `project:read`
 - ガイドは force push が既定で拒否されると書いていたが、実際には拒否していない。関所が見るのは ref 名であって早送りかどうかではないので、自分の `sekimore/*` の中では force push は通り、必要な場所では上流のブランチ保護が拒否する。関所側で forge と同じ検査を持つのではなく、ガイドの記述を実態に合わせた
