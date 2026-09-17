@@ -32,27 +32,3 @@ WEB_UI_PORT = int(os.getenv("SEKIMORE_WEB_PORT", "8080"))
 # Cache settings
 DNS_CACHE_ENABLED = os.getenv("SEKIMORE_DNS_CACHE_ENABLED", "true").lower() == "true"
 DNS_CACHE_REFRESH_INTERVAL = int(os.getenv("SEKIMORE_DNS_CACHE_REFRESH", "30"))
-
-
-def get_db_path(override: str | None = None) -> str:
-    """Return the database path.
-
-    Args:
-        override: Path to use instead (for tests)
-
-    Returns:
-        The database path
-    """
-    return override or DB_PATH
-
-
-def get_config_path(override: str | None = None) -> str:
-    """Return the configuration file path.
-
-    Args:
-        override: Path to use instead (for tests)
-
-    Returns:
-        The configuration file path
-    """
-    return override or CONFIG_PATH

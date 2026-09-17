@@ -1142,16 +1142,6 @@ async def add_blocked_domain(request: DomainRequest) -> dict:
     return {"success": True, "domain": request.domain}
 
 
-# Broadcasts a new log entry; called by the orchestrator
-async def broadcast_log(log_entry: LogEntry) -> None:
-    """Send a new log entry to every WebSocket client.
-
-    Args:
-        log_entry: The log entry
-    """
-    await manager.broadcast(log_entry.model_dump())
-
-
 # ---- Relay tab: read-only over /data/relay; changes go through the sekimore-relay CLI ----
 from . import relay_view  # noqa: E402
 
