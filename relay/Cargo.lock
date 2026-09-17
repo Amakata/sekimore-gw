@@ -2183,7 +2183,6 @@ dependencies = [
  "env_logger",
  "getrandom 0.3.4",
  "hex",
- "http",
  "http-body-util",
  "humantime",
  "humantime-serde",
@@ -2198,7 +2197,6 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.10.9",
  "tempfile",
- "thiserror",
  "tokio",
  "url",
 ]
