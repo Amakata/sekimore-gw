@@ -281,9 +281,12 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
             );
         }
         let tag = p.rsplit('/').next().unwrap_or("v1.0.0");
+        // 0.2.9: one tag whose release is still a draft, so `release edit` has something to publish.
+        let draft = tag == "v2.0.0-draft";
+        let id = if draft { 903 } else { 901 };
         return (
             StatusCode::OK,
-            serde_json::json!({"id": 901, "tag_name": tag, "name": tag, "html_url": format!("https://github.example/releases/{tag}"), "draft": false, "prerelease": false}),
+            serde_json::json!({"id": id, "tag_name": tag, "name": tag, "html_url": format!("https://github.example/releases/{tag}"), "draft": draft, "prerelease": false}),
         );
     }
     if method == "GET" && p.ends_with("/releases") {
@@ -331,6 +334,71 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
             serde_json::json!({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_1"}}, "node": {"title": "Board", "items": {"nodes": []}}}}),
         );
     }
+    // 0.2.9: merging with options, and deleting the head branch afterwards.
+    if method == "PUT" && p.ends_with("/merge") {
+        // A squash-only repository: exactly the case that made the old literal `{}` unusable.
+        if p.contains("/pulls/405/")
+            && body.get("merge_method").and_then(|m| m.as_str()) != Some("squash")
+        {
+            return (
+                StatusCode::METHOD_NOT_ALLOWED,
+                serde_json::json!({"message": "Merge commits are not allowed on this repository"}),
+            );
+        }
+        return (
+            StatusCode::OK,
+            serde_json::json!({"merged": true, "sha": "deadbeef", "message": "Pull Request successfully merged"}),
+        );
+    }
+    if method == "DELETE" && p.contains("/git/refs/heads/") {
+        return (StatusCode::NO_CONTENT, serde_json::Value::Null);
+    }
+    // 0.2.9: reopening and editing. PATCH on a pull request or an issue answers the new state.
+    if method == "PATCH" && (p.contains("/pulls/") || p.contains("/issues/")) {
+        return (
+            StatusCode::OK,
+            serde_json::json!({
+                "number": 42,
+                "state": body.get("state").and_then(|v| v.as_str()).unwrap_or("open"),
+                "html_url": "https://github.example/pr/42"
+            }),
+        );
+    }
+    // 0.2.9: removing a label, and removing assignees.
+    if method == "DELETE" && p.contains("/labels/") {
+        return (StatusCode::OK, serde_json::json!([]));
+    }
+    if method == "DELETE" && p.ends_with("/assignees") {
+        return (
+            StatusCode::OK,
+            serde_json::json!({"number": 47, "assignees": []}),
+        );
+    }
+    // 0.2.9: editing a release. `id` 903 is the draft the edit tests publish.
+    if method == "PATCH" && p.contains("/releases/") {
+        let id: u64 = p
+            .rsplit('/')
+            .next()
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(0);
+        return (
+            StatusCode::OK,
+            serde_json::json!({
+                "id": id,
+                "tag_name": "v2.0.0",
+                "name": body.get("name").and_then(|n| n.as_str()).unwrap_or("v2.0.0"),
+                "html_url": "https://github.example/releases/v2.0.0",
+                "draft": body.get("draft").and_then(|d| d.as_bool()).unwrap_or(false),
+                "prerelease": body.get("prerelease").and_then(|d| d.as_bool()).unwrap_or(false),
+            }),
+        );
+    }
+    // 0.2.9: re-running and cancelling a workflow run.
+    if method == "POST"
+        && (p.ends_with("/rerun") || p.ends_with("/rerun-failed-jobs") || p.ends_with("/cancel"))
+    {
+        return (StatusCode::CREATED, serde_json::json!({}));
+    }
     if method == "POST" && p.ends_with("/requested_reviewers") {
         return (
             StatusCode::CREATED,
@@ -347,6 +415,14 @@ pub fn project_case_a(grants: &[&str]) -> Project {
     for g in grants {
         p = p.grant(g);
     }
+    p
+}
+
+/// 0.2.9: the same project, but with `delete_merged_branch` on for the read-write repo — the
+/// operator switch `pr merge --delete-branch` needs.
+pub fn project_case_a_deleting_merged_branches(grants: &[&str]) -> Project {
+    let mut p = project_case_a(grants);
+    p.repos[0].delete_merged_branch = true;
     p
 }
 

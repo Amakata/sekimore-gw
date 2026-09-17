@@ -49,6 +49,11 @@ pub enum AgentCmd {
         #[command(subcommand)]
         cmd: ReleaseCmd,
     },
+    #[command(about = t("agent.repo"))]
+    Repo {
+        #[command(subcommand)]
+        cmd: RepoCmd,
+    },
     #[command(about = t("agent.search"))]
     Search {
         #[arg(help = t("agent.search.query"))]
@@ -106,11 +111,35 @@ pub enum PrCmd {
     Merge {
         #[arg(long, help = t("agent.number"))]
         number: u64,
+        #[arg(long, help = t("agent.pr.merge.method"))]
+        method: Option<String>,
+        #[arg(long, help = t("agent.pr.merge.title"))]
+        title: Option<String>,
+        #[arg(long, help = t("agent.pr.merge.message"))]
+        message: Option<String>,
+        #[arg(long, help = t("agent.pr.merge.delete_branch"))]
+        delete_branch: bool,
     },
     #[command(about = t("agent.pr.close"))]
     Close {
         #[arg(long, help = t("agent.number"))]
         number: u64,
+    },
+    #[command(about = t("agent.pr.reopen"))]
+    Reopen {
+        #[arg(long, help = t("agent.number"))]
+        number: u64,
+    },
+    #[command(about = t("agent.pr.update"))]
+    Update {
+        #[arg(long, help = t("agent.number"))]
+        number: u64,
+        #[arg(long, help = t("agent.pr.update.title"))]
+        title: Option<String>,
+        #[arg(long, help = t("agent.pr.update.body"))]
+        body: Option<String>,
+        #[arg(long, help = t("agent.pr.update.base"))]
+        base: Option<String>,
     },
     #[command(about = t("agent.pr.request_review"))]
     RequestReview {
@@ -171,6 +200,18 @@ pub enum CiCmd {
         #[arg(long, help = t("agent.ci.run_id"))]
         run_id: Option<u64>,
     },
+    #[command(about = t("agent.ci.rerun"))]
+    Rerun {
+        #[arg(long, help = t("agent.ci.run_id"))]
+        run_id: u64,
+        #[arg(long, help = t("agent.ci.rerun.all"))]
+        all: bool,
+    },
+    #[command(about = t("agent.ci.cancel"))]
+    Cancel {
+        #[arg(long, help = t("agent.ci.run_id"))]
+        run_id: u64,
+    },
     #[command(about = t("agent.ci.log"))]
     Log {
         #[arg(long, help = t("agent.ci.log.number"))]
@@ -211,6 +252,11 @@ pub enum IssueCmd {
         #[arg(long, help = t("agent.number"))]
         number: u64,
     },
+    #[command(about = t("agent.issue.reopen"))]
+    Reopen {
+        #[arg(long, help = t("agent.number"))]
+        number: u64,
+    },
     #[command(about = t("agent.issue.label"))]
     Label {
         #[arg(long, help = t("agent.number"))]
@@ -218,11 +264,25 @@ pub enum IssueCmd {
         #[arg(long, help = t("agent.issue.labels"))]
         labels: String,
     },
+    #[command(about = t("agent.issue.unlabel"))]
+    Unlabel {
+        #[arg(long, help = t("agent.number"))]
+        number: u64,
+        #[arg(long, help = t("agent.issue.unlabel.labels"))]
+        labels: String,
+    },
     #[command(about = t("agent.issue.assign"))]
     Assign {
         #[arg(long, help = t("agent.number"))]
         number: u64,
         #[arg(long, help = t("agent.issue.assignees"))]
+        assignees: String,
+    },
+    #[command(about = t("agent.issue.unassign"))]
+    Unassign {
+        #[arg(long, help = t("agent.number"))]
+        number: u64,
+        #[arg(long, help = t("agent.issue.unassign.assignees"))]
         assignees: String,
     },
     #[command(about = t("agent.issue.view"))]
@@ -275,6 +335,21 @@ pub enum ReleaseCmd {
         #[arg(long, help = t("agent.release.prerelease"))]
         prerelease: bool,
     },
+    #[command(about = t("agent.release.edit"))]
+    Edit {
+        #[arg(long, help = t("agent.release.tag"))]
+        tag: String,
+        #[arg(long, help = t("agent.release.title"))]
+        title: Option<String>,
+        #[arg(long, help = t("agent.release.notes"))]
+        notes: Option<String>,
+        #[arg(long, help = t("agent.release.notes_file"))]
+        notes_file: Option<PathBuf>,
+        #[arg(long, help = t("agent.release.edit.draft"))]
+        draft: Option<bool>,
+        #[arg(long, help = t("agent.release.edit.prerelease"))]
+        prerelease: Option<bool>,
+    },
     #[command(about = t("agent.release.view"))]
     View {
         #[arg(long, help = t("agent.release.tag"))]
@@ -285,6 +360,12 @@ pub enum ReleaseCmd {
         #[arg(long, default_value_t = 20, help = t("agent.release.limit"))]
         limit: u32,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RepoCmd {
+    #[command(about = t("agent.repo.vocabulary"))]
+    Vocabulary,
 }
 
 #[derive(Subcommand, Debug)]
@@ -477,13 +558,45 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 req.body = body;
                 "/pr/review"
             }
-            PrCmd::Merge { number } => {
+            PrCmd::Merge {
+                number,
+                method,
+                title,
+                message,
+                delete_branch,
+            } => {
                 req.number = number;
+                req.method = method.unwrap_or_default();
+                req.title = title.unwrap_or_default();
+                // The merge commit's message rides in `body`, the field every other command uses
+                // for free text.
+                req.body = message.unwrap_or_default();
+                req.delete_branch = delete_branch;
                 "/pr/merge"
             }
             PrCmd::Close { number } => {
                 req.number = number;
                 "/pr/close"
+            }
+            PrCmd::Reopen { number } => {
+                req.number = number;
+                "/pr/reopen"
+            }
+            PrCmd::Update {
+                number,
+                title,
+                body,
+                base,
+            } => {
+                if title.is_none() && body.is_none() && base.is_none() {
+                    eprintln!("sekimore: pr update needs --title, --body or --base");
+                    return Ok(2);
+                }
+                req.number = number;
+                req.title = title.unwrap_or_default();
+                req.body = body.unwrap_or_default();
+                req.base = base.unwrap_or_default();
+                "/pr/update"
             }
             PrCmd::RequestReview {
                 number,
@@ -544,6 +657,15 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 req.run_id = run_id.unwrap_or(0);
                 "/ci/jobs"
             }
+            CiCmd::Rerun { run_id, all } => {
+                req.run_id = run_id;
+                req.all = all;
+                "/ci/rerun"
+            }
+            CiCmd::Cancel { run_id } => {
+                req.run_id = run_id;
+                "/ci/cancel"
+            }
             CiCmd::Log {
                 number,
                 run_id,
@@ -596,15 +718,29 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 req.number = number;
                 "/issue/close"
             }
+            IssueCmd::Reopen { number } => {
+                req.number = number;
+                "/issue/reopen"
+            }
             IssueCmd::Label { number, labels } => {
                 req.number = number;
                 req.labels = split_csv(&labels);
                 "/issue/label"
             }
+            IssueCmd::Unlabel { number, labels } => {
+                req.number = number;
+                req.labels = split_csv(&labels);
+                "/issue/unlabel"
+            }
             IssueCmd::Assign { number, assignees } => {
                 req.number = number;
                 req.assignees = split_csv(&assignees);
                 "/issue/assign"
+            }
+            IssueCmd::Unassign { number, assignees } => {
+                req.number = number;
+                req.assignees = split_csv(&assignees);
+                "/issue/unassign"
             }
             IssueCmd::View { number, json } => {
                 req.number = number;
@@ -668,6 +804,9 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 "/project/fields"
             }
         },
+        AgentCmd::Repo { cmd } => match cmd {
+            RepoCmd::Vocabulary => "/repo/vocabulary",
+        },
         AgentCmd::Search { query, limit, json } => {
             req.query = query;
             req.first = limit;
@@ -709,6 +848,40 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 req.draft = draft;
                 req.prerelease = prerelease;
                 "/release/create"
+            }
+            ReleaseCmd::Edit {
+                tag,
+                title,
+                notes,
+                notes_file,
+                draft,
+                prerelease,
+            } => {
+                if title.is_none()
+                    && notes.is_none()
+                    && notes_file.is_none()
+                    && draft.is_none()
+                    && prerelease.is_none()
+                {
+                    eprintln!(
+                        "sekimore: release edit needs --title, --notes, --notes-file, --draft or --prerelease"
+                    );
+                    return Ok(2);
+                }
+                req.tag = tag;
+                req.title = title.unwrap_or_default();
+                req.body = match (notes, notes_file) {
+                    (Some(_), Some(_)) => {
+                        return Err(anyhow!("pass either --notes or --notes-file, not both"))
+                    }
+                    (Some(n), None) => n,
+                    (None, Some(f)) => std::fs::read_to_string(&f)
+                        .with_context(|| format!("read {}", f.display()))?,
+                    (None, None) => String::new(),
+                };
+                req.set_draft = draft;
+                req.set_prerelease = prerelease;
+                "/release/edit"
             }
             ReleaseCmd::View { tag } => {
                 req.tag = tag;

@@ -133,7 +133,9 @@ git push origin HEAD:refs/heads/sekimore/x      # 自分の名前空間 sekimore
 sekimore whoami                                 # 自分の権限と repo
 sekimore pr create --head sekimore/x --base main --title T --body="…"
 sekimore pr status --number 12                  # PR の CI チェック（--json で機械可読）
-sekimore pr merge --number 12
+sekimore pr merge --number 12 --method squash --delete-branch
+sekimore pr update --number 12 --title T         # --base は bases に対して再検査される
+sekimore pr reopen --number 12                   # issue reopen も同じ。閉じるのと同じ権限
 sekimore ci runs --ref v0.2.0                   # タグ / ブランチ / SHA に紐づく workflow run
 sekimore ci jobs --number 12                    # PR の全 run のジョブ一覧（失敗と job_id が分かる）
 sekimore ci log --number 12                     # 失敗ジョブのログを末尾から。--before / --window で前へ
@@ -141,6 +143,9 @@ sekimore issue create --title T --labels bug    # ラベル付きは issue:label
 sekimore release create --tag v0.2.6            # タグを push した後に。本文は GitHub が書く
 sekimore release view --tag v0.2.6              # タグに対応する Release
 sekimore release list --limit 10                # 新しい順に Release 一覧
+sekimore release edit --tag v0.2.6 --draft false # draft を公開する（release:publish が要る）
+sekimore issue unlabel --number 5 --labels bug  # issue unassign も同じ形
+sekimore ci rerun --run-id 123 [--all]          # ci cancel --run-id 123。どちらも ci:rerun
 ```
 
 AI エージェント向けの使い方は `sekimore guide` で表示できます（CLI に埋め込み。正本は `relay/share/agent-guide.en.md` と `agent-guide.ja.md`）。
@@ -196,6 +201,7 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 | `push` | `["sekimore/*"]` | 直接 push を許すブランチ glob |
 | `tags` | `[]` | push を許すタグ glob。空は拒否 |
 | `delete` | `false` | ブランチとタグの削除 |
+| `delete_merged_branch` | `false` | `pr merge --delete-branch` がマージしたブランチを消してよいか。そのブランチだけなので `delete` とは別の権限。forge 側で自動削除している場合は不要 |
 | `boards` | `[]` | この案件が触れてよい Projects v2 のボード。URL のとおりに書く: `github.com/orgs/acme/projects/3` なら `{ org: acme, number: 3 }`、`{ user: someone, number: 1 }` も可。空なら Projects の操作を全て拒否 |
 | `repos` | `[]` | リポジトリ。`Org/Repo` は既定上流、`host/Org/Repo` で上流を明示 |
 | `upstreams.<domain>` | | 上流ごとの層。`permissions`（差分）、`push` / `tags` / `delete`（その上流の既定）、`repos` |
@@ -214,10 +220,13 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 
 - 実効権限 = (案件 allow ∪ 上流 allow ∪ repo allow) − (案件 deny ∪ 上流 deny ∪ repo deny)。deny はどの層に書いても勝ちます。
 - `push` / `tags` / `delete` は 案件 → 上流 → repo の順で上書きされます。glob は `*` と `?` が使えます。
-- 権限キーは 21 個: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:request_review` `pr:merge` `pr:close`、`issue:create` `issue:read` `issue:comment` `issue:close` `issue:label` `issue:assign`、`project:read` `project:add_item` `project:update_item`、`repo:read`、`ci:read`、`release:create` `release:read`、`search:read`。
+- 権限キーは 23 個: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:request_review` `pr:merge` `pr:close`、`issue:create` `issue:read` `issue:comment` `issue:close` `issue:label` `issue:assign`、`project:read` `project:add_item` `project:update_item`、`repo:read`、`ci:read` `ci:rerun`、`release:create` `release:read` `release:publish`、`search:read`。
 - `pr:read` は状態・CI チェックに加えて本文とコメントも含む。`issue:read` は別にしてあるので、非公開のトラッカーを読ませずに bug を登録させられる。`search:read` は 1 つのリポジトリに宛てた操作ではないので独立した資源。
 - `pr:review` はレビューを出す権限、`pr:request_review` は誰かに依頼する権限。意見を記録することと人に通知することは別なので分けてある。
-- `repo:read` は宣言されているが、まだどこも検査していない。
+- `ci:rerun` は workflow run の再実行と中止。`ci:read` には含めていない。再実行は Actions の時間を消費し、リポジトリの secret を持つ workflow のコードを実行するため。
+- `release:publish` は Release を draft から公開状態にする権限。`release create --draft` は公開を人間に委ねるためにあるので、`release:create` に畳み込むとその線が消える。draft のまま編集するだけなら `release:create` で足りる。
+- 閉じると開き直すは同じ権限（`pr:close` / `issue:close`）。開き直すのは閉じたことの取り消しであって、新しい力ではない。ラベルと担当者の付け外しも同様に 1 つ（`issue:label` / `issue:assign`）。PR のタイトルや本文の編集は `pr:create`。ただし base の変更だけは、そのリポジトリの `bases` に対して改めて検査する。
+- `repo:read` は `repo vocabulary`（そのリポジトリのラベル・担当者に指定できる人・マイルストーンの一覧）で使う。
 - 実効値は `sekimore-relay check` と Web UI の Relay タブで確認できます。
 
 ### 例: github.com と GHES を同時に扱う

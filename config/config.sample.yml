@@ -121,4 +121,7 @@ database_path: "/data/security_gateway.db"
 #     # about its owner, so without this list any board the upstream token can see would be reachable.
 #     tags: []                                  # default globs of tags that may be pushed (empty = denied). Override per repo with repos[].tags
 #     delete: false                             # default for deleting branches and tags. Override with repos[].delete
+#     delete_merged_branch: false               # 0.2.9+ whether `pr merge --delete-branch` may remove the branch it
+#                                               # just merged. Only that branch, so it is not the same authority as
+#                                               # `delete` above. Leave it off where the forge already does this
 #     # repos[] takes mode / bases / push / tags / delete / permissions ({allow, deny}, a diff against the project defaults; deny wins)

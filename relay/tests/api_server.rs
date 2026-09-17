@@ -1251,3 +1251,690 @@ async fn a_search_needs_a_query() {
     assert_eq!(code, 400);
     assert!(recorded(&f.recorder).is_empty());
 }
+
+// ---- finishing what the agent can already start (0.2.9) ----
+
+#[tokio::test]
+async fn merge_sends_the_method_and_the_commit_message() {
+    let f = start_api(project_case_a(&["pr:merge"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 42,
+        method: "squash".into(),
+        title: "Squashed title".into(),
+        body: "the whole story".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/merge", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    assert_eq!(rec.len(), 1);
+    assert_eq!(rec[0].method, "PUT");
+    assert_eq!(
+        rec[0].path,
+        "/api/v3/repos/LibOrg/awesome-lib/pulls/42/merge"
+    );
+    assert_eq!(rec[0].body["merge_method"], "squash");
+    assert_eq!(rec[0].body["commit_title"], "Squashed title");
+    assert_eq!(rec[0].body["commit_message"], "the whole story");
+}
+
+#[tokio::test]
+async fn a_squash_only_repository_is_no_longer_a_dead_end() {
+    // PR 405 in the mock rejects anything but a squash, the way a squash-only repository does.
+    let f = start_api(project_case_a(&["pr:merge"]), BootstrapMode::Auto, true).await;
+    let plain = ApiRequest {
+        number: 405,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/pr/merge", Some(&f.token), &plain).await;
+    assert_ne!(
+        code, 200,
+        "the default merge commit should still be refused"
+    );
+
+    let squash = ApiRequest {
+        number: 405,
+        method: "squash".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/merge", Some(&f.token), &squash).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+}
+
+#[tokio::test]
+async fn merge_without_options_still_sends_an_empty_body() {
+    // The old behaviour has to survive: no option given means no key in the request.
+    let f = start_api(project_case_a(&["pr:merge"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 42,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/merge", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    assert_eq!(rec.len(), 1);
+    assert!(
+        rec[0].body.get("merge_method").is_none(),
+        "{:?}",
+        rec[0].body
+    );
+    assert!(rec[0].body.get("commit_title").is_none());
+    assert!(rec[0].body.get("commit_message").is_none());
+}
+
+#[tokio::test]
+async fn an_unknown_merge_method_is_rejected_before_upstream() {
+    let f = start_api(project_case_a(&["pr:merge"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 42,
+        method: "fast-forward".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/merge", Some(&f.token), &r).await;
+    assert_eq!(code, 400, "{:?}", resp.error);
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "nothing should reach upstream"
+    );
+}
+
+#[tokio::test]
+async fn deleting_the_branch_uses_the_name_the_upstream_gave() {
+    // The caller never names the branch: it comes from the pull request, so this cannot become
+    // "delete any ref". PR 7 in the mock has head sekimore/topic.
+    let f = start_api(
+        project_case_a_deleting_merged_branches(&["pr:merge"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 7,
+        delete_branch: true,
+        // A branch name in a field the handler must ignore for this purpose.
+        head: "main".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/merge", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    let deletes: Vec<_> = rec.iter().filter(|c| c.method == "DELETE").collect();
+    assert_eq!(deletes.len(), 1);
+    assert_eq!(
+        deletes[0].path,
+        "/api/v3/repos/LibOrg/awesome-lib/git/refs/heads/sekimore%2Ftopic"
+    );
+    assert!(resp.message.unwrap_or_default().contains("sekimore/topic"));
+}
+
+#[tokio::test]
+async fn the_branch_survives_a_merge_that_did_not_happen() {
+    // The mock refuses a plain merge commit on 405; nothing may be deleted after that.
+    let f = start_api(
+        project_case_a_deleting_merged_branches(&["pr:merge"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 405,
+        delete_branch: true,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/pr/merge", Some(&f.token), &r).await;
+    assert_ne!(code, 200);
+    assert!(
+        !recorded(&f.recorder).iter().any(|c| c.method == "DELETE"),
+        "a failed merge must not delete the branch"
+    );
+}
+
+#[tokio::test]
+async fn merging_still_needs_pr_merge() {
+    let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 42,
+        method: "squash".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/pr/merge", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn reopening_rides_on_the_permission_that_closes() {
+    for (path, grant) in [("/pr/reopen", "pr:close"), ("/issue/reopen", "issue:close")] {
+        let f = start_api(project_case_a(&[grant]), BootstrapMode::Auto, true).await;
+        let r = ApiRequest {
+            number: 42,
+            ..req("LibOrg/awesome-lib")
+        };
+        let (code, resp) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(code, 200, "{path}: {:?}", resp.error);
+        let rec = recorded(&f.recorder);
+        assert_eq!(rec.len(), 1, "{path}");
+        assert_eq!(rec[0].method, "PATCH", "{path}");
+        assert_eq!(rec[0].body["state"], "open", "{path}");
+    }
+}
+
+#[tokio::test]
+async fn reopening_is_refused_without_the_close_permission() {
+    for (path, other) in [
+        ("/pr/reopen", "pr:create"),
+        ("/issue/reopen", "issue:create"),
+    ] {
+        let f = start_api(project_case_a(&[other]), BootstrapMode::Auto, true).await;
+        let r = ApiRequest {
+            number: 42,
+            ..req("LibOrg/awesome-lib")
+        };
+        let (code, _) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(code, 403, "{path}");
+        assert!(recorded(&f.recorder).is_empty(), "{path}");
+    }
+}
+
+#[tokio::test]
+async fn removing_a_label_and_an_assignee_is_the_permission_that_adds_them() {
+    let f = start_api(
+        project_case_a(&["issue:label", "issue:assign"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 47,
+        labels: vec!["bug".into(), "p1".into()],
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/unlabel", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+
+    let r = ApiRequest {
+        number: 47,
+        assignees: vec!["bob".into()],
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/unassign", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+
+    let rec = recorded(&f.recorder);
+    // GitHub removes one label per request, so two names are two calls.
+    let paths: Vec<&str> = rec.iter().map(|c| c.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            "/api/v3/repos/LibOrg/awesome-lib/issues/47/labels/bug",
+            "/api/v3/repos/LibOrg/awesome-lib/issues/47/labels/p1",
+            "/api/v3/repos/LibOrg/awesome-lib/issues/47/assignees",
+        ]
+    );
+    assert!(rec.iter().all(|c| c.method == "DELETE"));
+    assert_eq!(rec[2].body["assignees"][0], "bob");
+}
+
+#[tokio::test]
+async fn removing_a_label_needs_issue_label() {
+    let f = start_api(project_case_a(&["issue:create"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 47,
+        labels: vec!["bug".into()],
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/issue/unlabel", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+
+    let r = ApiRequest {
+        number: 47,
+        assignees: vec!["bob".into()],
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/issue/unassign", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn a_label_name_cannot_escape_the_repository_path() {
+    // The label goes into the PATH, so it needs path_segment and not url_escape: `/` and `.` have
+    // to be encoded or the URL parser resolves `..` and walks out of /repos/<owner>/<repo>/.
+    let f = start_api(project_case_a(&["issue:label"]), BootstrapMode::Auto, true).await;
+    for evil in [
+        "../../../Other/Secret/issues/1/labels/x",
+        "..%2f..%2fOther/Secret",
+        "bug/../../../../Other/Secret",
+        "../../../../user",
+    ] {
+        let r = ApiRequest {
+            number: 47,
+            labels: vec![evil.to_string()],
+            ..req("LibOrg/awesome-lib")
+        };
+        let (_, _) = post(f.addr, "/issue/unlabel", Some(&f.token), &r).await;
+        for call in recorded(&f.recorder) {
+            assert!(
+                call.path
+                    .starts_with("/api/v3/repos/LibOrg/awesome-lib/issues/47/labels/"),
+                "label {evil:?} reached {} — outside the project",
+                call.path
+            );
+        }
+    }
+    assert!(
+        !recorded(&f.recorder).is_empty(),
+        "the calls should have been made, just contained"
+    );
+}
+
+#[tokio::test]
+async fn updating_a_pull_request_rides_on_pr_create() {
+    let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 42,
+        title: "A better title".into(),
+        body: "a better body".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/update", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    assert_eq!(rec.len(), 1);
+    assert_eq!(rec[0].method, "PATCH");
+    assert_eq!(rec[0].path, "/api/v3/repos/LibOrg/awesome-lib/pulls/42");
+    assert_eq!(rec[0].body["title"], "A better title");
+    assert_eq!(rec[0].body["body"], "a better body");
+    // Nothing was said about the base, so nothing is sent about it.
+    assert!(rec[0].body.get("base").is_none());
+}
+
+#[tokio::test]
+async fn updating_a_pull_request_needs_pr_create() {
+    let f = start_api(project_case_a(&["pr:comment"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 42,
+        title: "A better title".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/pr/update", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn a_pull_request_cannot_be_retargeted_at_a_forbidden_base() {
+    // LibOrg/awesome-lib allows only `main`, the same rule pr create is held to. Retargeting an
+    // existing PR must not be the way around it.
+    let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 42,
+        base: "release".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/update", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp.error);
+    assert!(recorded(&f.recorder).is_empty());
+
+    // The allowed base still goes through, and reaches upstream.
+    let ok = ApiRequest {
+        number: 42,
+        base: "main".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/update", Some(&f.token), &ok).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    assert_eq!(rec.len(), 1);
+    assert_eq!(rec[0].body["base"], "main");
+}
+
+#[tokio::test]
+async fn pr_update_needs_something_to_change() {
+    let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 42,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/pr/update", Some(&f.token), &r).await;
+    assert_eq!(code, 400);
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn editing_a_release_that_stays_a_draft_is_release_create() {
+    // v2.0.0-draft is a draft in the mock. Editing its notes without publishing needs no more than
+    // the permission that made it.
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v2.0.0-draft".into(),
+        body: "rewritten notes".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/edit", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    // A lookup to learn the draft state, then the edit itself.
+    assert_eq!(rec.len(), 2);
+    assert_eq!(rec[1].method, "PATCH");
+    assert_eq!(rec[1].path, "/api/v3/repos/LibOrg/awesome-lib/releases/903");
+    assert_eq!(rec[1].body["body"], "rewritten notes");
+    assert!(rec[1].body.get("draft").is_none());
+    assert!(resp.message.unwrap_or_default().starts_with("updated"));
+}
+
+#[tokio::test]
+async fn publishing_a_draft_needs_release_publish() {
+    // release:create made the draft; it must not also be what takes it out of draft, or --draft
+    // would stop meaning anything.
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v2.0.0-draft".into(),
+        set_draft: Some(false),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/edit", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp.error);
+    // The lookup happened (it is what tells us this publishes); the edit did not.
+    assert!(
+        !recorded(&f.recorder).iter().any(|c| c.method == "PATCH"),
+        "nothing should have been written"
+    );
+
+    let f = start_api(
+        project_case_a(&["release:create", "release:publish"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let (code, resp) = post(f.addr, "/release/edit", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    let patch = rec.iter().find(|c| c.method == "PATCH").expect("the edit");
+    assert_eq!(patch.body["draft"], false);
+    assert!(resp.message.unwrap_or_default().starts_with("published"));
+}
+
+#[tokio::test]
+async fn release_publish_is_only_demanded_when_the_draft_really_flips() {
+    // v1.0.0 is already published in the mock. Saying --draft false about it changes nothing, so it
+    // is an edit, not a publish, and release:create is enough.
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v1.0.0".into(),
+        set_draft: Some(false),
+        title: "renamed".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/edit", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+
+    // Turning a published release back into a draft is also not a publish.
+    let back = ApiRequest {
+        tag: "v1.0.0".into(),
+        set_draft: Some(true),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/edit", Some(&f.token), &back).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+}
+
+#[tokio::test]
+async fn editing_a_release_needs_release_create_at_the_very_least() {
+    // release:read can look at a release; it cannot change one.
+    let f = start_api(project_case_a(&["release:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        tag: "v1.0.0".into(),
+        title: "renamed".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/release/edit", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn editing_a_release_that_does_not_exist_says_so() {
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v0.0.0-none".into(),
+        title: "renamed".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/edit", Some(&f.token), &r).await;
+    assert_eq!(code, 400);
+    assert!(resp.error.unwrap_or_default().contains("v0.0.0-none"));
+}
+
+#[tokio::test]
+async fn an_agent_cannot_escape_its_repository_through_a_release_edit_tag() {
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "../../../Other/Secret/releases/1".into(),
+        title: "renamed".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (_, _) = post(f.addr, "/release/edit", Some(&f.token), &r).await;
+    for call in recorded(&f.recorder) {
+        assert!(
+            call.path.starts_with("/api/v3/repos/LibOrg/awesome-lib/"),
+            "tag reached {} — outside the project",
+            call.path
+        );
+    }
+}
+
+#[tokio::test]
+async fn re_running_ci_is_its_own_permission() {
+    // Reading a log and spending Actions minutes with the repository's secrets are not the same
+    // authority, so ci:read must not carry ci:rerun.
+    let f = start_api(project_case_a(&["ci:read"]), BootstrapMode::Auto, true).await;
+    for path in ["/ci/rerun", "/ci/cancel"] {
+        let r = ApiRequest {
+            run_id: 1234,
+            ..req("LibOrg/awesome-lib")
+        };
+        let (code, _) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(code, 403, "{path}");
+    }
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn ci_rerun_picks_the_failed_jobs_unless_asked_for_all() {
+    let f = start_api(project_case_a(&["ci:rerun"]), BootstrapMode::Auto, true).await;
+    let failed = ApiRequest {
+        run_id: 1234,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/ci/rerun", Some(&f.token), &failed).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+
+    let all = ApiRequest {
+        run_id: 1234,
+        all: true,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/ci/rerun", Some(&f.token), &all).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+
+    let cancel = ApiRequest {
+        run_id: 1234,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/ci/cancel", Some(&f.token), &cancel).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+
+    let rec = recorded(&f.recorder);
+    let paths: Vec<&str> = rec.iter().map(|c| c.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            "/api/v3/repos/LibOrg/awesome-lib/actions/runs/1234/rerun-failed-jobs",
+            "/api/v3/repos/LibOrg/awesome-lib/actions/runs/1234/rerun",
+            "/api/v3/repos/LibOrg/awesome-lib/actions/runs/1234/cancel",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn ci_rerun_needs_a_run_id() {
+    let f = start_api(project_case_a(&["ci:rerun"]), BootstrapMode::Auto, true).await;
+    let r = req("LibOrg/awesome-lib");
+    let (code, _) = post(f.addr, "/ci/rerun", Some(&f.token), &r).await;
+    assert_eq!(code, 400);
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn the_new_operations_all_refuse_a_repository_outside_the_project() {
+    let f = start_api(
+        project_case_a(&[
+            "pr:merge",
+            "pr:close",
+            "pr:create",
+            "issue:close",
+            "issue:label",
+            "issue:assign",
+            "release:create",
+            "release:publish",
+            "ci:rerun",
+        ]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let cases: Vec<(&str, ApiRequest)> = vec![
+        (
+            "/pr/merge",
+            ApiRequest {
+                number: 1,
+                ..req("Other/Secret")
+            },
+        ),
+        (
+            "/pr/reopen",
+            ApiRequest {
+                number: 1,
+                ..req("Other/Secret")
+            },
+        ),
+        (
+            "/pr/update",
+            ApiRequest {
+                number: 1,
+                title: "x".into(),
+                ..req("Other/Secret")
+            },
+        ),
+        (
+            "/issue/reopen",
+            ApiRequest {
+                number: 1,
+                ..req("Other/Secret")
+            },
+        ),
+        (
+            "/issue/unlabel",
+            ApiRequest {
+                number: 1,
+                labels: vec!["bug".into()],
+                ..req("Other/Secret")
+            },
+        ),
+        (
+            "/issue/unassign",
+            ApiRequest {
+                number: 1,
+                assignees: vec!["bob".into()],
+                ..req("Other/Secret")
+            },
+        ),
+        (
+            "/release/edit",
+            ApiRequest {
+                tag: "v1.0.0".into(),
+                title: "x".into(),
+                ..req("Other/Secret")
+            },
+        ),
+        (
+            "/ci/rerun",
+            ApiRequest {
+                run_id: 1,
+                ..req("Other/Secret")
+            },
+        ),
+        (
+            "/ci/cancel",
+            ApiRequest {
+                run_id: 1,
+                ..req("Other/Secret")
+            },
+        ),
+    ];
+    for (path, r) in cases {
+        let (code, _) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(
+            code, 403,
+            "{path} should refuse a repository outside the project"
+        );
+    }
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn deleting_the_merged_branch_needs_the_operator_to_allow_it() {
+    // `delete_merged_branch` is the operator's switch. The agent asking for --delete-branch is
+    // necessary but not sufficient, and the merge must not happen behind a refusal either.
+    let f = start_api(project_case_a(&["pr:merge"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        delete_branch: true,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/merge", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp.error);
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "not even the merge should run"
+    );
+
+    // Without --delete-branch the same repository merges fine; only the deletion was refused. A
+    // fresh fixture, so the recorder holds this request alone.
+    let f = start_api(project_case_a(&["pr:merge"]), BootstrapMode::Auto, true).await;
+    let plain = ApiRequest {
+        number: 7,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/merge", Some(&f.token), &plain).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    assert_eq!(rec.len(), 1, "only the merge itself");
+    assert_eq!(rec[0].method, "PUT");
+}

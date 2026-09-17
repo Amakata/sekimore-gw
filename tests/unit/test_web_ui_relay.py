@@ -565,6 +565,8 @@ def describe_dashboard_permission_list():
             "Read": "read",
             "AddItem": "add_item",
             "UpdateItem": "update_item",
+            "Publish": "publish",
+            "Rerun": "rerun",
         }
         defined = set()
         for res, body in re.findall(r"Resource::(\w+) => &\[([^\]]*)\]", policy):

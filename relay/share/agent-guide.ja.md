@@ -31,17 +31,26 @@ sekimore pr view --number N              # タイトル、本文、ブランチ�
 sekimore pr comments --number N          # 会話・レビュー・行への指摘を時系列で
 sekimore pr list [--state open]          # そのリポジトリの PR 一覧
 sekimore pr status --number N            # CI チェックの状態（--json で機械可読）
-sekimore pr merge --number N             # pr:merge が許可されているとき
+sekimore pr merge --number N             # pr:merge が許可されているとき。squash 限定の repo などは --method squash|merge|rebase
+                                         #   --delete-branch で head ブランチも消す（運用者が許可しているとき）
+sekimore pr update --number N --title "…"    # 自分の PR を編集する。--base は許可された base か改めて検査される
+sekimore pr reopen --number N            # pr close の逆。権限は同じ
 sekimore ci runs --ref <tag|branch|sha>  # ref に紐づく workflow run 一覧
 sekimore ci jobs --number N              # PR のジョブ一覧（どれが失敗したか、job_id）
 sekimore ci log --number N               # 失敗ジョブのログを末尾から。--before <start> で前へ、--window で行数
+sekimore ci rerun --run-id N [--all]     # 失敗ジョブを再実行（--all で全ジョブ）。ci:read ではなく ci:rerun が要る
+sekimore ci cancel --run-id N            # 実行中の run を中止する
 sekimore issue create --title "…" --body="…" [--labels a,b]
 sekimore issue view --number N           # タイトル、本文、ラベル、担当者
 sekimore issue comments --number N
 sekimore issue list [--state open] [--labels bug]
+sekimore issue reopen --number N         # issue close の逆。権限は同じ
+sekimore issue unlabel --number N --labels bug        # ラベルを外す（issue:label）
+sekimore issue unassign --number N --assignees alice  # 担当者を外す（issue:assign）
 sekimore search "is:open label:bug"      # 案件の全リポジトリを横断
 sekimore release create --tag vX.Y.Z      # タグを push した後に。本文は GitHub が書く
 sekimore release view --tag vX.Y.Z        # タグに対応する Release
+sekimore release edit --tag vX.Y.Z --draft false      # draft を公開する。release:publish が要る
 sekimore pr request-review --number N --reviewers alice,bob   # レビューを依頼する
 ```
 
@@ -57,7 +66,7 @@ sekimore pr request-review --number N --reviewers alice,bob   # レビューを�
 3. `sekimore pr create --head sekimore/<topic> --base main --title "…" --body="…"`
 4. `sekimore pr status --number N` で緑になるのを待つ。失敗は `sekimore ci log` で確認。
 5. 権限があり、人間の指示があれば `sekimore pr merge --number N`。タグは許可された repo でのみ `git push origin vX.Y.Z`。
-6. タグを push したら `sekimore release create --tag vX.Y.Z` で Release にする。本文は前のタグからの PR を元に GitHub が書くので、自分で組み立てなくてよい。自分で書くときは `--notes` か `--notes-file`、公開を人間に任せるときは `--draft`。
+6. タグを push したら `sekimore release create --tag vX.Y.Z` で Release にする。本文は前のタグからの PR を元に GitHub が書くので、自分で組み立てなくてよい。自分で書くときは `--notes` か `--notes-file`、公開を人間に任せるときは `--draft`。draft を仕上げるのは `sekimore release edit --tag vX.Y.Z --draft false`（`release:publish` が要る）。
 
 ## よくある拒否メッセージ
 
