@@ -62,6 +62,11 @@ pub struct ApiRequest {
     pub draft: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub prerelease: bool,
+    /// 0.2.7: people asked to review a pull request, and teams asked the same
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reviewers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub team_reviewers: Vec<String>,
 }
 
 fn is_false(b: &bool) -> bool {

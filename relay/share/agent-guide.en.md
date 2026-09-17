@@ -16,7 +16,8 @@ Start with `sekimore whoami` to see your project, your permissions and the repos
 - There are only two push targets.
   - `git push origin HEAD:refs/for/<base>` puts the commits on a branch named `sekimore/<base>-<sha7>` and opens a pull request against `<base>` automatically. The title is generated, so use the other form when you want to write the title and body yourself.
   - `git push origin HEAD:refs/heads/sekimore/<topic>` is a working branch. Open the pull request with `sekimore pr create`. This is the recommended path.
-- Direct pushes to `main`, tags, branch deletions and force pushes are refused by default. They work only for repositories where they are allowed; check with `sekimore whoami`.
+- Direct pushes to `main`, tags and branch deletions are refused by default. They work only for repositories where they are allowed; check with `sekimore whoami`.
+- A force push inside your own `sekimore/*` namespace is not blocked by the relay. Branch protection upstream is what refuses one where it matters. Do not rewrite a branch someone else may be working from.
 - Commits are signed automatically with the AI signing key. Do not change the signing configuration.
 - The HTTPS URL of a repository (`https://github.com/…`) cannot be used for push or clone. Use the SSH URL.
 
@@ -34,6 +35,7 @@ sekimore ci log --number N               # log of the failed job from the end; -
 sekimore issue create --title "…" --body="…" [--labels a,b]
 sekimore release create --tag vX.Y.Z      # after pushing the tag; GitHub writes the notes
 sekimore release view --tag vX.Y.Z        # the release for one tag
+sekimore pr request-review --number N --reviewers alice,bob   # ask people to review
 ```
 
 - Select the repository with `--repo Org/Repo`, or leave it to `SEKIMORE_REPO`. With several upstreams you can prefix the host: `--repo ghe.example.com/Org/Repo`.

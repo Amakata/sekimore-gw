@@ -535,3 +535,45 @@ relay:
         capped = [e for e in blocked if e["event"] == "https_upload_capped"]
         assert len(capped) == 1 and capped[0]["component"] == "HTTPS"
         assert stats["large_uploads"] == 1 and stats["upload_capped"] == 1
+
+
+def describe_dashboard_permission_list():
+    """The Relay tab offers a fixed list of permission keys; it must match the relay's own set."""
+
+    def it_lists_every_key_the_relay_defines():
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        html = (root / "src" / "web_ui" / "templates" / "dashboard.html").read_text()
+        policy = (root / "relay" / "src" / "policy.rs").read_text()
+
+        m = re.search(r"const allPerms = \[(.*?)\];", html, re.S)
+        assert m, "the dashboard should declare allPerms"
+        shown = set(re.findall(r"'([a-z_]+:[a-z_]+)'", m.group(1)))
+
+        # Rebuild the relay's set from valid_actions(): `Resource::X => &[A, B],`
+        actions = {
+            "Create": "create",
+            "Comment": "comment",
+            "Review": "review",
+            "RequestReview": "request_review",
+            "Merge": "merge",
+            "Close": "close",
+            "Label": "label",
+            "Assign": "assign",
+            "Read": "read",
+            "AddItem": "add_item",
+            "UpdateItem": "update_item",
+        }
+        defined = set()
+        for res, body in re.findall(r"Resource::(\w+) => &\[([^\]]*)\]", policy):
+            for a in (x.strip() for x in body.split(",") if x.strip()):
+                assert a in actions, f"unknown action {a}; add it to this test"
+                defined.add(f"{res.lower()}:{actions[a]}")
+
+        assert defined, "should have parsed the relay's permission keys"
+        assert defined == shown, (
+            f"dashboard is out of step: missing {sorted(defined - shown)}, "
+            f"stale {sorted(shown - defined)}"
+        )

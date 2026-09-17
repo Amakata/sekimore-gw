@@ -40,6 +40,8 @@ pub enum Action {
     Read,
     AddItem,
     UpdateItem,
+    /// 0.2.7: ask someone to review a pull request. Separate from `Review`, which submits one
+    RequestReview,
 }
 
 impl Resource {
@@ -57,7 +59,7 @@ impl Resource {
     pub fn valid_actions(&self) -> &'static [Action] {
         use Action::*;
         match self {
-            Resource::Pr => &[Create, Comment, Review, Merge, Close, Read],
+            Resource::Pr => &[Create, Comment, Review, Merge, Close, Read, RequestReview],
             Resource::Issue => &[Create, Comment, Close, Label, Assign],
             Resource::Project => &[Read, AddItem, UpdateItem],
             Resource::Repo => &[Read],
@@ -88,6 +90,7 @@ impl Action {
             Action::Read => "read",
             Action::AddItem => "add_item",
             Action::UpdateItem => "update_item",
+            Action::RequestReview => "request_review",
         }
     }
 }
@@ -122,6 +125,7 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "read" => Action::Read,
         "add_item" => Action::AddItem,
         "update_item" => Action::UpdateItem,
+        "request_review" => Action::RequestReview,
         other => return Err(format!("unknown action {other:?}")),
     };
     if !resource.valid_actions().contains(&action) {
@@ -1073,7 +1077,9 @@ mod tests {
         assert!(Project::try_new("x", vec![], &["pr:delete".to_string()]).is_err());
         assert!(Project::try_new("x", vec![RepoPolicy::new("nope", Mode::ReadOnly)], &[]).is_err());
         // pr:read (0.1.3) + ci:read (0.1.5) + release:create / release:read (0.2.6)
-        assert_eq!(all_permission_keys().len(), 18);
+        // + pr:request_review (0.2.7)
+        assert_eq!(all_permission_keys().len(), 19);
+        assert!(all_permission_keys().contains(&"pr:request_review".to_string()));
         assert!(all_permission_keys().contains(&"release:create".to_string()));
     }
 }

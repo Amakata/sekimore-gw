@@ -103,6 +103,15 @@ pub enum PrCmd {
         #[arg(long, help = t("agent.number"))]
         number: u64,
     },
+    #[command(about = t("agent.pr.request_review"))]
+    RequestReview {
+        #[arg(long, help = t("agent.number"))]
+        number: u64,
+        #[arg(long, help = t("agent.pr.reviewers"))]
+        reviewers: Option<String>,
+        #[arg(long, help = t("agent.pr.team_reviewers"))]
+        teams: Option<String>,
+    },
     #[command(about = t("agent.pr.status"))]
     Status {
         #[arg(long, help = t("agent.number"))]
@@ -238,6 +247,13 @@ pub enum ProjectCmd {
         #[arg(long, help = t("agent.project.project_id"))]
         project_id: String,
         #[arg(long, default_value_t = 20)]
+        first: u32,
+    },
+    #[command(about = t("agent.project.fields"))]
+    Fields {
+        #[arg(long, help = t("agent.project.project_id"))]
+        project_id: String,
+        #[arg(long, default_value_t = 50)]
         first: u32,
     },
 }
@@ -404,6 +420,16 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 req.number = number;
                 "/pr/close"
             }
+            PrCmd::RequestReview {
+                number,
+                reviewers,
+                teams,
+            } => {
+                req.number = number;
+                req.reviewers = reviewers.map(|r| split_csv(&r)).unwrap_or_default();
+                req.team_reviewers = teams.map(|t| split_csv(&t)).unwrap_or_default();
+                "/pr/request-review"
+            }
             PrCmd::Status { number, json } => {
                 req.number = number;
                 let resp = client.call("/pr/status", &req).await?;
@@ -520,6 +546,11 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 req.project_id = project_id;
                 req.first = first;
                 "/project/list"
+            }
+            ProjectCmd::Fields { project_id, first } => {
+                req.project_id = project_id;
+                req.first = first;
+                "/project/fields"
             }
         },
         AgentCmd::Release { cmd } => match cmd {

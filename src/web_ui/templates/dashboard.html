@@ -1240,9 +1240,13 @@
                     relayKV(tr('relay.kv.state_dir'), cfg.state_dir),
                 ].join('');
 
+                // Keep in step with Resource::valid_actions() in relay/src/policy.rs. A key missing
+                // here still shows once it is granted (see the push below), but it will not appear
+                // as an ungranted option.
                 const allPerms = ['issue:assign', 'issue:close', 'issue:comment', 'issue:create', 'issue:label',
-                    'pr:close', 'pr:comment', 'pr:create', 'pr:merge', 'pr:read', 'pr:review',
-                    'project:add_item', 'project:read', 'project:update_item', 'repo:read', 'ci:read'];
+                    'pr:close', 'pr:comment', 'pr:create', 'pr:merge', 'pr:read', 'pr:request_review', 'pr:review',
+                    'project:add_item', 'project:read', 'project:update_item', 'repo:read', 'ci:read',
+                    'release:create', 'release:read'];
                 const granted = new Set(cfg.permissions);
                 const denied = new Set(cfg.permissions_deny || []);
                 cfg.permissions.forEach(p => allPerms.includes(p) || allPerms.push(p));

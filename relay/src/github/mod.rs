@@ -641,6 +641,32 @@ impl GitHub {
         Ok(())
     }
 
+    /// 0.2.7: ask people to review a pull request. Separate permission from submitting a review,
+    /// because this notifies humans rather than recording an opinion.
+    pub async fn request_reviewers(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        reviewers: &[String],
+        team_reviewers: &[String],
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Pr, Action::RequestReview)?;
+        let mut body = json!({});
+        if !reviewers.is_empty() {
+            body["reviewers"] = json!(reviewers);
+        }
+        if !team_reviewers.is_empty() {
+            body["team_reviewers"] = json!(team_reviewers);
+        }
+        self.rest::<Value>(
+            "POST",
+            &format!("/repos/{}/pulls/{number}/requested_reviewers", auth.repo()),
+            Some(body),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn merge_pull_request(
         &self,
         auth: &Authorized<'_>,
@@ -816,6 +842,23 @@ impl GitHub {
     ) -> Result<Value, GhError> {
         auth.ensure(Resource::Project, Action::Read)?;
         const Q: &str = "query($project:ID!,$first:Int!){ node(id:$project){ ... on ProjectV2 { title items(first:$first){ nodes{ id type content{ ... on Issue { number title } ... on PullRequest { number title } } } } } } }";
+        self.graphql(Q, json!({"project": project_id, "first": first}))
+            .await
+    }
+
+    /// 0.2.7: the fields of a project board, with the option ids of every single-select.
+    ///
+    /// `project update-item` needs a `field_id`, and for a single-select the option's id rather
+    /// than its name. Without this the ids had to come from a human, which made the update
+    /// command unusable on its own.
+    pub async fn list_project_fields(
+        &self,
+        auth: &Authorized<'_>,
+        project_id: &str,
+        first: u32,
+    ) -> Result<Value, GhError> {
+        auth.ensure(Resource::Project, Action::Read)?;
+        const Q: &str = "query($project:ID!,$first:Int!){ node(id:$project){ ... on ProjectV2 { title fields(first:$first){ nodes{ ... on ProjectV2FieldCommon { id name dataType } ... on ProjectV2SingleSelectField { id name dataType options{ id name } } ... on ProjectV2IterationField { id name dataType configuration{ iterations{ id title } } } } } } } }";
         self.graphql(Q, json!({"project": project_id, "first": first}))
             .await
     }

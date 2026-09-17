@@ -200,9 +200,30 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
         );
     }
     if p == "/api/graphql" {
+        // 0.2.7: the fields query asks for `fields(`; the items query does not
+        let asks_for_fields = body
+            .get("query")
+            .and_then(|q| q.as_str())
+            .is_some_and(|q| q.contains("fields(first:"));
+        if asks_for_fields {
+            return (
+                StatusCode::OK,
+                serde_json::json!({"data": {"node": {"title": "Board", "fields": {"nodes": [
+                    {"id": "PVTF_status", "name": "Status", "dataType": "SINGLE_SELECT",
+                     "options": [{"id": "OPT_todo", "name": "Todo"}, {"id": "OPT_done", "name": "Done"}]},
+                    {"id": "PVTF_text", "name": "Notes", "dataType": "TEXT"}
+                ]}}}}),
+            );
+        }
         return (
             StatusCode::OK,
             serde_json::json!({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_1"}}, "node": {"title": "Board", "items": {"nodes": []}}}}),
+        );
+    }
+    if method == "POST" && p.ends_with("/requested_reviewers") {
+        return (
+            StatusCode::CREATED,
+            serde_json::json!({"number": 42, "requested_reviewers": [{"login": "alice"}]}),
         );
     }
     (StatusCode::OK, serde_json::json!({}))

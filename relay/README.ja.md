@@ -213,7 +213,9 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 
 - 実効権限 = (案件 allow ∪ 上流 allow ∪ repo allow) − (案件 deny ∪ 上流 deny ∪ repo deny)。deny はどの層に書いても勝ちます。
 - `push` / `tags` / `delete` は 案件 → 上流 → repo の順で上書きされます。glob は `*` と `?` が使えます。
-- 権限キーは 18 個: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:merge` `pr:close`、`issue:create` `issue:comment` `issue:close` `issue:label` `issue:assign`、`project:read` `project:add_item` `project:update_item`、`repo:read`、`ci:read`、`release:create` `release:read`。
+- 権限キーは 19 個: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:request_review` `pr:merge` `pr:close`、`issue:create` `issue:comment` `issue:close` `issue:label` `issue:assign`、`project:read` `project:add_item` `project:update_item`、`repo:read`、`ci:read`、`release:create` `release:read`。
+- `pr:review` はレビューを出す権限、`pr:request_review` は誰かに依頼する権限。意見を記録することと人に通知することは別なので分けてある。
+- `repo:read` は宣言されているが、まだどこも検査していない。
 - 実効値は `sekimore-relay check` と Web UI の Relay タブで確認できます。
 
 ### 例: github.com と GHES を同時に扱う
