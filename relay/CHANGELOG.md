@@ -2,6 +2,13 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.11 (2026-09-17)
+
+- `cli/agent.rs` (948 lines) split into `cli/agent/`: the clap tree, the dispatch, the printing and the HTTP client. Each part now knows one thing — printing knows nothing about endpoints, the client nothing about subcommands
+- An endpoint's path is declared beside its flags, so the two cannot drift. A subcommand written without a path does not compile. The field mapping stays explicit: covering all 38 endpoints in a macro would need seven features and sixteen escapes, which costs more reading than it saves
+- The repeated handler preamble in `api/handlers.rs` folded into three scope helpers, about 150 lines. The permission stays an argument at every call site, because that is the security boundary and belongs where it can be read
+- No change to any command, flag, endpoint, permission or message. All 47 help screens are byte-identical in both languages
+
 ## 0.2.10 (2026-09-17)
 
 - `SEKIMORE_WEB_HOST`, `SEKIMORE_WEB_PORT` and `SEKIMORE_ULOG_PATH` were read into constants that nothing used, so setting them did nothing. They work now. `ULOG_FILE_PATH` also defaulted to `syslogemu.log` while the code read `firewall.log`; the default matches what ulogd writes
