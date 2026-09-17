@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The suite finishes in under a minute; anything beyond this is the job wedged rather than slow,
+    # and a wedged job blocks the pull request for the full six-hour default.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -24,4 +27,6 @@ jobs:
         run: uv sync
 
       - name: Run tests
-        run: uv run pytest -m "not e2e" -v --cov=src
+        # -p no:cacheprovider: the cache writes into the checkout, which buys nothing on a runner
+        # that is thrown away. Coverage options come from addopts in pyproject.toml.
+        run: uv run pytest -m "not e2e" -v -p no:cacheprovider
