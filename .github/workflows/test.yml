@@ -27,6 +27,6 @@ jobs:
         run: uv sync
 
       - name: Run tests
-        # -p no:cacheprovider: the cache writes into the checkout, which buys nothing on a runner
-        # that is thrown away. Coverage options come from addopts in pyproject.toml.
+        # -p no:cacheprovider: the cache writes into the checkout, which a discarded runner has no
+        # use for. Coverage options come from addopts in pyproject.toml.
         run: uv run pytest -m "not e2e" -v -p no:cacheprovider
