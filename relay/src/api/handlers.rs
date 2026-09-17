@@ -40,6 +40,58 @@ fn need(cond: bool, msg: &str) -> Result<(), ApiError> {
     }
 }
 
+/// The guard 33 handlers opened with. Named so a handler that cannot use `repo_scope` still
+/// states the requirement the same way.
+fn need_repo(req: &ApiRequest) -> Result<(), ApiError> {
+    need(!req.repo.is_empty(), "repo is required")
+}
+
+/// The preamble every repo-scoped handler shares: check the repo, ask the policy, pick the client
+/// for that repo's upstream.
+///
+/// Resource and action stay arguments rather than being inferred from anything, because this is
+/// the security boundary: the permission a handler demands has to be readable at the handler, not
+/// looked up somewhere else. What is hidden here is only the mechanical part — the empty-string
+/// check and which `GitHub` the proof belongs to.
+fn repo_scope<'a>(
+    ctx: &'a ApiContext,
+    req: &'a ApiRequest,
+    resource: Resource,
+    action: Action,
+) -> Result<(Authorized<'a>, &'a GitHub), ApiError> {
+    need_repo(req)?;
+    let auth = ctx.project.authorize(&req.repo, resource, action)?;
+    let client = gh(ctx, &auth)?;
+    Ok((auth, client))
+}
+
+/// As `repo_scope`, plus the `number is required` guard.
+fn numbered_scope<'a>(
+    ctx: &'a ApiContext,
+    req: &'a ApiRequest,
+    resource: Resource,
+    action: Action,
+) -> Result<(Authorized<'a>, &'a GitHub), ApiError> {
+    // Repo first, then the number: a request missing both is answered the way it always was.
+    need_repo(req)?;
+    need(req.number != 0, "number is required")?;
+    repo_scope(ctx, req, resource, action)
+}
+
+/// As `repo_scope`, but anchored on the project rather than a named repo (Projects v2 and search
+/// carry no repository of their own).
+fn project_scope<'a>(
+    ctx: &'a ApiContext,
+    req: &'a ApiRequest,
+    resource: Resource,
+    action: Action,
+) -> Result<(Authorized<'a>, &'a GitHub), ApiError> {
+    let anchor = project_anchor(ctx, req)?;
+    let auth = ctx.project.authorize(anchor, resource, action)?;
+    let client = gh(ctx, &auth)?;
+    Ok((auth, client))
+}
+
 /// Projects v2 is org-scoped, so the repo may be omitted. The policy anchor is then the project's first repository.
 fn project_anchor<'a>(ctx: &'a ApiContext, req: &'a ApiRequest) -> Result<&'a str, ApiError> {
     if !req.repo.is_empty() {
@@ -152,7 +204,7 @@ fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiError> 
 // ---- PR ----
 
 async fn pr_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(
         !req.head.is_empty() && !req.base.is_empty() && !req.title.is_empty(),
         "head, base and title are required",
@@ -170,22 +222,20 @@ async fn pr_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
 }
 
 async fn pr_comment(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(
         req.number != 0 && !req.body.is_empty(),
         "number and body are required",
     )?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Pr, Action::Comment)?;
-    gh(ctx, &auth)?
+    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Comment)?;
+    client
         .comment_pull_request(&auth, req.number, &req.body)
         .await?;
     Ok(ApiResponse::default())
 }
 
 async fn pr_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(
         req.number != 0 && !req.event.is_empty(),
         "number and event are required",
@@ -197,10 +247,8 @@ async fn pr_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
         ),
         "event must be APPROVE, REQUEST_CHANGES or COMMENT",
     )?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Pr, Action::Review)?;
-    gh(ctx, &auth)?
+    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Review)?;
+    client
         .review_pull_request(&auth, req.number, &req.event, &req.body)
         .await?;
     Ok(ApiResponse::default())
@@ -216,16 +264,14 @@ fn opt(s: &str) -> Option<&str> {
 }
 
 async fn pr_merge(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(req.number != 0, "number is required")?;
     // A typo here would otherwise become an upstream 422; catch it before spending a call.
     need(
         req.method.is_empty() || matches!(req.method.as_str(), "merge" | "squash" | "rebase"),
         "method must be merge, squash or rebase",
     )?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Pr, Action::Merge)?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Merge)?;
     // `delete_merged_branch` was declared as a repo policy and never enforced. It is the operator's
     // switch for exactly this, so the agent asking is necessary but not sufficient.
     if req.delete_branch && !auth.policy().delete_merged_branch {
@@ -234,7 +280,7 @@ async fn pr_merge(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Api
             auth.repo()
         )));
     }
-    let res = gh(ctx, &auth)?
+    let res = client
         .merge_pull_request(
             &auth,
             req.number,
@@ -267,28 +313,16 @@ async fn pr_merge(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Api
 }
 
 async fn pr_close(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    need(req.number != 0, "number is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Pr, Action::Close)?;
-    gh(ctx, &auth)?
-        .close_pull_request(&auth, req.number)
-        .await?;
+    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Close)?;
+    client.close_pull_request(&auth, req.number).await?;
     Ok(ApiResponse::default())
 }
 
 /// The inverse of closing, under the same permission: `pr:close` already lets the agent change the
 /// state, and reopening is the less destructive direction.
 async fn pr_reopen(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    need(req.number != 0, "number is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Pr, Action::Close)?;
-    gh(ctx, &auth)?
-        .reopen_pull_request(&auth, req.number)
-        .await?;
+    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Close)?;
+    client.reopen_pull_request(&auth, req.number).await?;
     Ok(ApiResponse {
         number: Some(req.number),
         message: Some(format!("reopened #{}", req.number)),
@@ -302,7 +336,7 @@ async fn pr_reopen(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
 /// A new base is not — retargeting a PR from an allowed base to a forbidden one would walk straight
 /// around `bases`, so that case goes through `authorize_pr`, the same check `pr create` runs.
 async fn pr_update(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(req.number != 0, "number is required")?;
     need(
         !req.title.is_empty() || !req.body.is_empty() || !req.base.is_empty(),
@@ -331,14 +365,8 @@ async fn pr_update(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
 }
 
 async fn pr_status(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    need(req.number != 0, "number is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Pr, Action::Read)?;
-    let st = gh(ctx, &auth)?
-        .pull_request_status(&auth, req.number)
-        .await?;
+    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
+    let st = client.pull_request_status(&auth, req.number).await?;
     let raw = serde_json::to_value(&st).unwrap_or(serde_json::Value::Null);
     let n = st.checks.len();
     let msg = format!(
@@ -402,12 +430,8 @@ fn comment_lines(items: &[crate::github::CommentItem]) -> String {
 }
 
 async fn pr_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    need(req.number != 0, "number is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Pr, Action::Read)?;
-    let pr = gh(ctx, &auth)?.pull_request_view(&auth, req.number).await?;
+    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
+    let pr = client.pull_request_view(&auth, req.number).await?;
     let state = if pr.merged {
         "merged".to_string()
     } else if pr.draft {
@@ -443,12 +467,8 @@ async fn pr_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiE
 /// The conversation, the reviews and the comments on the diff, as one ordered list. Each of the
 /// three is a separate GitHub endpoint, and reading one of them misses most of a review.
 async fn pr_comments(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    need(req.number != 0, "number is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Pr, Action::Read)?;
-    let items = gh(ctx, &auth)?
+    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
+    let items = client
         .pull_request_comments(&auth, req.number, limit_or(req.first, 30))
         .await?;
     let msg = if items.is_empty() {
@@ -465,12 +485,10 @@ async fn pr_comments(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, 
 }
 
 async fn pr_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     let state = list_state(&req.state)?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Pr, Action::Read)?;
-    let prs = gh(ctx, &auth)?
+    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Read)?;
+    let prs = client
         .list_pull_requests(
             &auth,
             state,
@@ -511,12 +529,8 @@ async fn pr_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiE
 /// One issue. GitHub serves pull requests from this endpoint too, so the answer says which it got
 /// rather than presenting a PR as an issue; the payload is still returned.
 async fn issue_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    need(req.number != 0, "number is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Issue, Action::Read)?;
-    let iss = gh(ctx, &auth)?.issue_view(&auth, req.number).await?;
+    let (auth, client) = numbered_scope(ctx, req, Resource::Issue, Action::Read)?;
+    let iss = client.issue_view(&auth, req.number).await?;
     let mut msg = format!(
         "#{} {} [{}] by {}",
         iss.number, iss.title, iss.state, iss.author
@@ -545,12 +559,8 @@ async fn issue_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, A
 }
 
 async fn issue_comments(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    need(req.number != 0, "number is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Issue, Action::Read)?;
-    let items = gh(ctx, &auth)?
+    let (auth, client) = numbered_scope(ctx, req, Resource::Issue, Action::Read)?;
+    let items = client
         .issue_comments(&auth, req.number, limit_or(req.first, 30))
         .await?;
     let msg = if items.is_empty() {
@@ -567,12 +577,10 @@ async fn issue_comments(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespons
 }
 
 async fn issue_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     let state = list_state(&req.state)?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Issue, Action::Read)?;
-    let issues = gh(ctx, &auth)?
+    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Read)?;
+    let issues = client
         .list_issues(
             &auth,
             state,
@@ -611,14 +619,12 @@ async fn issue_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, A
 /// Create a release for a tag that the relay already let through. The tag has to exist upstream,
 /// so this runs after `git push origin <tag>`; GitHub answers 422 when it does not.
 async fn release_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(!req.tag.is_empty(), "tag is required")?;
     // Without notes of its own a release would be empty, so ask GitHub to write them.
     let generate = req.generate_notes || req.body.is_empty();
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Release, Action::Create)?;
-    let rel = gh(ctx, &auth)?
+    let (auth, client) = repo_scope(ctx, req, Resource::Release, Action::Create)?;
+    let rel = client
         .create_release(
             &auth,
             &req.tag,
@@ -648,12 +654,10 @@ async fn release_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespons
 }
 
 async fn release_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(!req.tag.is_empty(), "tag is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Release, Action::Read)?;
-    match gh(ctx, &auth)?.get_release_by_tag(&auth, &req.tag).await? {
+    let (auth, client) = repo_scope(ctx, req, Resource::Release, Action::Read)?;
+    match client.get_release_by_tag(&auth, &req.tag).await? {
         Some(rel) => Ok(ApiResponse {
             number: Some(rel.id),
             url: Some(rel.html_url.clone()),
@@ -674,12 +678,9 @@ async fn release_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
 }
 
 async fn release_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Release, Action::Read)?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Release, Action::Read)?;
     let limit = if req.first == 0 { 20 } else { req.first };
-    let rels = gh(ctx, &auth)?.list_releases(&auth, limit).await?;
+    let rels = client.list_releases(&auth, limit).await?;
     let msg = rels
         .iter()
         .map(|r| {
@@ -709,7 +710,7 @@ async fn release_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
 /// current state, so the relay looks it up first and only asks for `release:publish` when the call
 /// really does flip draft to false.
 async fn release_edit(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(!req.tag.is_empty(), "tag is required")?;
     need(
         !req.title.is_empty()
@@ -766,12 +767,10 @@ async fn release_edit(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
 /// `ci:rerun`, not a wider `ci:read`: a re-run spends the account's Actions minutes and executes
 /// workflow code with the repository's secrets. Reading a log does neither.
 async fn ci_rerun(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(req.run_id != 0, "run_id is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Ci, Action::Rerun)?;
-    gh(ctx, &auth)?.rerun_ci(&auth, req.run_id, req.all).await?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Rerun)?;
+    client.rerun_ci(&auth, req.run_id, req.all).await?;
     Ok(ApiResponse {
         message: Some(format!(
             "re-running {} of run {}",
@@ -787,12 +786,10 @@ async fn ci_rerun(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Api
 }
 
 async fn ci_cancel(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(req.run_id != 0, "run_id is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Ci, Action::Rerun)?;
-    gh(ctx, &auth)?.cancel_ci(&auth, req.run_id).await?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Rerun)?;
+    client.cancel_ci(&auth, req.run_id).await?;
     Ok(ApiResponse {
         message: Some(format!("cancelled run {}", req.run_id)),
         ..ApiResponse::ok()
@@ -800,15 +797,13 @@ async fn ci_cancel(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
 }
 
 async fn ci_runs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(
         !req.git_ref.is_empty(),
         "ref (tag / branch / sha) is required",
     )?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Ci, Action::Read)?;
-    let runs = gh(ctx, &auth)?.ci_runs(&auth, &req.git_ref).await?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Read)?;
+    let runs = client.ci_runs(&auth, &req.git_ref).await?;
     let raw = serde_json::to_value(&runs).unwrap_or(serde_json::Value::Null);
     let msg = runs
         .iter()
@@ -838,18 +833,16 @@ async fn ci_runs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiE
 }
 
 async fn ci_jobs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(
         req.number != 0 || req.run_id != 0,
         "number or run_id is required",
     )?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Ci, Action::Read)?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Read)?;
     let jobs = if req.run_id != 0 {
-        gh(ctx, &auth)?.ci_jobs_for_run(&auth, req.run_id).await?
+        client.ci_jobs_for_run(&auth, req.run_id).await?
     } else {
-        gh(ctx, &auth)?.ci_jobs(&auth, req.number).await?
+        client.ci_jobs(&auth, req.number).await?
     };
     let raw = serde_json::to_value(&jobs).unwrap_or(serde_json::Value::Null);
     let msg = jobs
@@ -877,10 +870,7 @@ async fn ci_jobs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiE
 }
 
 async fn ci_log(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Ci, Action::Read)?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Read)?;
     let window = if req.window == 0 {
         200
     } else {
@@ -896,9 +886,9 @@ async fn ci_log(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiEr
             "number, run_id or job_id is required",
         )?;
         let jobs = if req.run_id != 0 {
-            gh(ctx, &auth)?.ci_jobs_for_run(&auth, req.run_id).await?
+            client.ci_jobs_for_run(&auth, req.run_id).await?
         } else {
-            gh(ctx, &auth)?.ci_jobs(&auth, req.number).await?
+            client.ci_jobs(&auth, req.number).await?
         };
         let pick = jobs
             .iter()
@@ -907,7 +897,7 @@ async fn ci_log(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiEr
             .ok_or_else(|| ApiError::bad_request("no CI jobs for this PR"))?;
         (pick.id, pick.name.clone(), pick.conclusion.clone())
     };
-    let page = gh(ctx, &auth)?
+    let page = client
         .ci_job_log(&auth, job_id, &name, &concl, window, before)
         .await?;
     let raw = serde_json::to_value(&page).unwrap_or(serde_json::Value::Null);
@@ -921,11 +911,9 @@ async fn ci_log(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiEr
 // ---- Issue ----
 
 async fn issue_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(!req.title.is_empty(), "title is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Issue, Action::Create)?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Create)?;
     // Applying labels is a separate permission: issue:label is required to set them
     let label_auth = if req.labels.is_empty() {
         None
@@ -936,7 +924,7 @@ async fn issue_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
         )
     };
     let labels = label_auth.as_ref().map(|a| (a, req.labels.as_slice()));
-    let iss = gh(ctx, &auth)?
+    let iss = client
         .create_issue(&auth, &req.title, &req.body, labels)
         .await?;
     Ok(ApiResponse {
@@ -948,37 +936,25 @@ async fn issue_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
 }
 
 async fn issue_comment(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(
         req.number != 0 && !req.body.is_empty(),
         "number and body are required",
     )?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Issue, Action::Comment)?;
-    gh(ctx, &auth)?
-        .comment_issue(&auth, req.number, &req.body)
-        .await?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Comment)?;
+    client.comment_issue(&auth, req.number, &req.body).await?;
     Ok(ApiResponse::default())
 }
 
 async fn issue_close(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    need(req.number != 0, "number is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Issue, Action::Close)?;
-    gh(ctx, &auth)?.close_issue(&auth, req.number).await?;
+    let (auth, client) = numbered_scope(ctx, req, Resource::Issue, Action::Close)?;
+    client.close_issue(&auth, req.number).await?;
     Ok(ApiResponse::default())
 }
 
 async fn issue_reopen(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    need(req.number != 0, "number is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Issue, Action::Close)?;
-    gh(ctx, &auth)?.reopen_issue(&auth, req.number).await?;
+    let (auth, client) = numbered_scope(ctx, req, Resource::Issue, Action::Close)?;
+    client.reopen_issue(&auth, req.number).await?;
     Ok(ApiResponse {
         number: Some(req.number),
         message: Some(format!("reopened #{}", req.number)),
@@ -987,17 +963,13 @@ async fn issue_reopen(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
 }
 
 async fn issue_label(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(
         req.number != 0 && !req.labels.is_empty(),
         "number and labels are required",
     )?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Issue, Action::Label)?;
-    gh(ctx, &auth)?
-        .label_issue(&auth, req.number, &req.labels)
-        .await?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Label)?;
+    client.label_issue(&auth, req.number, &req.labels).await?;
     Ok(ApiResponse::default())
 }
 
@@ -1006,15 +978,12 @@ async fn issue_label(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, 
 /// GitHub removes one label per request, so several names mean several calls. The names are
 /// agent-supplied and land in the path; `unlabel_issue` is what keeps them inside the repository.
 async fn issue_unlabel(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(
         req.number != 0 && !req.labels.is_empty(),
         "number and labels are required",
     )?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Issue, Action::Label)?;
-    let client = gh(ctx, &auth)?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Label)?;
     for label in &req.labels {
         client.unlabel_issue(&auth, req.number, label).await?;
     }
@@ -1030,30 +999,26 @@ async fn issue_unlabel(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse
 }
 
 async fn issue_assign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(
         req.number != 0 && !req.assignees.is_empty(),
         "number and assignees are required",
     )?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Issue, Action::Assign)?;
-    gh(ctx, &auth)?
+    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Assign)?;
+    client
         .assign_issue(&auth, req.number, &req.assignees)
         .await?;
     Ok(ApiResponse::default())
 }
 
 async fn issue_unassign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(
         req.number != 0 && !req.assignees.is_empty(),
         "number and assignees are required",
     )?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Issue, Action::Assign)?;
-    gh(ctx, &auth)?
+    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Assign)?;
+    client
         .unassign_issue(&auth, req.number, &req.assignees)
         .await?;
     Ok(ApiResponse {
@@ -1074,12 +1039,9 @@ async fn project_add_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespo
         !req.project_id.is_empty() && !req.content_id.is_empty(),
         "project_id and content_id are required",
     )?;
-    let anchor = project_anchor(ctx, req)?;
-    let auth = ctx
-        .project
-        .authorize(anchor, Resource::Project, Action::AddItem)?;
+    let (auth, client) = project_scope(ctx, req, Resource::Project, Action::AddItem)?;
     allowed_board(ctx, &req.project_id)?;
-    let item = gh(ctx, &auth)?
+    let item = client
         .add_project_item(&auth, &req.project_id, &req.content_id)
         .await?;
     Ok(ApiResponse {
@@ -1093,13 +1055,10 @@ async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRe
         !req.project_id.is_empty() && !req.item_id.is_empty() && !req.field_id.is_empty(),
         "project_id, item_id and field_id are required",
     )?;
-    let anchor = project_anchor(ctx, req)?;
-    let auth = ctx
-        .project
-        .authorize(anchor, Resource::Project, Action::UpdateItem)?;
+    let (auth, client) = project_scope(ctx, req, Resource::Project, Action::UpdateItem)?;
     allowed_board(ctx, &req.project_id)?;
     let value = req.value.clone().unwrap_or(Value::Null);
-    gh(ctx, &auth)?
+    client
         .update_project_item_field(&auth, &req.project_id, &req.item_id, &req.field_id, value)
         .await?;
     Ok(ApiResponse::default())
@@ -1107,17 +1066,14 @@ async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRe
 
 async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need(!req.project_id.is_empty(), "project_id is required")?;
-    let anchor = project_anchor(ctx, req)?;
-    let auth = ctx
-        .project
-        .authorize(anchor, Resource::Project, Action::Read)?;
+    let (auth, client) = project_scope(ctx, req, Resource::Project, Action::Read)?;
     allowed_board(ctx, &req.project_id)?;
     let first = if req.first == 0 || req.first > 100 {
         20
     } else {
         req.first
     };
-    let raw = gh(ctx, &auth)?
+    let raw = client
         .list_project_items(&auth, &req.project_id, first)
         .await?;
     Ok(ApiResponse {
@@ -1129,17 +1085,14 @@ async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
 /// 0.2.7: the board's fields and their option ids, which `project update-item` needs.
 async fn project_fields(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need(!req.project_id.is_empty(), "project_id is required")?;
-    let anchor = project_anchor(ctx, req)?;
-    let auth = ctx
-        .project
-        .authorize(anchor, Resource::Project, Action::Read)?;
+    let (auth, client) = project_scope(ctx, req, Resource::Project, Action::Read)?;
     allowed_board(ctx, &req.project_id)?;
     let first = if req.first == 0 || req.first > 100 {
         50
     } else {
         req.first
     };
-    let raw = gh(ctx, &auth)?
+    let raw = client
         .list_project_fields(&auth, &req.project_id, first)
         .await?;
     Ok(ApiResponse {
@@ -1150,16 +1103,14 @@ async fn project_fields(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespons
 
 /// 0.2.7: ask people to review a pull request.
 async fn pr_request_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
+    need_repo(req)?;
     need(req.number != 0, "number is required")?;
     need(
         !req.reviewers.is_empty() || !req.team_reviewers.is_empty(),
         "at least one reviewer or team is required",
     )?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Pr, Action::RequestReview)?;
-    gh(ctx, &auth)?
+    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::RequestReview)?;
+    client
         .request_reviewers(&auth, req.number, &req.reviewers, &req.team_reviewers)
         .await?;
     let mut who = req.reviewers.clone();
@@ -1181,12 +1132,9 @@ async fn pr_request_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResp
 /// the filter applied to the results, both in the client.
 async fn search_issues(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need(!req.query.is_empty(), "query is required")?;
-    let anchor = project_anchor(ctx, req)?;
-    let auth = ctx
-        .project
-        .authorize(anchor, Resource::Search, Action::Read)?;
+    let (auth, client) = project_scope(ctx, req, Resource::Search, Action::Read)?;
     let limit = if req.first == 0 { 20 } else { req.first };
-    let hits = gh(ctx, &auth)?
+    let hits = client
         .search_issues(&auth, &ctx.project, &req.query, limit)
         .await?;
     let msg = if hits.is_empty() {
@@ -1212,12 +1160,9 @@ async fn search_issues(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse
 /// 0.2.9: the labels, assignees and milestones a repository defines, so `issue label` and
 /// `issue assign` can use a value that exists instead of guessing at one.
 async fn repo_vocabulary(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.repo.is_empty(), "repo is required")?;
-    let auth = ctx
-        .project
-        .authorize(&req.repo, Resource::Repo, Action::Read)?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Repo, Action::Read)?;
     let limit = if req.first == 0 { 100 } else { req.first };
-    let raw = gh(ctx, &auth)?.repo_vocabulary(&auth, limit).await?;
+    let raw = client.repo_vocabulary(&auth, limit).await?;
     let line = |key: &str| {
         raw.get(key)
             .and_then(|v| v.as_array())
