@@ -25,33 +25,51 @@
 
 権限は `sekimore whoami` の `permissions` にあるものだけです。無い操作は 403 で拒否されます。
 
+コマンド名と同じ名前の権限はありません。複数のコマンドが 1 つのキーを共有します。下の角括弧が
+`sekimore whoami` に出ているべきキーです。使えないコマンドがあったら、コマンド名ではなく角括弧の
+キーを人間に頼んでください。
+
 ```bash
-sekimore pr create --head sekimore/<topic> --base main --title "…" --body="…"
-sekimore pr view --number N              # タイトル、本文、ブランチ、件数
-sekimore pr comments --number N          # 会話・レビュー・行への指摘を時系列で
-sekimore pr list [--state open]          # そのリポジトリの PR 一覧
-sekimore pr status --number N            # CI チェックの状態（--json で機械可読）
-sekimore pr merge --number N             # pr:merge が許可されているとき。squash 限定の repo などは --method squash|merge|rebase
-                                         #   --delete-branch で head ブランチも消す（運用者が許可しているとき）
-sekimore pr update --number N --title "…"    # 自分の PR を編集する。--base は許可された base か改めて検査される
-sekimore pr reopen --number N            # pr close の逆。権限は同じ
-sekimore ci runs --ref <tag|branch|sha>  # ref に紐づく workflow run 一覧
-sekimore ci jobs --number N              # PR のジョブ一覧（どれが失敗したか、job_id）
-sekimore ci log --number N               # 失敗ジョブのログを末尾から。--before <start> で前へ、--window で行数
-sekimore ci rerun --run-id N [--all]     # 失敗ジョブを再実行（--all で全ジョブ）。ci:read ではなく ci:rerun が要る
-sekimore ci cancel --run-id N            # 実行中の run を中止する
-sekimore issue create --title "…" --body="…" [--labels a,b]
-sekimore issue view --number N           # タイトル、本文、ラベル、担当者
-sekimore issue comments --number N
-sekimore issue list [--state open] [--labels bug]
-sekimore issue reopen --number N         # issue close の逆。権限は同じ
-sekimore issue unlabel --number N --labels bug        # ラベルを外す（issue:label）
-sekimore issue unassign --number N --assignees alice  # 担当者を外す（issue:assign）
-sekimore search "is:open label:bug"      # 案件の全リポジトリを横断
-sekimore release create --tag vX.Y.Z      # タグを push した後に。本文は GitHub が書く
-sekimore release view --tag vX.Y.Z        # タグに対応する Release
-sekimore release edit --tag vX.Y.Z --draft false      # draft を公開する。release:publish が要る
-sekimore pr request-review --number N --reviewers alice,bob   # レビューを依頼する
+sekimore pr create --head sekimore/<topic> --base main --title "…" --body="…"   [pr:create]
+sekimore pr update --number N --title "…"                     [pr:create]  自分の PR を編集する
+                                                              #   --base は許可された base か改めて検査される
+sekimore pr view --number N                                   [pr:read]  タイトル、本文、ブランチ、件数
+sekimore pr comments --number N                               [pr:read]  会話・レビュー・行への指摘を古い順に
+sekimore pr list [--state open]                               [pr:read]
+sekimore pr status --number N                                 [pr:read]  CI チェック（--json で機械可読）
+sekimore pr merge --number N                                  [pr:merge]  squash 限定の repo などは --method squash|merge|rebase
+                                                              #   --delete-branch で head ブランチも消す（運用者が許可しているとき）
+sekimore pr close --number N                                  [pr:close]
+sekimore pr reopen --number N                                 [pr:close]  close の逆
+sekimore pr comment --number N --body="…"                     [pr:comment]
+sekimore pr review --number N --event APPROVE                 [pr:review]  レビューを出す
+sekimore pr request-review --number N --reviewers alice,bob   [pr:request_review]  レビューを依頼する
+sekimore ci runs --ref <tag|branch|sha>                       [ci:read]  ref に紐づく workflow run 一覧
+sekimore ci jobs --number N                                   [ci:read]  どのジョブが失敗したか、job_id
+sekimore ci log --number N                                    [ci:read]  失敗ジョブのログを末尾から。--before で前へ
+sekimore ci rerun --run-id N [--all]                          [ci:rerun]  ci:read ではない。Actions の分数を消費する
+sekimore ci cancel --run-id N                                 [ci:rerun]
+sekimore issue create --title "…" --body="…" [--labels a,b]   [issue:create]
+sekimore issue view --number N                                [issue:read]  タイトル、本文、ラベル、担当者
+sekimore issue comments --number N                            [issue:read]
+sekimore issue list [--state open] [--labels bug]             [issue:read]
+sekimore issue comment --number N --body="…"                  [issue:comment]
+sekimore issue close --number N                               [issue:close]
+sekimore issue reopen --number N                              [issue:close]  close の逆
+sekimore issue label --number N --labels bug                  [issue:label]
+sekimore issue unlabel --number N --labels bug                [issue:label]  その逆
+sekimore issue assign --number N --assignees alice            [issue:assign]
+sekimore issue unassign --number N --assignees alice          [issue:assign]  その逆
+sekimore search "is:open label:bug"                           [search:read]  案件の全リポジトリを横断
+sekimore repo vocabulary                                      [repo:read]  そのリポジトリのラベルと担当者候補
+sekimore release create --tag vX.Y.Z                          [release:create]  タグを push した後に。本文は GitHub が書く
+sekimore release view --tag vX.Y.Z                            [release:read]
+sekimore release list                                         [release:read]
+sekimore release edit --tag vX.Y.Z --draft false              [release:publish]  draft の公開だけ
+                                                              #   draft のままの編集は release:create
+sekimore project list --project-id PVT_…                      [project:read]
+sekimore project fields --project-id PVT_…                    [project:read]  update-item に要る field と option の id
+sekimore project add-item / update-item                       [project:add_item] / [project:update_item]
 ```
 
 - repo は `--repo Org/Repo` で指定します（省略時は `SEKIMORE_REPO`）。上流が複数あるときは `--repo ghe.example.com/Org/Repo` のようにホストを付けられます。
