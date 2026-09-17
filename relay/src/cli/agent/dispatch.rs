@@ -46,290 +46,309 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
         repo,
         ..Default::default()
     };
+    // Endpoints come from the command tree in `cmd.rs`, beside the flags they belong to, so this
+    // match only has to fill the request. `group` is the path of a top-level command that has one
+    // of its own (whoami, search); the grouping variants answer None and read `leaf` instead.
+    let group = cmd.path().unwrap_or_default();
     let path = match cmd {
-        AgentCmd::Whoami => "/whoami",
+        AgentCmd::Whoami {} => group,
         AgentCmd::Guide { .. } => unreachable!("guide is handled before connecting"),
-        AgentCmd::Pr { cmd } => match cmd {
-            PrCmd::Create {
-                head,
-                base,
-                title,
-                body,
-            } => {
-                req.head = head;
-                req.base = base;
-                req.title = title;
-                req.body = body;
-                "/pr/create"
-            }
-            PrCmd::Comment { number, body } => {
-                req.number = number;
-                req.body = body;
-                "/pr/comment"
-            }
-            PrCmd::Review {
-                number,
-                event,
-                body,
-            } => {
-                req.number = number;
-                req.event = event;
-                req.body = body;
-                "/pr/review"
-            }
-            PrCmd::Merge {
-                number,
-                method,
-                title,
-                message,
-                delete_branch,
-            } => {
-                req.number = number;
-                req.method = method.unwrap_or_default();
-                req.title = title.unwrap_or_default();
-                // The merge commit's message rides in `body`, the field every other command uses
-                // for free text.
-                req.body = message.unwrap_or_default();
-                req.delete_branch = delete_branch;
-                "/pr/merge"
-            }
-            PrCmd::Close { number } => {
-                req.number = number;
-                "/pr/close"
-            }
-            PrCmd::Reopen { number } => {
-                req.number = number;
-                "/pr/reopen"
-            }
-            PrCmd::Update {
-                number,
-                title,
-                body,
-                base,
-            } => {
-                if title.is_none() && body.is_none() && base.is_none() {
-                    eprintln!("sekimore: pr update needs --title, --body or --base");
-                    return Ok(2);
+        AgentCmd::Pr { cmd } => {
+            let leaf = cmd.path();
+            match cmd {
+                PrCmd::Create {
+                    head,
+                    base,
+                    title,
+                    body,
+                } => {
+                    req.head = head;
+                    req.base = base;
+                    req.title = title;
+                    req.body = body;
+                    leaf
                 }
-                req.number = number;
-                req.title = title.unwrap_or_default();
-                req.body = body.unwrap_or_default();
-                req.base = base.unwrap_or_default();
-                "/pr/update"
-            }
-            PrCmd::RequestReview {
-                number,
-                reviewers,
-                teams,
-            } => {
-                req.number = number;
-                req.reviewers = reviewers.map(|r| split_csv(&r)).unwrap_or_default();
-                req.team_reviewers = teams.map(|t| split_csv(&t)).unwrap_or_default();
-                "/pr/request-review"
-            }
-            PrCmd::Status { number, json } => {
-                req.number = number;
-                let resp = client.call("/pr/status", &req).await?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&resp.raw)?);
-                } else {
-                    print_pr_status(&resp);
+                PrCmd::Comment { number, body } => {
+                    req.number = number;
+                    req.body = body;
+                    leaf
                 }
-                return Ok(if resp.ok { 0 } else { 1 });
-            }
-            PrCmd::View { number, json } => {
-                req.number = number;
-                return call_and_print(&client, "/pr/view", &req, json).await;
-            }
-            PrCmd::Comments {
-                number,
-                limit,
-                json,
-            } => {
-                req.number = number;
-                req.first = limit;
-                return call_and_print(&client, "/pr/comments", &req, json).await;
-            }
-            PrCmd::List {
-                state,
-                base,
-                limit,
-                json,
-            } => {
-                req.state = state;
-                req.base = base.unwrap_or_default();
-                req.first = limit;
-                return call_and_print(&client, "/pr/list", &req, json).await;
-            }
-        },
-        AgentCmd::Ci { cmd } => match cmd {
-            CiCmd::Runs { git_ref } => {
-                req.git_ref = git_ref;
-                "/ci/runs"
-            }
-            CiCmd::Jobs { number, run_id } => {
-                if number.is_none() && run_id.is_none() {
-                    eprintln!("sekimore: ci jobs needs --number <pr> or --run-id <run>");
-                    return Ok(2);
+                PrCmd::Review {
+                    number,
+                    event,
+                    body,
+                } => {
+                    req.number = number;
+                    req.event = event;
+                    req.body = body;
+                    leaf
                 }
-                req.number = number.unwrap_or(0);
-                req.run_id = run_id.unwrap_or(0);
-                "/ci/jobs"
-            }
-            CiCmd::Rerun { run_id, all } => {
-                req.run_id = run_id;
-                req.all = all;
-                "/ci/rerun"
-            }
-            CiCmd::Cancel { run_id } => {
-                req.run_id = run_id;
-                "/ci/cancel"
-            }
-            CiCmd::Log {
-                number,
-                run_id,
-                job_id,
-                window,
-                before,
-                json,
-            } => {
-                if let Some(n) = number {
-                    req.number = n;
+                PrCmd::Merge {
+                    number,
+                    method,
+                    title,
+                    message,
+                    delete_branch,
+                } => {
+                    req.number = number;
+                    req.method = method.unwrap_or_default();
+                    req.title = title.unwrap_or_default();
+                    // The merge commit's message rides in `body`, the field every other command uses
+                    // for free text.
+                    req.body = message.unwrap_or_default();
+                    req.delete_branch = delete_branch;
+                    leaf
                 }
-                if let Some(r) = run_id {
-                    req.run_id = r;
+                PrCmd::Close { number } => {
+                    req.number = number;
+                    leaf
                 }
-                if let Some(j) = job_id {
-                    req.job_id = j;
+                PrCmd::Reopen { number } => {
+                    req.number = number;
+                    leaf
                 }
-                req.window = window;
-                req.before = before;
-                let resp = client.call("/ci/log", &req).await?;
-                if !resp.ok {
-                    eprintln!("sekimore: {}", resp.error.unwrap_or_default());
-                    return Ok(1);
+                PrCmd::Update {
+                    number,
+                    title,
+                    body,
+                    base,
+                } => {
+                    if title.is_none() && body.is_none() && base.is_none() {
+                        eprintln!("sekimore: pr update needs --title, --body or --base");
+                        return Ok(2);
+                    }
+                    req.number = number;
+                    req.title = title.unwrap_or_default();
+                    req.body = body.unwrap_or_default();
+                    req.base = base.unwrap_or_default();
+                    leaf
                 }
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&resp.raw)?);
-                } else {
-                    print_ci_log(&resp);
+                PrCmd::RequestReview {
+                    number,
+                    reviewers,
+                    teams,
+                } => {
+                    req.number = number;
+                    req.reviewers = reviewers.map(|r| split_csv(&r)).unwrap_or_default();
+                    req.team_reviewers = teams.map(|t| split_csv(&t)).unwrap_or_default();
+                    leaf
                 }
-                return Ok(0);
+                PrCmd::Status { number, json } => {
+                    req.number = number;
+                    let resp = client.call(leaf, &req).await?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&resp.raw)?);
+                    } else {
+                        print_pr_status(&resp);
+                    }
+                    return Ok(if resp.ok { 0 } else { 1 });
+                }
+                PrCmd::View { number, json } => {
+                    req.number = number;
+                    return call_and_print(&client, leaf, &req, json).await;
+                }
+                PrCmd::Comments {
+                    number,
+                    limit,
+                    json,
+                } => {
+                    req.number = number;
+                    req.first = limit;
+                    return call_and_print(&client, leaf, &req, json).await;
+                }
+                PrCmd::List {
+                    state,
+                    base,
+                    limit,
+                    json,
+                } => {
+                    req.state = state;
+                    req.base = base.unwrap_or_default();
+                    req.first = limit;
+                    return call_and_print(&client, leaf, &req, json).await;
+                }
             }
-        },
-        AgentCmd::Issue { cmd } => match cmd {
-            IssueCmd::Create {
-                title,
-                body,
-                labels,
-            } => {
-                req.title = title;
-                req.body = body;
-                req.labels = labels.map(|l| split_csv(&l)).unwrap_or_default();
-                "/issue/create"
+        }
+        AgentCmd::Ci { cmd } => {
+            let leaf = cmd.path();
+            match cmd {
+                CiCmd::Runs { git_ref } => {
+                    req.git_ref = git_ref;
+                    leaf
+                }
+                CiCmd::Jobs { number, run_id } => {
+                    if number.is_none() && run_id.is_none() {
+                        eprintln!("sekimore: ci jobs needs --number <pr> or --run-id <run>");
+                        return Ok(2);
+                    }
+                    req.number = number.unwrap_or(0);
+                    req.run_id = run_id.unwrap_or(0);
+                    leaf
+                }
+                CiCmd::Rerun { run_id, all } => {
+                    req.run_id = run_id;
+                    req.all = all;
+                    leaf
+                }
+                CiCmd::Cancel { run_id } => {
+                    req.run_id = run_id;
+                    leaf
+                }
+                CiCmd::Log {
+                    number,
+                    run_id,
+                    job_id,
+                    window,
+                    before,
+                    json,
+                } => {
+                    if let Some(n) = number {
+                        req.number = n;
+                    }
+                    if let Some(r) = run_id {
+                        req.run_id = r;
+                    }
+                    if let Some(j) = job_id {
+                        req.job_id = j;
+                    }
+                    req.window = window;
+                    req.before = before;
+                    let resp = client.call(leaf, &req).await?;
+                    if !resp.ok {
+                        eprintln!("sekimore: {}", resp.error.unwrap_or_default());
+                        return Ok(1);
+                    }
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&resp.raw)?);
+                    } else {
+                        print_ci_log(&resp);
+                    }
+                    return Ok(0);
+                }
             }
-            IssueCmd::Comment { number, body } => {
-                req.number = number;
-                req.body = body;
-                "/issue/comment"
+        }
+        AgentCmd::Issue { cmd } => {
+            let leaf = cmd.path();
+            match cmd {
+                IssueCmd::Create {
+                    title,
+                    body,
+                    labels,
+                } => {
+                    req.title = title;
+                    req.body = body;
+                    req.labels = labels.map(|l| split_csv(&l)).unwrap_or_default();
+                    leaf
+                }
+                IssueCmd::Comment { number, body } => {
+                    req.number = number;
+                    req.body = body;
+                    leaf
+                }
+                IssueCmd::Close { number } => {
+                    req.number = number;
+                    leaf
+                }
+                IssueCmd::Reopen { number } => {
+                    req.number = number;
+                    leaf
+                }
+                IssueCmd::Label { number, labels } => {
+                    req.number = number;
+                    req.labels = split_csv(&labels);
+                    leaf
+                }
+                IssueCmd::Unlabel { number, labels } => {
+                    req.number = number;
+                    req.labels = split_csv(&labels);
+                    leaf
+                }
+                IssueCmd::Assign { number, assignees } => {
+                    req.number = number;
+                    req.assignees = split_csv(&assignees);
+                    leaf
+                }
+                IssueCmd::Unassign { number, assignees } => {
+                    req.number = number;
+                    req.assignees = split_csv(&assignees);
+                    leaf
+                }
+                IssueCmd::View { number, json } => {
+                    req.number = number;
+                    return call_and_print(&client, leaf, &req, json).await;
+                }
+                IssueCmd::Comments {
+                    number,
+                    limit,
+                    json,
+                } => {
+                    req.number = number;
+                    req.first = limit;
+                    return call_and_print(&client, leaf, &req, json).await;
+                }
+                IssueCmd::List {
+                    state,
+                    labels,
+                    assignee,
+                    limit,
+                    json,
+                } => {
+                    req.state = state;
+                    req.labels = labels.map(|l| split_csv(&l)).unwrap_or_default();
+                    req.assignee = assignee.unwrap_or_default();
+                    req.first = limit;
+                    return call_and_print(&client, leaf, &req, json).await;
+                }
             }
-            IssueCmd::Close { number } => {
-                req.number = number;
-                "/issue/close"
+        }
+        AgentCmd::Project { cmd } => {
+            let leaf = cmd.path();
+            match cmd {
+                ProjectCmd::AddItem {
+                    project_id,
+                    content_id,
+                } => {
+                    req.project_id = project_id;
+                    req.content_id = content_id;
+                    leaf
+                }
+                ProjectCmd::UpdateItem {
+                    project_id,
+                    item_id,
+                    field_id,
+                    value,
+                } => {
+                    req.project_id = project_id;
+                    req.item_id = item_id;
+                    req.field_id = field_id;
+                    req.value = Some(
+                        serde_json::from_str::<Value>(&value)
+                            .unwrap_or_else(|_| serde_json::json!({"text": value})),
+                    );
+                    leaf
+                }
+                ProjectCmd::List { project_id, first } => {
+                    req.project_id = project_id;
+                    req.first = first;
+                    leaf
+                }
+                ProjectCmd::Fields { project_id, first } => {
+                    req.project_id = project_id;
+                    req.first = first;
+                    leaf
+                }
             }
-            IssueCmd::Reopen { number } => {
-                req.number = number;
-                "/issue/reopen"
+        }
+        AgentCmd::Repo { cmd } => {
+            let leaf = cmd.path();
+            match cmd {
+                RepoCmd::Vocabulary {} => leaf,
             }
-            IssueCmd::Label { number, labels } => {
-                req.number = number;
-                req.labels = split_csv(&labels);
-                "/issue/label"
-            }
-            IssueCmd::Unlabel { number, labels } => {
-                req.number = number;
-                req.labels = split_csv(&labels);
-                "/issue/unlabel"
-            }
-            IssueCmd::Assign { number, assignees } => {
-                req.number = number;
-                req.assignees = split_csv(&assignees);
-                "/issue/assign"
-            }
-            IssueCmd::Unassign { number, assignees } => {
-                req.number = number;
-                req.assignees = split_csv(&assignees);
-                "/issue/unassign"
-            }
-            IssueCmd::View { number, json } => {
-                req.number = number;
-                return call_and_print(&client, "/issue/view", &req, json).await;
-            }
-            IssueCmd::Comments {
-                number,
-                limit,
-                json,
-            } => {
-                req.number = number;
-                req.first = limit;
-                return call_and_print(&client, "/issue/comments", &req, json).await;
-            }
-            IssueCmd::List {
-                state,
-                labels,
-                assignee,
-                limit,
-                json,
-            } => {
-                req.state = state;
-                req.labels = labels.map(|l| split_csv(&l)).unwrap_or_default();
-                req.assignee = assignee.unwrap_or_default();
-                req.first = limit;
-                return call_and_print(&client, "/issue/list", &req, json).await;
-            }
-        },
-        AgentCmd::Project { cmd } => match cmd {
-            ProjectCmd::AddItem {
-                project_id,
-                content_id,
-            } => {
-                req.project_id = project_id;
-                req.content_id = content_id;
-                "/project/add-item"
-            }
-            ProjectCmd::UpdateItem {
-                project_id,
-                item_id,
-                field_id,
-                value,
-            } => {
-                req.project_id = project_id;
-                req.item_id = item_id;
-                req.field_id = field_id;
-                req.value = Some(
-                    serde_json::from_str::<Value>(&value)
-                        .unwrap_or_else(|_| serde_json::json!({"text": value})),
-                );
-                "/project/update-item"
-            }
-            ProjectCmd::List { project_id, first } => {
-                req.project_id = project_id;
-                req.first = first;
-                "/project/list"
-            }
-            ProjectCmd::Fields { project_id, first } => {
-                req.project_id = project_id;
-                req.first = first;
-                "/project/fields"
-            }
-        },
-        AgentCmd::Repo { cmd } => match cmd {
-            RepoCmd::Vocabulary => "/repo/vocabulary",
-        },
+        }
         AgentCmd::Search { query, limit, json } => {
             req.query = query;
             req.first = limit;
-            let resp = client.call("/search/issues", &req).await?;
+            let resp = client.call(group, &req).await?;
             if !resp.ok {
                 eprintln!("sekimore: denied: {}", resp.error.unwrap_or_default());
                 return Ok(1);
@@ -341,76 +360,79 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
             }
             return Ok(0);
         }
-        AgentCmd::Release { cmd } => match cmd {
-            ReleaseCmd::Create {
-                tag,
-                title,
-                notes,
-                notes_file,
-                generate_notes,
-                draft,
-                prerelease,
-            } => {
-                req.tag = tag;
-                req.title = title.unwrap_or_default();
-                // --notes-file is the way to pass a long body without fighting the shell.
-                req.body = match (notes, notes_file) {
-                    (Some(_), Some(_)) => {
-                        return Err(anyhow!("pass either --notes or --notes-file, not both"))
-                    }
-                    (Some(n), None) => n,
-                    (None, Some(f)) => std::fs::read_to_string(&f)
-                        .with_context(|| format!("read {}", f.display()))?,
-                    (None, None) => String::new(),
-                };
-                req.generate_notes = generate_notes;
-                req.draft = draft;
-                req.prerelease = prerelease;
-                "/release/create"
-            }
-            ReleaseCmd::Edit {
-                tag,
-                title,
-                notes,
-                notes_file,
-                draft,
-                prerelease,
-            } => {
-                if title.is_none()
-                    && notes.is_none()
-                    && notes_file.is_none()
-                    && draft.is_none()
-                    && prerelease.is_none()
-                {
-                    eprintln!(
+        AgentCmd::Release { cmd } => {
+            let leaf = cmd.path();
+            match cmd {
+                ReleaseCmd::Create {
+                    tag,
+                    title,
+                    notes,
+                    notes_file,
+                    generate_notes,
+                    draft,
+                    prerelease,
+                } => {
+                    req.tag = tag;
+                    req.title = title.unwrap_or_default();
+                    // --notes-file is the way to pass a long body without fighting the shell.
+                    req.body = match (notes, notes_file) {
+                        (Some(_), Some(_)) => {
+                            return Err(anyhow!("pass either --notes or --notes-file, not both"))
+                        }
+                        (Some(n), None) => n,
+                        (None, Some(f)) => std::fs::read_to_string(&f)
+                            .with_context(|| format!("read {}", f.display()))?,
+                        (None, None) => String::new(),
+                    };
+                    req.generate_notes = generate_notes;
+                    req.draft = draft;
+                    req.prerelease = prerelease;
+                    leaf
+                }
+                ReleaseCmd::Edit {
+                    tag,
+                    title,
+                    notes,
+                    notes_file,
+                    draft,
+                    prerelease,
+                } => {
+                    if title.is_none()
+                        && notes.is_none()
+                        && notes_file.is_none()
+                        && draft.is_none()
+                        && prerelease.is_none()
+                    {
+                        eprintln!(
                         "sekimore: release edit needs --title, --notes, --notes-file, --draft or --prerelease"
                     );
-                    return Ok(2);
-                }
-                req.tag = tag;
-                req.title = title.unwrap_or_default();
-                req.body = match (notes, notes_file) {
-                    (Some(_), Some(_)) => {
-                        return Err(anyhow!("pass either --notes or --notes-file, not both"))
+                        return Ok(2);
                     }
-                    (Some(n), None) => n,
-                    (None, Some(f)) => std::fs::read_to_string(&f)
-                        .with_context(|| format!("read {}", f.display()))?,
-                    (None, None) => String::new(),
-                };
-                req.set_draft = draft;
-                req.set_prerelease = prerelease;
-                "/release/edit"
+                    req.tag = tag;
+                    req.title = title.unwrap_or_default();
+                    req.body = match (notes, notes_file) {
+                        (Some(_), Some(_)) => {
+                            return Err(anyhow!("pass either --notes or --notes-file, not both"))
+                        }
+                        (Some(n), None) => n,
+                        (None, Some(f)) => std::fs::read_to_string(&f)
+                            .with_context(|| format!("read {}", f.display()))?,
+                        (None, None) => String::new(),
+                    };
+                    req.set_draft = draft;
+                    req.set_prerelease = prerelease;
+                    leaf
+                }
+                ReleaseCmd::View { tag } => {
+                    req.tag = tag;
+                    leaf
+                }
+                ReleaseCmd::List { limit } => {
+                    req.first = limit;
+                    leaf
+                }
             }
-            ReleaseCmd::View { tag } => {
-                req.tag = tag;
-                "/release/view"
-            }
-            ReleaseCmd::List { limit } => {
-                req.first = limit;
-                "/release/list"
-            }
-        },
+        }
     };
     let resp = client.call(path, &req).await?;
     if !resp.ok {
