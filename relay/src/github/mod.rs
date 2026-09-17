@@ -84,13 +84,6 @@ impl From<reqwest::Error> for GhError {
     }
 }
 
-impl GhError {
-    /// Whether this was a denial before reaching upstream (used to decide the audit entry and HTTP status).
-    pub fn is_denied(&self) -> bool {
-        matches!(self, GhError::Denied(_))
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct PrResult {
     pub number: u64,
@@ -286,10 +279,6 @@ impl GitHub {
             tokens,
             audit,
         }
-    }
-
-    pub fn api_base(&self) -> &Url {
-        &self.api_base
     }
 
     // ---- Pull Request ----

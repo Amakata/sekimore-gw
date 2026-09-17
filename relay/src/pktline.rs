@@ -226,9 +226,6 @@ impl<'a> RefUpdate<'a> {
     pub fn is_delete(&self) -> bool {
         self.new.bytes().all(|b| b == b'0')
     }
-    pub fn is_create(&self) -> bool {
-        self.old.bytes().all(|b| b == b'0')
-    }
 }
 
 /// One line of the command section. Re-encoded in the original order.
@@ -506,21 +503,9 @@ impl<R: AsyncRead + Unpin> PktReader<R> {
         }
     }
 
-    /// Starts with already-read leftover bytes at the front of the buffer.
-    pub fn with_leftover(inner: R, leftover: BytesMut) -> Self {
-        Self {
-            inner,
-            buf: leftover,
-        }
-    }
-
     /// Returns the inner reader and the unconsumed bytes. **The caller must forward those bytes.**
     pub fn into_parts(self) -> (R, BytesMut) {
         (self.inner, self.buf)
-    }
-
-    pub fn leftover(&self) -> &[u8] {
-        &self.buf
     }
 
     async fn fill(&mut self) -> std::io::Result<usize> {

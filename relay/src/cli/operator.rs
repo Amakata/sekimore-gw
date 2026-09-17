@@ -80,14 +80,6 @@ pub fn open_audit(r: &Resolved) -> anyhow::Result<Arc<Audit>> {
     Ok(Arc::new(Audit::new(Some(&r.paths.audit), false)?))
 }
 
-/// GitHub client for the default upstream (0.1.x compatible).
-pub fn build_github(
-    r: &Resolved,
-    audit: Arc<Audit>,
-) -> anyhow::Result<(Arc<GitHub>, Arc<UpstreamTokenStore>, reqwest::Client)> {
-    build_github_for(r, r.default_upstream(), audit)
-}
-
 /// GitHub client for one upstream (api_base / graphql_base / upstream_token are that upstream's. 0.2.0).
 pub fn build_github_for(
     r: &Resolved,
