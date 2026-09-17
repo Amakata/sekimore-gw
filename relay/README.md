@@ -352,7 +352,7 @@ Token records are swept 7 days after they expire. The permanent record is `audit
 | `repository "X" is not in project "P"` | Outside the project | Add it to `repos`. If the denial was intended, do nothing |
 | `push to refs/heads/main is not allowed` | A direct push outside the namespace | Use `refs/for/main` to open a PR, or add a glob to `push` if you really need it |
 | `tag is not allowed for this repository` | Tag pushes are denied by default | Add a glob to `tags` on that repo or upstream |
-| `Permission denied (publickey)` (from the relay) | The agent's key is not registered | `sekimore bootstrap …`, or `add-key` by the operator. Check for `bootstrap.disabled` |
+| `Permission denied (publickey)` (from the relay) | The agent's key is not registered | `sudo sekimore-agent-setup.sh`, or `add-key` by the operator. Check for `bootstrap.disabled` |
 | `! [remote rejected] … (sekimore: …)` | A push the policy denied | Follow what the message says |
 | `denied: token expired at …` | The project token expired | The `sekimore` wrapper renews it automatically. On an older environment, run `sudo sekimore-agent-setup.sh` |
 | `no upstream token … run sekimore-relay login` | The device flow was never run, or you logged out | `sekimore-relay login` |

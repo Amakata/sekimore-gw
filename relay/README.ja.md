@@ -349,7 +349,7 @@ Dev Containers 構成では `mise run gw:tokens` / `gw:revoke-project` / `gw:aud
 | `repository "X" is not in project "P"` | 案件外 | `repos` に追加する。意図した拒否なら何もしない |
 | `push to refs/heads/main is not allowed` | 名前空間外への直接 push | `refs/for/main` で PR にする。必要なら `push` に glob を足す |
 | `tag is not allowed for this repository` | タグの push は既定拒否 | その repo か上流の `tags` に glob を足す |
-| `Permission denied (publickey)`（関所から） | エージェントの鍵が未登録 | `sekimore bootstrap …` か操作者の `add-key`。`bootstrap.disabled` の有無 |
+| `Permission denied (publickey)`（関所から） | エージェントの鍵が未登録 | `sudo sekimore-agent-setup.sh` か操作者の `add-key`。`bootstrap.disabled` の有無 |
 | `! [remote rejected] … (sekimore: …)` | ポリシーで拒否した push | メッセージの案内どおり |
 | `denied: token expired at …` | 案件トークンの期限切れ | `sekimore` ラッパーが自動で取り直す。古い環境は `sudo sekimore-agent-setup.sh` |
 | `no upstream token … run sekimore-relay login` | device flow 未実施、または logout 後 | `sekimore-relay login` |

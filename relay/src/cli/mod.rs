@@ -99,8 +99,6 @@ pub enum BootstrapAction {
     Disable,
     #[command(about = t("cli.bootstrap.enable"))]
     Enable,
-    #[command(about = t("cli.bootstrap.status"))]
-    Status,
 }
 
 /// Runs the command and returns the exit code.

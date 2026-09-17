@@ -10,7 +10,7 @@ use anyhow::{anyhow, Context};
 use clap::{Args, Subcommand};
 use serde_json::Value;
 
-use crate::api::types::{ApiRequest, ApiResponse, BootstrapRequest, BootstrapResponse};
+use crate::api::types::{ApiRequest, ApiResponse};
 use crate::i18n::t;
 
 pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:8420";
@@ -62,13 +62,6 @@ pub enum AgentCmd {
         limit: u32,
         #[arg(long, help = t("agent.search.json"))]
         json: bool,
-    },
-    #[command(about = t("agent.bootstrap"))]
-    Bootstrap {
-        #[arg(long, help = t("agent.bootstrap.pubkey_file"))]
-        pubkey_file: PathBuf,
-        #[arg(long, help = t("agent.bootstrap.label"))]
-        label: Option<String>,
     },
 }
 
@@ -462,27 +455,6 @@ impl AgentClient {
         serde_json::from_slice::<ApiResponse>(&body)
             .map_err(|_| anyhow!("gateway returned HTTP {status} (unparseable body)"))
     }
-
-    pub async fn bootstrap(
-        &self,
-        public_key: &str,
-        label: Option<&str>,
-    ) -> anyhow::Result<BootstrapResponse> {
-        let resp = self
-            .http
-            .post(format!("{}/bootstrap", self.endpoint))
-            .json(&BootstrapRequest {
-                public_key: public_key.trim().to_string(),
-                label: label.map(str::to_string),
-            })
-            .send()
-            .await
-            .with_context(|| format!("cannot reach the gateway at {}", self.endpoint))?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-        serde_json::from_slice::<BootstrapResponse>(&body)
-            .map_err(|_| anyhow!("gateway returned HTTP {status} (unparseable body)"))
-    }
 }
 
 /// The body of `sekimore guide`. Embedded in the binary so it cannot drift from the CLI version (relay/share/agent-guide.*.md is the source of truth).
@@ -515,21 +487,6 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
     let path = match cmd {
         AgentCmd::Whoami => "/whoami",
         AgentCmd::Guide { .. } => unreachable!("guide is handled before connecting"),
-        AgentCmd::Bootstrap { pubkey_file, label } => {
-            let key = std::fs::read_to_string(&pubkey_file)
-                .with_context(|| format!("read {}", pubkey_file.display()))?;
-            let resp = client.bootstrap(&key, label.as_deref()).await?;
-            if !resp.ok {
-                eprintln!(
-                    "sekimore: bootstrap denied: {}",
-                    resp.error.unwrap_or_default()
-                );
-                return Ok(1);
-            }
-            // Machine-readable output for agent-setup.sh to read (the token only ever goes to stdout)
-            println!("{}", serde_json::to_string(&resp)?);
-            return Ok(0);
-        }
         AgentCmd::Pr { cmd } => match cmd {
             PrCmd::Create {
                 head,

@@ -852,17 +852,6 @@ pub fn bootstrap(path: &Path, action: BootstrapAction) -> anyhow::Result<()> {
             }
             audit.log("bootstrap_enabled", Actor::Operator, &[]);
         }
-        BootstrapAction::Status => {
-            println!(
-                "mode: {:?}; kill-switch: {}",
-                r.relay.bootstrap,
-                if flag.exists() {
-                    "DISABLED"
-                } else {
-                    "not set (enabled)"
-                }
-            );
-        }
     }
     Ok(())
 }
