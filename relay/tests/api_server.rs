@@ -762,3 +762,492 @@ async fn the_permission_is_checked_before_the_board() {
     let e = resp.error.unwrap_or_default();
     assert!(e.contains("project:read"), "{e}");
 }
+
+// ---- reading pull requests and issues (0.2.8) ----
+
+#[tokio::test]
+async fn reading_a_pull_request_needs_pr_read() {
+    // issue:read is a different key and must not open pr view / comments / list.
+    let f = start_api(
+        project_case_a(&["pr:create", "issue:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    for path in ["/pr/view", "/pr/comments", "/pr/list"] {
+        let r = ApiRequest {
+            number: 7,
+            ..req("LibOrg/awesome-lib")
+        };
+        let (code, resp) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(code, 403, "{path}: {:?}", resp.error);
+        assert!(resp.error.unwrap_or_default().contains("pr:read"));
+    }
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "a denied read must not reach upstream"
+    );
+}
+
+#[tokio::test]
+async fn reading_an_issue_needs_issue_read_which_create_does_not_give() {
+    // issue:create writes; it says nothing about being allowed to read the tracker.
+    let f = start_api(
+        project_case_a(&["issue:create", "issue:comment", "pr:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    for path in ["/issue/view", "/issue/comments", "/issue/list"] {
+        let r = ApiRequest {
+            number: 47,
+            ..req("LibOrg/awesome-lib")
+        };
+        let (code, resp) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(code, 403, "{path}: {:?}", resp.error);
+        assert!(
+            resp.error.unwrap_or_default().contains("issue:read"),
+            "{path} should name the permission it wants"
+        );
+    }
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn pr_view_reports_the_branches_and_the_counts() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/view", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let raw = resp.raw.expect("raw PR");
+    assert_eq!(raw["title"], "Add the thing");
+    assert_eq!(raw["head"], "sekimore/topic");
+    assert_eq!(raw["base"], "main");
+    assert_eq!(raw["author"], "alice");
+    assert_eq!(raw["changed_files"], 3);
+    assert_eq!(raw["additions"], 40);
+    assert_eq!(raw["review_comments"], 1);
+    let msg = resp.message.unwrap_or_default();
+    assert!(msg.contains("main ← sekimore/topic"), "{msg}");
+    assert!(
+        msg.contains("why it is needed"),
+        "the body belongs in it: {msg}"
+    );
+    // One read, and it stays inside the project's repository.
+    let rec = recorded(&f.recorder);
+    assert_eq!(rec.len(), 1);
+    assert_eq!(rec[0].path, "/api/v3/repos/LibOrg/awesome-lib/pulls/7");
+}
+
+#[tokio::test]
+async fn pr_comments_merges_the_three_sources_in_order() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/comments", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let raw = resp.raw.expect("raw comments");
+    let items = raw.as_array().expect("a list");
+
+    // carol 09:00 (comment), alice 10:00 (review), alice 10:05 (inline), bob 11:00 (comment).
+    // The empty COMMENTED review at 10:05 is only a container and is left out.
+    let got: Vec<(&str, &str)> = items
+        .iter()
+        .map(|i| {
+            (
+                i["kind"].as_str().unwrap_or(""),
+                i["author"].as_str().unwrap_or(""),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("comment", "carol"),
+            ("review", "alice"),
+            ("inline", "alice"),
+            ("comment", "bob"),
+        ],
+        "the three sources must come back as one timeline"
+    );
+
+    // The review carries its state, the inline comment its place in the diff.
+    assert_eq!(items[1]["state"], "CHANGES_REQUESTED");
+    assert_eq!(items[2]["path"], "src/main.rs");
+    assert_eq!(items[2]["line"], 40);
+    assert_eq!(items[2]["in_reply_to_id"], 555);
+    assert!(
+        items[0].get("state").is_none(),
+        "a plain comment has no state"
+    );
+
+    // All three endpoints were asked, and none of them left the project's repository.
+    let paths: Vec<String> = recorded(&f.recorder)
+        .iter()
+        .map(|c| c.path.clone())
+        .collect();
+    assert_eq!(paths.len(), 3, "{paths:?}");
+    for p in &paths {
+        assert!(
+            p.starts_with("/api/v3/repos/LibOrg/awesome-lib/"),
+            "{p} is outside the project"
+        );
+    }
+
+    let msg = resp.message.unwrap_or_default();
+    assert!(msg.contains("[review CHANGES_REQUESTED]"), "{msg}");
+    assert!(msg.contains("src/main.rs:40"), "{msg}");
+    assert!(msg.contains("CI is red"), "{msg}");
+}
+
+#[tokio::test]
+async fn an_empty_commented_review_is_not_listed() {
+    // GitHub wraps line comments in a review with no body. It says nothing, so it is noise.
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (_, resp) = post(f.addr, "/pr/comments", Some(&f.token), &r).await;
+    let raw = resp.raw.expect("raw comments");
+    let reviews = raw
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["kind"] == "review")
+        .count();
+    assert_eq!(reviews, 1, "only the review that actually said something");
+}
+
+#[tokio::test]
+async fn issue_view_says_when_it_is_really_a_pull_request() {
+    // The issues endpoint serves PRs too. Returning one silently as an issue would mislead.
+    let f = start_api(project_case_a(&["issue:read"]), BootstrapMode::Auto, true).await;
+
+    let r = ApiRequest {
+        number: 47,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/view", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let raw = resp.raw.expect("raw issue");
+    assert_eq!(raw["title"], "Crash on empty input");
+    assert_eq!(raw["labels"][0], "bug");
+    assert_eq!(raw["assignees"][0], "bob");
+    assert_eq!(raw["is_pull_request"], false);
+    assert!(!resp.message.unwrap_or_default().contains("pr view"));
+
+    let r = ApiRequest {
+        number: 8,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/view", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let raw = resp.raw.expect("raw issue");
+    assert_eq!(raw["is_pull_request"], true, "#8 is a pull request");
+    let msg = resp.message.unwrap_or_default();
+    assert!(msg.contains("pull request"), "{msg}");
+    assert!(
+        msg.contains("pr view"),
+        "it should point at the right command: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn issue_list_drops_the_pull_requests_github_mixes_in() {
+    let f = start_api(project_case_a(&["issue:read"]), BootstrapMode::Auto, true).await;
+    let (code, resp) = post(
+        f.addr,
+        "/issue/list",
+        Some(&f.token),
+        &req("LibOrg/awesome-lib"),
+    )
+    .await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let raw = resp.raw.expect("raw issues");
+    let items = raw.as_array().expect("a list");
+    assert_eq!(
+        items.len(),
+        1,
+        "the pull request must be dropped: {items:?}"
+    );
+    assert_eq!(items[0]["number"], 47);
+    let msg = resp.message.unwrap_or_default();
+    assert!(
+        msg.contains("#47 [open] Crash on empty input (alice, 3 comments)"),
+        "{msg}"
+    );
+    assert!(!msg.contains("#38"), "a PR belongs to pr list: {msg}");
+}
+
+#[tokio::test]
+async fn issue_list_passes_its_filters_as_query_values() {
+    let f = start_api(project_case_a(&["issue:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        state: "all".into(),
+        labels: vec!["bug".into(), "p1".into()],
+        assignee: "bob".into(),
+        first: 5,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/list", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let path = &recorded(&f.recorder)[0].path;
+    assert!(
+        path.starts_with("/api/v3/repos/LibOrg/awesome-lib/issues?"),
+        "{path}"
+    );
+    assert!(path.contains("state=all"), "{path}");
+    assert!(path.contains("per_page=5"), "{path}");
+    assert!(
+        path.contains("labels=bug%2Cp1"),
+        "a comma is escaped in a query value: {path}"
+    );
+    assert!(path.contains("assignee=bob"), "{path}");
+}
+
+#[tokio::test]
+async fn a_bad_state_is_the_agents_mistake_not_an_upstream_call() {
+    let f = start_api(
+        project_case_a(&["issue:read", "pr:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    for path in ["/issue/list", "/pr/list"] {
+        let r = ApiRequest {
+            state: "banana".into(),
+            ..req("LibOrg/awesome-lib")
+        };
+        let (code, resp) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(code, 400, "{path}: {:?}", resp.error);
+        assert!(resp
+            .error
+            .unwrap_or_default()
+            .contains("open, closed or all"));
+    }
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn pr_list_shows_the_branches_and_honours_base() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        base: "main".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/list", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let msg = resp.message.unwrap_or_default();
+    assert!(
+        msg.contains("#41 [open] Older change (alice, main ← sekimore/topic)"),
+        "{msg}"
+    );
+    let path = &recorded(&f.recorder)[0].path;
+    assert!(
+        path.contains("state=open") && path.contains("base=main"),
+        "{path}"
+    );
+}
+
+#[tokio::test]
+async fn a_limit_is_clamped_rather_than_passed_on() {
+    let f = start_api(project_case_a(&["issue:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        first: 9999,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/issue/list", Some(&f.token), &r).await;
+    assert_eq!(code, 200);
+    let path = &recorded(&f.recorder)[0].path;
+    assert!(
+        path.contains("per_page=100"),
+        "the limit tops out at 100: {path}"
+    );
+}
+
+#[tokio::test]
+async fn reading_a_repository_outside_the_project_is_refused() {
+    let f = start_api(
+        project_case_a(&["pr:read", "issue:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    for path in [
+        "/pr/view",
+        "/pr/comments",
+        "/pr/list",
+        "/issue/view",
+        "/issue/comments",
+        "/issue/list",
+    ] {
+        let r = ApiRequest {
+            number: 7,
+            ..req("Other/elsewhere")
+        };
+        let (code, resp) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(code, 403, "{path}: {:?}", resp.error);
+        assert!(resp.error.unwrap_or_default().contains("not in project"));
+    }
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "nothing outside the project may reach upstream"
+    );
+}
+
+#[tokio::test]
+async fn a_read_only_repository_can_still_be_read() {
+    // Reading is not a write, so read-only mode is no obstacle.
+    let f = start_api(
+        project_case_a(&["pr:read", "issue:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 7,
+        ..req("VendorOrg/reference-impl")
+    };
+    let (code, resp) = post(f.addr, "/pr/view", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let (code, resp) = post(
+        f.addr,
+        "/issue/list",
+        Some(&f.token),
+        &req("VendorOrg/reference-impl"),
+    )
+    .await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+}
+
+#[tokio::test]
+async fn pr_comments_renders_one_entry_per_block() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (_, resp) = post(f.addr, "/pr/comments", Some(&f.token), &r).await;
+    let msg = resp.message.unwrap_or_default();
+    // Date, author, then what kind of entry it is; the body indented underneath.
+    assert_eq!(
+        msg,
+        "2026-09-17 carol  [comment]\n  first\n\
+         2026-09-17 alice  [review CHANGES_REQUESTED]\n  the null check is inverted\n\
+         2026-09-17 alice  src/main.rs:40\n  this should be >=\n\
+         2026-09-17 bob    [comment]\n  CI is red"
+    );
+}
+
+// ---- search (0.2.7) ----
+
+#[tokio::test]
+async fn search_needs_its_own_permission() {
+    // Reading one issue and searching across repositories are different authorities: a search is
+    // the only operation not addressed to a repository.
+    let f = start_api(
+        project_case_a(&["issue:read", "pr:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        query: "is:open".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/search/issues", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp.error);
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn a_search_is_scoped_to_the_project_in_the_query() {
+    let f = start_api(project_case_a(&["search:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        query: "is:open label:bug".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/search/issues", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    assert_eq!(rec.len(), 1);
+    // Every repository of the project is named in the query the relay sends
+    let sent = rec[0].path.clone();
+    for repo in [
+        "repo%3ALibOrg/awesome-lib",
+        "repo%3AVendorOrg/reference-impl",
+    ] {
+        assert!(sent.contains(repo), "{repo} missing from {sent}");
+    }
+    assert!(
+        sent.contains("is%3Aopen"),
+        "the caller's own query survives"
+    );
+}
+
+#[tokio::test]
+async fn a_result_from_outside_the_project_is_dropped() {
+    // The mock answers with one repository the project does not own. Scoping the query is a
+    // request; dropping what comes back anyway is the guarantee.
+    let f = start_api(project_case_a(&["search:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        query: "is:open".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/search/issues", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+
+    let msg = resp.message.clone().unwrap_or_default();
+    assert!(!msg.contains("Other/Secret"), "leaked: {msg}");
+    assert!(!msg.contains("OUTSIDE"), "leaked: {msg}");
+    assert!(msg.contains("LibOrg/awesome-lib#7"), "{msg}");
+
+    let hits = resp.raw.expect("hits");
+    let arr = hits.as_array().expect("an array of hits");
+    assert_eq!(arr.len(), 2, "only the two in-project hits: {arr:?}");
+    for h in arr {
+        assert_eq!(h["repository"], "LibOrg/awesome-lib");
+    }
+    // The search API mixes issues and pull requests; the caller has to be able to tell them apart
+    assert_eq!(arr[0]["kind"], "issue");
+    assert_eq!(arr[1]["kind"], "pr");
+}
+
+#[tokio::test]
+async fn a_repo_qualifier_of_the_agents_own_cannot_widen_the_search() {
+    // GitHub honours a repo: the caller writes, so the filter on the way back is what holds.
+    let f = start_api(project_case_a(&["search:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        query: "is:open repo:Other/Secret".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/search/issues", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let arr = resp.raw.expect("hits");
+    for h in arr.as_array().expect("array") {
+        assert_eq!(
+            h["repository"], "LibOrg/awesome-lib",
+            "a hand-written repo: must not widen the answer"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_search_needs_a_query() {
+    let f = start_api(project_case_a(&["search:read"]), BootstrapMode::Auto, true).await;
+    let (code, _) = post(
+        f.addr,
+        "/search/issues",
+        Some(&f.token),
+        &req("LibOrg/awesome-lib"),
+    )
+    .await;
+    assert_eq!(code, 400);
+    assert!(recorded(&f.recorder).is_empty());
+}

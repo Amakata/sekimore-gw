@@ -118,6 +118,20 @@ pub struct ReleaseResult {
     pub published_at: Option<String>,
 }
 
+/// 0.2.7: one hit from a search. `repository` is `Org/Repo`, which is what scopes it to the project.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SearchHit {
+    pub number: u64,
+    pub title: String,
+    pub state: String,
+    /// "issue" or "pr" — the search API mixes both and the caller needs to tell them apart
+    pub kind: String,
+    pub repository: String,
+    pub author: String,
+    pub html_url: String,
+    pub updated_at: String,
+}
+
 /// A single CI check on a PR (a check-run or commit status, normalized to one shape).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CheckItem {
@@ -149,6 +163,94 @@ pub struct IssueResult {
     pub html_url: String,
     #[serde(default)]
     pub node_id: String,
+}
+
+/// 0.2.8: the full view of a pull request (`pr view`).
+///
+/// `pull_request_status` fetches the same object but keeps only what a CI rollup needs, so this is
+/// a separate read rather than a widening of that one.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PrView {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
+    pub state: String, // open / closed
+    pub draft: bool,
+    pub merged: bool,
+    pub head: String,
+    pub base: String,
+    pub author: String,
+    pub html_url: String,
+    pub comments: u64,
+    pub review_comments: u64,
+    pub changed_files: u64,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+/// 0.2.8: the full view of an issue (`issue view`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct IssueView {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
+    pub state: String,
+    pub author: String,
+    pub labels: Vec<String>,
+    pub assignees: Vec<String>,
+    pub html_url: String,
+    pub comments: u64,
+    /// GitHub serves pull requests from the issues endpoint too. True when this one is really a PR.
+    pub is_pull_request: bool,
+}
+
+/// 0.2.8: one entry of a discussion, whichever of the three endpoints it came from.
+///
+/// The body is written by whoever commented. It is **data**: the relay carries the text through and
+/// never reads it for instructions.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CommentItem {
+    /// "comment" (conversation) | "review" (a review submission) | "inline" (a comment on the diff)
+    pub kind: String,
+    pub author: String,
+    pub created_at: String,
+    pub body: String,
+    /// The review state: APPROVED / CHANGES_REQUESTED / COMMENTED (reviews only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// File an inline comment hangs on (inline only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    /// Set when an inline comment answers another one
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_reply_to_id: Option<u64>,
+}
+
+/// 0.2.8: one line of `issue list`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct IssueBrief {
+    pub number: u64,
+    pub title: String,
+    pub state: String,
+    pub author: String,
+    pub labels: Vec<String>,
+    pub comments: u64,
+    pub html_url: String,
+}
+
+/// 0.2.8: one line of `pr list`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PrBrief {
+    pub number: u64,
+    pub title: String,
+    pub state: String,
+    pub draft: bool,
+    pub author: String,
+    pub head: String,
+    pub base: String,
+    pub html_url: String,
 }
 
 pub struct GitHub {
@@ -902,6 +1004,95 @@ impl GitHub {
             })
     }
 
+    /// 0.2.7: search issues and pull requests across the project's repositories.
+    ///
+    /// Unlike every other operation this is not addressed to one repository, so the project's
+    /// repositories are appended to the query as `repo:` qualifiers. That is the scoping. The
+    /// caller's own text is still their own — someone can write `repo:other/thing` and GitHub will
+    /// honour it — so whatever comes back is filtered again against the project before it is
+    /// returned. Two layers, because the first one is a request and the second one is a fact.
+    pub async fn search_issues(
+        &self,
+        auth: &Authorized<'_>,
+        project: &crate::policy::Project,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<SearchHit>, GhError> {
+        auth.ensure(Resource::Search, Action::Read)?;
+        let scope = project.search_scope();
+        if scope.is_empty() {
+            return Ok(Vec::new());
+        }
+        // `a OR b` over repo: qualifiers is how the search API takes several repositories
+        let scoped = format!("{query} {}", scope.join(" "));
+        let path = format!(
+            "/search/issues?q={}&per_page={}",
+            url_escape(&scoped),
+            limit.clamp(1, 100)
+        );
+        let out: Value = self.rest("GET", &path, None).await?;
+        let items = out
+            .get("items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut hits = Vec::new();
+        for it in items {
+            // repository_url is `…/repos/<owner>/<name>`; the search API gives no plain full name
+            let repo = it
+                .get("repository_url")
+                .and_then(Value::as_str)
+                .and_then(|u| {
+                    let mut parts = u.rsplitn(3, '/');
+                    let name = parts.next()?;
+                    let owner = parts.next()?;
+                    Some(format!("{owner}/{name}"))
+                })
+                .unwrap_or_default();
+            if !project.owns_repo(&repo) {
+                // A result from outside the project: the query was scoped, so this means the
+                // caller wrote their own repo: qualifier. Drop it rather than report it.
+                continue;
+            }
+            hits.push(SearchHit {
+                number: it.get("number").and_then(Value::as_u64).unwrap_or(0),
+                title: it
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                state: it
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                kind: if it.get("pull_request").is_some() {
+                    "pr".to_string()
+                } else {
+                    "issue".to_string()
+                },
+                repository: repo,
+                author: it
+                    .get("user")
+                    .and_then(|u| u.get("login"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                html_url: it
+                    .get("html_url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                updated_at: it
+                    .get("updated_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            });
+        }
+        Ok(hits)
+    }
+
     // ---- For the operator (no proof required; never called from the agent path) ----
 
     /// Which upstream identity the relay acts as.
@@ -1052,6 +1243,330 @@ impl GitHub {
         serde_json::from_slice(&body)
             .map_err(|e| GhError::Parse(format!("{e}: {}", truncate(&body))))
     }
+}
+
+/// 0.2.8: read and list operations.
+///
+/// Everything here reads, so each method proves `Read` on its resource and nothing more. The only
+/// agent-supplied text reaching upstream is a query VALUE (`state`, `base`, `labels`, `assignee`),
+/// which goes through `url_escape`; the numbers are `u64` and cannot leave their path segment.
+impl GitHub {
+    /// The whole pull request, including the counts GitHub attaches to it.
+    pub async fn pull_request_view(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+    ) -> Result<PrView, GhError> {
+        auth.ensure(Resource::Pr, Action::Read)?;
+        let pr: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{}/pulls/{number}", auth.repo()),
+                None,
+            )
+            .await?;
+        Ok(PrView {
+            number: pr.get("number").and_then(Value::as_u64).unwrap_or(number),
+            title: str_at(&pr, "title"),
+            body: pr
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            state: str_at(&pr, "state"),
+            draft: pr.get("draft").and_then(Value::as_bool).unwrap_or(false),
+            merged: pr.get("merged").and_then(Value::as_bool).unwrap_or(false),
+            head: pointer_str(&pr, "/head/ref"),
+            base: pointer_str(&pr, "/base/ref"),
+            author: pointer_str(&pr, "/user/login"),
+            html_url: str_at(&pr, "html_url"),
+            comments: u64_at(&pr, "comments"),
+            review_comments: u64_at(&pr, "review_comments"),
+            changed_files: u64_at(&pr, "changed_files"),
+            additions: u64_at(&pr, "additions"),
+            deletions: u64_at(&pr, "deletions"),
+        })
+    }
+
+    /// Everything said on a pull request, from the three places GitHub keeps it, as one list
+    /// ordered by creation time: the conversation, the review submissions, and the comments on the
+    /// diff. Reading only one of them misses most of a review.
+    pub async fn pull_request_comments(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        limit: u32,
+    ) -> Result<Vec<CommentItem>, GhError> {
+        auth.ensure(Resource::Pr, Action::Read)?;
+        let repo = auth.repo();
+        let per = limit.clamp(1, 100);
+        let mut out: Vec<CommentItem> = Vec::new();
+
+        let conv: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{repo}/issues/{number}/comments?per_page={per}"),
+                None,
+            )
+            .await?;
+        for c in conv.as_array().unwrap_or(&Vec::new()) {
+            out.push(CommentItem {
+                kind: "comment".into(),
+                author: pointer_str(c, "/user/login"),
+                created_at: str_at(c, "created_at"),
+                body: str_at(c, "body"),
+                state: None,
+                path: None,
+                line: None,
+                in_reply_to_id: None,
+            });
+        }
+
+        let reviews: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{repo}/pulls/{number}/reviews?per_page={per}"),
+                None,
+            )
+            .await?;
+        for r in reviews.as_array().unwrap_or(&Vec::new()) {
+            let body = str_at(r, "body");
+            let state = str_at(r, "state");
+            // A COMMENTED review with no body is just the envelope around the inline comments
+            // below; it carries nothing to read, so it would only be noise.
+            if body.is_empty() && state == "COMMENTED" {
+                continue;
+            }
+            out.push(CommentItem {
+                kind: "review".into(),
+                author: pointer_str(r, "/user/login"),
+                // A review is stamped when it is submitted; a pending one has no timestamp.
+                created_at: str_at(r, "submitted_at"),
+                body,
+                state: Some(state),
+                path: None,
+                line: None,
+                in_reply_to_id: None,
+            });
+        }
+
+        let inline: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{repo}/pulls/{number}/comments?per_page={per}"),
+                None,
+            )
+            .await?;
+        for c in inline.as_array().unwrap_or(&Vec::new()) {
+            out.push(CommentItem {
+                kind: "inline".into(),
+                author: pointer_str(c, "/user/login"),
+                created_at: str_at(c, "created_at"),
+                body: str_at(c, "body"),
+                state: None,
+                path: c.get("path").and_then(Value::as_str).map(str::to_string),
+                // `line` is null on a comment left against an outdated diff; original_line still has it.
+                line: c
+                    .get("line")
+                    .and_then(Value::as_u64)
+                    .or_else(|| c.get("original_line").and_then(Value::as_u64)),
+                in_reply_to_id: c.get("in_reply_to_id").and_then(Value::as_u64),
+            });
+        }
+
+        // One timeline across the three sources. The timestamps are RFC 3339 in UTC, so they sort
+        // as strings; an entry without one (a pending review) sorts first rather than being dropped.
+        out.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        Ok(out)
+    }
+
+    /// One issue. GitHub also serves pull requests here, so the caller is told which it got.
+    pub async fn issue_view(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+    ) -> Result<IssueView, GhError> {
+        auth.ensure(Resource::Issue, Action::Read)?;
+        let iss: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{}/issues/{number}", auth.repo()),
+                None,
+            )
+            .await?;
+        Ok(IssueView {
+            number: iss.get("number").and_then(Value::as_u64).unwrap_or(number),
+            title: str_at(&iss, "title"),
+            body: iss
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            state: str_at(&iss, "state"),
+            author: pointer_str(&iss, "/user/login"),
+            labels: label_names(&iss),
+            assignees: logins(iss.get("assignees")),
+            html_url: str_at(&iss, "html_url"),
+            comments: u64_at(&iss, "comments"),
+            is_pull_request: iss.get("pull_request").is_some(),
+        })
+    }
+
+    /// The conversation on an issue. Issues have only the one kind of comment.
+    pub async fn issue_comments(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        limit: u32,
+    ) -> Result<Vec<CommentItem>, GhError> {
+        auth.ensure(Resource::Issue, Action::Read)?;
+        let out: Value = self
+            .rest(
+                "GET",
+                &format!(
+                    "/repos/{}/issues/{number}/comments?per_page={}",
+                    auth.repo(),
+                    limit.clamp(1, 100)
+                ),
+                None,
+            )
+            .await?;
+        Ok(out
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .map(|c| CommentItem {
+                kind: "comment".into(),
+                author: pointer_str(c, "/user/login"),
+                created_at: str_at(c, "created_at"),
+                body: str_at(c, "body"),
+                state: None,
+                path: None,
+                line: None,
+                in_reply_to_id: None,
+            })
+            .collect())
+    }
+
+    /// The repository's issues. The endpoint mixes pull requests in; they are dropped here, since
+    /// `pr list` is where a PR belongs and `issue:read` is not `pr:read`.
+    pub async fn list_issues(
+        &self,
+        auth: &Authorized<'_>,
+        state: &str,
+        labels: &[String],
+        assignee: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<IssueBrief>, GhError> {
+        auth.ensure(Resource::Issue, Action::Read)?;
+        let mut path = format!(
+            "/repos/{}/issues?state={}&per_page={}",
+            auth.repo(),
+            url_escape(state),
+            limit.clamp(1, 100)
+        );
+        if !labels.is_empty() {
+            path.push_str(&format!("&labels={}", url_escape(&labels.join(","))));
+        }
+        if let Some(a) = assignee {
+            path.push_str(&format!("&assignee={}", url_escape(a)));
+        }
+        let out: Value = self.rest("GET", &path, None).await?;
+        Ok(out
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .filter(|i| i.get("pull_request").is_none())
+            .map(|i| IssueBrief {
+                number: i.get("number").and_then(Value::as_u64).unwrap_or(0),
+                title: str_at(i, "title"),
+                state: str_at(i, "state"),
+                author: pointer_str(i, "/user/login"),
+                labels: label_names(i),
+                comments: u64_at(i, "comments"),
+                html_url: str_at(i, "html_url"),
+            })
+            .collect())
+    }
+
+    /// The repository's pull requests.
+    pub async fn list_pull_requests(
+        &self,
+        auth: &Authorized<'_>,
+        state: &str,
+        base: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<PrBrief>, GhError> {
+        auth.ensure(Resource::Pr, Action::Read)?;
+        let mut path = format!(
+            "/repos/{}/pulls?state={}&per_page={}",
+            auth.repo(),
+            url_escape(state),
+            limit.clamp(1, 100)
+        );
+        if let Some(b) = base {
+            path.push_str(&format!("&base={}", url_escape(b)));
+        }
+        let out: Value = self.rest("GET", &path, None).await?;
+        Ok(out
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .map(|p| PrBrief {
+                number: p.get("number").and_then(Value::as_u64).unwrap_or(0),
+                title: str_at(p, "title"),
+                state: str_at(p, "state"),
+                draft: p.get("draft").and_then(Value::as_bool).unwrap_or(false),
+                author: pointer_str(p, "/user/login"),
+                head: pointer_str(p, "/head/ref"),
+                base: pointer_str(p, "/base/ref"),
+                html_url: str_at(p, "html_url"),
+            })
+            .collect())
+    }
+}
+
+/// A string field, or "" when it is absent or null.
+fn str_at(v: &Value, key: &str) -> String {
+    v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+fn u64_at(v: &Value, key: &str) -> u64 {
+    v.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+/// A string at a JSON pointer, or "" (`/user/login` is null on a comment left by a deleted account).
+fn pointer_str(v: &Value, ptr: &str) -> String {
+    v.pointer(ptr)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// The `name` of each label. GitHub gives objects here, and strings on some older payloads.
+fn label_names(v: &Value) -> Vec<String> {
+    v.get("labels")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|l| {
+                    l.as_str()
+                        .map(str::to_string)
+                        .or_else(|| l.get("name").and_then(Value::as_str).map(str::to_string))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn logins(v: Option<&Value>) -> Vec<String> {
+    v.and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|u| u.get("login").and_then(Value::as_str).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Roll up a set of checks: failure if any check failed, otherwise pending if any is pending,
