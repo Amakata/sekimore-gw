@@ -49,6 +49,15 @@ pub enum AgentCmd {
         #[command(subcommand)]
         cmd: ReleaseCmd,
     },
+    #[command(about = t("agent.search"))]
+    Search {
+        #[arg(help = t("agent.search.query"))]
+        query: String,
+        #[arg(long, default_value_t = 20, help = t("agent.search.limit"))]
+        limit: u32,
+        #[arg(long, help = t("agent.search.json"))]
+        json: bool,
+    },
     #[command(about = t("agent.bootstrap"))]
     Bootstrap {
         #[arg(long, help = t("agent.bootstrap.pubkey_file"))]
@@ -117,6 +126,33 @@ pub enum PrCmd {
         #[arg(long, help = t("agent.number"))]
         number: u64,
         #[arg(long, help = t("agent.pr.status.json"))]
+        json: bool,
+    },
+    #[command(about = t("agent.pr.view"))]
+    View {
+        #[arg(long, help = t("agent.number"))]
+        number: u64,
+        #[arg(long, help = t("agent.json"))]
+        json: bool,
+    },
+    #[command(about = t("agent.pr.comments"))]
+    Comments {
+        #[arg(long, help = t("agent.number"))]
+        number: u64,
+        #[arg(long, default_value_t = 30, help = t("agent.comments.limit"))]
+        limit: u32,
+        #[arg(long, help = t("agent.json"))]
+        json: bool,
+    },
+    #[command(about = t("agent.pr.list"))]
+    List {
+        #[arg(long, default_value = "open", help = t("agent.list.state"))]
+        state: String,
+        #[arg(long, help = t("agent.pr.list.base"))]
+        base: Option<String>,
+        #[arg(long, default_value_t = 20, help = t("agent.list.limit"))]
+        limit: u32,
+        #[arg(long, help = t("agent.json"))]
         json: bool,
     },
 }
@@ -188,6 +224,35 @@ pub enum IssueCmd {
         number: u64,
         #[arg(long, help = t("agent.issue.assignees"))]
         assignees: String,
+    },
+    #[command(about = t("agent.issue.view"))]
+    View {
+        #[arg(long, help = t("agent.number"))]
+        number: u64,
+        #[arg(long, help = t("agent.json"))]
+        json: bool,
+    },
+    #[command(about = t("agent.issue.comments"))]
+    Comments {
+        #[arg(long, help = t("agent.number"))]
+        number: u64,
+        #[arg(long, default_value_t = 30, help = t("agent.comments.limit"))]
+        limit: u32,
+        #[arg(long, help = t("agent.json"))]
+        json: bool,
+    },
+    #[command(about = t("agent.issue.list"))]
+    List {
+        #[arg(long, default_value = "open", help = t("agent.list.state"))]
+        state: String,
+        #[arg(long, help = t("agent.issue.list.labels"))]
+        labels: Option<String>,
+        #[arg(long, help = t("agent.issue.list.assignee"))]
+        assignee: Option<String>,
+        #[arg(long, default_value_t = 20, help = t("agent.list.limit"))]
+        limit: u32,
+        #[arg(long, help = t("agent.json"))]
+        json: bool,
     },
 }
 
@@ -440,6 +505,30 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 }
                 return Ok(if resp.ok { 0 } else { 1 });
             }
+            PrCmd::View { number, json } => {
+                req.number = number;
+                return call_and_print(&client, "/pr/view", &req, json).await;
+            }
+            PrCmd::Comments {
+                number,
+                limit,
+                json,
+            } => {
+                req.number = number;
+                req.first = limit;
+                return call_and_print(&client, "/pr/comments", &req, json).await;
+            }
+            PrCmd::List {
+                state,
+                base,
+                limit,
+                json,
+            } => {
+                req.state = state;
+                req.base = base.unwrap_or_default();
+                req.first = limit;
+                return call_and_print(&client, "/pr/list", &req, json).await;
+            }
         },
         AgentCmd::Ci { cmd } => match cmd {
             CiCmd::Runs { git_ref } => {
@@ -517,6 +606,32 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 req.assignees = split_csv(&assignees);
                 "/issue/assign"
             }
+            IssueCmd::View { number, json } => {
+                req.number = number;
+                return call_and_print(&client, "/issue/view", &req, json).await;
+            }
+            IssueCmd::Comments {
+                number,
+                limit,
+                json,
+            } => {
+                req.number = number;
+                req.first = limit;
+                return call_and_print(&client, "/issue/comments", &req, json).await;
+            }
+            IssueCmd::List {
+                state,
+                labels,
+                assignee,
+                limit,
+                json,
+            } => {
+                req.state = state;
+                req.labels = labels.map(|l| split_csv(&l)).unwrap_or_default();
+                req.assignee = assignee.unwrap_or_default();
+                req.first = limit;
+                return call_and_print(&client, "/issue/list", &req, json).await;
+            }
         },
         AgentCmd::Project { cmd } => match cmd {
             ProjectCmd::AddItem {
@@ -553,6 +668,21 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 "/project/fields"
             }
         },
+        AgentCmd::Search { query, limit, json } => {
+            req.query = query;
+            req.first = limit;
+            let resp = client.call("/search/issues", &req).await?;
+            if !resp.ok {
+                eprintln!("sekimore: denied: {}", resp.error.unwrap_or_default());
+                return Ok(1);
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp.raw)?);
+            } else if let Some(m) = &resp.message {
+                println!("{m}");
+            }
+            return Ok(0);
+        }
         AgentCmd::Release { cmd } => match cmd {
             ReleaseCmd::Create {
                 tag,
@@ -650,6 +780,27 @@ fn print_ci_log(resp: &ApiResponse) {
             "-- more above. next: sekimore ci log --job-id {job_id} --before {start} --window <n>"
         );
     }
+}
+
+/// 0.2.8: the read commands all share one shape — call, then print either the raw JSON or the
+/// human-readable message the relay already rendered.
+async fn call_and_print(
+    client: &AgentClient,
+    path: &str,
+    req: &ApiRequest,
+    json: bool,
+) -> anyhow::Result<i32> {
+    let resp = client.call(path, req).await?;
+    if !resp.ok {
+        eprintln!("sekimore: {}", resp.error.unwrap_or_default());
+        return Ok(1);
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp.raw)?);
+    } else if let Some(m) = &resp.message {
+        println!("{m}");
+    }
+    Ok(0)
 }
 
 pub fn print_response(resp: &ApiResponse) {

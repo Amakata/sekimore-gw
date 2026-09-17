@@ -82,6 +82,12 @@ pub async fn dispatch(
         "/pr/merge" => pr_merge(ctx, req).await,
         "/pr/close" => pr_close(ctx, req).await,
         "/pr/status" => pr_status(ctx, req).await,
+        "/pr/view" => pr_view(ctx, req).await,
+        "/pr/comments" => pr_comments(ctx, req).await,
+        "/pr/list" => pr_list(ctx, req).await,
+        "/issue/view" => issue_view(ctx, req).await,
+        "/issue/comments" => issue_comments(ctx, req).await,
+        "/issue/list" => issue_list(ctx, req).await,
         "/ci/runs" => ci_runs(ctx, req).await,
         "/ci/jobs" => ci_jobs(ctx, req).await,
         "/ci/log" => ci_log(ctx, req).await,
@@ -95,6 +101,7 @@ pub async fn dispatch(
         "/project/list" => project_list(ctx, req).await,
         "/project/fields" => project_fields(ctx, req).await,
         "/pr/request-review" => pr_request_review(ctx, req).await,
+        "/search/issues" => search_issues(ctx, req).await,
         "/release/create" => release_create(ctx, req).await,
         "/release/view" => release_view(ctx, req).await,
         "/release/list" => release_list(ctx, req).await,
@@ -239,6 +246,254 @@ async fn pr_status(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
         raw: Some(raw),
         message: Some(msg),
         ..Default::default()
+    })
+}
+
+// ---- reading pull requests and issues (0.2.8) ----
+
+/// How many to fetch: the agent's number, clamped, or the default when it asked for nothing.
+fn limit_or(first: u32, default: u32) -> u32 {
+    if first == 0 {
+        default
+    } else {
+        first.clamp(1, 100)
+    }
+}
+
+/// The three values GitHub accepts. Anything else is the agent's mistake, not an upstream error.
+fn list_state(state: &str) -> Result<&str, ApiError> {
+    match state {
+        "" => Ok("open"),
+        "open" | "closed" | "all" => Ok(state),
+        _ => Err(ApiError::bad_request("state must be open, closed or all")),
+    }
+}
+
+/// Render one discussion entry. The body is whatever a human wrote: it is printed, never parsed.
+fn comment_lines(items: &[crate::github::CommentItem]) -> String {
+    let mut out = String::new();
+    for c in items {
+        // The date alone is enough to follow a discussion; the time is in the JSON.
+        let day = c.created_at.split('T').next().unwrap_or("").to_string();
+        let tail = match c.kind.as_str() {
+            "review" => format!("[review {}]", c.state.clone().unwrap_or_default()),
+            "inline" => match (&c.path, c.line) {
+                (Some(p), Some(l)) => format!("{p}:{l}"),
+                (Some(p), None) => p.clone(),
+                _ => "[inline]".to_string(),
+            },
+            _ => "[comment]".to_string(),
+        };
+        out.push_str(&format!("{day} {:<6} {tail}\n", c.author));
+        for line in c.body.lines() {
+            out.push_str(&format!("  {line}\n"));
+        }
+    }
+    out.trim_end().to_string()
+}
+
+async fn pr_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    need(req.number != 0, "number is required")?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Pr, Action::Read)?;
+    let pr = gh(ctx, &auth)?.pull_request_view(&auth, req.number).await?;
+    let state = if pr.merged {
+        "merged".to_string()
+    } else if pr.draft {
+        format!("{}, draft", pr.state)
+    } else {
+        pr.state.clone()
+    };
+    let msg = format!(
+        "#{} {} [{}] {} ← {} by {}\n{} files +{} -{}, {} comments ({} on the diff)\n{}\n\n{}",
+        pr.number,
+        pr.title,
+        state,
+        pr.base,
+        pr.head,
+        pr.author,
+        pr.changed_files,
+        pr.additions,
+        pr.deletions,
+        pr.comments,
+        pr.review_comments,
+        pr.html_url,
+        pr.body
+    );
+    Ok(ApiResponse {
+        number: Some(pr.number),
+        url: Some(pr.html_url.clone()),
+        message: Some(msg.trim_end().to_string()),
+        raw: serde_json::to_value(&pr).ok(),
+        ..ApiResponse::ok()
+    })
+}
+
+/// The conversation, the reviews and the comments on the diff, as one ordered list. Each of the
+/// three is a separate GitHub endpoint, and reading one of them misses most of a review.
+async fn pr_comments(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    need(req.number != 0, "number is required")?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Pr, Action::Read)?;
+    let items = gh(ctx, &auth)?
+        .pull_request_comments(&auth, req.number, limit_or(req.first, 30))
+        .await?;
+    let msg = if items.is_empty() {
+        format!("no comments on PR #{}", req.number)
+    } else {
+        comment_lines(&items)
+    };
+    Ok(ApiResponse {
+        number: Some(req.number),
+        message: Some(msg),
+        raw: serde_json::to_value(&items).ok(),
+        ..ApiResponse::ok()
+    })
+}
+
+async fn pr_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    let state = list_state(&req.state)?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Pr, Action::Read)?;
+    let prs = gh(ctx, &auth)?
+        .list_pull_requests(
+            &auth,
+            state,
+            if req.base.is_empty() {
+                None
+            } else {
+                Some(&req.base)
+            },
+            limit_or(req.first, 20),
+        )
+        .await?;
+    let msg = if prs.is_empty() {
+        format!("no {state} pull requests")
+    } else {
+        prs.iter()
+            .map(|p| {
+                format!(
+                    "#{} [{}{}] {} ({}, {} ← {})",
+                    p.number,
+                    p.state,
+                    if p.draft { ", draft" } else { "" },
+                    p.title,
+                    p.author,
+                    p.base,
+                    p.head
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Ok(ApiResponse {
+        message: Some(msg),
+        raw: serde_json::to_value(&prs).ok(),
+        ..ApiResponse::ok()
+    })
+}
+
+/// One issue. GitHub serves pull requests from this endpoint too, so the answer says which it got
+/// rather than presenting a PR as an issue; the payload is still returned.
+async fn issue_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    need(req.number != 0, "number is required")?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Issue, Action::Read)?;
+    let iss = gh(ctx, &auth)?.issue_view(&auth, req.number).await?;
+    let mut msg = format!(
+        "#{} {} [{}] by {}",
+        iss.number, iss.title, iss.state, iss.author
+    );
+    if !iss.labels.is_empty() {
+        msg.push_str(&format!("\nlabels: {}", iss.labels.join(", ")));
+    }
+    if !iss.assignees.is_empty() {
+        msg.push_str(&format!("\nassignees: {}", iss.assignees.join(", ")));
+    }
+    msg.push_str(&format!("\n{} comments\n{}", iss.comments, iss.html_url));
+    if iss.is_pull_request {
+        msg.push_str("\nthis is a pull request, not an issue: sekimore pr view --number ");
+        msg.push_str(&iss.number.to_string());
+    }
+    if !iss.body.is_empty() {
+        msg.push_str(&format!("\n\n{}", iss.body));
+    }
+    Ok(ApiResponse {
+        number: Some(iss.number),
+        url: Some(iss.html_url.clone()),
+        message: Some(msg),
+        raw: serde_json::to_value(&iss).ok(),
+        ..ApiResponse::ok()
+    })
+}
+
+async fn issue_comments(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    need(req.number != 0, "number is required")?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Issue, Action::Read)?;
+    let items = gh(ctx, &auth)?
+        .issue_comments(&auth, req.number, limit_or(req.first, 30))
+        .await?;
+    let msg = if items.is_empty() {
+        format!("no comments on issue #{}", req.number)
+    } else {
+        comment_lines(&items)
+    };
+    Ok(ApiResponse {
+        number: Some(req.number),
+        message: Some(msg),
+        raw: serde_json::to_value(&items).ok(),
+        ..ApiResponse::ok()
+    })
+}
+
+async fn issue_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.repo.is_empty(), "repo is required")?;
+    let state = list_state(&req.state)?;
+    let auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Issue, Action::Read)?;
+    let issues = gh(ctx, &auth)?
+        .list_issues(
+            &auth,
+            state,
+            &req.labels,
+            if req.assignee.is_empty() {
+                None
+            } else {
+                Some(&req.assignee)
+            },
+            limit_or(req.first, 20),
+        )
+        .await?;
+    let msg = if issues.is_empty() {
+        format!("no {state} issues")
+    } else {
+        issues
+            .iter()
+            .map(|i| {
+                format!(
+                    "#{} [{}] {} ({}, {} comments)",
+                    i.number, i.state, i.title, i.author, i.comments
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Ok(ApiResponse {
+        message: Some(msg),
+        raw: serde_json::to_value(&issues).ok(),
+        ..ApiResponse::ok()
     })
 }
 
@@ -642,6 +897,41 @@ async fn pr_request_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResp
             req.number,
             who.join(", ")
         )),
+        ..ApiResponse::ok()
+    })
+}
+
+/// 0.2.7: search issues and pull requests across the project.
+///
+/// A search names no repository, so the policy anchor is the project's first one, the same way
+/// Projects does it. What actually keeps the answer inside the project is the `repo:` scoping and
+/// the filter applied to the results, both in the client.
+async fn search_issues(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.query.is_empty(), "query is required")?;
+    let anchor = project_anchor(ctx, req)?;
+    let auth = ctx
+        .project
+        .authorize(anchor, Resource::Search, Action::Read)?;
+    let limit = if req.first == 0 { 20 } else { req.first };
+    let hits = gh(ctx, &auth)?
+        .search_issues(&auth, &ctx.project, &req.query, limit)
+        .await?;
+    let msg = if hits.is_empty() {
+        "no match in this project".to_string()
+    } else {
+        hits.iter()
+            .map(|h| {
+                format!(
+                    "{}#{} [{}] {} ({})",
+                    h.repository, h.number, h.state, h.title, h.kind
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Ok(ApiResponse {
+        message: Some(msg),
+        raw: serde_json::to_value(&hits).ok(),
         ..ApiResponse::ok()
     })
 }

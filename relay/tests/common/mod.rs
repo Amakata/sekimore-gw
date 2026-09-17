@@ -120,6 +120,28 @@ fn percent_decode(s: &str) -> String {
 fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, serde_json::Value) {
     let decoded = percent_decode(path);
     let p = decoded.split('?').next().unwrap_or(&decoded);
+    // 0.2.7: search. The answer deliberately mixes in a repository outside the project, so the
+    // filter in the client is actually exercised rather than assumed.
+    if method == "GET" && p == "/api/v3/search/issues" {
+        return (
+            StatusCode::OK,
+            serde_json::json!({"total_count": 3, "items": [
+                {"number": 7, "title": "in project, an issue", "state": "open",
+                 "repository_url": "https://api.github.example/repos/LibOrg/awesome-lib",
+                 "user": {"login": "alice"}, "html_url": "https://github.example/LibOrg/awesome-lib/issues/7",
+                 "updated_at": "2026-09-17T00:00:00Z"},
+                {"number": 9, "title": "in project, a pull request", "state": "open",
+                 "pull_request": {"url": "…"},
+                 "repository_url": "https://api.github.example/repos/LibOrg/awesome-lib",
+                 "user": {"login": "bob"}, "html_url": "https://github.example/LibOrg/awesome-lib/pull/9",
+                 "updated_at": "2026-09-17T01:00:00Z"},
+                {"number": 1, "title": "OUTSIDE the project", "state": "open",
+                 "repository_url": "https://api.github.example/repos/Other/Secret",
+                 "user": {"login": "mallory"}, "html_url": "https://github.example/Other/Secret/issues/1",
+                 "updated_at": "2026-09-17T02:00:00Z"}
+            ]}),
+        );
+    }
     if method == "POST" && p.ends_with("/pulls") {
         if body.get("head").and_then(|h| h.as_str()) == Some("sekimore/main-dup0000") {
             return (
@@ -132,10 +154,99 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
             serde_json::json!({"number": 42, "html_url": "https://github.example/pr/42", "node_id": "PR_42"}),
         );
     }
+    // 0.2.8: reading a PR. The three comment sources are distinct paths, so they are matched
+    // before the plain /pulls and /pulls/{n} below.
+    if method == "GET" && p.ends_with("/reviews") {
+        return (
+            StatusCode::OK,
+            serde_json::json!([
+                // Out of order on purpose: the relay has to sort the three sources into one timeline.
+                {"user": {"login": "alice"}, "state": "CHANGES_REQUESTED",
+                 "body": "the null check is inverted", "submitted_at": "2026-09-17T10:00:00Z"},
+                // No body and COMMENTED: only the envelope around the inline comments, and dropped.
+                {"user": {"login": "alice"}, "state": "COMMENTED",
+                 "body": "", "submitted_at": "2026-09-17T10:05:00Z"}
+            ]),
+        );
+    }
+    if method == "GET" && p.ends_with("/pulls/7/comments") {
+        return (
+            StatusCode::OK,
+            serde_json::json!([
+                {"user": {"login": "alice"}, "body": "this should be >=",
+                 "created_at": "2026-09-17T10:05:00Z", "path": "src/main.rs", "line": 40,
+                 "in_reply_to_id": 555}
+            ]),
+        );
+    }
+    if method == "GET" && p.ends_with("/issues/7/comments") {
+        return (
+            StatusCode::OK,
+            serde_json::json!([
+                {"user": {"login": "bob"}, "body": "CI is red", "created_at": "2026-09-17T11:00:00Z"},
+                {"user": {"login": "carol"}, "body": "first", "created_at": "2026-09-17T09:00:00Z"}
+            ]),
+        );
+    }
+    if method == "GET" && p.ends_with("/pulls/7") {
+        return (
+            StatusCode::OK,
+            serde_json::json!({
+                "number": 7, "title": "Add the thing", "body": "why it is needed",
+                "state": "open", "draft": false, "merged": false,
+                "head": {"ref": "sekimore/topic"}, "base": {"ref": "main"},
+                "user": {"login": "alice"}, "html_url": "https://github.example/pr/7",
+                "comments": 2, "review_comments": 1, "changed_files": 3,
+                "additions": 40, "deletions": 5
+            }),
+        );
+    }
+    // 0.2.8: the issues endpoint serves pull requests too; #8 is one, and issue list must drop it.
+    if method == "GET" && p.ends_with("/issues/8") {
+        return (
+            StatusCode::OK,
+            serde_json::json!({
+                "number": 8, "title": "Really a PR", "body": "", "state": "open",
+                "user": {"login": "alice"}, "labels": [], "assignees": [],
+                "html_url": "https://github.example/pr/8", "comments": 0,
+                "pull_request": {"url": "https://github.example/api/pulls/8"}
+            }),
+        );
+    }
+    if method == "GET" && p.contains("/issues/") && !p.ends_with("/comments") {
+        return (
+            StatusCode::OK,
+            serde_json::json!({
+                "number": 47, "title": "Crash on empty input", "body": "steps to reproduce",
+                "state": "open", "user": {"login": "alice"},
+                "labels": [{"name": "bug"}, {"name": "p1"}],
+                "assignees": [{"login": "bob"}],
+                "html_url": "https://github.example/issues/47", "comments": 3
+            }),
+        );
+    }
+    if method == "GET" && p.ends_with("/issues") {
+        return (
+            StatusCode::OK,
+            serde_json::json!([
+                {"number": 47, "title": "Crash on empty input", "state": "open",
+                 "user": {"login": "alice"}, "labels": [{"name": "bug"}], "comments": 3,
+                 "html_url": "https://github.example/issues/47"},
+                // A pull request served from the issues endpoint. issue list must not show it.
+                {"number": 38, "title": "Add the thing", "state": "open",
+                 "user": {"login": "alice"}, "labels": [], "comments": 0,
+                 "html_url": "https://github.example/pr/38",
+                 "pull_request": {"url": "https://github.example/api/pulls/38"}}
+            ]),
+        );
+    }
     if method == "GET" && p.ends_with("/pulls") {
         return (
             StatusCode::OK,
-            serde_json::json!([{"number": 41, "html_url": "https://github.example/pr/41", "node_id": "PR_41"}]),
+            serde_json::json!([{"number": 41, "html_url": "https://github.example/pr/41", "node_id": "PR_41",
+                               "title": "Older change", "state": "open", "draft": false,
+                               "user": {"login": "alice"},
+                               "head": {"ref": "sekimore/topic"}, "base": {"ref": "main"}}]),
         );
     }
     // 0.2.6: releases

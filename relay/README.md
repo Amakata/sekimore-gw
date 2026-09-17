@@ -215,7 +215,8 @@ Keys are exact FQDN matches. Listing `github` more than once gives you more than
 
 - Effective permissions = (project allow ∪ upstream allow ∪ repo allow) − (project deny ∪ upstream deny ∪ repo deny). A deny wins at any layer.
 - `push` / `tags` / `delete` are overridden in the order project → upstream → repo. Globs support `*` and `?`.
-- There are 19 permission keys: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:request_review` `pr:merge` `pr:close`, `issue:create` `issue:comment` `issue:close` `issue:label` `issue:assign`, `project:read` `project:add_item` `project:update_item`, `repo:read`, `ci:read`, `release:create` `release:read`.
+- There are 21 permission keys: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:request_review` `pr:merge` `pr:close`, `issue:create` `issue:read` `issue:comment` `issue:close` `issue:label` `issue:assign`, `project:read` `project:add_item` `project:update_item`, `repo:read`, `ci:read`, `release:create` `release:read`, `search:read`.
+- `pr:read` covers the state, the CI checks, the description and the comments. `issue:read` is separate, so an agent can file bugs without reading a private tracker. `search:read` is its own resource because a search is not addressed to one repository.
 - `pr:review` submits a review; `pr:request_review` asks someone else for one. They are separate because one records an opinion and the other notifies a person.
 - `repo:read` is declared but nothing checks it yet.
 - Check the effective values with `sekimore-relay check` or the Relay tab in the Web UI.

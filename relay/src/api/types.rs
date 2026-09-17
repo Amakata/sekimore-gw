@@ -67,6 +67,16 @@ pub struct ApiRequest {
     pub reviewers: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub team_reviewers: Vec<String>,
+    /// 0.2.7: a search query, in GitHub's search syntax. The relay appends the project's
+    /// repositories to it and filters the results again
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub query: String,
+    /// 0.2.8: filters for `issue list` / `pr list`. `state` is open / closed / all; the list
+    /// reuses `labels`, `base` and `first`
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub state: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub assignee: String,
 }
 
 fn is_false(b: &bool) -> bool {

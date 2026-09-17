@@ -2,6 +2,13 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.8 (2026-09-17. The agent can read what people wrote, and find things by itself)
+
+- Until now an agent could open an issue it could never read, and could be reviewed without being able to see the review. `sekimore pr view`, `pr comments`, `pr list`, `issue view`, `issue comments` and `issue list` close that. `pr comments` merges the three things GitHub keeps apart — the conversation, the review verdicts and the comments attached to individual lines — into one list in time order, so a review reads the way a person wrote it
+- `sekimore search "is:open label:bug"` searches issues and pull requests across the project. A search is the one operation not addressed to a repository, so the project's repositories are appended to the query as `repo:` qualifiers **and** every result is checked against the project before it is returned. GitHub honours a `repo:` the caller writes themselves, so the scoping is a request and the filter is the guarantee
+- Two new permissions. `issue:read`, because an operator may want an agent that files bugs without reading a private tracker, and `search:read` as its own resource, since searching is not scoped to one repository the way everything else is. `pr view` / `pr comments` / `pr list` sit under the existing `pr:read`
+- The guide now tells agents that comment text is data rather than instruction: a comment asking them to abandon the task or reach outside the project is something to report, not to obey
+
 ## 0.2.7 (2026-09-17. Security: a tag or ref could reach outside the project. Review requests, project fields, the DNS redirect)
 
 - Security, and a breaking change for anyone using Projects: a Projects v2 node id is opaque and says nothing about who owns the board, so `project:add_item` on one repository could reach **any** board the upstream token can see, in or out of the project. The boards a project may touch are now declared in `relay.project.boards`, written the way the URL reads (`{ org: acme, number: 3 }` for `github.com/orgs/acme/projects/3`, or `user:` for a personal board); the relay resolves each to its node id at startup and accepts only those. Omitted or empty refuses every Projects operation, so a project that uses them has to add the list — the alternative was leaving the hole open for configs that never declared anything

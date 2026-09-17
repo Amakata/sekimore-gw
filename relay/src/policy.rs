@@ -26,6 +26,9 @@ pub enum Resource {
     Ci,
     /// 0.2.6: GitHub releases
     Release,
+    /// 0.2.7: searching across repositories. Its own resource because a search is not scoped to one
+    /// repository the way every other operation is; results are filtered back to the project
+    Search,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -53,6 +56,7 @@ impl Resource {
             Resource::Repo => "repo",
             Resource::Ci => "ci",
             Resource::Release => "release",
+            Resource::Search => "search",
         }
     }
     /// The actions that exist for this resource. Used to reject typos in the config.
@@ -60,20 +64,22 @@ impl Resource {
         use Action::*;
         match self {
             Resource::Pr => &[Create, Comment, Review, Merge, Close, Read, RequestReview],
-            Resource::Issue => &[Create, Comment, Close, Label, Assign],
+            Resource::Issue => &[Create, Comment, Close, Label, Assign, Read],
             Resource::Project => &[Read, AddItem, UpdateItem],
             Resource::Repo => &[Read],
             Resource::Ci => &[Read],
             Resource::Release => &[Create, Read],
+            Resource::Search => &[Read],
         }
     }
-    pub const ALL: [Resource; 6] = [
+    pub const ALL: [Resource; 7] = [
         Resource::Pr,
         Resource::Issue,
         Resource::Project,
         Resource::Repo,
         Resource::Ci,
         Resource::Release,
+        Resource::Search,
     ];
 }
 
@@ -108,9 +114,10 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "repo" => Resource::Repo,
         "ci" => Resource::Ci,
         "release" => Resource::Release,
+        "search" => Resource::Search,
         other => {
             return Err(format!(
-                "unknown resource {other:?} (known: ci, issue, pr, project, release, repo)"
+                "unknown resource {other:?} (known: ci, issue, pr, project, release, repo, search)"
             ))
         }
     };
@@ -570,6 +577,27 @@ impl Project {
     ///
     /// For the API path. `host/Org/Repo` narrows by host; a bare `Org/Repo` resolves to the single match, or,
     /// if the name exists on several upstreams, to the one on the default upstream (denied if there is none).
+    /// 0.2.7: `repo:` qualifiers naming every repository in the project, for a search.
+    ///
+    /// A search is not scoped to one repository the way every other operation is, so the query is
+    /// rewritten to name the project's repositories explicitly. That is what keeps a result from
+    /// outside the project out of the answer; `filter_search_items` then drops anything that comes
+    /// back anyway, because a caller can write their own `repo:` and GitHub would honour it.
+    pub fn search_scope(&self) -> Vec<String> {
+        self.repos
+            .iter()
+            .map(|r| format!("repo:{}", r.full_name))
+            .collect()
+    }
+
+    /// Whether a search result belongs to this project. `full_name` is `Org/Repo` as the search
+    /// API reports it.
+    pub fn owns_repo(&self, full_name: &str) -> bool {
+        self.repos
+            .iter()
+            .any(|r| r.full_name.eq_ignore_ascii_case(full_name))
+    }
+
     pub fn find_repo(&self, path: &str) -> Result<&RepoPolicy, Denied> {
         let want = path.trim_start_matches('/').trim_end_matches(".git");
         let (host, name) = crate::config::split_repo_host(want);
@@ -1066,6 +1094,33 @@ mod tests {
         assert!(r.allows_tag("anything"));
     }
 
+    /// 0.2.7: a search is the one operation not addressed to a repository, so the scoping has to
+    /// come from the query and from filtering what comes back.
+    #[test]
+    fn search_is_scoped_to_the_projects_repositories() {
+        let p = Project::try_new(
+            "case-a",
+            vec![
+                RepoPolicy::new("Org/App", Mode::ReadWrite),
+                RepoPolicy::new("Org/Lib", Mode::ReadOnly),
+            ],
+            &["search:read".to_string()],
+        )
+        .unwrap();
+        assert_eq!(p.search_scope(), vec!["repo:Org/App", "repo:Org/Lib"]);
+        assert!(p.owns_repo("Org/App"));
+        // GitHub is case-insensitive about owner and name, so the filter has to be too
+        assert!(p.owns_repo("org/app"));
+        assert!(!p.owns_repo("Other/Secret"));
+        assert!(!p.owns_repo("Org/AppExtra"));
+        assert!(!p.owns_repo(""));
+
+        // A project with no repositories can search nothing, rather than searching everything
+        let empty = Project::try_new("empty", vec![], &["search:read".to_string()]).unwrap();
+        assert!(empty.search_scope().is_empty());
+        assert!(!empty.owns_repo("Org/App"));
+    }
+
     #[test]
     fn invalid_permission_specs_are_rejected() {
         assert!(parse_permission("pr:create").is_ok());
@@ -1077,9 +1132,11 @@ mod tests {
         assert!(Project::try_new("x", vec![], &["pr:delete".to_string()]).is_err());
         assert!(Project::try_new("x", vec![RepoPolicy::new("nope", Mode::ReadOnly)], &[]).is_err());
         // pr:read (0.1.3) + ci:read (0.1.5) + release:create / release:read (0.2.6)
-        // + pr:request_review (0.2.7)
-        assert_eq!(all_permission_keys().len(), 19);
-        assert!(all_permission_keys().contains(&"pr:request_review".to_string()));
+        // + pr:request_review, issue:read, search:read (0.2.7)
+        assert_eq!(all_permission_keys().len(), 21);
+        for k in ["pr:request_review", "issue:read", "search:read"] {
+            assert!(all_permission_keys().contains(&k.to_string()), "{k}");
+        }
         assert!(all_permission_keys().contains(&"release:create".to_string()));
     }
 }
