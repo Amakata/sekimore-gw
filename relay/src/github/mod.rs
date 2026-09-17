@@ -100,6 +100,16 @@ pub struct PrResult {
     pub node_id: String,
 }
 
+/// 0.2.9: what a merge did, so the caller can report it and know whether the branch went with it.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct MergeResult {
+    pub merged: bool,
+    pub sha: String,
+    pub branch_deleted: bool,
+    /// The head branch, as the upstream named it (never as the caller named it)
+    pub branch: String,
+}
+
 /// 0.2.6: a GitHub release.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ReleaseResult {
@@ -358,10 +368,21 @@ impl GitHub {
         tag: &str,
     ) -> Result<Option<ReleaseResult>, GhError> {
         auth.ensure(Resource::Release, Action::Read)?;
+        self.release_by_tag(auth.repo(), tag).await
+    }
+
+    /// The fetch behind `get_release_by_tag` and `get_release_for_edit`. Private, and reachable
+    /// only from a method that has already proved something, so it adds no way around the policy.
+    /// The tag is agent-supplied text in a path segment, hence `path_segment`.
+    async fn release_by_tag(
+        &self,
+        repo: &str,
+        tag: &str,
+    ) -> Result<Option<ReleaseResult>, GhError> {
         match self
             .rest::<Value>(
                 "GET",
-                &format!("/repos/{}/releases/tags/{}", auth.repo(), path_segment(tag)),
+                &format!("/repos/{repo}/releases/tags/{}", path_segment(tag)),
                 None,
             )
             .await
@@ -391,6 +412,109 @@ impl GitHub {
             )
             .await?;
         Ok(serde_json::from_value::<Vec<ReleaseResult>>(out).unwrap_or_default())
+    }
+
+    /// 0.2.9: the release for a tag, for a caller that is about to edit it.
+    ///
+    /// `release edit` has to know the current draft state before it can tell whether the call
+    /// publishes, and that lookup is part of the edit rather than a read of its own — demanding
+    /// `release:read` to edit would make editing need two permissions. `release:create` is the
+    /// floor for any edit, so that is what proves this one.
+    pub async fn get_release_for_edit(
+        &self,
+        auth: &Authorized<'_>,
+        tag: &str,
+    ) -> Result<Option<ReleaseResult>, GhError> {
+        auth.ensure(Resource::Release, Action::Create)?;
+        self.release_by_tag(auth.repo(), tag).await
+    }
+
+    /// 0.2.9: edit a release, and publish a draft.
+    ///
+    /// `release create --draft` used to be a one-way door: the agent could make a draft and had no
+    /// way to finish it. Editing a release that stays a draft is `release:create`; taking it out of
+    /// draft is `release:publish`, which is the boundary `--draft` exists to create. The caller
+    /// decides which proof to bring by looking the release up first, so `release:publish` is
+    /// demanded only when the call actually publishes.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_release(
+        &self,
+        auth: &Authorized<'_>,
+        release_id: u64,
+        publishing: bool,
+        name: Option<&str>,
+        body: Option<&str>,
+        draft: Option<bool>,
+        prerelease: Option<bool>,
+    ) -> Result<ReleaseResult, GhError> {
+        auth.ensure(
+            Resource::Release,
+            if publishing {
+                Action::Publish
+            } else {
+                Action::Create
+            },
+        )?;
+        let mut payload = json!({});
+        if let Some(n) = name {
+            payload["name"] = json!(n);
+        }
+        if let Some(b) = body {
+            payload["body"] = json!(b);
+        }
+        if let Some(d) = draft {
+            payload["draft"] = json!(d);
+        }
+        if let Some(p) = prerelease {
+            payload["prerelease"] = json!(p);
+        }
+        let out: Value = self
+            .rest(
+                "PATCH",
+                &format!("/repos/{}/releases/{release_id}", auth.repo()),
+                Some(payload),
+            )
+            .await?;
+        serde_json::from_value::<ReleaseResult>(out.clone()).map_err(|_| {
+            GhError::Parse(format!(
+                "release not updated: {}",
+                out.get("message").and_then(Value::as_str).unwrap_or("?")
+            ))
+        })
+    }
+
+    /// 0.2.9: re-run a workflow run, or only the jobs that failed.
+    ///
+    /// `ci:rerun` and not `ci:read`: this spends the account's Actions minutes and re-executes
+    /// workflow code with the repository's secrets, which is a different authority from reading a
+    /// log. The run id is a `u64` and cannot leave its path segment.
+    pub async fn rerun_ci(
+        &self,
+        auth: &Authorized<'_>,
+        run_id: u64,
+        all: bool,
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Ci, Action::Rerun)?;
+        let what = if all { "rerun" } else { "rerun-failed-jobs" };
+        self.rest::<Value>(
+            "POST",
+            &format!("/repos/{}/actions/runs/{run_id}/{what}", auth.repo()),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// 0.2.9: stop a workflow run. Same permission as re-running: both steer what CI is doing.
+    pub async fn cancel_ci(&self, auth: &Authorized<'_>, run_id: u64) -> Result<(), GhError> {
+        auth.ensure(Resource::Ci, Action::Rerun)?;
+        self.rest::<Value>(
+            "POST",
+            &format!("/repos/{}/actions/runs/{run_id}/cancel", auth.repo()),
+            None,
+        )
+        .await?;
+        Ok(())
     }
 
     /// Find an open PR with the same head/base, so a re-push to `refs/for` can report the existing PR.
@@ -769,16 +893,128 @@ impl GitHub {
         Ok(())
     }
 
+    /// 0.2.9: merge with the options a repository may require.
+    ///
+    /// A repository configured squash-only rejects the default merge commit with 405, so the method
+    /// has to be selectable. `method` / `title` / `message` are sent only when given, which keeps
+    /// the request identical to the old one when the caller asks for nothing.
+    ///
+    /// `delete_branch` removes the head branch afterwards, and only after the merge actually
+    /// succeeded. The branch name is never taken from the caller: it comes from the merge response,
+    /// or from the pull request itself, so this cannot be turned into "delete an arbitrary ref".
+    /// That is why it stays under `pr:merge` rather than the git-level `delete` flag — it completes
+    /// the merge instead of deleting something of its own.
     pub async fn merge_pull_request(
         &self,
         auth: &Authorized<'_>,
         number: u64,
-    ) -> Result<(), GhError> {
+        method: Option<&str>,
+        title: Option<&str>,
+        message: Option<&str>,
+        delete_branch: bool,
+    ) -> Result<MergeResult, GhError> {
         auth.ensure(Resource::Pr, Action::Merge)?;
+        // Look the PR up first only when the head branch will be needed: the merge response carries
+        // the SHA but not the branch name.
+        let head = if delete_branch {
+            let pr: Value = self
+                .rest::<Value>(
+                    "GET",
+                    &format!("/repos/{}/pulls/{number}", auth.repo()),
+                    None,
+                )
+                .await?;
+            pointer_str(&pr, "/head/ref")
+        } else {
+            String::new()
+        };
+        let mut payload = json!({});
+        if let Some(m) = method {
+            payload["merge_method"] = json!(m);
+        }
+        if let Some(t) = title {
+            payload["commit_title"] = json!(t);
+        }
+        if let Some(m) = message {
+            payload["commit_message"] = json!(m);
+        }
+        let out: Value = self
+            .rest(
+                "PUT",
+                &format!("/repos/{}/pulls/{number}/merge", auth.repo()),
+                Some(payload),
+            )
+            .await?;
+        let merged = out.get("merged").and_then(Value::as_bool).unwrap_or(true);
+        let mut res = MergeResult {
+            merged,
+            sha: str_at(&out, "sha"),
+            branch_deleted: false,
+            branch: head.clone(),
+        };
+        // Only after a merge that actually happened, and only for a branch the upstream named.
+        if delete_branch && merged && !head.is_empty() {
+            self.rest::<Value>(
+                "DELETE",
+                &format!(
+                    "/repos/{}/git/refs/heads/{}",
+                    auth.repo(),
+                    path_segment(&head)
+                ),
+                None,
+            )
+            .await?;
+            res.branch_deleted = true;
+        }
+        Ok(res)
+    }
+
+    /// 0.2.9: the inverse of `close_pull_request`. Reopening is strictly less destructive than
+    /// closing, so `pr:close` covers both.
+    pub async fn reopen_pull_request(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Pr, Action::Close)?;
         self.rest::<Value>(
-            "PUT",
-            &format!("/repos/{}/pulls/{number}/merge", auth.repo()),
-            Some(json!({})),
+            "PATCH",
+            &format!("/repos/{}/pulls/{number}", auth.repo()),
+            Some(json!({"state": "open"})),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// 0.2.9: edit a pull request's own metadata.
+    ///
+    /// `pr:create` is the authority for title and body — editing the PR you opened is the same
+    /// thing you already did when you opened it. `base` is different: retargeting a PR at another
+    /// branch is exactly what `bases` exists to stop, so the caller has to bring a proof obtained
+    /// from `Project::authorize_pr(repo, new_base)`, the same check `pr create` runs.
+    pub async fn update_pull_request(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        title: Option<&str>,
+        body: Option<&str>,
+        base: Option<&str>,
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Pr, Action::Create)?;
+        let mut payload = json!({});
+        if let Some(t) = title {
+            payload["title"] = json!(t);
+        }
+        if let Some(b) = body {
+            payload["body"] = json!(b);
+        }
+        if let Some(b) = base {
+            payload["base"] = json!(b);
+        }
+        self.rest::<Value>(
+            "PATCH",
+            &format!("/repos/{}/pulls/{number}", auth.repo()),
+            Some(payload),
         )
         .await?;
         Ok(())
@@ -864,6 +1100,19 @@ impl GitHub {
         Ok(())
     }
 
+    /// 0.2.9: the inverse of `close_issue`, under the same permission — reopening undoes a close
+    /// rather than adding a new power.
+    pub async fn reopen_issue(&self, auth: &Authorized<'_>, number: u64) -> Result<(), GhError> {
+        auth.ensure(Resource::Issue, Action::Close)?;
+        self.rest::<Value>(
+            "PATCH",
+            &format!("/repos/{}/issues/{number}", auth.repo()),
+            Some(json!({"state": "open"})),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn label_issue(
         &self,
         auth: &Authorized<'_>,
@@ -889,6 +1138,50 @@ impl GitHub {
         auth.ensure(Resource::Issue, Action::Assign)?;
         self.rest::<Value>(
             "POST",
+            &format!("/repos/{}/issues/{number}/assignees", auth.repo()),
+            Some(json!({"assignees": assignees})),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// 0.2.9: take one label off an issue. Adding and removing are the same authority, `issue:label`.
+    ///
+    /// The label name is agent-supplied text that lands in the request PATH, so it goes through
+    /// `path_segment` and not `url_escape`: a name of `../../../Other/Secret/issues/1/labels/x`
+    /// would otherwise be resolved by the URL parser and reach a repository outside the project
+    /// with the operator's token (the 0.2.7 traversal fix).
+    pub async fn unlabel_issue(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        label: &str,
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Issue, Action::Label)?;
+        self.rest::<Value>(
+            "DELETE",
+            &format!(
+                "/repos/{}/issues/{number}/labels/{}",
+                auth.repo(),
+                path_segment(label)
+            ),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// 0.2.9: take assignees off an issue. The logins travel in a JSON body, so no path escaping is
+    /// involved.
+    pub async fn unassign_issue(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        assignees: &[String],
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Issue, Action::Assign)?;
+        self.rest::<Value>(
+            "DELETE",
             &format!("/repos/{}/issues/{number}/assignees", auth.repo()),
             Some(json!({"assignees": assignees})),
         )
@@ -1091,6 +1384,58 @@ impl GitHub {
             });
         }
         Ok(hits)
+    }
+
+    /// 0.2.9: the vocabularies a repository defines — labels, the people who may be assigned, and
+    /// the open milestones.
+    ///
+    /// `issue label` and `issue assign` take free text today, so an agent guesses: GitHub silently
+    /// creates a label that does not exist, and 422s on an assignee who cannot be assigned. This is
+    /// what `repo:read` is for; until now that key was declared and nothing checked it.
+    pub async fn repo_vocabulary(
+        &self,
+        auth: &Authorized<'_>,
+        limit: u32,
+    ) -> Result<Value, GhError> {
+        auth.ensure(Resource::Repo, Action::Read)?;
+        let n = limit.clamp(1, 100);
+        let repo = auth.repo();
+        // Three independent reads; a failure on one should not lose the others
+        let labels: Value = self
+            .rest("GET", &format!("/repos/{repo}/labels?per_page={n}"), None)
+            .await
+            .unwrap_or(Value::Array(vec![]));
+        let assignees: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{repo}/assignees?per_page={n}"),
+                None,
+            )
+            .await
+            .unwrap_or(Value::Array(vec![]));
+        let milestones: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{repo}/milestones?state=open&per_page={n}"),
+                None,
+            )
+            .await
+            .unwrap_or(Value::Array(vec![]));
+        let names = |v: &Value, key: &str| -> Vec<String> {
+            v.as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.get(key).and_then(Value::as_str))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        Ok(json!({
+            "labels": names(&labels, "name"),
+            "assignees": names(&assignees, "login"),
+            "milestones": names(&milestones, "title"),
+        }))
     }
 
     // ---- For the operator (no proof required; never called from the agent path) ----
@@ -1653,7 +1998,8 @@ mod tests {
         let g = gh();
         // Proof of pr:create cannot drive a merge (it reaches neither upstream nor the token store).
         assert!(matches!(
-            g.merge_pull_request(&auth, 1).await,
+            g.merge_pull_request(&auth, 1, None, None, None, false)
+                .await,
             Err(GhError::Denied(_))
         ));
         assert!(matches!(

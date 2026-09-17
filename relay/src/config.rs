@@ -247,6 +247,9 @@ pub struct RepoConfig {
     pub tags: Option<Vec<String>>,
     /// Whether deleting branches and tags is allowed. Defaults to the project's `delete`
     pub delete: Option<bool>,
+    /// 0.2.9: delete the head branch after a merge through `pr merge`. Defaults to the project's
+    /// `delete_merged_branch`. Unrelated to `delete` above, which is about git-level ref deletion
+    pub delete_merged_branch: Option<bool>,
     /// Delta on the project defaults: allow adds, deny removes. A plain list means additional allows
     pub permissions: Option<PermissionSpec>,
 }
@@ -261,6 +264,7 @@ pub struct UpstreamPolicyConfig {
     pub push: Option<Vec<String>>,
     pub tags: Option<Vec<String>>,
     pub delete: Option<bool>,
+    pub delete_merged_branch: Option<bool>,
     /// Repos on this upstream, written as `Org/Repo`. A host prefix is unnecessary, and if given it must match this upstream
     #[serde(default)]
     pub repos: Vec<RepoConfig>,
@@ -288,6 +292,14 @@ pub struct ProjectConfig {
     /// Default for deleting branches and tags; false when unset
     #[serde(default)]
     pub delete: bool,
+    /// 0.2.9: after `pr merge` succeeds, delete the branch that was merged. False when unset.
+    ///
+    /// A forge can be configured to do this itself, and many are; this is for the ones that are
+    /// not, and it keeps the agent's own `sekimore/*` branches from accumulating. It is not the
+    /// same authority as `delete`: this removes only the branch the agent just merged, whereas
+    /// `delete` allows deleting any ref the push policy admits
+    #[serde(default)]
+    pub delete_merged_branch: bool,
     /// 0.2.7: the Projects v2 boards this project may touch.
     ///
     /// A board is named the way it appears in its URL — `github.com/orgs/<org>/projects/<number>`
@@ -835,6 +847,7 @@ impl Loaded {
             let l_push = layer.and_then(|l| l.push.clone());
             let l_tags = layer.and_then(|l| l.tags.clone());
             let l_delete = layer.and_then(|l| l.delete);
+            let l_dmb = layer.and_then(|l| l.delete_merged_branch);
             let mut rp = RepoPolicy::new(full_name, mode);
             rp.host = host;
             rp.bases = r.bases.clone();
@@ -849,6 +862,10 @@ impl Loaded {
                 .or(l_tags)
                 .unwrap_or_else(|| default_tags.clone());
             rp.delete = r.delete.or(l_delete).unwrap_or(default_delete);
+            rp.delete_merged_branch = r
+                .delete_merged_branch
+                .or(l_dmb)
+                .unwrap_or(pc.delete_merged_branch);
             // permissions: the upstream layer's delta, then the repo's; in both, allow adds and deny wins
             if let Some(p) = layer.and_then(|l| l.permissions.as_ref()) {
                 rp.allow.extend(p.allow().iter().cloned());

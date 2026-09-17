@@ -134,7 +134,9 @@ git push origin HEAD:refs/heads/sekimore/x      # a direct push inside your own 
 sekimore whoami                                 # your permissions and repos
 sekimore pr create --head sekimore/x --base main --title T --body="…"
 sekimore pr status --number 12                  # the PR's CI checks (--json for machine-readable output)
-sekimore pr merge --number 12
+sekimore pr merge --number 12 --method squash --delete-branch
+sekimore pr update --number 12 --title T         # --base is re-checked against bases
+sekimore pr reopen --number 12                   # issue reopen too; same permission as closing
 sekimore ci runs --ref v0.2.0                   # workflow runs for a tag / branch / SHA
 sekimore ci jobs --number 12                    # every job across the PR's runs (shows failures and job_id)
 sekimore ci log --number 12                     # a failed job's log, from the end. --before / --window to go back
@@ -142,6 +144,9 @@ sekimore issue create --title T --labels bug    # labels also need issue:label
 sekimore release create --tag v0.2.6            # after the tag is pushed; GitHub writes the notes
 sekimore release view --tag v0.2.6              # the release for one tag
 sekimore release list --limit 10                # the most recent releases, newest first
+sekimore release edit --tag v0.2.6 --draft false # publish a draft (needs release:publish)
+sekimore issue unlabel --number 5 --labels bug   # issue unassign is the same shape
+sekimore ci rerun --run-id 123 [--all]           # ci cancel --run-id 123. Both need ci:rerun
 ```
 
 Run `sekimore guide` to print the usage guide written for AI agents (embedded in the CLI; the sources of truth are `relay/share/agent-guide.en.md` and `agent-guide.ja.md`).
@@ -197,6 +202,7 @@ Keys are exact FQDN matches. Listing `github` more than once gives you more than
 | `push` | `["sekimore/*"]` | Branch globs that may be pushed to directly |
 | `tags` | `[]` | Tag globs that may be pushed. Empty means denied |
 | `delete` | `false` | Deleting branches and tags |
+| `delete_merged_branch` | `false` | Whether `pr merge --delete-branch` may remove the branch it just merged. Only that branch, so it is not the same authority as `delete`. Leave it off where the forge already deletes merged branches itself |
 | `boards` | `[]` | The Projects v2 boards this project may touch, written the way the URL reads: `{ org: acme, number: 3 }` for `github.com/orgs/acme/projects/3`, or `{ user: someone, number: 1 }`. Empty refuses every Projects operation |
 | `repos` | `[]` | Repositories. `Org/Repo` means the default upstream; `host/Org/Repo` names one explicitly |
 | `upstreams.<domain>` | | A per-upstream layer: `permissions` (a delta), `push` / `tags` / `delete` (that upstream's defaults), and `repos` |
@@ -215,10 +221,13 @@ Keys are exact FQDN matches. Listing `github` more than once gives you more than
 
 - Effective permissions = (project allow ∪ upstream allow ∪ repo allow) − (project deny ∪ upstream deny ∪ repo deny). A deny wins at any layer.
 - `push` / `tags` / `delete` are overridden in the order project → upstream → repo. Globs support `*` and `?`.
-- There are 21 permission keys: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:request_review` `pr:merge` `pr:close`, `issue:create` `issue:read` `issue:comment` `issue:close` `issue:label` `issue:assign`, `project:read` `project:add_item` `project:update_item`, `repo:read`, `ci:read`, `release:create` `release:read`, `search:read`.
+- There are 23 permission keys: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:request_review` `pr:merge` `pr:close`, `issue:create` `issue:read` `issue:comment` `issue:close` `issue:label` `issue:assign`, `project:read` `project:add_item` `project:update_item`, `repo:read`, `ci:read` `ci:rerun`, `release:create` `release:read` `release:publish`, `search:read`.
 - `pr:read` covers the state, the CI checks, the description and the comments. `issue:read` is separate, so an agent can file bugs without reading a private tracker. `search:read` is its own resource because a search is not addressed to one repository.
 - `pr:review` submits a review; `pr:request_review` asks someone else for one. They are separate because one records an opinion and the other notifies a person.
-- `repo:read` is declared but nothing checks it yet.
+- `ci:rerun` re-runs and cancels workflow runs. It is not part of `ci:read`, because a re-run spends Actions minutes and executes workflow code with the repository's secrets.
+- `release:publish` takes a release out of draft. `release:create --draft` exists so that publishing can be left to a human, so folding it into `release:create` would erase that line; editing a release that stays a draft needs only `release:create`.
+- Closing and reopening are one permission (`pr:close` / `issue:close`): reopening undoes a close rather than adding a power. Adding and removing a label or an assignee are likewise one (`issue:label` / `issue:assign`), and editing a pull request's title or body is `pr:create` — except that a new base is re-checked against the repository's `bases`.
+- `repo:read` covers `repo vocabulary`, which lists the labels, assignable people and milestones a repository defines.
 - Check the effective values with `sekimore-relay check` or the Relay tab in the Web UI.
 
 ### Example: github.com and GHES side by side
@@ -267,6 +276,8 @@ sekimore release list --limit 10
   notes to what you wrote.
 - `--title` defaults to the tag, so a release is never left untitled. `--prerelease` marks it as one.
 - `--draft` creates the release unpublished and leaves publishing to a human. The default is published.
+- `sekimore release edit --tag v0.2.6 --draft false` publishes that draft, and needs `release:publish`.
+  Editing a release that stays a draft (`--title`, `--notes`, `--prerelease`) needs only `release:create`.
 
 ### Exfiltration controls: the 443 upload cap and `https-relay`
 

@@ -77,6 +77,21 @@ pub struct ApiRequest {
     pub state: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub assignee: String,
+    /// 0.2.9: merge options. `method` is merge / squash / rebase; `delete_branch` removes the head
+    /// branch after a merge that succeeded (the name comes from the upstream, never from here)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub method: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub delete_branch: bool,
+    /// 0.2.9: `release edit` / `pr update`. Three-valued on purpose: absent leaves the field alone,
+    /// which is what tells `release edit` whether the call actually flips draft to false
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_draft: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_prerelease: Option<bool>,
+    /// 0.2.9: `ci rerun --all` re-runs every job instead of only the failed ones
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub all: bool,
 }
 
 fn is_false(b: &bool) -> bool {

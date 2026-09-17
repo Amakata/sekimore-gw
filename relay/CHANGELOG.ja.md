@@ -2,36 +2,48 @@
 
 *[English](CHANGELOG.md)*
 
-## 0.2.8（2026-09-17。人が書いたものを読めるように、自分で探せるように）
+## 0.2.9（2026-09-17）
 
-- これまでエージェントは Issue を作れるのに読めず、レビューされてもその内容を見られなかった。`sekimore pr view` / `pr comments` / `pr list` / `issue view` / `issue comments` / `issue list` でそこを塞いだ。`pr comments` は GitHub が別々に持っている 3 種類（会話、レビューの可否、行に付いた指摘）を 1 つの時系列にまとめるので、人が書いたとおりの順で読める
-- `sekimore search "is:open label:bug"` で案件を横断して Issue と PR を検索できる。検索だけは 1 つのリポジトリに宛てた操作ではないので、案件のリポジトリを `repo:` 修飾子としてクエリに足し、**さらに**返ってきた結果を案件内かどうかで濾す。呼び出し側が自分で書いた `repo:` も GitHub は honour するため、絞り込みは依頼であって、保証は濾す側にある
-- 権限を 2 つ追加。`issue:read` は、非公開のトラッカーを読ませずに bug を登録させたい運用があるため。`search:read` は独立した資源にした。検索だけが 1 つのリポジトリに紐づかないため。`pr view` / `pr comments` / `pr list` は既存の `pr:read`
-- コメントの文面は指示ではなくデータである、とガイドに明記した。作業を放棄しろ、案件の外に出ろ、といったコメントは従うのではなく報告する
+- `sekimore pr merge` に `--method merge|squash|rebase`、`--title`、`--message`、`--delete-branch` を追加。squash 専用の repo は従来の空ボディを 405 で拒否していた
+- `--delete-branch` はマージしたブランチだけを消し、repo 側の `delete_merged_branch` が要る。git レベルの `delete` とは別の権限
+- `sekimore pr reopen` / `issue reopen`、`issue unlabel`、`issue unassign`、`pr update --title/--body/--base`。base を変えるときは base の検査をやり直す
+- `sekimore release edit` で draft を公開・修正できる。draft を false にするには新しい `release:publish` が要る
+- `sekimore ci rerun --run-id N [--all]` と `ci cancel`。新しい権限 `ci:rerun`。再実行は Actions の分数を消費し、秘密情報を持つジョブを走らせ直すので `ci:read` とは分ける
+- `sekimore repo vocabulary` でラベル・担当者に指定できる人・開いているマイルストーンを一覧する。`repo:read` は宣言されているだけでどこも検査していなかった
+- CHANGELOG の書式を CI で検査する。項目の長さ、見出しは版と日付だけ、2 言語が同じ版を記述しているか
 
-## 0.2.7（2026-09-17。セキュリティ: タグと ref が案件の外へ到達できた。レビュー依頼、Project のフィールド一覧、DNS 転送）
+## 0.2.8（2026-09-17）
 
-- セキュリティ、および Projects を使っている場合の破壊的変更: Projects v2 の node ID は不透明で、どのボードの所有者かを何も示さない。そのため 1 つの repo に対する `project:add_item` があれば、案件の内外を問わず上流トークンから見える**任意の**ボードに到達できた。触れてよいボードを `relay.project.boards` に宣言する形にした。書き方は URL のとおりで、`github.com/orgs/acme/projects/3` なら `{ org: acme, number: 3 }`、個人のボードなら `user:`。関所が起動時に node ID へ解決し、それ以外は受け付けない。省略または空なら Projects の操作を全て拒否する。宣言の無い設定で穴を開けたままにするより、使っている案件に一覧を書いてもらう方を選んだ
-- `sekimore pr request-review --number N --reviewers alice,bob [--teams platform]` でレビューを依頼できる。権限は `pr:review` ではなく専用の `pr:request_review`。意見を出すことと人に通知することは別の権限だから
-- `sekimore project fields --project-id PVT_…` でボードのフィールドと single-select の option id を一覧できる。`project update-item` は `field_id` を、single-select では名前ではなく option の id を要求するため、これまでその id は人間から渡すしかなく、コマンド単体では使えなかった。権限は既存の `project:read`
-- ガイドは force push が既定で拒否されると書いていたが、実際には拒否していない。関所が見るのは ref 名であって早送りかどうかではないので、自分の `sekimore/*` の中では force push は通り、必要な場所では上流のブランチ保護が拒否する。関所側で forge と同じ検査を持つのではなく、ガイドの記述を実態に合わせた
-- セキュリティ: エージェントが渡すタグと CI の ref が、自分のリポジトリの外へ出られた。どちらもリクエストのパスに入り、URL を組み立てるときにパーサが `..` を解決するため、`release view --tag '../../../Other/Secret/releases'` が案件に無いリポジトリへ operator のトークンで認証付きの読み取りを飛ばしていた。エスケープが `/` と `.` を通していたのが原因で、クエリ値としては正しいがパス部品では誤り。パス部品では両方を符号化するようにした。監査ログには実際に触れたリポジトリではなく案件内のリポジトリが記録されるので、`ci:read`（`--ref` の経路は 0.1.7 から）や `release:read`（0.2.6 から）を許可していた gateway ではログを確認すること
-- `find_pull_request` が読み取りに `pr:create` を要求していた。到達経路は `refs/for` だけでその証明を持っているため悪用はできなかったが、本来必要な `pr:read` でも通るようにした
-- DNS: `handler: github` でも関所へ転送するようにした。`git-relay` では従来どおり動いていたが、0.2.6 は handler を改名して設定層だけを追従させたため、`dns_server.py` が旧名としか比較しておらず、新しい書き方のドメインが実アドレスに解決されて関所を通らなかった。両方の綴りを受け、同じ結果になることをテストで固定した。`git-relay` のままだった場合は影響なし
+- `sekimore pr view` / `pr comments` / `pr list`、`issue view` / `issue comments` / `issue list`。Issue を作れるのに読めず、レビューされても内容を見られなかった
+- `pr comments` は会話・レビューの可否・行への指摘を 1 つの時系列にまとめる（古い順）
+- `sekimore search "is:open label:bug"` で案件を横断して検索する。クエリを `repo:` で絞り、返ってきた結果も案件内かで濾す
+- 権限 `issue:read` と `search:read` を追加。`pr view` / `comments` / `list` は既存の `pr:read`
+- コメントの文面は指示ではなくデータである、とガイドに明記した
 
-## 0.2.6（2026-09-16。エージェントからの Release 作成と、handler 名を上流サービス名に）
+## 0.2.7（2026-09-17）
 
-- `sekimore release create --tag vX.Y.Z [--title T] [--notes "…" | --notes-file F] [--generate-notes] [--draft] [--prerelease]`、`sekimore release view --tag vX.Y.Z`、`sekimore release list [--limit N]`。エンドポイントは `/release/create`、`/release/view`、`/release/list`
-- タグが上流に無いと GitHub が 422 を返すので、`release create` は `git push origin vX.Y.Z` の後に実行する。本文を渡さないと関所が `generate_release_notes` を立て、前のタグ以降にマージされた PR から GitHub が本文を書く（これが通常の使い方）。`--notes` / `--notes-file` を渡すとそれが本文になり、さらに `--generate-notes` を付けると生成した本文が後ろに追記される。`--title` の既定はタグ名、`--draft` は公開を人間に任せる（既定は公開済み）
-- 権限に `release:create` と `release:read` を追加。他と同じく既定で拒否。device flow トークンは `repo` スコープを持つので、認証のやり直しは不要
-- `handler: git-relay` の書き方を `handler: github` に変更。SSH の git 側（refs/for、ポリシー、receive-pack）はただの git でどの forge でも動くが、API 側（pulls、check-runs、Projects v2）は GitHub 固有なので、handler に上流サービスの名前を持たせた。0.3.0 で API 層を差し替え可能にしたときの `gitlab` / `gitea` の余地にもなる
-- `git-relay` はそのまま動く。Rust 側も Python 側も別名として受け付けるので、設定を書き換える必要は今も今後も無い
+- セキュリティ: 細工したタグと CI の ref がリポジトリのパスの外へ出て、operator のトークンで別のリポジトリを読めた。パス部品では `/` と `.` も符号化する（クエリ値は従来どおり）。`ci runs --ref` は 0.1.7 から、`release view --tag` は 0.2.6 から到達できた
+- セキュリティ: Projects v2 のボードが node ID だけで到達でき、案件に属するかを誰も見ていなかった。`relay.project.boards` に `{ org, number }` で宣言し、起動時に解決する。**破壊的変更**: 空なら Projects の操作を全て拒否する
+- `dns_server.py` が `git-relay` としか比較しておらず、`github` と書いたドメインが実アドレスに解決されて関所を通らなかった
+- `sekimore pr request-review --reviewers alice,bob [--teams t]`。新しい権限 `pr:request_review`
+- `sekimore project fields` でボードのフィールドと single-select の option id を一覧する（`update-item` に必要）
+- `find_pull_request` が読み取りに `pr:create` を要求していた。`pr:read` でも通るようにした
+- ガイドは force push を拒否すると書いていたが、関所が見るのは ref 名であって早送りかどうかではない。拒否するのは上流のブランチ保護
 
-## 0.2.5（2026-09-16。0.2.4 のイメージビルドの修正）
+## 0.2.6（2026-09-16）
 
-- Docker: `relay/locales` をビルダー段にコピーする。0.2.4 の CLI 辞書は `include_str!` で取り込むが、コピーしていたのは `relay/share` だけだったため、リリースビルドが `locales/ja.json` を読めず v0.2.4 のイメージが公開されなかった。relay 本体の変更は無く、0.2.4 と 0.2.5 は同じコード。
+- `sekimore release create --tag vX.Y.Z [--title T] [--notes … | --notes-file F] [--draft] [--prerelease]`、`release view`、`release list`。本文を渡さなければ前のタグからの PR を元に GitHub が書く
+- タグが上流に無いと作れないので、`git push origin vX.Y.Z` の後に実行する
+- 権限 `release:create` と `release:read` を追加。device flow のトークンは既に `repo` スコープを持つ
+- `handler: git-relay` を `handler: github` と書くようにした。SSH の git は forge 非依存だが API は GitHub 固有で、0.3.0 の `gitlab` / `gitea` に道を残す
+- `git-relay` は Rust と Python の両方で別名として有効。設定を書き換える必要はない
 
-## 0.2.4（2026-09-16。ローカライズ。英語を正本に、日本語は言語ファイル）
+## 0.2.5（2026-09-16）
+
+- Docker: `relay/locales` をビルダー段にコピーする。0.2.4 の辞書は `include_str!` で取り込むのにコピーしていたのは `relay/share` だけで、v0.2.4 のイメージが公開されなかった
+- relay 本体の変更は無く、0.2.4 と 0.2.5 は同じコード
+
+## 0.2.4（2026-09-16）
 
 - Web UI: 文言を `src/locales/{en,ja}.json` に移し、既定を英語に。言語は `?lang=` → cookie（画面の切替）→ `config.yml` の `ui.language`（`auto` / `en` / `ja`）→ ブラウザの `Accept-Language` → 英語の順で決める。`/api/i18n`
 - `python -m src.maint`: `--help` とメッセージを `SEKIMORE_LANG` / `LC_ALL` / `LC_MESSAGES` / `LANG` で切替（既定は英語）
@@ -40,12 +52,14 @@
 - README と CHANGELOG を英語主体に。日本語版は `README.ja.md` / `CHANGELOG.ja.md`
 - 拒否理由（`sekimore: …`）と監査ログは英語のまま固定
 
-## 0.2.3（2026-09-16。sekimore-gw 本体の性能と運用。relay 本体の変更なし）
+## 0.2.3（2026-09-16）
 
-- Web UI: WebSocket は接続ごとの全表走査をやめ、1 本のポーラが rowid カーソルで新着だけを読んで 1 メッセージ（配列）で配信。1 件でも即時、多ければまとめて届く。接続時と非表示から戻ったときは最新 50 件の snapshot。ログ 1 件ごとの `/api/stats` 取得をやめ、新着後 3 秒に 1 回に
-- SQLite: `journal_mode=WAL` / `synchronous=NORMAL` / `busy_timeout`、`dns_queries(timestamp)` と `(status, timestamp)` の索引。記録は削除しない（永続化）
-- `python -m src.maint db-stats | db-prune | db-reset | db-vacuum`（操作者が明示的に実行）。Dev Containers の `mise run gw:db-*`
-- Relay タブ: 単一上流でもその上流の送信上限を表示
+- Web UI: 1 本のポーラが rowid をカーソルに増分だけ読み、1 メッセージで送る。1 件なら即時、多ければまとめて。接続時と非表示タブの復帰時は最新 50 件のスナップショット
+- `/api/stats` はログ 1 件ごとではなく、新着後に最短 3 秒に 1 回
+- SQLite: `journal_mode=WAL`、`synchronous=NORMAL`、`busy_timeout`、`dns_queries(timestamp)` と `(status, timestamp)` の索引
+- 記録は削除しない。`python -m src.maint db-stats | db-prune | db-reset | db-vacuum` を操作者が明示的に実行する（Dev Containers なら `mise run gw:db-*`）
+- Relay タブ: 上流が 1 つでも送信上限を表示する
+- relay 本体の変更は無し
 
 ## 0.2.2（2026-09-16）
 

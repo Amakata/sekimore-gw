@@ -2,36 +2,48 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
-## 0.2.8 (2026-09-17. The agent can read what people wrote, and find things by itself)
+## 0.2.9 (2026-09-17)
 
-- Until now an agent could open an issue it could never read, and could be reviewed without being able to see the review. `sekimore pr view`, `pr comments`, `pr list`, `issue view`, `issue comments` and `issue list` close that. `pr comments` merges the three things GitHub keeps apart — the conversation, the review verdicts and the comments attached to individual lines — into one list in time order, so a review reads the way a person wrote it
-- `sekimore search "is:open label:bug"` searches issues and pull requests across the project. A search is the one operation not addressed to a repository, so the project's repositories are appended to the query as `repo:` qualifiers **and** every result is checked against the project before it is returned. GitHub honours a `repo:` the caller writes themselves, so the scoping is a request and the filter is the guarantee
-- Two new permissions. `issue:read`, because an operator may want an agent that files bugs without reading a private tracker, and `search:read` as its own resource, since searching is not scoped to one repository the way everything else is. `pr view` / `pr comments` / `pr list` sit under the existing `pr:read`
-- The guide now tells agents that comment text is data rather than instruction: a comment asking them to abandon the task or reach outside the project is something to report, not to obey
+- `sekimore pr merge` takes `--method merge|squash|rebase`, `--title`, `--message` and `--delete-branch`. A squash-only repository rejected the old empty body with 405
+- `--delete-branch` removes only the branch just merged, and needs `delete_merged_branch` on the repo. That is not the git-level `delete` authority
+- `sekimore pr reopen` / `issue reopen`, `issue unlabel`, `issue unassign`, `pr update --title/--body/--base`. Changing the base re-runs the base check
+- `sekimore release edit` can publish or amend a draft. Flipping draft to false needs the new `release:publish`
+- `sekimore ci rerun --run-id N [--all]` and `ci cancel`, under the new `ci:rerun`. Re-running spends Actions minutes and re-executes jobs holding repository secrets, so it is not `ci:read`
+- `sekimore repo vocabulary` lists the labels, assignable people and open milestones. `repo:read` was declared and checked nowhere until now
+- The changelog style is checked in CI: bullet length, one date-only heading per release, and the two languages describing the same releases
 
-## 0.2.7 (2026-09-17. Security: a tag or ref could reach outside the project. Review requests, project fields, the DNS redirect)
+## 0.2.8 (2026-09-17)
 
-- Security, and a breaking change for anyone using Projects: a Projects v2 node id is opaque and says nothing about who owns the board, so `project:add_item` on one repository could reach **any** board the upstream token can see, in or out of the project. The boards a project may touch are now declared in `relay.project.boards`, written the way the URL reads (`{ org: acme, number: 3 }` for `github.com/orgs/acme/projects/3`, or `user:` for a personal board); the relay resolves each to its node id at startup and accepts only those. Omitted or empty refuses every Projects operation, so a project that uses them has to add the list — the alternative was leaving the hole open for configs that never declared anything
-- `sekimore pr request-review --number N --reviewers alice,bob [--teams platform]` asks people to review. Its own permission, `pr:request_review`, rather than `pr:review`: submitting an opinion and notifying a human are different authorities
-- `sekimore project fields --project-id PVT_…` lists the board's fields with the option ids of every single-select. `project update-item` needs a `field_id`, and for a single-select the option's id rather than its name, so until now those ids had to come from a human and the command was unusable on its own. Under the existing `project:read`
-- The guide claimed force pushes were refused by default. They are not: the relay checks the ref name, not whether the push fast-forwards, so inside your own `sekimore/*` namespace a force push goes through and upstream branch protection is what refuses one where it matters. The guide now says that, rather than the relay growing a check that duplicates the forge's
-- Security: a tag or CI ref supplied by the agent could walk out of its repository. Both land in the request path, and the URL parser resolves `..` when it builds the request, so `release view --tag '../../../Other/Secret/releases'` issued an authenticated read against a repository the project never granted, with the operator's token. The escaper allowed `/` and `.` through, which is right for a query value but not for a path segment; path segments now percent-encode both. The audit log recorded the in-project repository, not the one actually reached, so check the logs of any gateway that granted `ci:read` (the `--ref` path has been reachable since 0.1.7) or `release:read` (0.2.6)
-- `find_pull_request` asked for `pr:create` to perform a read. It is reachable only from the `refs/for` path, which holds that proof, so it was not exploitable — but it now accepts `pr:read` as well, which is the proof the operation actually needs
-- DNS: `handler: github` now redirects to the relay, as `git-relay` always did. 0.2.6 renamed the handler and updated the config layer, but `dns_server.py` still compared against the old spelling alone, so a domain written the new way resolved to its real address and never reached the relay. Both spellings are accepted there now, with a test that asserts they behave identically. Anyone who kept writing `git-relay` was unaffected
+- `sekimore pr view` / `pr comments` / `pr list`, and `issue view` / `issue comments` / `issue list`. An agent could open an issue it could never read, and be reviewed without seeing the review
+- `pr comments` merges the conversation, the review verdicts and the line comments into one list, oldest first
+- `sekimore search "is:open label:bug"` searches issues and pull requests across the project. The query is scoped with `repo:` qualifiers and every result is checked against the project again
+- New permissions `issue:read` and `search:read`. `pr view` / `comments` / `list` use the existing `pr:read`
+- The guide now says comment text is data, not instruction
 
-## 0.2.6 (2026-09-16. Releases from the agent, and the handler is named after the forge)
+## 0.2.7 (2026-09-17)
 
-- `sekimore release create --tag vX.Y.Z [--title T] [--notes "…" | --notes-file F] [--generate-notes] [--draft] [--prerelease]`, `sekimore release view --tag vX.Y.Z`, `sekimore release list [--limit N]`. The endpoints are `/release/create`, `/release/view`, `/release/list`
-- The tag has to exist upstream, so `release create` runs after `git push origin vX.Y.Z`; GitHub answers 422 otherwise. With no body the relay sets `generate_release_notes`, and GitHub writes the notes from the pull requests merged since the previous tag — the usual path. `--notes` / `--notes-file` is used as the body instead, and adding `--generate-notes` makes GitHub append its generated notes to it. `--title` defaults to the tag, `--draft` leaves publishing to a human (published by default)
-- Two new permissions, `release:create` and `release:read`, denied by default like the rest. The device flow token already carries the `repo` scope, so there is nothing to re-authenticate
-- `handler: git-relay` is now written `handler: github`. The SSH git half (refs/for, the policy, receive-pack) is plain git and would work against any forge, but the API half (pulls, check-runs, Projects v2) is GitHub's, so the handler carries the forge's name and leaves room for `gitlab` / `gitea` when 0.3.0 makes the API layer pluggable
-- `git-relay` keeps working — it is an alias on both the Rust and the Python side. No config has to be edited, now or later
+- Security: a crafted tag or CI ref walked out of the repository path and read another repository with the operator's token. Path segments now percent-encode `/` and `.`; query values are unchanged. Reachable since 0.1.7 through `ci runs --ref` and 0.2.6 through `release view --tag`
+- Security: a Projects v2 board was reachable by node id with nothing checking it belonged to the project. Boards are declared in `relay.project.boards` as `{ org, number }` and resolved at startup. **Breaking**: an empty list refuses every Projects call
+- `dns_server.py` still compared against `git-relay` alone, so a domain written as `github` resolved to its real address and never reached the relay
+- `sekimore pr request-review --reviewers alice,bob [--teams t]`, under the new `pr:request_review`
+- `sekimore project fields` lists the board's fields and single-select option ids, which `update-item` needs
+- `find_pull_request` demanded `pr:create` for a read; it now accepts `pr:read`
+- The guide claimed force pushes were refused. The relay checks the ref name, not whether the push fast-forwards; upstream branch protection is what refuses one
 
-## 0.2.5 (2026-09-16. Fixes the 0.2.4 image build)
+## 0.2.6 (2026-09-16)
 
-- Docker: copy `relay/locales` into the builder stage. The 0.2.4 CLI dictionaries are pulled in with `include_str!`, but only `relay/share` was copied, so the release build could not read `locales/ja.json` and the v0.2.4 image never published. No change to the relay itself; 0.2.4 and 0.2.5 are the same code.
+- `sekimore release create --tag vX.Y.Z [--title T] [--notes … | --notes-file F] [--draft] [--prerelease]`, plus `release view` and `release list`. With no body given, GitHub writes the notes from the pull requests since the previous tag
+- The tag has to exist upstream first, so this runs after `git push origin vX.Y.Z`
+- New permissions `release:create` and `release:read`. The device flow token already carries the `repo` scope
+- `handler: git-relay` is now written `handler: github`. The SSH git half is forge-agnostic but the API half is GitHub's, which leaves room for `gitlab` / `gitea` in 0.3.0
+- `git-relay` keeps working as an alias on both the Rust and the Python side; no config has to change
 
-## 0.2.4 (2026-09-16. Localization: English is primary, Japanese ships as a language file)
+## 0.2.5 (2026-09-16)
+
+- Docker: copy `relay/locales` into the builder stage. The 0.2.4 dictionaries are pulled in with `include_str!` but only `relay/share` was copied, so the v0.2.4 image never published
+- No change to the relay; 0.2.4 and 0.2.5 are the same code
+
+## 0.2.4 (2026-09-16)
 
 - Web UI: strings moved into `src/locales/{en,ja}.json`, English by default. The language is resolved in this order: `?lang=` → cookie (the in-page switcher) → `ui.language` in `config.yml` (`auto` / `en` / `ja`) → the browser's `Accept-Language` → English. New `/api/i18n`
 - `python -m src.maint`: `--help` and all messages follow `SEKIMORE_LANG` / `LC_ALL` / `LC_MESSAGES` / `LANG` (English by default)
@@ -40,12 +52,14 @@
 - README and CHANGELOG are English-primary; the Japanese versions are `README.ja.md` and `CHANGELOG.ja.md`
 - Denial reasons (`sekimore: …`) and the audit log stay English
 
-## 0.2.3 (2026-09-16. Performance and operations in sekimore-gw itself. No change to the relay)
+## 0.2.3 (2026-09-16)
 
-- Web UI: the WebSocket no longer scans the whole table per connection. A single poller walks a rowid cursor, reads only what is new, and ships it as one message (an array) — immediate for a single row, batched when there are many. On connect and when a hidden tab comes back, a snapshot of the latest 50. `/api/stats` is no longer fetched per log line, but at most once every 3 seconds after new rows
-- SQLite: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout`, plus indexes on `dns_queries(timestamp)` and `(status, timestamp)`. Records are never deleted (they persist)
-- `python -m src.maint db-stats | db-prune | db-reset | db-vacuum`, run explicitly by the operator. `mise run gw:db-*` under Dev Containers
-- Relay tab: show the upload cap of the upstream even when there is only one
+- Web UI: one poller walks a rowid cursor and ships only what is new, as a single message. Immediate for one row, batched when there are many. A snapshot of the latest 50 on connect and when a hidden tab returns
+- `/api/stats` is fetched at most once every 3 seconds after new rows, rather than per log line
+- SQLite: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout`, and indexes on `dns_queries(timestamp)` and `(status, timestamp)`
+- Records are never deleted. `python -m src.maint db-stats | db-prune | db-reset | db-vacuum` is run explicitly by the operator; `mise run gw:db-*` under Dev Containers
+- Relay tab: show the upstream's upload cap even when there is only one
+- No change to the relay itself
 
 ## 0.2.2 (2026-09-16)
 

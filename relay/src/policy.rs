@@ -45,6 +45,12 @@ pub enum Action {
     UpdateItem,
     /// 0.2.7: ask someone to review a pull request. Separate from `Review`, which submits one
     RequestReview,
+    /// 0.2.9: take a release out of draft. Separate from `Create`, because `--draft` exists exactly
+    /// to leave publishing to a human; folding it into `create` would erase that boundary
+    Publish,
+    /// 0.2.9: re-run or cancel a workflow run. Separate from `Read`, because re-running spends
+    /// Actions minutes and runs workflow code with the repository's secrets
+    Rerun,
 }
 
 impl Resource {
@@ -67,8 +73,8 @@ impl Resource {
             Resource::Issue => &[Create, Comment, Close, Label, Assign, Read],
             Resource::Project => &[Read, AddItem, UpdateItem],
             Resource::Repo => &[Read],
-            Resource::Ci => &[Read],
-            Resource::Release => &[Create, Read],
+            Resource::Ci => &[Read, Rerun],
+            Resource::Release => &[Create, Read, Publish],
             Resource::Search => &[Read],
         }
     }
@@ -97,6 +103,8 @@ impl Action {
             Action::AddItem => "add_item",
             Action::UpdateItem => "update_item",
             Action::RequestReview => "request_review",
+            Action::Publish => "publish",
+            Action::Rerun => "rerun",
         }
     }
 }
@@ -133,6 +141,8 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "add_item" => Action::AddItem,
         "update_item" => Action::UpdateItem,
         "request_review" => Action::RequestReview,
+        "publish" => Action::Publish,
+        "rerun" => Action::Rerun,
         other => return Err(format!("unknown action {other:?}")),
     };
     if !resource.valid_actions().contains(&action) {
@@ -225,6 +235,9 @@ pub struct RepoPolicy {
     pub tags: Vec<String>,
     /// Whether deleting branches and tags is allowed
     pub delete: bool,
+    /// 0.2.9: delete the head branch once `pr merge` succeeds. Only the branch just merged, which
+    /// is why it is not the same authority as `delete`
+    pub delete_merged_branch: bool,
     /// Delta on top of the project defaults: permissions to add, and permissions to remove (a deny wins at any layer)
     pub allow: Vec<String>,
     pub deny: Vec<String>,
@@ -240,6 +253,7 @@ impl RepoPolicy {
             push: DEFAULT_PUSH_GLOBS.iter().map(|s| s.to_string()).collect(),
             tags: Vec::new(),
             delete: false,
+            delete_merged_branch: false,
             allow: Vec::new(),
             deny: Vec::new(),
         }
@@ -1133,8 +1147,15 @@ mod tests {
         assert!(Project::try_new("x", vec![RepoPolicy::new("nope", Mode::ReadOnly)], &[]).is_err());
         // pr:read (0.1.3) + ci:read (0.1.5) + release:create / release:read (0.2.6)
         // + pr:request_review, issue:read, search:read (0.2.7)
-        assert_eq!(all_permission_keys().len(), 21);
-        for k in ["pr:request_review", "issue:read", "search:read"] {
+        // + release:publish, ci:rerun (0.2.9)
+        assert_eq!(all_permission_keys().len(), 23);
+        for k in [
+            "pr:request_review",
+            "issue:read",
+            "search:read",
+            "release:publish",
+            "ci:rerun",
+        ] {
             assert!(all_permission_keys().contains(&k.to_string()), "{k}");
         }
         assert!(all_permission_keys().contains(&"release:create".to_string()));
