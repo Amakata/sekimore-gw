@@ -47,12 +47,20 @@ block_ips:
   - 203.0.113.0/24       # Known malicious IP block
 
 # Proxy Configuration (HTTP/HTTPS Proxy)
+#
+# `enabled` runs Squid inside the gateway. Turning it off stops Squid, its cache and its access
+# log — DNS filtering, the firewall and the relay are separate and keep working without it.
+#
+# `upstream_proxy` is a different decision: it sends Squid's traffic, and the relay's own requests
+# (the device flow, the GitHub API), through a corporate proxy. Set it only where one is required.
+# A proxy that does not answer makes `sekimore-relay login` time out, which reads like the upstream
+# being unreachable. It is read only while `enabled` is true.
 proxy:
-  enabled: true                           # Enable Squid proxy
+  enabled: true                           # run Squid (not: enable upstream proxying — see above)
   port: 3128                              # Proxy port
   cache_enabled: true                     # Enable cache
   cache_size_mb: 1000                     # Cache size (MB)
-  upstream_proxy: null                    # Upstream proxy (corporate proxy integration) e.g., "proxy.example.com:8080"
+  upstream_proxy: null                    # corporate proxy, e.g. "proxy.example.com:8080". Leave null when there is none
   upstream_proxy_tls: false               # Use TLS for upstream proxy connection
 
   # Upstream proxy authentication (Basic Auth)

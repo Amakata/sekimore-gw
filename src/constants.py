@@ -12,7 +12,7 @@ DB_PATH = os.getenv("SEKIMORE_DB_PATH", "/data/security_gateway.db")
 CONFIG_PATH = os.getenv("SEKIMORE_CONFIG_PATH", "/etc/sekimore/config.yml")
 
 # Log file path
-ULOG_FILE_PATH = os.getenv("SEKIMORE_ULOG_PATH", "/var/log/ulog/syslogemu.log")
+ULOG_FILE_PATH = os.getenv("SEKIMORE_ULOG_PATH", "/var/log/ulog/firewall.log")
 
 # Squid configuration paths
 SQUID_CONFIG_PATH = os.getenv("SEKIMORE_SQUID_CONFIG", "/etc/squid/squid.conf")
@@ -32,27 +32,3 @@ WEB_UI_PORT = int(os.getenv("SEKIMORE_WEB_PORT", "8080"))
 # Cache settings
 DNS_CACHE_ENABLED = os.getenv("SEKIMORE_DNS_CACHE_ENABLED", "true").lower() == "true"
 DNS_CACHE_REFRESH_INTERVAL = int(os.getenv("SEKIMORE_DNS_CACHE_REFRESH", "30"))
-
-
-def get_db_path(override: str | None = None) -> str:
-    """Return the database path.
-
-    Args:
-        override: Path to use instead (for tests)
-
-    Returns:
-        The database path
-    """
-    return override or DB_PATH
-
-
-def get_config_path(override: str | None = None) -> str:
-    """Return the configuration file path.
-
-    Args:
-        override: Path to use instead (for tests)
-
-    Returns:
-        The configuration file path
-    """
-    return override or CONFIG_PATH

@@ -6,6 +6,7 @@ import time
 
 import aiosqlite
 
+from . import constants
 from .logger import ComponentType, log_error, log_system_event
 
 
@@ -128,12 +129,13 @@ class FirewallMonitor:
         """Monitor the ulogd log file (used in the Docker environment).
 
         ulogd2 writes the packet details it receives from the iptables ULOG
-        target to /var/log/ulog/firewall.log; this follows that file with tail -f.
+        target to constants.ULOG_FILE_PATH (/var/log/ulog/firewall.log unless
+        SEKIMORE_ULOG_PATH says otherwise); this follows that file with tail -f.
         """
         log_system_event("Starting firewall monitor (ulogd file mode)")
         self.running = True
 
-        log_file = "/var/log/ulog/firewall.log"
+        log_file = constants.ULOG_FILE_PATH
 
         while self.running:
             try:

@@ -448,9 +448,6 @@ impl Project {
     pub fn set_default_host(&mut self, host: &str) {
         self.default_host = host.trim().to_ascii_lowercase();
     }
-    pub fn default_host(&self) -> &str {
-        &self.default_host
-    }
     /// A repo's effective host, falling back to the default upstream when empty.
     pub fn host_of<'a>(&'a self, repo: &'a RepoPolicy) -> &'a str {
         if repo.host.is_empty() {

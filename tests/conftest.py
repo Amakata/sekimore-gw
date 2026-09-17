@@ -81,3 +81,29 @@ def sample_config_data():
         },
         "database_path": "/data/security_gateway.db",
     }
+
+
+@pytest.fixture(autouse=True)
+def _stop_the_shared_log_streamer():
+    """Leave no background task behind when the suite ends.
+
+    `web_ui.app` keeps one `LogStreamer` in a module global, and it owns an asyncio task that
+    polls the database. A test that touches the streaming endpoint leaves that task running, and
+    pytest's process then has something to wait for after the last test reports. Locally the loop
+    is already closed by then and nothing notices; on a CI runner the process hung for nine
+    minutes after printing "426 passed", until the job timed out.
+
+    Clearing the global after every test costs nothing and removes the class of failure.
+    """
+    yield
+    try:
+        from src.web_ui import app as _app
+    except Exception:  # the module is not importable in every test environment
+        return
+    streamer = getattr(_app, "_streamer", None)
+    if streamer is None:
+        return
+    task = getattr(streamer, "_task", None)
+    if task is not None and not task.done():
+        task.cancel()
+    _app._streamer = None

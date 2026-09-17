@@ -25,33 +25,51 @@ Start with `sekimore whoami` to see your project, your permissions and the repos
 
 You may only use the operations listed under `permissions` in `sekimore whoami`. Anything else is refused with 403.
 
+There is no permission named after a command. Several commands share one key, and the key in
+brackets below is the one `sekimore whoami` has to list. If a command is missing from your
+permissions, it is the bracketed key you ask a human for, not the command's name.
+
 ```bash
-sekimore pr create --head sekimore/<topic> --base main --title "…" --body="…"
-sekimore pr view --number N              # title, description, branches, counts
-sekimore pr comments --number N          # the conversation, the reviews and the line comments, in order
-sekimore pr list [--state open]          # the pull requests of one repository
-sekimore pr status --number N            # state of the CI checks (--json for machine output)
-sekimore pr merge --number N             # when pr:merge is allowed. --method squash|merge|rebase if the repo requires one
-                                         #   --delete-branch also removes the head branch, when the operator allowed it
-sekimore pr update --number N --title "…"    # edit your own PR; --base is re-checked against the allowed bases
-sekimore pr reopen --number N            # the inverse of pr close, same permission
-sekimore ci runs --ref <tag|branch|sha>  # workflow runs for a ref
-sekimore ci jobs --number N              # jobs of the PR's latest run (which failed, job_id)
-sekimore ci log --number N               # log of the failed job from the end; --before <start> pages back, --window sets the size
-sekimore ci rerun --run-id N [--all]     # re-run the failed jobs (--all: every job). Needs ci:rerun, not ci:read
-sekimore ci cancel --run-id N            # stop a run that is still going
-sekimore issue create --title "…" --body="…" [--labels a,b]
-sekimore issue view --number N           # title, description, labels, assignees
-sekimore issue comments --number N
-sekimore issue list [--state open] [--labels bug]
-sekimore issue reopen --number N         # the inverse of issue close, same permission
-sekimore issue unlabel --number N --labels bug        # take labels off again (issue:label)
-sekimore issue unassign --number N --assignees alice  # take assignees off again (issue:assign)
-sekimore search "is:open label:bug"      # across every repository of the project
-sekimore release create --tag vX.Y.Z      # after pushing the tag; GitHub writes the notes
-sekimore release view --tag vX.Y.Z        # the release for one tag
-sekimore release edit --tag vX.Y.Z --draft false      # publish a draft. Needs release:publish
-sekimore pr request-review --number N --reviewers alice,bob   # ask people to review
+sekimore pr create --head sekimore/<topic> --base main --title "…" --body="…"   [pr:create]
+sekimore pr update --number N --title "…"                     [pr:create]  edit your own PR
+                                                              #   --base is re-checked against the allowed bases
+sekimore pr view --number N                                   [pr:read]  title, body, branches, counts
+sekimore pr comments --number N                               [pr:read]  conversation, reviews and line comments, oldest first
+sekimore pr list [--state open]                               [pr:read]
+sekimore pr status --number N                                 [pr:read]  CI checks (--json for machine output)
+sekimore pr merge --number N                                  [pr:merge]  --method squash|merge|rebase if the repo requires one
+                                                              #   --delete-branch also removes the head branch, when the operator allowed it
+sekimore pr close --number N                                  [pr:close]
+sekimore pr reopen --number N                                 [pr:close]  the inverse of close
+sekimore pr comment --number N --body="…"                     [pr:comment]
+sekimore pr review --number N --event APPROVE                 [pr:review]  submit a review
+sekimore pr request-review --number N --reviewers alice,bob   [pr:request_review]  ask someone else for one
+sekimore ci runs --ref <tag|branch|sha>                       [ci:read]  workflow runs for a ref
+sekimore ci jobs --number N                                   [ci:read]  which job failed, and its job_id
+sekimore ci log --number N                                    [ci:read]  the failed job's log from the end; --before pages back
+sekimore ci rerun --run-id N [--all]                          [ci:rerun]  not ci:read — it spends Actions minutes
+sekimore ci cancel --run-id N                                 [ci:rerun]
+sekimore issue create --title "…" --body="…" [--labels a,b]   [issue:create]
+sekimore issue view --number N                                [issue:read]  title, body, labels, assignees
+sekimore issue comments --number N                            [issue:read]
+sekimore issue list [--state open] [--labels bug]             [issue:read]
+sekimore issue comment --number N --body="…"                  [issue:comment]
+sekimore issue close --number N                               [issue:close]
+sekimore issue reopen --number N                              [issue:close]  the inverse of close
+sekimore issue label --number N --labels bug                  [issue:label]
+sekimore issue unlabel --number N --labels bug                [issue:label]  the inverse
+sekimore issue assign --number N --assignees alice            [issue:assign]
+sekimore issue unassign --number N --assignees alice          [issue:assign]  the inverse
+sekimore search "is:open label:bug"                           [search:read]  across every repository of the project
+sekimore repo vocabulary                                      [repo:read]  the labels and assignees this repository defines
+sekimore release create --tag vX.Y.Z                          [release:create]  after pushing the tag; GitHub writes the notes
+sekimore release view --tag vX.Y.Z                            [release:read]
+sekimore release list                                         [release:read]
+sekimore release edit --tag vX.Y.Z --draft false              [release:publish]  publishing a draft only
+                                                              #   editing one that stays a draft is release:create
+sekimore project list --project-id PVT_…                      [project:read]
+sekimore project fields --project-id PVT_…                    [project:read]  field and option ids for update-item
+sekimore project add-item / update-item                       [project:add_item] / [project:update_item]
 ```
 
 - Select the repository with `--repo Org/Repo`, or leave it to `SEKIMORE_REPO`. With several upstreams you can prefix the host: `--repo ghe.example.com/Org/Repo`.

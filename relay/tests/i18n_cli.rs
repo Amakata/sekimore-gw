@@ -95,3 +95,42 @@ fn denial_messages_stay_english() {
     .to_string();
     assert!(!is_japanese(&denial), "{denial}");
 }
+
+/// The guide annotates every command with the permission key it needs, because an agent that sees
+/// `sekimore pr update` will otherwise assume a `pr:update` key exists and ask a human for it.
+/// A key written there that the policy does not define is worse than no annotation at all.
+#[test]
+fn every_permission_named_in_the_guide_exists() {
+    use sekimore_relay::policy::all_permission_keys;
+    let known = all_permission_keys();
+    for (lang, guide) in [("en", AGENT_GUIDE_EN), ("ja", AGENT_GUIDE_JA)] {
+        let mut named = Vec::new();
+        for line in guide.lines() {
+            // `[pr:read]` — the bracketed key beside a command
+            let mut rest = line;
+            while let Some(i) = rest.find('[') {
+                rest = &rest[i + 1..];
+                if let Some(j) = rest.find(']') {
+                    let k = &rest[..j];
+                    if k.contains(':') && !k.contains(' ') && !k.contains('|') {
+                        named.push(k.to_string());
+                    }
+                }
+            }
+        }
+        assert!(
+            named.len() > 20,
+            "{lang}: expected the command list to be annotated, found {}",
+            named.len()
+        );
+        let unknown: Vec<_> = named
+            .iter()
+            .filter(|k| !known.contains(k))
+            .cloned()
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "{lang} guide names permissions the policy does not define: {unknown:?}"
+        );
+    }
+}

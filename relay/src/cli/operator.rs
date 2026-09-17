@@ -80,14 +80,6 @@ pub fn open_audit(r: &Resolved) -> anyhow::Result<Arc<Audit>> {
     Ok(Arc::new(Audit::new(Some(&r.paths.audit), false)?))
 }
 
-/// GitHub client for the default upstream (0.1.x compatible).
-pub fn build_github(
-    r: &Resolved,
-    audit: Arc<Audit>,
-) -> anyhow::Result<(Arc<GitHub>, Arc<UpstreamTokenStore>, reqwest::Client)> {
-    build_github_for(r, r.default_upstream(), audit)
-}
-
 /// GitHub client for one upstream (api_base / graphql_base / upstream_token are that upstream's. 0.2.0).
 pub fn build_github_for(
     r: &Resolved,
@@ -164,7 +156,23 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
             println!("{}", tf("op.login.code", &[("code", code)]));
             println!();
         })
-        .await?;
+        .await
+        // The device flow is the relay reaching the upstream itself, not relaying for an agent.
+        // When `proxy.upstream_proxy` is set every one of those requests goes through it, and a
+        // proxy that does not answer looks exactly like the upstream being unreachable. Say which
+        // it was, because the two are fixed in completely different places.
+        .map_err(|e| match &r.proxy {
+            Some(px) => e.context(format!(
+                "the relay reaches {} through the proxy {} (proxy.upstream_proxy). \
+                 Check that the proxy is reachable from the gateway, or unset it if this network does not need one",
+                up.host, px.url
+            )),
+            None => e.context(format!(
+                "the relay reaches {} directly (no proxy.upstream_proxy is set). \
+                 Check that the gateway itself can leave the network",
+                up.host
+            )),
+        })?;
     store.save(&up.host, &token, &scope)?;
     println!(
         "{}",
@@ -859,17 +867,6 @@ pub fn bootstrap(path: &Path, action: BootstrapAction) -> anyhow::Result<()> {
                 Err(e) => return Err(e.into()),
             }
             audit.log("bootstrap_enabled", Actor::Operator, &[]);
-        }
-        BootstrapAction::Status => {
-            println!(
-                "mode: {:?}; kill-switch: {}",
-                r.relay.bootstrap,
-                if flag.exists() {
-                    "DISABLED"
-                } else {
-                    "not set (enabled)"
-                }
-            );
         }
     }
     Ok(())

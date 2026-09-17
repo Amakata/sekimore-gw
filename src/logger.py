@@ -7,16 +7,6 @@ from enum import Enum
 import structlog
 
 
-class LogLevel(str, Enum):
-    """Log level."""
-
-    DEBUG = "DEBUG"
-    INFO = "INFO"
-    WARNING = "WARNING"
-    ERROR = "ERROR"
-    CRITICAL = "CRITICAL"
-
-
 class ComponentType(str, Enum):
     """Component type."""
 
