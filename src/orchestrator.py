@@ -1137,6 +1137,16 @@ class SecurityGatewayOrchestrator:
                     # Handled dynamically when a DNS query arrives, so nothing to do here
                     pass
 
+            # Re-apply allow_ips / block_ips. These used to be read only at start-up, so
+            # adding an address to block_ips did nothing until the container was restarted —
+            # and nothing said so, which is the wrong way round for a blocklist.
+            if not self.ip_manager.setup_static_ips(
+                allow_ips=new_config.allow_ips,
+                block_ips=new_config.block_ips,
+            ):
+                log_error(ComponentType.ORCHESTRATOR, "Static IP reload failed")
+                return False
+
             # Update the Squid proxy configuration, when enabled
             if self.proxy_manager:
                 # domain_handlers changes need a restart, so the relay may still be running with

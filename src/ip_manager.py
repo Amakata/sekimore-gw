@@ -78,18 +78,26 @@ class StaticIPManager:
             return False
 
     def create_ipsets(self) -> bool:
-        """Create the ipsets (hash:net type, so CIDRs are supported)."""
-        # Destroy any existing ipsets for a clean start
-        self._run_ipset_command(["destroy", self.allow_ipset_name])
-        self._run_ipset_command(["destroy", self.block_ipset_name])
+        """Create the ipsets (hash:net type, so CIDRs are supported).
 
-        # Create as hash:net (supports CIDR, IPv4)
+        Flushed rather than destroyed when they already exist: on a reload the iptables rules
+        still reference them, and ipset refuses to destroy a set in use — which would leave
+        the reload failing on a config that is perfectly valid. Flushing empties them, so an
+        address taken out of the config stops being matched.
+        """
+        for name in (self.allow_ipset_name, self.block_ipset_name):
+            if not self._run_ipset_command(["flush", name]):
+                # Not there yet; the create below makes it.
+                self._run_ipset_command(["destroy", name])
+
+        # Create as hash:net (supports CIDR, IPv4). `-exist` because the flush above leaves
+        # the set in place when it was already there.
         success = True
         success &= self._run_ipset_command(
-            ["create", self.allow_ipset_name, "hash:net", "family", "inet"]
+            ["create", "-exist", self.allow_ipset_name, "hash:net", "family", "inet"]
         )
         success &= self._run_ipset_command(
-            ["create", self.block_ipset_name, "hash:net", "family", "inet"]
+            ["create", "-exist", self.block_ipset_name, "hash:net", "family", "inet"]
         )
 
         if success:

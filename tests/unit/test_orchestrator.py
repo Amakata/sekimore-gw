@@ -1693,3 +1693,66 @@ database_path: /tmp/test.db
     def loopback_is_ignored(tmp_path):
         orch = _orch(tmp_path, "127.0.0.1:3129", [("eth0", "192.168.0.3/20")])
         assert orch._warn_if_upstream_proxy_is_shadowed() is None
+
+
+def describe_static_ips_are_re_applied_on_reload():
+    """allow_ips and block_ips were read only at start-up, so adding an address to block_ips
+    did nothing until the container was restarted — and nothing said so. For a blocklist that
+    is the wrong way round: the operator believes the address is blocked."""
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def a_new_block_ip_takes_effect(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - example.com
+block_ips: []
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.dns_server.allowed_domains = ["example.com"]
+        orch.dns_server.blocked_domains = set()
+        orch.firewall.remove_domain = Mock()
+        orch.ip_manager.setup_static_ips = Mock(return_value=True)
+
+        config_file.write_text("""
+allow_domains:
+  - example.com
+block_ips:
+  - 203.0.113.7/32
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        assert await orch.reload_config() is True
+        orch.ip_manager.setup_static_ips.assert_called_once()
+        kwargs = orch.ip_manager.setup_static_ips.call_args.kwargs
+        assert kwargs["block_ips"] == ["203.0.113.7/32"]
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def a_failure_stops_the_reload(mock_run, tmp_path):
+        # Half-applying would leave the firewall and the config disagreeing about what is
+        # blocked, which is worse than refusing the reload.
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - example.com
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.dns_server.allowed_domains = ["example.com"]
+        orch.dns_server.blocked_domains = set()
+        orch.firewall.remove_domain = Mock()
+        orch.ip_manager.setup_static_ips = Mock(return_value=False)
+        assert await orch.reload_config() is False
