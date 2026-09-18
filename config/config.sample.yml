@@ -56,6 +56,17 @@ block_ips:
 # A proxy that does not answer makes `sekimore-relay login` time out, which reads like the upstream
 # being unreachable. It is read only while `enabled` is true.
 #
+# One timeout is worth naming, because it is not a rule in this config and widening anything
+# here will not fix it: docker chooses the bridge subnets, and if the proxy's address falls
+# inside one of them, the container treats the proxy as a neighbour on the bridge and never
+# routes to it. The proxy logs nothing, the docker host reaches the same address fine, and the
+# gateway says so at start-up. Keep docker off the site's ranges with default-address-pools in
+# the daemon's /etc/docker/daemon.json:
+#
+#   { "default-address-pools": [ { "base": "172.31.0.0/16", "size": 24 } ] }
+#
+# A /16 cut into /24s gives 256 networks, which is well past what a compose stack needs.
+#
 # A domain listed under `domain_handlers` as github / https-relay / deny is refused by Squid
 # automatically. Squid resolves names through Docker's DNS and so never sees the DNS filter's
 # answers; served here, a relayed domain would stay reachable through

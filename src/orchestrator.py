@@ -872,9 +872,11 @@ class SecurityGatewayOrchestrator:
                     f"this container's own {iface} subnet {net}. Connections to it will time "
                     "out: the address looks like a neighbour on the bridge, so nothing is "
                     "routed and the proxy never sees a packet. This is not a firewall rule "
-                    "and widening allow_ips or network.allowed_ports will not help — give "
-                    "the docker network a subnet that does not overlap the site's, with "
-                    "`networks.<name>.ipam.config.subnet` in docker-compose.yml."
+                    "and widening allow_ips or network.allowed_ports will not help — point "
+                    "docker at a range that does not overlap the site's, with "
+                    "`default-address-pools` in the daemon's /etc/docker/daemon.json, e.g. "
+                    '[{"base": "172.31.0.0/16", "size": 24}]. Naming a subnet per network '
+                    "works too but leaves you allocating addresses by hand."
                 )
                 log_error(ComponentType.ORCHESTRATOR, msg)
                 return msg

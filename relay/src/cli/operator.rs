@@ -169,9 +169,9 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
                  nothing in the proxy's own log usually means its address falls inside one of \
                  this container's docker subnets, so the container treats it as a neighbour on \
                  the bridge and never routes to it; `ip -4 addr` next to the proxy's address \
-                 shows that, and the fix is a non-overlapping subnet for the docker network, \
-                 not a wider allow_ips or network.allowed_ports. Or unset the proxy if this \
-                 network does not need one",
+                 shows that, and the fix is to point docker at a non-overlapping range \
+                 (`default-address-pools` in daemon.json), not a wider allow_ips or \
+                 network.allowed_ports. Or unset the proxy if this network does not need one",
                 up.host, px.url
             )),
             None => e.context(format!(
