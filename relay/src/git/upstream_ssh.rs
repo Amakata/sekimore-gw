@@ -76,17 +76,27 @@ impl OpenSshUpstream {
         Ok(hashed)
     }
 
+    /// What to do about a missing host key, written for whoever reads it on stderr.
+    ///
+    /// That reader is an agent inside the dev container, where none of these commands exist —
+    /// they run in the gateway. Saying so is the difference between the agent relaying a
+    /// usable instruction and running `sekimore-relay keyscan` locally, where it fails
+    /// against a config.yml the dev container does not have and points at the wrong cause.
     pub fn known_hosts_remedy(&self) -> String {
         format!(
-            "known_hosts {} has no entry for {}; run `sekimore-relay login` (fetches the upstream host keys) or \
-             `sekimore-relay keyscan {} --port {}` (also for a ProxyJump bastion), or append \
-             `ssh-keyscan -t ed25519,ecdsa,rsa -p {} {}` yourself",
+            "known_hosts {} has no entry for {}. This is fixed by the operator, on the host \
+             running docker (not in this container): `docker compose exec sekimore-gw \
+             sekimore-relay login` fetches the upstream host keys, or `docker compose exec \
+             sekimore-gw sekimore-relay keyscan {} --port {}` takes them from the host itself \
+             (also for a ProxyJump bastion). In the devcontainer setup that is `mise run gw:login`. \
+             Failing those, append the output of `ssh-keyscan -t ed25519,ecdsa,rsa -p {} {}` to \
+             that file, again from inside the gateway.",
             self.known_hosts.display(),
             self.host,
             self.host,
             self.port,
             self.port,
-            self.host
+            self.host,
         )
     }
 
@@ -214,6 +224,34 @@ mod tests {
             "hashed lines cannot be checked; assume present"
         );
         assert!(up.known_hosts_remedy().contains("ssh-keyscan"));
+    }
+
+    /// The agent reads this on stderr from inside the dev container, where none of these
+    /// commands exist. Told to run `sekimore-relay keyscan` with no location, it runs it
+    /// locally, hits a config.yml the dev container does not have, and reports a missing
+    /// domain_handlers entry — a cause that has nothing to do with the real one.
+    #[test]
+    fn the_known_hosts_remedy_says_where_to_run_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let up = OpenSshUpstream::new("github.com", 22, &dir.path().join("known_hosts"), None);
+        let m = up.known_hosts_remedy();
+        assert!(m.contains("not in this container"), "{m}");
+        // Every command it names has to carry the way in.
+        for cmd in ["sekimore-relay login", "sekimore-relay keyscan"] {
+            let at = m
+                .find(cmd)
+                .unwrap_or_else(|| panic!("{cmd} missing from: {m}"));
+            let before = &m[at.saturating_sub(40)..at];
+            assert!(
+                before.contains("docker compose exec sekimore-gw"),
+                "{cmd} is given without saying where: {m}"
+            );
+        }
+        // and the wrapper this project actually uses
+        assert!(m.contains("mise run gw:login"), "{m}");
+        // the host and port belong to the upstream that failed, not a placeholder
+        assert!(m.contains("github.com"), "{m}");
+        assert!(m.contains("--port 22"), "{m}");
     }
 
     #[test]

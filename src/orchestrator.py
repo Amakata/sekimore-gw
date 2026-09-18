@@ -2,10 +2,10 @@
 
 import asyncio
 import contextlib
-import fnmatch
 import ipaddress
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -14,14 +14,179 @@ from pathlib import Path
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from . import constants
 from .config import load_config
-from .dns_server import DNSServer
+from .dns_server import DNSServer, domain_matches
 from .firewall import FirewallManager
 from .firewall_monitor import FirewallMonitor
 from .ip_manager import StaticIPManager
 from .logger import ComponentType, log_error, log_system_event, setup_logging
 from .proxy_manager import ProxyManager
 from .proxy_monitor import ProxyMonitor
+
+
+class ReloadWindow:
+    """Whether a change to config.yml is applied when it is saved.
+
+    The config file is writable from the dev container, and the gateway applies it on save,
+    so an agent that has read a hostile prompt can rewrite the rules it is held by. Closing
+    the window leaves the gateway on the configuration it already had, where a human can see
+    the change and undo it.
+
+    `auto` keeps the old behaviour, `manual` never applies on save, and a duration opens the
+    window for that long after start-up. The duration is the one to reach for: debugging a
+    policy needs saves to take effect, and a window that expires does not depend on anyone
+    remembering to close it again.
+
+    Only the operator can reopen it, from inside the gateway
+    (`docker compose exec … sekimore-relay reload --follow`), which the agent cannot run.
+    """
+
+    def __init__(self, mode: str, window_seconds: int | None, state_path: str | Path | None = None):
+        self.mode = mode
+        self.window_seconds = window_seconds
+        self._opened_at: float | None = time.time() if window_seconds else None
+        self._frozen = False
+        self._lock = threading.Lock()
+        # The operator reopens the window with a separate command, in a separate process, so
+        # the two sides meet in a file on the gateway's own volume.
+        self._state_path = Path(state_path) if state_path else Path(constants.RELOAD_STATE_PATH)
+        self._state_mtime: float | None = None
+        with self._lock:
+            self._refresh_locked()
+
+    def _refresh_locked(self) -> None:
+        """Pick up an override written by `python -m src.maint reload-*`.
+
+        The operator's command runs in its own process, so the running gateway only learns
+        about a freeze by reading the file. Checked on every read rather than at start-up:
+        `reload-freeze` is run to shut the window *now*, before handing the session over, and
+        a freeze that waited for a restart would be worse than useless.
+
+        Caller holds the lock. Stats the file first so a closed window costs one stat.
+        """
+        try:
+            mtime = self._state_path.stat().st_mtime
+        except OSError:
+            return
+        if mtime == self._state_mtime:
+            return
+        self._state_mtime = mtime
+        try:
+            raw = json.loads(self._state_path.read_text())
+        except (OSError, ValueError) as e:
+            # Not fatal, but the operator's intent is being ignored, so say so.
+            log_error(ComponentType.ORCHESTRATOR, f"Cannot read the reload window state: {e}")
+            return
+        if not isinstance(raw, dict):
+            log_error(
+                ComponentType.ORCHESTRATOR,
+                f"Reload window state is not an object: {self._state_path}",
+            )
+            return
+        if raw.get("frozen"):
+            self._frozen = True
+            return
+        try:
+            until = float(raw["until"])
+        except (KeyError, TypeError, ValueError):
+            log_error(
+                ComponentType.ORCHESTRATOR,
+                f"Reload window state has no usable 'until': {self._state_path}",
+            )
+            return
+        left = until - time.time()
+        if left > 0:
+            self._frozen = False
+            self.window_seconds = int(left)
+            self._opened_at = time.time()
+            # An override outlives a restart, and it also narrows an `auto` config: `follow`
+            # means "open until this runs out", which is not the same as "always open".
+            self.mode = "windowed"
+
+    def _write_state(self, payload: dict[str, object]) -> bool:
+        """Persist an override. False when it could not be written.
+
+        The caller has to surface a failure: `reload-freeze` reporting success while the
+        window stayed open would send the operator off to start an agent believing the
+        config is protected.
+        """
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._state_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload))
+            tmp.replace(self._state_path)
+        except OSError as e:
+            log_error(ComponentType.ORCHESTRATOR, f"Cannot record the reload window: {e}")
+            return False
+        self._state_mtime = None  # force the next read to pick this up
+        return True
+
+    def is_open(self) -> bool:
+        """True when a save should be applied."""
+        with self._lock:
+            self._refresh_locked()
+            if self._frozen:
+                return False
+            if self.mode == "auto":
+                return True
+            if self.mode == "manual":
+                return False
+            if self._opened_at is None or self.window_seconds is None:
+                return False
+            return (time.time() - self._opened_at) < self.window_seconds
+
+    def seconds_left(self) -> int | None:
+        """Seconds until the window closes; None when it is not time-limited."""
+        with self._lock:
+            self._refresh_locked()
+            if self._frozen:
+                return None
+            if self._opened_at is None or self.window_seconds is None:
+                return None
+            left = self.window_seconds - (time.time() - self._opened_at)
+            return max(0, int(left))
+
+    def follow(self, seconds: int) -> bool:
+        """Reopen the window for `seconds` from now. False when it could not be recorded."""
+        with self._lock:
+            self._frozen = False
+            self.window_seconds = seconds
+            self._opened_at = time.time()
+            if self.mode == "manual":
+                self.mode = "windowed"
+            return self._write_state({"until": time.time() + seconds})
+
+    def freeze(self) -> bool:
+        """Close the window now, whatever the mode. False when it could not be recorded.
+
+        Run before handing the session to an agent, so a silent failure here is the one that
+        matters most.
+        """
+        with self._lock:
+            self._frozen = True
+            return self._write_state({"frozen": True})
+
+    def describe(self) -> str:
+        """One line for `check` and `whoami`. Says whether a save would be applied right now.
+
+        Reads the same state as is_open(), so the two cannot disagree — a line saying the
+        window is open while saves are being dropped would send someone looking in the wrong
+        place.
+        """
+        open_now = self.is_open()
+        with self._lock:
+            frozen, mode, window = self._frozen, self.mode, self.window_seconds
+        if mode == "auto" and not frozen:
+            return "auto (applies on save)"
+        if frozen:
+            return "frozen (does not apply on save; reload-follow to reopen)"
+        if window is None:
+            return "manual (does not apply on save)"
+        left = self.seconds_left() or 0
+        if not open_now or left <= 0:
+            return "window closed (does not apply on save; reload-follow to reopen)"
+        return f"open for {left // 60}m {left % 60}s (applies on save)"
 
 
 class ConfigFileEventHandler(FileSystemEventHandler):
@@ -59,6 +224,18 @@ class ConfigFileEventHandler(FileSystemEventHandler):
             if current_time - self._last_reload_time < 1.0:  # ignore within 1 second
                 return
             self._last_reload_time = current_time
+
+        # 0.2.13: apply only while the reload window is open. The file is writable from dev,
+        # so a change arriving here is not necessarily the operator's.
+        window = getattr(self.orchestrator, "reload_window", None)
+        if window is not None and not window.is_open():
+            log_system_event(
+                "Configuration file modified but not applied",
+                reason="reload window closed",
+                reload=window.describe(),
+            )
+            self.orchestrator.note_unapplied_change()
+            return
 
         log_system_event("Configuration file modified, reloading...")
 
@@ -122,6 +299,10 @@ def _relay_settings_changed(old: object, new: object) -> bool:
         or _relay_ports_of(old) != _relay_ports_of(new)
         or _allowed_ports_of(old) != _allowed_ports_of(new)
         or getattr(old, "relay", None) != getattr(new, "relay", None)
+        # The model keeps four relay keys; the project's repositories, permissions and upload
+        # caps are the Rust binary's and do not survive it. Compared through the model, adding
+        # a repository the agent may write to reads as no change at all.
+        or getattr(old, "relay_fingerprint", "") != getattr(new, "relay_fingerprint", "")
     )
 
 
@@ -535,6 +716,13 @@ class SecurityGatewayOrchestrator:
         if self.config.proxy.enabled:
             self.proxy_monitor = ProxyMonitor(db_path=self.config.database_path)
 
+        # 0.2.13: whether a save is applied (see ReloadWindow)
+        self.reload_window = ReloadWindow(
+            "windowed" if self.config.reload_is_windowed() else self.config.reload,
+            self.config.reload_window_seconds(),
+        )
+        self._unapplied_changes = 0
+
         # File watcher that reloads automatically when config.yml changes
         self.config_observer: Observer | None = None  # type: ignore[valid-type]
         # Task checking that the relay is listening (only when git-relay is configured)
@@ -547,36 +735,14 @@ class SecurityGatewayOrchestrator:
             self.config_observer.schedule(event_handler, str(config_dir), recursive=False)
 
     def _match_allowed_domain(self, domain: str) -> bool:
-        """Check whether a domain is on the allow list.
+        """Whether a domain is on the allow list.
 
-        Args:
-            domain: The domain to check
-
-        Returns:
-            True when it is allowed
+        Defers to the DNS server's matcher. This used to be a third implementation, with its
+        own reading of a wildcard — it accepted `*.x` where DNS did not, and rejected what
+        DNS accepted. Nothing called it, so the disagreement was invisible; the next caller
+        would have inherited it.
         """
-        domain_lower = domain.lower().rstrip(".")
-
-        for allowed in self.config.allow_domains:
-            # Exact match
-            if allowed == domain_lower:
-                return True
-
-            # Wildcard match
-            if allowed.startswith("*."):
-                suffix = allowed[2:]
-                if domain_lower.endswith(suffix):
-                    return True
-            elif allowed.startswith("*"):
-                suffix = allowed[1:]
-                if domain_lower.endswith(suffix):
-                    return True
-
-            # fnmatch, for more flexible patterns
-            if fnmatch.fnmatch(domain_lower, allowed):
-                return True
-
-        return False
+        return domain_matches(domain, self.config.allow_domains)
 
     async def apply_domain_rule(self, domain: str, action: str = "allow") -> bool:
         """Apply a single domain rule across all three layers.
@@ -592,6 +758,14 @@ class SecurityGatewayOrchestrator:
             # Add it to the block list
             self.dns_server.blocked_domains.add(domain)
             log_system_event("Domain blocked", domain=domain)
+            return True
+
+        # A domain the relay answers for keeps its real address out of the allow ipset,
+        # whichever path got here. Reachable by address, it would bypass the relay entirely.
+        if domain.lower().rstrip(".") in {
+            d.lower().rstrip(".") for d in self.config.relay_domains()
+        }:
+            log_system_event("Domain rule refused: the relay answers for it", domain=domain)
             return True
 
         # Allowed domain
@@ -662,6 +836,75 @@ class SecurityGatewayOrchestrator:
             )
         return listening
 
+    def _warn_if_upstream_proxy_is_shadowed(self) -> str | None:
+        """Warn when proxy.upstream_proxy sits inside one of our own Docker subnets.
+
+        Docker picks the bridge subnets, and it can land on a range the site already uses —
+        192.168.0.0/20 here. An upstream proxy inside that range then looks to the container
+        like a neighbour on the same link: it ARPs, nothing answers, and the connection times
+        out. Nothing is dropped by a rule, the proxy logs nothing because no packet reaches
+        it, and the docker host can talk to the same address perfectly well.
+
+        That combination reads as a firewall problem and sends people to widen allow_ips or
+        allowed_ports, which hands the agent a route to the proxy and does not fix anything.
+        Returns the warning text, so a caller can show it too.
+        """
+        upstream = getattr(self.config.proxy, "upstream_proxy", None)
+        if not upstream:
+            return None
+        host = str(upstream).rsplit(":", 1)[0].strip("[]")
+        try:
+            addr = ipaddress.ip_address(host)
+        except ValueError:
+            try:
+                addr = ipaddress.ip_address(socket.gethostbyname(host))
+            except (OSError, ValueError):
+                return None
+
+        for iface, cidr in self._own_subnets():
+            try:
+                net = ipaddress.ip_network(cidr, strict=False)
+            except ValueError:
+                continue
+            if addr in net:
+                msg = (
+                    f"proxy.upstream_proxy ({upstream}) resolves to {addr}, which is inside "
+                    f"this container's own {iface} subnet {net}. Connections to it will time "
+                    "out: the address looks like a neighbour on the bridge, so nothing is "
+                    "routed and the proxy never sees a packet. This is not a firewall rule "
+                    "and widening allow_ips or network.allowed_ports will not help — point "
+                    "docker at a range that does not overlap the site's, with "
+                    "`default-address-pools` in the daemon's /etc/docker/daemon.json, e.g. "
+                    '[{"base": "172.31.0.0/16", "size": 24}]. Naming a subnet per network '
+                    "works too but leaves you allocating addresses by hand."
+                )
+                log_error(ComponentType.ORCHESTRATOR, msg)
+                return msg
+        return None
+
+    def _own_subnets(self) -> list[tuple[str, str]]:
+        """This container's interface subnets, as (interface, cidr)."""
+        out: list[tuple[str, str]] = []
+        try:
+            result = subprocess.run(
+                ["ip", "-o", "-4", "addr", "show"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return out
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 4 or parts[2] != "inet":
+                continue
+            iface, cidr = parts[1], parts[3]
+            if iface == "lo":
+                continue
+            out.append((iface, cidr))
+        return out
+
     async def initialize(self) -> bool:
         """Initialize the security gateway.
 
@@ -669,6 +912,10 @@ class SecurityGatewayOrchestrator:
             True on success
         """
         log_system_event("Initializing Security Gateway...")
+
+        # Before anything else: an upstream proxy inside our own bridge subnet fails in a way
+        # that looks like a firewall problem and is not one.
+        self._warn_if_upstream_proxy_is_shadowed()
 
         # 1. Initialize the firewall
         if not self.firewall.initialize_firewall():
@@ -692,13 +939,25 @@ class SecurityGatewayOrchestrator:
             return False
 
         # 4. Apply the rules for allowed domains (only those not starting with ".")
+        relayed = {d.lower().rstrip(".") for d in self.config.relay_domains()}
         for domain in self.config.allow_domains:
             # Wildcards starting with "." are skipped at startup and handled
             # dynamically when a DNS query arrives
-            if not domain.startswith("."):
-                log_system_event(f"Applying domain rule for: {domain}")
-                await self.apply_domain_rule(domain, action="allow")
-                log_system_event(f"Domain rule applied successfully: {domain}")
+            if domain.startswith("."):
+                continue
+            # A domain the relay answers for must not have its real address in the allow
+            # ipset. DNS hands out the gateway's address for these and deliberately skips
+            # setup_domain; seeding the upstream's address here would undo that, and the
+            # agent could reach it by address and miss the relay altogether.
+            if domain.lower().rstrip(".") in relayed:
+                log_system_event(
+                    "Domain rule skipped: the relay answers for it",
+                    domain=domain,
+                )
+                continue
+            log_system_event(f"Applying domain rule for: {domain}")
+            await self.apply_domain_rule(domain, action="allow")
+            log_system_event(f"Domain rule applied successfully: {domain}")
 
         # 5. Enable block logging once every ACCEPT rule is in place, so the LOG rule
         # lands last and only blocked packets get logged
@@ -811,6 +1070,17 @@ class SecurityGatewayOrchestrator:
         self.ip_manager.cleanup()
 
         log_system_event("Cleanup complete")
+
+    def note_unapplied_change(self) -> None:
+        """Record that config.yml changed while the window was closed.
+
+        The count is what `check` reports; the audit line is written by the caller. A change
+        nobody applied is still worth seeing — it is how an attempt to widen the rules shows up.
+        """
+        self._unapplied_changes += 1
+
+    def has_unapplied_changes(self) -> bool:
+        return self._unapplied_changes > 0
 
     async def reload_config(self) -> bool:
         """Reload the configuration file and apply the differences, without downtime.

@@ -26,6 +26,10 @@ use authorized_keys::{fingerprint, AuthorizedKeys};
 
 pub const GIT_USER: &str = "git";
 
+/// How many session channels one connection may hold open at once. A git client opens one and
+/// execs on it; anything beyond a couple is a client that is not doing git.
+const MAX_OPEN_CHANNELS: usize = 4;
+
 /// Loads the host key, generating an ed25519 key and saving it with mode 0600 if there is none.
 pub fn load_or_create_host_key(path: &Path) -> anyhow::Result<PrivateKey> {
     match std::fs::read(path) {
@@ -231,8 +235,36 @@ impl Handler for ClientHandler {
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        // One exec per connection, so a handful of open sessions is already more than the
+        // protocol needs. Without a bound an authenticated client can open and abandon
+        // channels indefinitely, and each one holds its receive buffer.
+        if self.exec_started || self.channels.len() >= MAX_OPEN_CHANNELS {
+            reply.reject(ChannelOpenFailure::ResourceShortage).await;
+            return Ok(());
+        }
         self.channels.insert(channel.id(), channel);
         reply.accept().await;
+        Ok(())
+    }
+
+    /// Release a channel the client opened and closed without running anything. `exec_request`
+    /// removes the one it takes over; these two cover the rest, which otherwise accumulate for
+    /// the life of the connection.
+    async fn channel_close(
+        &mut self,
+        channel: ChannelId,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.channels.remove(&channel);
+        Ok(())
+    }
+
+    async fn channel_eof(
+        &mut self,
+        channel: ChannelId,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.channels.remove(&channel);
         Ok(())
     }
 

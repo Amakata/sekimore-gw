@@ -11,7 +11,6 @@
   "error.load_data": "Error: failed to load data",
   "error.load_config": "Error: failed to load configuration",
   "error.load_relay": "Error: failed to load relay information",
-
   "tab.dashboard": "Dashboard",
   "tab.allowed": "Allowed Domains",
   "tab.blocked": "Blocked Domains",
@@ -20,7 +19,6 @@
   "tab.blocked_ips": "Blocked IPs",
   "tab.config": "Config",
   "tab.relay": "Relay",
-
   "stat.total_24h": "Total Requests (24h)",
   "stat.dns_allowed": "DNS Allowed",
   "stat.dns_blocked": "DNS Blocked",
@@ -40,7 +38,6 @@
   "btn.refresh": "Refresh",
   "logs.connecting": "Connecting to WebSocket...",
   "logs.empty": "No logs yet",
-
   "allowed.title": "Allowed Domains",
   "allowed.empty": "No allowed domains are configured",
   "blocked.title": "Blocked Domains",
@@ -71,7 +68,6 @@
   "ips.times": "{n} times",
   "ips.last_blocked": "Last blocked: {time}",
   "ips.blocked": "Blocked:",
-
   "config.title": "Configuration",
   "config.version": "Version",
   "config.package": "Package",
@@ -90,7 +86,6 @@
   "config.upstream_auth": "Upstream Auth",
   "config.configured": "Configured",
   "config.none": "None",
-
   "relay.title": "Relay",
   "relay.disabled_note": "config.yml has no <code>domain_handlers: { &lt;domain&gt;: { handler: git-relay } }</code>, so the relay is not running",
   "relay.stat_allowed": "Relay Allowed (24h)",
@@ -147,7 +142,6 @@
   "relay.file.present": "present",
   "relay.file.missing": "missing",
   "relay.large_upload_badge": "⚠ LARGE UPLOAD",
-
   "maint.description": "Operator commands for the gateway log database (SQLite): inspect, prune, reset.",
   "maint.db": "path of the SQLite file (default: database_path in config.yml)",
   "maint.config": "path of config.yml",
@@ -176,5 +170,13 @@
   "maint.stats.free_pages": "free pages:",
   "maint.stats.tables": "tables:",
   "maint.stats.rows": "rows",
-  "maint.stats.indexes": "indexes:"
+  "maint.stats.indexes": "indexes:",
+  "maint.reload_follow": "open the reload window, so saving config.yml applies again",
+  "maint.reload_freeze": "close the reload window now (run before handing the session to an agent)",
+  "maint.reload_status": "report whether saving config.yml applies",
+  "maint.reload_duration": "how long to keep it open (default 30m)",
+  "maint.reload_frozen": "reload window closed. Saving config.yml no longer applies.",
+  "maint.reload_following": "reload window open for {duration}. Saving config.yml applies until it runs out.",
+  "maint.reload_bad_duration": "not a duration: {value}. Use something like 30m, 2h, 90s.",
+  "maint.reload_write_failed": "could not record the reload window; it is unchanged. Check the log for the reason."
 }

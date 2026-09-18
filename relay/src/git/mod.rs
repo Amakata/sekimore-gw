@@ -178,10 +178,30 @@ impl Watchdog {
 
 /// Copy `reader` → `writer` in 64 KiB chunks, reporting activity to the watchdog. Returns the number of bytes transferred.
 pub async fn copy_touch<R, W>(
+    reader: R,
+    writer: W,
+    wd: &Watchdog,
+    close_writer: bool,
+) -> std::io::Result<u64>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    copy_touch_counted(reader, writer, wd, close_writer, &AtomicU64::new(0)).await
+}
+
+/// `copy_touch`, reporting progress into `seen` as it goes.
+///
+/// An idle timeout drops this future, and a dropped future's return value is gone — so a
+/// transfer cut short would be audited as zero bytes. That matters here: the byte count is
+/// the exfiltration record, and going quiet mid-upload would be a way to erase it. The cap
+/// itself is enforced before each write and is unaffected either way.
+pub async fn copy_touch_counted<R, W>(
     mut reader: R,
     mut writer: W,
     wd: &Watchdog,
     close_writer: bool,
+    seen: &AtomicU64,
 ) -> std::io::Result<u64>
 where
     R: AsyncRead + Unpin,
@@ -197,6 +217,7 @@ where
         }
         writer.write_all(&buf[..n]).await?;
         total += n as u64;
+        seen.store(total, Ordering::Relaxed);
         wd.touch();
     }
     writer.flush().await?;

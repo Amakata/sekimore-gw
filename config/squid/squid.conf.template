@@ -32,7 +32,7 @@ http_access allow allowed_domains
 http_access deny all
 
 # Listening port
-http_port 3128
+http_port {PROXY_PORT}
 
 # Cache settings
 {CACHE_CONFIG}

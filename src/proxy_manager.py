@@ -14,6 +14,7 @@ class ProxyManager:
         self,
         config_template_path: str | None = None,
         config_output_path: str | None = None,
+        port: int = 3128,
         cache_enabled: bool = True,
         cache_size_mb: int = 10000,
         upstream_proxy: str | None = None,
@@ -27,6 +28,7 @@ class ProxyManager:
         Args:
             config_template_path: Path to the Squid config template
             config_output_path: Path to write the generated config to
+            port: Port Squid listens on (proxy.port)
             cache_enabled: Whether caching is enabled
             cache_size_mb: Cache size in MB
             upstream_proxy: Upstream proxy (host:port)
@@ -37,6 +39,7 @@ class ProxyManager:
         """
         self.template_path = Path(config_template_path or constants.SQUID_TEMPLATE_PATH)
         self.output_path = Path(config_output_path or constants.SQUID_CONFIG_PATH)
+        self.port = port
         self.cache_enabled = cache_enabled
         self.cache_size_mb = cache_size_mb
         self.upstream_proxy = upstream_proxy
@@ -93,6 +96,7 @@ class ProxyManager:
 
             # Fill in the template
             config = template.format(
+                PROXY_PORT=str(self.port),
                 ALLOWED_DOMAINS_ACL=domain_acls,
                 RELAYED_DOMAINS_ACL=relayed_acls,
                 RELAYED_DOMAINS_RULE=relayed_rule,

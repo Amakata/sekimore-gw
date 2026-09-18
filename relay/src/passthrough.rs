@@ -6,6 +6,7 @@
 //! so it can be read in the clear). Without an SNI, or with no matching upstream, the default upstream is used (same as 0.1.x).
 
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -153,6 +154,13 @@ async fn read_client_hello(stream: &mut TcpStream, timeout: Duration) -> (Option
 
 impl Passthrough {
     /// Picks the destination from the SNI. Returns (host, port, upload cap, whether it matched).
+    ///
+    /// With no usable SNI the destination is the default upstream, but the cap is the
+    /// tightest of all of them. The cap is what limits how much leaves, and it is chosen from
+    /// a name the client supplies: leaving the default's cap in place means a client that
+    /// omits the SNI, or sends one that matches nothing, gets whichever cap happens to be
+    /// loosest. Here `github.com` is held to 256 KiB and the default is 1 MiB, so omitting
+    /// the name would be a fourfold raise for the asking.
     pub fn select(&self, sni: Option<&str>) -> (&str, u16, Option<u64>, bool) {
         if let Some(name) = sni {
             for t in &self.upstreams {
@@ -161,7 +169,17 @@ impl Passthrough {
                 }
             }
         }
-        (&self.upstream, self.port, self.max_upload, false)
+        (&self.upstream, self.port, self.strictest_cap(), false)
+    }
+
+    /// The tightest cap among the default and every configured target. `None` (unlimited)
+    /// only when nothing sets one.
+    fn strictest_cap(&self) -> Option<u64> {
+        // Any target that is capped binds an unnamed connection; unlimited loses to a number.
+        std::iter::once(self.max_upload)
+            .chain(self.upstreams.iter().map(|t| t.max_upload))
+            .flatten()
+            .min()
     }
 
     /// Connects to the default upstream (0.1.x compatible).
@@ -335,7 +353,10 @@ impl Passthrough {
         // upstream → dev keeps flowing in its own task (aborted, closing the connection, once the cap is hit)
         let down =
             tokio::spawn(async move { copy_touch(ur, cw, &wd_down, true).await.unwrap_or(0) });
-        let up = copy_capped(cr, uw, &wd, cap, already);
+        // Read from outside the future: an idle timeout drops it, and the bytes it had already
+        // forwarded are the record of what left. Zero there would let a pause erase them.
+        let sent_up = AtomicU64::new(0);
+        let up = copy_capped(cr, uw, &wd, cap, already, &sent_up);
         tokio::select! {
             (sent, capped) = up => {
                 if capped {
@@ -350,7 +371,7 @@ impl Passthrough {
             }
             _ = wd.expired() => {
                 down.abort();
-                (0, 0, false)
+                (sent_up.load(Ordering::Relaxed), 0, false)
             }
         }
     }
@@ -364,6 +385,7 @@ async fn copy_capped<R, W>(
     wd: &Watchdog,
     cap: Option<u64>,
     already: u64,
+    seen: &AtomicU64,
 ) -> (u64, bool)
 where
     R: AsyncRead + Unpin,
@@ -371,6 +393,7 @@ where
 {
     let mut buf = vec![0u8; 64 * 1024];
     let mut total = already;
+    seen.store(0, Ordering::Relaxed);
     loop {
         let n = match reader.read(&mut buf).await {
             Ok(0) | Err(_) => break,
@@ -386,6 +409,7 @@ where
             break;
         }
         total += n as u64;
+        seen.store(total - already, Ordering::Relaxed);
         wd.touch();
     }
     let _ = writer.shutdown().await;
@@ -409,6 +433,84 @@ mod tests {
             audit: Arc::new(Audit::disabled()),
             allow_local,
         })
+    }
+
+    /// The cap is what limits how much leaves, and it is picked from a name the client sends.
+    /// Falling back to the default's cap when the name matches nothing means a client that
+    /// omits it gets whichever cap is loosest — here the deployment holds github.com to
+    /// 256 KiB while the default is 1 MiB, so leaving the name out would be a fourfold raise
+    /// for the asking.
+    #[test]
+    fn an_unnamed_connection_gets_the_tightest_cap_not_the_default() {
+        let mut p = pt("upstream.test", 443, true);
+        {
+            let p = Arc::get_mut(&mut p).unwrap();
+            p.max_upload = Some(1024 * 1024); // relay.https_max_upload_bytes
+            p.upstreams = vec![
+                SniTarget {
+                    domain: "github.com".into(),
+                    host: "github.com".into(),
+                    port: 443,
+                    max_upload: Some(256 * 1024),
+                },
+                SniTarget {
+                    domain: "api.github.com".into(),
+                    host: "api.github.com".into(),
+                    port: 443,
+                    max_upload: Some(16 * 1024 * 1024),
+                },
+            ];
+        }
+        // A name that matches still gets its own cap, loose or tight.
+        assert_eq!(p.select(Some("github.com")).2, Some(256 * 1024));
+        assert_eq!(p.select(Some("api.github.com")).2, Some(16 * 1024 * 1024));
+        // No name, or one that matches nothing, gets the tightest of them all.
+        assert_eq!(p.select(None).2, Some(256 * 1024));
+        assert_eq!(p.select(Some("nothing.test")).2, Some(256 * 1024));
+        assert_eq!(p.select(Some("")).2, Some(256 * 1024));
+    }
+
+    #[test]
+    fn an_uncapped_target_does_not_loosen_the_unnamed_cap() {
+        // One target left unlimited must not become the cap every unnamed connection gets.
+        let mut p = pt("upstream.test", 443, true);
+        {
+            let p = Arc::get_mut(&mut p).unwrap();
+            p.max_upload = None; // the default itself is unlimited
+            p.upstreams = vec![
+                SniTarget {
+                    domain: "ghcr.io".into(),
+                    host: "ghcr.io".into(),
+                    port: 443,
+                    max_upload: None,
+                },
+                SniTarget {
+                    domain: "github.com".into(),
+                    host: "github.com".into(),
+                    port: 443,
+                    max_upload: Some(4096),
+                },
+            ];
+        }
+        assert_eq!(p.select(None).2, Some(4096));
+        assert_eq!(p.select(Some("ghcr.io")).2, None);
+    }
+
+    #[test]
+    fn with_nothing_capped_an_unnamed_connection_stays_uncapped() {
+        // Otherwise adding the rule would cap a deployment that had deliberately set none.
+        let mut p = pt("upstream.test", 443, true);
+        {
+            let p = Arc::get_mut(&mut p).unwrap();
+            p.max_upload = None;
+            p.upstreams = vec![SniTarget {
+                domain: "a.test".into(),
+                host: "a.test".into(),
+                port: 443,
+                max_upload: None,
+            }];
+        }
+        assert_eq!(p.select(None).2, None);
     }
 
     async fn echo_server() -> u16 {

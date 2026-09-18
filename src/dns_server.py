@@ -305,6 +305,37 @@ class DNSMapping:
             await self.db.close()
 
 
+def domain_matches(domain: str, patterns: list[str]) -> bool:
+    """Whether `domain` is covered by any entry in `patterns`.
+
+    An entry is an exact name, or `.example.com` / `*.example.com` for a name and everything
+    under it. The match is on label boundaries: `.github.com` covers `sub.github.com` and
+    `github.com`, and does not cover `evilgithub.com` — a name anyone can register, which a
+    plain suffix comparison would have accepted.
+
+    Shared by the allow, block and ignore lists so the three cannot drift apart.
+    """
+    d = domain.lower().rstrip(".")
+    for entry in patterns:
+        p = entry.lower().rstrip(".").strip()
+        if not p:
+            continue
+        if p.startswith("*."):
+            p = p[1:]
+        elif p.startswith("*"):
+            # `*github.io` with no dot would mean "anything ending in github.io", which takes
+            # in evilgithub.io — a name anyone can register. Read it as the exact name, the
+            # same conservative reading a label-boundary wildcard gets.
+            p = p[1:]
+        if p.startswith("."):
+            base = p[1:]
+            if d == base or d.endswith(p):
+                return True
+        elif d == p:
+            return True
+    return False
+
+
 class DNSServer:
     """DNS server (UDP/53)."""
 
@@ -437,24 +468,7 @@ class DNSServer:
         Returns:
             True if allowed
         """
-        domain_lower = domain.lower().rstrip(".")
-
-        for allowed in self.allowed_domains:
-            # Exact match
-            if allowed == domain_lower:
-                return True
-
-            # Wildcard entries written as .example.com;
-            # .pythonhosted.org matches files.pythonhosted.org, cdn.pythonhosted.org, etc.
-            if allowed.startswith("."):
-                # Does the domain match .example.com or *.example.com?
-                suffix = allowed  # .pythonhosted.org
-                if domain_lower.endswith(suffix) or domain_lower.endswith(suffix[1:]):
-                    # files.pythonhosted.org -> endswith(".pythonhosted.org") -> True
-                    # pythonhosted.org -> endswith("pythonhosted.org") -> True
-                    return True
-
-        return False
+        return domain_matches(domain, self.allowed_domains)
 
     def _is_ignored(self, domain: str) -> bool:
         """Check whether a domain is on the ignore list.
@@ -465,20 +479,7 @@ class DNSServer:
         Returns:
             True if the domain should be ignored
         """
-        domain_lower = domain.lower().rstrip(".")
-
-        for ignored in self.ignored_domains:
-            # Exact match
-            if ignored == domain_lower:
-                return True
-
-            # Wildcard entries written as .example.com
-            if ignored.startswith("."):
-                suffix = ignored
-                if domain_lower.endswith(suffix) or domain_lower.endswith(suffix[1:]):
-                    return True
-
-        return False
+        return domain_matches(domain, list(self.ignored_domains))
 
     def _is_blocked(self, domain: str) -> bool:
         """Check whether a domain is on the blocklist.
@@ -489,20 +490,11 @@ class DNSServer:
         Returns:
             True if blocked
         """
-        domain_lower = domain.lower().rstrip(".")
-
-        # Exact match
-        if domain_lower in self.blocked_domains:
-            return True
-
-        # Wildcard entries written as .example.com
-        for blocked in self.blocked_domains:
-            if blocked.startswith("."):
-                suffix = blocked
-                if domain_lower.endswith(suffix) or domain_lower.endswith(suffix[1:]):
-                    return True
-
-        return False
+        # Same label-boundary match as the allow list. Blocking is the safe direction, but a
+        # plain suffix comparison also catches names the entry never meant — `.evil.com`
+        # stopping `notevil.com` — and the two lists disagreeing about what an entry covers is
+        # its own kind of surprise.
+        return domain_matches(domain, list(self.blocked_domains))
 
     async def _resolve_domain(
         self, domain: str, query_type: str = "A"

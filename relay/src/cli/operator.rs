@@ -164,7 +164,14 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
         .map_err(|e| match &r.proxy {
             Some(px) => e.context(format!(
                 "the relay reaches {} through the proxy {} (proxy.upstream_proxy). \
-                 Check that the proxy is reachable from the gateway, or unset it if this network does not need one",
+                 Check that the proxy is reachable from the gateway itself — not from the \
+                 docker host, which has a different view of the network. A timeout here with \
+                 nothing in the proxy's own log usually means its address falls inside one of \
+                 this container's docker subnets, so the container treats it as a neighbour on \
+                 the bridge and never routes to it; `ip -4 addr` next to the proxy's address \
+                 shows that, and the fix is to point docker at a non-overlapping range \
+                 (`default-address-pools` in daemon.json), not a wider allow_ips or \
+                 network.allowed_ports. Or unset the proxy if this network does not need one",
                 up.host, px.url
             )),
             None => e.context(format!(

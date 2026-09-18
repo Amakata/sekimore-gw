@@ -83,9 +83,58 @@ pub async fn read_limited(resp: reqwest::Response, cap: usize) -> reqwest::Resul
 /// Shorten a body for use in an error message.
 pub fn truncate(b: &[u8]) -> String {
     let s = String::from_utf8_lossy(b);
-    if s.len() > 200 {
-        format!("{}...", &s[..200])
-    } else {
-        s.into_owned()
+    if s.len() <= 200 {
+        return s.into_owned();
+    }
+    // Cut on a character boundary. `s[..200]` panics mid-character, and the strings reaching
+    // here are upstream error bodies, which echo back what the agent sent — a Japanese label
+    // name is enough to land a multi-byte character across byte 200.
+    let mut end = 200;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate;
+
+    /// Upstream error bodies echo back what the agent sent, so a multi-byte character can
+    /// land across the cut. `&s[..200]` panics there, and the panic is reachable by asking
+    /// for a label with a Japanese name.
+    #[test]
+    fn a_multibyte_character_across_the_cut_does_not_panic() {
+        for pad in 195..=205 {
+            let mut v = vec![b'a'; pad];
+            v.extend_from_slice("あいうえお".as_bytes());
+            let out = truncate(&v);
+            assert!(out.ends_with("..."), "pad={pad}");
+            // and what comes back is still valid text
+            assert!(out.chars().count() > 0);
+        }
+    }
+
+    #[test]
+    fn a_short_body_is_returned_whole() {
+        assert_eq!(truncate(b"boom"), "boom");
+        assert_eq!(truncate("短い".as_bytes()), "短い");
+        assert_eq!(truncate(b""), "");
+    }
+
+    #[test]
+    fn a_long_body_is_cut_and_marked() {
+        let out = truncate(&vec![b'x'; 500]);
+        assert_eq!(out.len(), 203);
+        assert!(out.ends_with("..."));
+    }
+
+    #[test]
+    fn invalid_utf8_is_replaced_rather_than_refused() {
+        // read_limited cuts on a byte boundary, so the body can end mid-character.
+        let mut v = vec![b'a'; 199];
+        v.push(0xE3); // first byte of a 3-byte sequence, truncated
+        let out = truncate(&v);
+        assert!(!out.is_empty());
     }
 }

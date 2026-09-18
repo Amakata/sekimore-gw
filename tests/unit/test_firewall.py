@@ -665,3 +665,55 @@ def describe_allowed_ports():
         accepts = _forward_accepts(mock_run)
         assert len(accepts) == 1 and accepts[0][3:5] == ["-i", "eth1"] and "-o" not in accepts[0]
         assert "--dport" in accepts[0]
+
+
+def describe_ipset_names_are_unique_per_domain():
+    """setup_domain destroys and recreates the set on every resolution, so two domains sharing
+    one name means each resolution drops the other's addresses, and removing either takes
+    both. Truncating to 31 characters made that happen for any pair agreeing on their first
+    25 — and a wildcard entry creates subdomains as they resolve, so the pair need not both
+    be written in the config."""
+
+    from src.firewall import _ipset_name
+
+    def a_short_name_stays_readable():
+        assert _ipset_name("pypi.org") == "allow_pypi_org"
+        assert _ipset_name("github.com") == "allow_github_com"
+
+    def every_name_fits_the_limit():
+        for d in (
+            "a.com",
+            "pkg-containers.githubusercontent.com",
+            "docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com",
+            "x" * 200 + ".example.com",
+        ):
+            assert len(_ipset_name(d)) <= 31, d
+
+    def two_domains_agreeing_on_their_first_25_characters_do_not_collide():
+        # The shape that made this reachable: same prefix, different name.
+        a = "pkg-containers.githubusercontent.com"
+        b = "pkg-containers.githubusercontentx.com"
+        assert a[:25] == b[:25]
+        assert _ipset_name(a) != _ipset_name(b)
+
+    def the_githubusercontent_hosts_in_this_deployment_are_distinct():
+        names = {
+            _ipset_name(d)
+            for d in (
+                "pkg-containers.githubusercontent.com",
+                "release-assets.githubusercontent.com",
+                "objects.githubusercontent.com",
+                "raw.githubusercontent.com",
+            )
+        }
+        assert len(names) == 4
+
+    def the_name_is_stable_for_a_given_domain():
+        # setup_domain and remove_domain compute it separately; a name that moved would leave
+        # the set behind.
+        assert _ipset_name("a.very.long.subdomain.example.com") == _ipset_name(
+            "a.very.long.subdomain.example.com"
+        )
+
+    def a_wildcard_keeps_its_own_name():
+        assert _ipset_name("*.example.com") != _ipset_name(".example.com")

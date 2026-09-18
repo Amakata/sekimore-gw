@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from src.orchestrator import SecurityGatewayOrchestrator
+from src.config import Config, relay_fingerprint
+from src.orchestrator import ReloadWindow, SecurityGatewayOrchestrator, _relay_settings_changed
 
 
 def describe_security_gateway_orchestrator():
@@ -499,10 +500,17 @@ def describe_security_gateway_orchestrator():
         # Wildcard match *.example.com
         assert orch._match_allowed_domain("subdomain.example.com") is True
         assert orch._match_allowed_domain("deep.subdomain.example.com") is True
+        assert orch._match_allowed_domain("example.com") is True
 
-        # Wildcard match *github.io
-        assert orch._match_allowed_domain("mysite.github.io") is True
+        # A wildcard matches on label boundaries, so a name that merely ends with the same
+        # letters is not covered. `evilexample.com` is a name anyone can register.
+        assert orch._match_allowed_domain("evilexample.com") is False
+        assert orch._match_allowed_domain("attacker-example.com") is False
+
+        # `*github.io` has no dot after the star, so it reads as the exact name github.io.
+        # Taking it as "anything ending in github.io" would allow evilgithub.io.
         assert orch._match_allowed_domain("github.io") is True
+        assert orch._match_allowed_domain("evilgithub.io") is False
 
     @patch("subprocess.run")
     def it_checks_domain_case_insensitivity(mock_run, tmp_path, sample_config_data):
@@ -1298,3 +1306,390 @@ database_path: /tmp/test.db
         assert "pypi.org" in served
         # and it is denied outright, so a wildcard in the allowlist cannot serve it either
         assert "github.com" in relayed
+
+
+def describe_reload_window():
+    """0.2.13: config.yml is writable from dev and the gateway applied it on save, so an
+    agent that has read a hostile prompt could rewrite the rules it is held by. The window
+    decides whether a save takes effect."""
+
+    def auto_applies_on_save_as_before(tmp_path):
+        w = ReloadWindow("auto", None, tmp_path / "w.json")
+        assert w.is_open() is True
+        assert w.seconds_left() is None
+
+    def manual_never_applies_on_save(tmp_path):
+        w = ReloadWindow("manual", None, tmp_path / "w.json")
+        assert w.is_open() is False
+
+    def a_window_is_open_at_first_and_shuts_when_it_runs_out(tmp_path):
+        w = ReloadWindow("windowed", 1800, tmp_path / "w.json")
+        assert w.is_open() is True
+        assert 0 < (w.seconds_left() or 0) <= 1800
+        # A window whose length has already elapsed is shut, which is the state a session
+        # reaches by leaving the gateway running.
+        assert ReloadWindow("windowed", 0, tmp_path / "w.json").is_open() is False
+
+    def freeze_shuts_it_whatever_the_mode(tmp_path):
+        # What the operator runs before handing the session to an agent.
+        for mode, secs in (("auto", None), ("windowed", 1800)):
+            w = ReloadWindow(mode, secs, tmp_path / f"w-{mode}-{secs}.json")
+            assert w.is_open() is True
+            w.freeze()
+            assert w.is_open() is False
+
+    def follow_reopens_it(tmp_path):
+        w = ReloadWindow("manual", None, tmp_path / "w.json")
+        assert w.is_open() is False
+        w.follow(600)
+        assert w.is_open() is True
+        assert 0 < (w.seconds_left() or 0) <= 600
+
+    def follow_lifts_a_freeze(tmp_path):
+        w = ReloadWindow("windowed", 1800, tmp_path / "w.json")
+        w.freeze()
+        assert w.is_open() is False
+        w.follow(600)
+        assert w.is_open() is True
+
+    def the_description_says_whether_a_save_applies(tmp_path):
+        # Read by a human deciding whether it is safe to start an agent, so it has to say
+        # what happens, not just name the mode.
+        state = tmp_path / "w.json"
+        assert "applies on save" in ReloadWindow("auto", None, state).describe()
+        assert "does not apply on save" in ReloadWindow("manual", None, state).describe()
+        assert "does not apply on save" in ReloadWindow("windowed", 0, state).describe()
+        assert "applies on save" in ReloadWindow("windowed", 1800, state).describe()
+        w = ReloadWindow("auto", None, state)
+        w.freeze()
+        assert "does not apply on save" in w.describe()
+        # and how to get it back
+        assert "reload-follow" in w.describe()
+
+    def the_description_never_disagrees_with_is_open(tmp_path):
+        # A line saying the window is open while saves are dropped sends the reader looking
+        # in the wrong place.
+        state = tmp_path / "w.json"
+        for mode, secs in (("auto", None), ("manual", None), ("windowed", 1800), ("windowed", 0)):
+            w = ReloadWindow(mode, secs, state.with_name(f"w-{mode}-{secs}.json"))
+            says_open = "does not apply" not in w.describe()
+            assert says_open is w.is_open(), (mode, secs, w.describe())
+
+
+def describe_a_change_arriving_with_the_window_shut():
+    """Not applying it is half the job; the attempt has to be visible."""
+
+    @patch("subprocess.run")
+    def it_is_counted_rather_than_applied(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - example.com
+reload: manual
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        assert orch.reload_window.is_open() is False
+        assert orch.has_unapplied_changes() is False
+        orch.note_unapplied_change()
+        assert orch.has_unapplied_changes() is True
+
+    @patch("subprocess.run")
+    def the_window_follows_the_configured_mode(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        for mode, expected in (("auto", True), ("manual", False), ("30m", True)):
+            config_file = tmp_path / f"config-{mode}.yml"
+            config_file.write_text(f"""
+allow_domains:
+  - example.com
+reload: {mode}
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+            assert orch.reload_window.is_open() is expected, mode
+
+
+def describe_the_window_survives_a_restart():
+    """The operator reopens the window from a separate process, so the two sides meet in a
+    file on the gateway's volume — which the dev container does not mount."""
+
+    def follow_is_picked_up_by_a_later_instance(tmp_path):
+        state = tmp_path / "reload-window.json"
+        ReloadWindow("manual", None, state).follow(600)
+        # A restart, or the gateway process reading what the maint command wrote.
+        later = ReloadWindow("manual", None, state)
+        assert later.is_open() is True
+        assert 0 < (later.seconds_left() or 0) <= 600
+
+    def freeze_is_picked_up_by_a_later_instance(tmp_path):
+        state = tmp_path / "reload-window.json"
+        ReloadWindow("auto", None, state).freeze()
+        later = ReloadWindow("auto", None, state)
+        assert later.is_open() is False
+
+    def follow_narrows_an_auto_config_rather_than_leaving_it_open(tmp_path):
+        # `follow` means "open until this runs out". Reading it as "auto, plus a note" would
+        # leave an auto deployment permanently open after one --follow.
+        state = tmp_path / "reload-window.json"
+        ReloadWindow("auto", None, state).follow(600)
+        later = ReloadWindow("auto", None, state)
+        assert later.is_open() is True
+        assert (later.seconds_left() or 0) <= 600
+
+    def an_expired_override_is_ignored(tmp_path):
+        state = tmp_path / "reload-window.json"
+        state.write_text('{"until": 1}')  # long past
+        w = ReloadWindow("manual", None, state)
+        assert w.is_open() is False
+
+    def a_damaged_state_file_does_not_stop_the_gateway(tmp_path):
+        # Falling back to the configured mode is right: the file is a convenience, and the
+        # config is what the operator actually declared.
+        for body in ("", "{", "null", "[]", '{"until": "soon"}', '{"other": 1}'):
+            state = tmp_path / f"s-{abs(hash(body))}.json"
+            state.write_text(body)
+            assert ReloadWindow("manual", None, state).is_open() is False
+            assert ReloadWindow("auto", None, state).is_open() is True
+
+    def a_missing_state_file_is_the_normal_case(tmp_path):
+        state = tmp_path / "absent.json"
+        assert ReloadWindow("auto", None, state).is_open() is True
+        assert ReloadWindow("manual", None, state).is_open() is False
+
+
+def describe_a_relayed_domain_stays_out_of_the_allow_ipset():
+    """DNS answers with the gateway's address for these and deliberately skips setup_domain,
+    so the upstream's real address never reaches the ipset. Seeding it at startup would undo
+    that: the agent reaches the address directly and the relay never sees the connection."""
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def apply_domain_rule_refuses_one(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+  - pypi.org
+domain_handlers:
+  github.com:
+    handler: github
+relay:
+  project:
+    name: t
+    repos: []
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.firewall.setup_domain = Mock(return_value=True)
+        orch.dns_server._resolve_domain = AsyncMock(return_value=(["140.82.112.3"], 60))
+
+        assert await orch.apply_domain_rule("github.com", action="allow") is True
+        orch.firewall.setup_domain.assert_not_called()
+
+        # and an ordinary domain still goes through
+        assert await orch.apply_domain_rule("pypi.org", action="allow") is True
+        orch.firewall.setup_domain.assert_called_once()
+
+    @patch("subprocess.run")
+    def the_live_config_has_no_relayed_domain_in_its_startup_set(mock_run, tmp_path):
+        # The shape that made this reachable: a handler added for a domain that was already
+        # in allow_domains, which every https-relay entry is.
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+  - ghcr.io
+  - pypi.org
+domain_handlers:
+  github.com:
+    handler: github
+  ghcr.io:
+    handler: https-relay
+relay:
+  project:
+    name: t
+    repos: []
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        relayed = {d.lower().rstrip(".") for d in orch.config.relay_domains()}
+        seeded = [
+            d
+            for d in orch.config.allow_domains
+            if not d.startswith(".") and d.lower().rstrip(".") not in relayed
+        ]
+        assert seeded == ["pypi.org"]
+
+
+def describe_rewriting_the_project_is_detected_as_a_change():
+    """RelayConfig models four keys. What decides where an agent may reach — the project's
+    repositories, its permissions, the upload caps — belongs to the Rust binary and is dropped
+    on the way through the model. Compared through it, granting yourself a repository reads as
+    no change, so the reload check passes it with no warning and no audit line."""
+
+    def _cfg(relay):
+        raw = {
+            "allow_domains": ["github.com"],
+            "domain_handlers": {"github.com": {"handler": "github"}},
+            "relay": relay,
+        }
+        return Config(**raw, relay_fingerprint=relay_fingerprint(raw))
+
+    read_only = {
+        "project": {"name": "t", "repos": [{"name": "Org/A", "mode": "read-only", "bases": []}]}
+    }
+
+    def adding_a_repository_counts():
+        after = {
+            "project": {
+                "name": "t",
+                "repos": [
+                    {"name": "Org/A", "mode": "read-only", "bases": []},
+                    {"name": "Attacker/exfil", "mode": "read-write", "bases": ["main"]},
+                ],
+            }
+        }
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def promoting_a_repository_to_read_write_counts():
+        after = {
+            "project": {
+                "name": "t",
+                "repos": [{"name": "Org/A", "mode": "read-write", "bases": ["main"]}],
+            }
+        }
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def granting_a_permission_counts():
+        after = {**read_only, "project": {**read_only["project"], "permissions": ["pr:merge"]}}
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def lifting_the_upload_cap_counts():
+        after = {**read_only, "https_max_upload_bytes": -1}
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def turning_on_automatic_bootstrap_counts():
+        after = {**read_only, "bootstrap": "auto"}
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def allowing_tags_and_deletes_counts():
+        after = {
+            "project": {
+                "name": "t",
+                "repos": [
+                    {
+                        "name": "Org/A",
+                        "mode": "read-only",
+                        "bases": [],
+                        "tags": ["*"],
+                        "delete": True,
+                    }
+                ],
+            }
+        }
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def an_unchanged_config_is_not_reported_as_changed():
+        # Otherwise every reload claims a restart is needed and the warning stops meaning
+        # anything.
+        assert _relay_settings_changed(_cfg(read_only), _cfg(read_only)) is False
+
+    def a_change_outside_the_relay_does_not_count():
+        a = Config(
+            allow_domains=["github.com"],
+            relay_fingerprint=relay_fingerprint({"allow_domains": ["github.com"]}),
+        )
+        b = Config(
+            allow_domains=["github.com", "pypi.org"],
+            relay_fingerprint=relay_fingerprint({"allow_domains": ["github.com", "pypi.org"]}),
+        )
+        assert _relay_settings_changed(a, b) is False
+
+
+def describe_an_upstream_proxy_inside_our_own_subnet():
+    """Docker picks the bridge subnets and can land on a range the site already uses. A proxy
+    inside that range looks to the container like a neighbour on the same link: it ARPs,
+    nothing answers, the connection times out, and the proxy logs nothing because no packet
+    reached it. The docker host talks to the same address fine. That reads as a firewall
+    problem and sends people to widen allow_ips, which hands the agent a route to the proxy
+    and fixes nothing."""
+
+    def _orch(tmp_path, upstream, iface_line):
+        config_file = tmp_path / "config.yml"
+        config_file.write_text(f"""
+allow_domains:
+  - github.com
+proxy:
+  enabled: true
+  upstream_proxy: {upstream}
+network:
+  lan_subnets: []
+database_path: /tmp/test.db
+""")
+        with patch("subprocess.run") as m:
+            m.return_value = Mock(returncode=0, stdout="", stderr="")
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch._own_subnets = Mock(return_value=iface_line)
+        return orch
+
+    def it_is_reported(tmp_path):
+        orch = _orch(tmp_path, "192.168.0.10:3129", [("eth0", "192.168.0.3/20")])
+        msg = orch._warn_if_upstream_proxy_is_shadowed()
+        assert msg is not None
+        assert "192.168.0.0/20" in msg
+        # and it has to say what will not help, since that is where people go first
+        assert "allow_ips" in msg
+        assert "network.allowed_ports" in msg
+        assert "subnet" in msg
+
+    def a_proxy_outside_our_subnets_is_not_reported(tmp_path):
+        orch = _orch(tmp_path, "10.50.0.10:3129", [("eth0", "192.168.0.3/20")])
+        assert orch._warn_if_upstream_proxy_is_shadowed() is None
+
+    def the_boundaries_of_the_range_are_read_correctly(tmp_path):
+        # /20 from 192.168.0.0 runs to 192.168.15.255. 192.168.16.1 is outside it, and a
+        # check that compared the first two octets would get both of these wrong.
+        inside = _orch(tmp_path, "192.168.15.254:3129", [("eth0", "192.168.0.3/20")])
+        assert inside._warn_if_upstream_proxy_is_shadowed() is not None
+        outside = _orch(tmp_path, "192.168.16.1:3129", [("eth0", "192.168.0.3/20")])
+        assert outside._warn_if_upstream_proxy_is_shadowed() is None
+
+    def no_upstream_proxy_means_nothing_to_say(tmp_path):
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+proxy:
+  enabled: true
+network:
+  lan_subnets: []
+database_path: /tmp/test.db
+""")
+        with patch("subprocess.run") as m:
+            m.return_value = Mock(returncode=0, stdout="", stderr="")
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+        assert orch._warn_if_upstream_proxy_is_shadowed() is None
+
+    def a_name_that_does_not_resolve_is_not_an_error(tmp_path):
+        # The proxy may simply not be up yet; this check is not the place to fail startup.
+        orch = _orch(tmp_path, "proxy.invalid:3129", [("eth0", "192.168.0.3/20")])
+        assert orch._warn_if_upstream_proxy_is_shadowed() is None
+
+    def loopback_is_ignored(tmp_path):
+        orch = _orch(tmp_path, "127.0.0.1:3129", [("eth0", "192.168.0.3/20")])
+        assert orch._warn_if_upstream_proxy_is_shadowed() is None

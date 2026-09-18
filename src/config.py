@@ -1,6 +1,8 @@
 """Configuration management - loads and validates config.yml."""
 
+import hashlib
 import ipaddress
+import json
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -170,6 +172,42 @@ class UIConfig(BaseModel):
     )
 
 
+_DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def parse_duration(text: str) -> int | None:
+    """Parse `30m` / `2h` / `90s` into seconds. None when it is not a duration.
+
+    Used for `reload:`, where the value is either a mode word or a window length.
+    """
+    text = text.strip()
+    if len(text) < 2 or text[-1] not in _DURATION_UNITS:
+        return None
+    try:
+        n = int(text[:-1])
+    except ValueError:
+        return None
+    if n <= 0:
+        return None
+    return n * _DURATION_UNITS[text[-1]]
+
+
+def relay_fingerprint(raw: dict[str, Any]) -> str:
+    """sha256 of the `relay` and `domain_handlers` subtrees, taken from the parsed YAML.
+
+    From the raw document rather than the model: the model keeps only the handful of relay
+    keys Python needs, so a change to the project's repositories or permissions leaves it
+    identical. Those are exactly the settings that decide what an agent may reach.
+    """
+    subject = {
+        "relay": raw.get("relay"),
+        "domain_handlers": raw.get("domain_handlers"),
+    }
+    return hashlib.sha256(
+        json.dumps(subject, sort_keys=True, default=str, ensure_ascii=False).encode()
+    ).hexdigest()
+
+
 class Config(BaseModel):
     """AI Security Gateway configuration."""
 
@@ -197,6 +235,24 @@ class Config(BaseModel):
     database_path: str = Field(
         default="/data/security_gateway.db", description="Path of the SQLite database"
     )
+
+    # 0.2.13: a fingerprint of the relay subtree as it was written, not as Python models it.
+    # RelayConfig keeps four keys; everything that decides what an agent may reach —
+    # project.repos, permissions, push, tags, delete, bootstrap, https_max_upload_bytes —
+    # belongs to the Rust binary and is dropped on the way in. Compared through the model,
+    # rewriting the project is indistinguishable from changing nothing, so the reload check
+    # passes it through with no warning and no audit line.
+    relay_fingerprint: str = Field(
+        default="", description="sha256 of the relay / domain_handlers subtree as written"
+    )
+
+    # 0.2.13: when a change to this file is applied.
+    #   auto      — on save, as before
+    #   manual     — never on its own; the operator runs `sekimore-relay reload`
+    #   <duration> — auto for that long after start-up, then manual (e.g. 30m)
+    # The config is writable from dev, so on-save means an agent can change the rules it is
+    # held by. A window that expires does not need anyone to remember to close it.
+    reload: str = Field(default="auto", description="auto | manual | a duration such as 30m")
 
     # The relay. Absent, behaviour is unchanged (see relay/README.md).
     domain_handlers: dict[str, DomainHandlerConfig] = Field(
@@ -273,6 +329,25 @@ class Config(BaseModel):
     def relay_domains(self) -> list[str]:
         """Domains for which DNS answers with the relay IP (git-relay + https-relay)."""
         return self.git_relay_domains() + self.https_relay_domains()
+
+    @field_validator("reload")
+    @classmethod
+    def _validate_reload(cls, v: str) -> str:
+        v = str(v).strip().lower()
+        if v in ("auto", "manual"):
+            return v
+        if parse_duration(v) is not None:
+            return v
+        raise ValueError(
+            f"reload: {v!r} is not valid. Use 'auto', 'manual', or a duration such as '30m', '2h'"
+        )
+
+    def reload_window_seconds(self) -> int | None:
+        """Length of the auto-reload window, or None when `reload` is not a duration."""
+        return parse_duration(self.reload)
+
+    def reload_is_windowed(self) -> bool:
+        return self.reload_window_seconds() is not None
 
     def proxy_denied_domains(self) -> list[str]:
         """Domains Squid must not serve, because another component decides for them.
@@ -363,12 +438,18 @@ class Config(BaseModel):
         if data is None:
             data = {}
 
-        return cls(**data)
+        # Derived, not written: drop any value that came from the file so a round trip
+        # through to_yaml cannot hand us two.
+        data.pop("relay_fingerprint", None)
+        return cls(**data, relay_fingerprint=relay_fingerprint(data))
 
     def to_yaml(self, path: Path) -> None:
         """Write the configuration to a YAML file."""
+        # relay_fingerprint is computed from the rest, so writing it would put a stale copy
+        # in the file and make the next load disagree with itself.
+        data = self.model_dump(exclude={"relay_fingerprint"})
         with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(self.model_dump(), f, default_flow_style=False, allow_unicode=True)
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
 
 
 def load_config(config_path: Path | None = None) -> Config:

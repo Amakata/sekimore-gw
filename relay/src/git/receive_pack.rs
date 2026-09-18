@@ -10,12 +10,16 @@
 //!   D  map the upstream report-status back to the original ref names and send it to the client
 //!   E  on success, create a PR for each `refs/for`
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::io::AsyncWriteExt;
 
 use super::response::{RefStatus, ResponseRewriter};
-use super::{copy_touch, exit_code_of, GitContext, GitIo, RelayOutcome, UpstreamProcess, Watchdog};
+use super::{
+    copy_touch, copy_touch_counted, exit_code_of, GitContext, GitIo, RelayOutcome, UpstreamProcess,
+    Watchdog,
+};
 use crate::audit::Actor;
 use crate::github::GhError;
 use crate::pktline::{
@@ -113,6 +117,31 @@ pub fn plan_push(
     let mut commands = Vec::new();
     let mut rewrites: HashMap<String, String> = HashMap::new();
     let mut prs = Vec::new();
+    // Every upstream ref this plan will update, and the client ref it came from. Two updates
+    // to one ref in a single section put the report-status rewriter into a state it cannot
+    // represent — its map is one upstream ref to one client ref — so the ok/ng of one would
+    // be reported against the other, and stage E would decide whether to open the PR from
+    // the wrong result. Rejecting is the only answer that stays truthful.
+    // Both directions have to stay one-to-one. Two client refs mapping to one upstream ref is
+    // the obvious collision; one client ref mapping to two upstream refs is the same problem
+    // seen from the other end, and `refs/for/main` twice with different commits produces it.
+    let mut upstream_refs: HashSet<String> = HashSet::new();
+    let mut client_refs: HashSet<String> = HashSet::new();
+    let mut claim = |upstream: &str, client: &str| -> Result<(), Denied> {
+        if !upstream_refs.insert(upstream.to_string()) {
+            return Err(Denied::RefNotAllowed {
+                name: client.to_string(),
+                reason: "two refs in this push update the same upstream branch",
+            });
+        }
+        if !client_refs.insert(client.to_string()) {
+            return Err(Denied::RefNotAllowed {
+                name: client.to_string(),
+                reason: "the same ref is pushed twice in one push",
+            });
+        }
+        Ok(())
+    };
 
     for line in &section.lines {
         let u = match line {
@@ -137,12 +166,7 @@ pub fn plan_push(
                 name: upstream_ref.clone(),
                 reason,
             })?;
-            if rewrites.contains_key(&upstream_ref) {
-                return Err(Denied::RefNotAllowed {
-                    name: u.name.to_string(),
-                    reason: "two refs/for updates map to the same branch",
-                });
-            }
+            claim(&upstream_ref, u.name)?;
             // Re-pushing the same commit updates the existing branch rather than failing with "already exists".
             let old = adv
                 .get(&upstream_ref)
@@ -173,6 +197,7 @@ pub fn plan_push(
                     reason: "branch is outside the allowed push namespace (repos[].push, default sekimore/*); push to refs/for/<base> to open a PR instead",
                 });
             }
+            claim(u.name, u.name)?;
             commands.push(OwnedCommand::Update {
                 old: u.old.to_string(),
                 new: u.new.to_string(),
@@ -190,6 +215,7 @@ pub fn plan_push(
                     reason: "tag is not allowed for this repository (relay.project.tags / repos[].tags globs; default deny)",
                 });
             }
+            claim(u.name, u.name)?;
             commands.push(OwnedCommand::Update {
                 old: u.old.to_string(),
                 new: u.new.to_string(),
@@ -443,18 +469,33 @@ pub async fn relay_receive_pack(
     // ---- C + D ----
     let mut rewriter = ResponseRewriter::new(plan.rewrites.clone(), sideband);
     let has_commands = !plan.commands.is_empty();
+    // Read from outside the future: an idle timeout drops it, taking its return value with
+    // it, and the byte count is the exfiltration record. Losing it would make going quiet
+    // mid-upload a way to erase what was sent.
+    let sent = AtomicU64::new(0);
     let pack_fut = async {
         let mut total = 0u64;
         if !leftover.is_empty() {
             proc.stdin.write_all(&leftover).await?;
             total += leftover.len() as u64;
+            sent.store(total, Ordering::Relaxed);
             wd.touch();
         }
         if has_commands {
-            total += copy_touch(&mut io.stdin, &mut proc.stdin, &wd, true).await?;
+            let base = total;
+            let streamed = AtomicU64::new(0);
+            let r = async {
+                let n =
+                    copy_touch_counted(&mut io.stdin, &mut proc.stdin, &wd, true, &streamed).await;
+                sent.store(base + streamed.load(Ordering::Relaxed), Ordering::Relaxed);
+                n
+            }
+            .await;
+            total += r?;
         } else {
             proc.stdin.shutdown().await?;
         }
+        sent.store(total, Ordering::Relaxed);
         Ok::<u64, std::io::Error>(total)
     };
     let stdout = &mut io.stdout;
@@ -488,7 +529,8 @@ pub async fn relay_receive_pack(
         }
         _ = wd.expired() => {
             let _ = proc.child.start_kill();
-            (0, 0, Some("idle_timeout".to_string()))
+            // What did reach upstream before it went quiet, not zero.
+            (sent.load(Ordering::Relaxed), 0, Some("idle_timeout".to_string()))
         }
     };
 
@@ -778,6 +820,74 @@ mod tests {
             allow_delete,
             if allow_tags { &["*"] } else { &[] },
         )
+    }
+
+    /// The rewrite that makes `refs/for/<base>` into `sekimore/<base>-<sha7>` lands in the
+    /// same namespace the agent may push to directly, and the sha is its own commit — so it
+    /// can name the branch the rewrite is about to produce. Two updates to one upstream ref
+    /// leave the report-status rewriter unable to say which result belongs to which client
+    /// ref, and stage E would then decide whether to open the PR from the wrong one.
+    #[test]
+    fn a_direct_push_cannot_collide_with_the_branch_a_refs_for_rewrite_produces() {
+        let head = format!("sekimore/main-{}", &SHA[..7]);
+        let err = plan(
+            &[
+                format!("{ZERO} {SHA} refs/for/main"),
+                format!("{ZERO} {SHA2} refs/heads/{head}"),
+            ],
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, Denied::RefNotAllowed { reason, .. }
+                if reason.contains("same upstream branch")),
+            "{err}"
+        );
+        // and in the other order, so it is not an artefact of which one is seen first
+        let err = plan(
+            &[
+                format!("{ZERO} {SHA2} refs/heads/{head}"),
+                format!("{ZERO} {SHA} refs/for/main"),
+            ],
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Denied::RefNotAllowed { .. }), "{err}");
+    }
+
+    #[test]
+    fn the_same_ref_twice_in_one_push_is_refused() {
+        for name in [
+            "refs/heads/sekimore/topic",
+            "refs/for/main",
+            "refs/heads/sekimore/x",
+        ] {
+            let err = plan(
+                &[
+                    format!("{ZERO} {SHA} {name}"),
+                    format!("{SHA} {SHA2} {name}"),
+                ],
+                &HashMap::new(),
+            )
+            .unwrap_err();
+            assert!(matches!(err, Denied::RefNotAllowed { .. }), "{name}: {err}");
+        }
+    }
+
+    #[test]
+    fn distinct_refs_in_one_push_are_still_allowed() {
+        // The check must not catch the ordinary case of pushing several branches at once.
+        let plan = plan(
+            &[
+                format!("{ZERO} {SHA} refs/for/main"),
+                format!("{ZERO} {SHA2} refs/for/develop"),
+                format!("{ZERO} {SHA} refs/heads/sekimore/unrelated"),
+            ],
+            &HashMap::new(),
+        )
+        .expect("distinct refs");
+        assert_eq!(plan.commands.len(), 3);
+        assert_eq!(plan.prs.len(), 2);
     }
 
     /// 0.1.9: tags and deletes are governed by the repo's policy (project.tags / repos[].tags, delete)

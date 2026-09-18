@@ -545,3 +545,36 @@ def describe_proxy_allowlist_excludes_relayed_domains():
             domain_handlers={"github.com": {"handler": "git-relay"}},
         )
         assert cfg.proxy_allow_domains() == ["pypi.org"]
+
+
+def describe_reload_mode():
+    """0.2.13: when a change to config.yml takes effect. The file is writable from dev, so
+    applying on save lets an agent rewrite the rules it is held by."""
+
+    def the_default_is_auto_so_existing_deployments_do_not_change():
+        assert Config().reload == "auto"
+        assert Config().reload_window_seconds() is None
+        assert Config().reload_is_windowed() is False
+
+    def manual_is_accepted():
+        assert Config(reload="manual").reload == "manual"
+        assert Config(reload="manual").reload_window_seconds() is None
+
+    def a_duration_opens_a_window():
+        assert Config(reload="30m").reload_window_seconds() == 1800
+        assert Config(reload="2h").reload_window_seconds() == 7200
+        assert Config(reload="90s").reload_window_seconds() == 90
+        assert Config(reload="1d").reload_window_seconds() == 86400
+        assert Config(reload="30m").reload_is_windowed() is True
+
+    def the_value_is_case_insensitive_and_trimmed():
+        assert Config(reload="  AUTO ").reload == "auto"
+        assert Config(reload="30M").reload_window_seconds() == 1800
+
+    def anything_else_is_refused():
+        from pydantic import ValidationError
+
+        # Silently falling back to auto would leave the window open without saying so.
+        for bad in ("sometimes", "0m", "-5m", "30", "m", "", "30x"):
+            with pytest.raises(ValidationError, match="reload"):
+                Config(reload=bad)

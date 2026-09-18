@@ -284,10 +284,56 @@ async fn direct_tcpip_and_second_exec_refused() {
 
     let first = exec(&h, "rm -rf /").await;
     assert_eq!(first.status, Some(1));
-    // A second exec on the same connection gets channel_failure
-    let second = exec(&h, "git-upload-pack 'LibOrg/awesome-lib.git'").await;
-    assert!(second.failure, "second exec must be refused");
+    // A second exec is refused at channel open, before there is a channel to exec on.
+    assert!(
+        h.channel_open_session().await.is_err(),
+        "a connection that has already exec'd must not open another session"
+    );
     assert!(!s.reached.load(Ordering::SeqCst));
+}
+
+/// One exec per connection, so a few open sessions is already more than git needs. Unbounded,
+/// an authenticated client can open and abandon channels until the process runs out of memory.
+#[tokio::test]
+async fn open_session_channels_are_bounded() {
+    let s = start(common::project_case_a(&[])).await;
+    let key = gen_key();
+    s.keys.add(&key.public_key().to_openssh().unwrap()).unwrap();
+    let h = connect(s.addr, &key, "git").await.unwrap();
+
+    let mut held = Vec::new();
+    let mut refused = false;
+    for _ in 0..12 {
+        match h.channel_open_session().await {
+            Ok(ch) => held.push(ch),
+            Err(_) => {
+                refused = true;
+                break;
+            }
+        }
+    }
+    assert!(refused, "opening sessions without limit was allowed");
+    assert!(!s.reached.load(Ordering::SeqCst));
+}
+
+/// A channel the client opens and closes without exec'ing has to be released, or the same
+/// client reaches the limit above by churning rather than holding.
+#[tokio::test]
+async fn closing_a_session_frees_its_slot() {
+    let s = start(common::project_case_a(&[])).await;
+    let key = gen_key();
+    s.keys.add(&key.public_key().to_openssh().unwrap()).unwrap();
+    let h = connect(s.addr, &key, "git").await.unwrap();
+
+    for i in 0..20 {
+        let ch = h
+            .channel_open_session()
+            .await
+            .unwrap_or_else(|e| panic!("open {i} refused after closing the previous ones: {e}"));
+        ch.close().await.unwrap();
+        // The server removes it on close; give that message a moment to land.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[tokio::test]

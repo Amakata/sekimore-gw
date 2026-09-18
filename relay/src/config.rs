@@ -3,6 +3,9 @@
 //! - The top level is lenient - unknown keys, and unknown `handler` values, are ignored - so that
 //!   extensions on the Python side keep working
 //! - Everything under `relay:` is owned by the relay, so it is strict: an unknown key is a typo and an error
+//! - So is each `domain_handlers` entry. The keys there are the relay's too, and a typo in one
+//!   loosens rather than breaks: `max_uploads_bytes` reads as no cap and falls back to the
+//!   default, which `check` then prints as unlimited without complaint
 //! - Only one domain may use the `git-relay` handler, because an SSH exec request carries only the
 //!   repository path
 
@@ -39,6 +42,10 @@ pub enum HandlerKind {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+// A key that is not recognised here is a typo, and the ones worth typing are the ones that
+// loosen something: `max_uploads_bytes` for `max_upload_bytes` reads as "no cap set", falls
+// back to relay.https_max_upload_bytes, and `check` prints it as unlimited without complaint.
+#[serde(deny_unknown_fields)]
 pub struct DomainHandler {
     #[serde(default = "default_handler")]
     pub handler: HandlerKind,
@@ -1792,5 +1799,48 @@ relay:
         let px = r.proxy.unwrap();
         assert_eq!(px.url, "http://proxy.corp:3128");
         assert_eq!(px.username.as_deref(), Some("u"));
+    }
+}
+
+#[cfg(test)]
+mod domain_handler_strictness {
+    use super::*;
+
+    fn parse(yaml: &str) -> Result<GatewayConfig, String> {
+        serde_yaml_ng::from_str::<GatewayConfig>(yaml).map_err(|e| e.to_string())
+    }
+
+    const BASE: &str = "domain_handlers:\n  github.com:\n    handler: github\n";
+
+    /// A typo here loosens rather than breaks. `max_uploads_bytes` parses as "no cap set",
+    /// falls back to relay.https_max_upload_bytes, and `check` prints unlimited with no
+    /// complaint — the cap is gone and nothing says so.
+    #[test]
+    fn a_misspelled_key_is_an_error_not_a_default() {
+        let err = parse(&format!(
+            "{BASE}  ghcr.io:\n    handler: https-relay\n    max_uploads_bytes: 1024\n"
+        ))
+        .unwrap_err();
+        assert!(err.contains("max_uploads_bytes"), "{err}");
+        assert!(err.contains("unknown field"), "{err}");
+        // and it names the key that was meant, since that is the whole difficulty
+        assert!(err.contains("max_upload_bytes"), "{err}");
+    }
+
+    #[test]
+    fn the_keys_that_exist_still_parse() {
+        let cfg = parse(&format!(
+            "{BASE}  ghe.example.com:\n    handler: github\n    ssh_port: 2222\n    \
+             upstream: ghe.example.com\n    max_upload_bytes: -1\n    \
+             ssh_options: [ProxyJump=bastion]\n    api_base: https://ghe.example.com/api/v3\n"
+        ))
+        .expect("every documented key");
+        assert_eq!(cfg.domain_handlers.len(), 2);
+    }
+
+    #[test]
+    fn the_top_level_stays_lenient() {
+        // Python owns keys the relay has never heard of; those must keep working.
+        parse(&format!("{BASE}something_python_added: 1\n")).expect("top level");
     }
 }
