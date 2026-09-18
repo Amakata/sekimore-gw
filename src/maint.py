@@ -199,7 +199,9 @@ def _reload_cmd(args: argparse.Namespace, lang: str) -> int:
         return 0
 
     if args.cmd == "reload-freeze":
-        window.freeze()
+        if not window.freeze():
+            print(tr("maint.reload_write_failed"), file=sys.stderr)
+            return 1
         print(tr("maint.reload_frozen"))
         return 0
 
@@ -207,7 +209,9 @@ def _reload_cmd(args: argparse.Namespace, lang: str) -> int:
     if seconds is None:
         print(tr("maint.reload_bad_duration", value=args.duration), file=sys.stderr)
         return 2
-    window.follow(seconds)
+    if not window.follow(seconds):
+        print(tr("maint.reload_write_failed"), file=sys.stderr)
+        return 1
     print(tr("maint.reload_following", duration=args.duration))
     return 0
 

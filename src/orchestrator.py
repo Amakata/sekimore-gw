@@ -51,22 +51,49 @@ class ReloadWindow:
         # The operator reopens the window with a separate command, in a separate process, so
         # the two sides meet in a file on the gateway's own volume.
         self._state_path = Path(state_path) if state_path else Path(constants.RELOAD_STATE_PATH)
-        self._load_state()
+        self._state_mtime: float | None = None
+        with self._lock:
+            self._refresh_locked()
 
-    def _load_state(self) -> None:
-        """Pick up an override written by `python -m src.maint reload-*`."""
+    def _refresh_locked(self) -> None:
+        """Pick up an override written by `python -m src.maint reload-*`.
+
+        The operator's command runs in its own process, so the running gateway only learns
+        about a freeze by reading the file. Checked on every read rather than at start-up:
+        `reload-freeze` is run to shut the window *now*, before handing the session over, and
+        a freeze that waited for a restart would be worse than useless.
+
+        Caller holds the lock. Stats the file first so a closed window costs one stat.
+        """
+        try:
+            mtime = self._state_path.stat().st_mtime
+        except OSError:
+            return
+        if mtime == self._state_mtime:
+            return
+        self._state_mtime = mtime
         try:
             raw = json.loads(self._state_path.read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            # Not fatal, but the operator's intent is being ignored, so say so.
+            log_error(ComponentType.ORCHESTRATOR, f"Cannot read the reload window state: {e}")
             return
         if not isinstance(raw, dict):
+            log_error(
+                ComponentType.ORCHESTRATOR,
+                f"Reload window state is not an object: {self._state_path}",
+            )
+            return
+        if raw.get("frozen"):
+            self._frozen = True
             return
         try:
-            if raw.get("frozen"):
-                self._frozen = True
-                return
             until = float(raw["until"])
         except (KeyError, TypeError, ValueError):
+            log_error(
+                ComponentType.ORCHESTRATOR,
+                f"Reload window state has no usable 'until': {self._state_path}",
+            )
             return
         left = until - time.time()
         if left > 0:
@@ -77,7 +104,13 @@ class ReloadWindow:
             # means "open until this runs out", which is not the same as "always open".
             self.mode = "windowed"
 
-    def _write_state(self, payload: dict[str, object]) -> None:
+    def _write_state(self, payload: dict[str, object]) -> bool:
+        """Persist an override. False when it could not be written.
+
+        The caller has to surface a failure: `reload-freeze` reporting success while the
+        window stayed open would send the operator off to start an agent believing the
+        config is protected.
+        """
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._state_path.with_suffix(".tmp")
@@ -85,10 +118,14 @@ class ReloadWindow:
             tmp.replace(self._state_path)
         except OSError as e:
             log_error(ComponentType.ORCHESTRATOR, f"Cannot record the reload window: {e}")
+            return False
+        self._state_mtime = None  # force the next read to pick this up
+        return True
 
     def is_open(self) -> bool:
         """True when a save should be applied."""
         with self._lock:
+            self._refresh_locked()
             if self._frozen:
                 return False
             if self.mode == "auto":
@@ -102,6 +139,7 @@ class ReloadWindow:
     def seconds_left(self) -> int | None:
         """Seconds until the window closes; None when it is not time-limited."""
         with self._lock:
+            self._refresh_locked()
             if self._frozen:
                 return None
             if self._opened_at is None or self.window_seconds is None:
@@ -109,33 +147,45 @@ class ReloadWindow:
             left = self.window_seconds - (time.time() - self._opened_at)
             return max(0, int(left))
 
-    def follow(self, seconds: int) -> None:
-        """Reopen the window for `seconds` from now."""
+    def follow(self, seconds: int) -> bool:
+        """Reopen the window for `seconds` from now. False when it could not be recorded."""
         with self._lock:
             self._frozen = False
             self.window_seconds = seconds
             self._opened_at = time.time()
             if self.mode == "manual":
                 self.mode = "windowed"
-            self._write_state({"until": time.time() + seconds})
+            return self._write_state({"until": time.time() + seconds})
 
-    def freeze(self) -> None:
-        """Close the window now, whatever the mode. Used before handing the session to an agent."""
+    def freeze(self) -> bool:
+        """Close the window now, whatever the mode. False when it could not be recorded.
+
+        Run before handing the session to an agent, so a silent failure here is the one that
+        matters most.
+        """
         with self._lock:
             self._frozen = True
-            self._write_state({"frozen": True})
+            return self._write_state({"frozen": True})
 
     def describe(self) -> str:
-        """One line for `check` and `whoami`. Says whether a save would be applied right now."""
-        if self.mode == "auto" and not self._frozen:
+        """One line for `check` and `whoami`. Says whether a save would be applied right now.
+
+        Reads the same state as is_open(), so the two cannot disagree — a line saying the
+        window is open while saves are being dropped would send someone looking in the wrong
+        place.
+        """
+        open_now = self.is_open()
+        with self._lock:
+            frozen, mode, window = self._frozen, self.mode, self.window_seconds
+        if mode == "auto" and not frozen:
             return "auto (applies on save)"
-        if self._frozen:
-            return "frozen (does not apply on save; reload --follow to reopen)"
-        if self.window_seconds is None:
+        if frozen:
+            return "frozen (does not apply on save; reload-follow to reopen)"
+        if window is None:
             return "manual (does not apply on save)"
         left = self.seconds_left() or 0
-        if left <= 0:
-            return "window closed (does not apply on save; reload --follow to reopen)"
+        if not open_now or left <= 0:
+            return "window closed (does not apply on save; reload-follow to reopen)"
         return f"open for {left // 60}m {left % 60}s (applies on save)"
 
 

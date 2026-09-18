@@ -1305,57 +1305,67 @@ def describe_reload_window():
     agent that has read a hostile prompt could rewrite the rules it is held by. The window
     decides whether a save takes effect."""
 
-    def auto_applies_on_save_as_before():
-        w = ReloadWindow("auto", None)
+    def auto_applies_on_save_as_before(tmp_path):
+        w = ReloadWindow("auto", None, tmp_path / "w.json")
         assert w.is_open() is True
         assert w.seconds_left() is None
 
-    def manual_never_applies_on_save():
-        w = ReloadWindow("manual", None)
+    def manual_never_applies_on_save(tmp_path):
+        w = ReloadWindow("manual", None, tmp_path / "w.json")
         assert w.is_open() is False
 
-    def a_window_is_open_at_first_and_shuts_when_it_runs_out():
-        w = ReloadWindow("windowed", 1800)
+    def a_window_is_open_at_first_and_shuts_when_it_runs_out(tmp_path):
+        w = ReloadWindow("windowed", 1800, tmp_path / "w.json")
         assert w.is_open() is True
         assert 0 < (w.seconds_left() or 0) <= 1800
         # A window whose length has already elapsed is shut, which is the state a session
         # reaches by leaving the gateway running.
-        assert ReloadWindow("windowed", 0).is_open() is False
+        assert ReloadWindow("windowed", 0, tmp_path / "w.json").is_open() is False
 
-    def freeze_shuts_it_whatever_the_mode():
+    def freeze_shuts_it_whatever_the_mode(tmp_path):
         # What the operator runs before handing the session to an agent.
         for mode, secs in (("auto", None), ("windowed", 1800)):
-            w = ReloadWindow(mode, secs)
+            w = ReloadWindow(mode, secs, tmp_path / f"w-{mode}-{secs}.json")
             assert w.is_open() is True
             w.freeze()
             assert w.is_open() is False
 
-    def follow_reopens_it():
-        w = ReloadWindow("manual", None)
+    def follow_reopens_it(tmp_path):
+        w = ReloadWindow("manual", None, tmp_path / "w.json")
         assert w.is_open() is False
         w.follow(600)
         assert w.is_open() is True
         assert 0 < (w.seconds_left() or 0) <= 600
 
-    def follow_lifts_a_freeze():
-        w = ReloadWindow("windowed", 1800)
+    def follow_lifts_a_freeze(tmp_path):
+        w = ReloadWindow("windowed", 1800, tmp_path / "w.json")
         w.freeze()
         assert w.is_open() is False
         w.follow(600)
         assert w.is_open() is True
 
-    def the_description_says_whether_a_save_applies():
+    def the_description_says_whether_a_save_applies(tmp_path):
         # Read by a human deciding whether it is safe to start an agent, so it has to say
         # what happens, not just name the mode.
-        assert "applies on save" in ReloadWindow("auto", None).describe()
-        assert "does not apply on save" in ReloadWindow("manual", None).describe()
-        assert "does not apply on save" in ReloadWindow("windowed", 0).describe()
-        assert "applies on save" in ReloadWindow("windowed", 1800).describe()
-        w = ReloadWindow("auto", None)
+        state = tmp_path / "w.json"
+        assert "applies on save" in ReloadWindow("auto", None, state).describe()
+        assert "does not apply on save" in ReloadWindow("manual", None, state).describe()
+        assert "does not apply on save" in ReloadWindow("windowed", 0, state).describe()
+        assert "applies on save" in ReloadWindow("windowed", 1800, state).describe()
+        w = ReloadWindow("auto", None, state)
         w.freeze()
         assert "does not apply on save" in w.describe()
         # and how to get it back
-        assert "--follow" in w.describe()
+        assert "reload-follow" in w.describe()
+
+    def the_description_never_disagrees_with_is_open(tmp_path):
+        # A line saying the window is open while saves are dropped sends the reader looking
+        # in the wrong place.
+        state = tmp_path / "w.json"
+        for mode, secs in (("auto", None), ("manual", None), ("windowed", 1800), ("windowed", 0)):
+            w = ReloadWindow(mode, secs, state.with_name(f"w-{mode}-{secs}.json"))
+            says_open = "does not apply" not in w.describe()
+            assert says_open is w.is_open(), (mode, secs, w.describe())
 
 
 def describe_a_change_arriving_with_the_window_shut():

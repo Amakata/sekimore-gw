@@ -177,5 +177,6 @@
   "maint.reload_duration": "開けておく長さ (既定 30m)",
   "maint.reload_frozen": "反映の窓を閉じた。config.yml を保存しても適用されない。",
   "maint.reload_following": "反映の窓を {duration} 開けた。切れるまでは config.yml の保存が適用される。",
-  "maint.reload_bad_duration": "期間として読めない: {value}。30m, 2h, 90s のように書く。"
+  "maint.reload_bad_duration": "期間として読めない: {value}。30m, 2h, 90s のように書く。",
+  "maint.reload_write_failed": "反映の窓を記録できなかった。状態は変わっていない。理由はログを確認すること。"
 }
