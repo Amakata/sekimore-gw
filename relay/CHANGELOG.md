@@ -2,6 +2,21 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.13 (2026-09-18)
+
+- The config file is writable from dev and applied on save, so an agent that read a hostile prompt could rewrite the rules holding it. `reload:` now takes auto (as before), manual, or a duration — a window that runs out rather than a mode someone has to close. Reopened only from inside the gateway
+- `python -m src.maint reload-follow 30m` / `reload-freeze` / `reload-status`. A save arriving with the window shut is counted and logged rather than dropped quietly
+- A pull request's head was never checked. GitHub reads `owner:branch` as a fork, so an agent could open a PR against a project repository carrying code the relay never saw. A head now satisfies the same globs a direct push would
+- Two updates to one upstream ref in a single push left the report-status rewriter unable to say which result belonged to which client ref. The rewrite produces a branch name from the agent's own commit, so it could name that branch as a second ref deliberately
+- Start-up seeded the allow ipset from allow_domains without consulting domain_handlers, so the upstream's real address went in for every domain the relay answers for — six here. The agent could reach the address directly and miss the relay
+- Domain matching compared suffixes without label boundaries, so `.debian.org` covered `evildebian.org`, a name anyone can register. The allow, block and ignore lists now share one comparison, which also settles a three-way disagreement about wildcards
+- The reload check compared the relay section through a model that keeps four keys, so adding a repository to the project, granting pr:merge or lifting the upload cap all read as no change at all
+- An unnamed TLS connection took the default upload cap, so omitting the SNI was a way to ask for whichever cap was loosest. It now takes the tightest of them
+- truncate() cut a byte at a time into a str: an upstream error body echoes what the agent sent, so a Japanese label name was enough to panic the task
+- Operator commands in error messages now say they run inside the gateway. An agent told to run `sekimore-relay keyscan` ran it in dev, where it read a config that does not exist there and reported a cause unrelated to the real one
+- `sekimore-relay login` timing out against an upstream proxy has a cause that is not a rule in this config: if the proxy's address falls inside a docker bridge subnet, the container never routes to it. Start-up says so, since the natural next step is to widen allow_ips, which does not help
+- Also: a missing `merged` field read as true and gated deleting the branch; `repo vocabulary` answered "no labels" when the read had failed; an idle timeout recorded zero bytes sent; SSH session channels were never released; glob_match backtracked exponentially over a ref name the agent chooses
+
 ## 0.2.12 (2026-09-18)
 
 - Squid served the domains the relay owns. It resolves through Docker's DNS, never sees the DNS filter's answers, and served `github.com` to anyone setting `https_proxy=<gateway>:3128` — the real upstream, with none of the project's policy. Open whenever `proxy.enabled` is true
