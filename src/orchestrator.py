@@ -14,6 +14,7 @@ from pathlib import Path
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from . import constants
 from .config import load_config
 from .dns_server import DNSServer
 from .firewall import FirewallManager
@@ -41,12 +42,49 @@ class ReloadWindow:
     (`docker compose exec … sekimore-relay reload --follow`), which the agent cannot run.
     """
 
-    def __init__(self, mode: str, window_seconds: int | None):
+    def __init__(self, mode: str, window_seconds: int | None, state_path: str | Path | None = None):
         self.mode = mode
         self.window_seconds = window_seconds
         self._opened_at: float | None = time.time() if window_seconds else None
         self._frozen = False
         self._lock = threading.Lock()
+        # The operator reopens the window with a separate command, in a separate process, so
+        # the two sides meet in a file on the gateway's own volume.
+        self._state_path = Path(state_path) if state_path else Path(constants.RELOAD_STATE_PATH)
+        self._load_state()
+
+    def _load_state(self) -> None:
+        """Pick up an override written by `python -m src.maint reload-*`."""
+        try:
+            raw = json.loads(self._state_path.read_text())
+        except (OSError, ValueError):
+            return
+        if not isinstance(raw, dict):
+            return
+        try:
+            if raw.get("frozen"):
+                self._frozen = True
+                return
+            until = float(raw["until"])
+        except (KeyError, TypeError, ValueError):
+            return
+        left = until - time.time()
+        if left > 0:
+            self._frozen = False
+            self.window_seconds = int(left)
+            self._opened_at = time.time()
+            # An override outlives a restart, and it also narrows an `auto` config: `follow`
+            # means "open until this runs out", which is not the same as "always open".
+            self.mode = "windowed"
+
+    def _write_state(self, payload: dict[str, object]) -> None:
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._state_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload))
+            tmp.replace(self._state_path)
+        except OSError as e:
+            log_error(ComponentType.ORCHESTRATOR, f"Cannot record the reload window: {e}")
 
     def is_open(self) -> bool:
         """True when a save should be applied."""
@@ -79,11 +117,13 @@ class ReloadWindow:
             self._opened_at = time.time()
             if self.mode == "manual":
                 self.mode = "windowed"
+            self._write_state({"until": time.time() + seconds})
 
     def freeze(self) -> None:
         """Close the window now, whatever the mode. Used before handing the session to an agent."""
         with self._lock:
             self._frozen = True
+            self._write_state({"frozen": True})
 
     def describe(self) -> str:
         """One line for `check` and `whoami`. Says whether a save would be applied right now."""

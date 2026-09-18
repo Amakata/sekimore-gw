@@ -11,7 +11,6 @@
   "error.load_data": "エラー: データの読み込みに失敗しました",
   "error.load_config": "エラー: 設定情報の読み込みに失敗しました",
   "error.load_relay": "エラー: relay 情報の読み込みに失敗しました",
-
   "tab.dashboard": "ダッシュボード",
   "tab.allowed": "許可ドメイン",
   "tab.blocked": "ブロック済みドメイン",
@@ -20,7 +19,6 @@
   "tab.blocked_ips": "ブロック済み IP",
   "tab.config": "設定",
   "tab.relay": "Relay",
-
   "stat.total_24h": "総リクエスト (24h)",
   "stat.dns_allowed": "DNS 許可",
   "stat.dns_blocked": "DNS ブロック",
@@ -40,7 +38,6 @@
   "btn.refresh": "更新",
   "logs.connecting": "WebSocket に接続中...",
   "logs.empty": "ログはまだありません",
-
   "allowed.title": "許可ドメイン一覧",
   "allowed.empty": "許可ドメインが設定されていません",
   "blocked.title": "ブロックされたドメイン一覧",
@@ -71,7 +68,6 @@
   "ips.times": "{n}回",
   "ips.last_blocked": "最終ブロック: {time}",
   "ips.blocked": "ブロック:",
-
   "config.title": "設定情報",
   "config.version": "バージョン",
   "config.package": "パッケージ",
@@ -90,7 +86,6 @@
   "config.upstream_auth": "上位プロキシ認証",
   "config.configured": "設定あり",
   "config.none": "なし",
-
   "relay.title": "中継関所（Relay）",
   "relay.disabled_note": "config.yml に <code>domain_handlers: { &lt;domain&gt;: { handler: git-relay } }</code> が無いので relay は動いていません",
   "relay.stat_allowed": "Relay 許可 (24h)",
@@ -147,7 +142,6 @@
   "relay.file.present": "あり",
   "relay.file.missing": "なし",
   "relay.large_upload_badge": "⚠ 大きな送信",
-
   "maint.description": "gateway のログ DB（SQLite）の運用コマンド: 状態確認・削除・リセット。",
   "maint.db": "SQLite のパス（既定: config.yml の database_path）",
   "maint.config": "config.yml のパス",
@@ -176,5 +170,12 @@
   "maint.stats.free_pages": "空きページ:",
   "maint.stats.tables": "テーブル:",
   "maint.stats.rows": "行",
-  "maint.stats.indexes": "索引:"
+  "maint.stats.indexes": "索引:",
+  "maint.reload_follow": "反映の窓を開ける。config.yml の保存が再び適用されるようになる",
+  "maint.reload_freeze": "反映の窓を今すぐ閉じる (AI にセッションを渡す前に実行する)",
+  "maint.reload_status": "config.yml の保存が適用される状態かを表示する",
+  "maint.reload_duration": "開けておく長さ (既定 30m)",
+  "maint.reload_frozen": "反映の窓を閉じた。config.yml を保存しても適用されない。",
+  "maint.reload_following": "反映の窓を {duration} 開けた。切れるまでは config.yml の保存が適用される。",
+  "maint.reload_bad_duration": "期間として読めない: {value}。30m, 2h, 90s のように書く。"
 }

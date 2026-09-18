@@ -176,6 +176,42 @@ def _print_stats(s: dict[str, Any], lang: str) -> None:
         print(line)
 
 
+def _reload_cmd(args: argparse.Namespace, lang: str) -> int:
+    """Open, close or report the reload window (0.2.13).
+
+    Run inside the gateway, which is the point: `docker compose exec` is not something the
+    dev container can do, so an agent cannot reopen a window the operator shut.
+    """
+    from .config import load_config, parse_duration
+    from .orchestrator import ReloadWindow
+
+    def tr(key: str, **vars: Any) -> str:
+        return i18n.t(key, lang, **vars)
+
+    cfg = load_config(Path(args.config))
+    window = ReloadWindow(
+        "windowed" if cfg.reload_is_windowed() else cfg.reload,
+        cfg.reload_window_seconds(),
+    )
+
+    if args.cmd == "reload-status":
+        print(f"reload: {window.describe()}")
+        return 0
+
+    if args.cmd == "reload-freeze":
+        window.freeze()
+        print(tr("maint.reload_frozen"))
+        return 0
+
+    seconds = parse_duration(args.duration)
+    if seconds is None:
+        print(tr("maint.reload_bad_duration", value=args.duration), file=sys.stderr)
+        return 2
+    window.follow(seconds)
+    print(tr("maint.reload_following", duration=args.duration))
+    return 0
+
+
 def main(argv: list[str] | None = None, lang: str | None = None) -> int:
     lang = lang or i18n.env_lang()
 
@@ -197,7 +233,14 @@ def main(argv: list[str] | None = None, lang: str | None = None) -> int:
     p_reset = sub.add_parser("db-reset", help=tr("maint.reset"))
     p_reset.add_argument("--yes", action="store_true", help=tr("maint.yes"))
     sub.add_parser("db-vacuum", help=tr("maint.vacuum"))
+    p_follow = sub.add_parser("reload-follow", help=tr("maint.reload_follow"))
+    p_follow.add_argument("duration", nargs="?", default="30m", help=tr("maint.reload_duration"))
+    sub.add_parser("reload-freeze", help=tr("maint.reload_freeze"))
+    sub.add_parser("reload-status", help=tr("maint.reload_status"))
     args = parser.parse_args(argv)
+
+    if args.cmd in ("reload-follow", "reload-freeze", "reload-status"):
+        return _reload_cmd(args, lang)
 
     db_path = args.db or default_db_path(args.config)
     if args.cmd == "db-stats":

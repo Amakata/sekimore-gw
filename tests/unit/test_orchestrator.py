@@ -1396,3 +1396,51 @@ database_path: /tmp/test.db
 """)
             orch = SecurityGatewayOrchestrator(config_path=config_file)
             assert orch.reload_window.is_open() is expected, mode
+
+
+def describe_the_window_survives_a_restart():
+    """The operator reopens the window from a separate process, so the two sides meet in a
+    file on the gateway's volume — which the dev container does not mount."""
+
+    def follow_is_picked_up_by_a_later_instance(tmp_path):
+        state = tmp_path / "reload-window.json"
+        ReloadWindow("manual", None, state).follow(600)
+        # A restart, or the gateway process reading what the maint command wrote.
+        later = ReloadWindow("manual", None, state)
+        assert later.is_open() is True
+        assert 0 < (later.seconds_left() or 0) <= 600
+
+    def freeze_is_picked_up_by_a_later_instance(tmp_path):
+        state = tmp_path / "reload-window.json"
+        ReloadWindow("auto", None, state).freeze()
+        later = ReloadWindow("auto", None, state)
+        assert later.is_open() is False
+
+    def follow_narrows_an_auto_config_rather_than_leaving_it_open(tmp_path):
+        # `follow` means "open until this runs out". Reading it as "auto, plus a note" would
+        # leave an auto deployment permanently open after one --follow.
+        state = tmp_path / "reload-window.json"
+        ReloadWindow("auto", None, state).follow(600)
+        later = ReloadWindow("auto", None, state)
+        assert later.is_open() is True
+        assert (later.seconds_left() or 0) <= 600
+
+    def an_expired_override_is_ignored(tmp_path):
+        state = tmp_path / "reload-window.json"
+        state.write_text('{"until": 1}')  # long past
+        w = ReloadWindow("manual", None, state)
+        assert w.is_open() is False
+
+    def a_damaged_state_file_does_not_stop_the_gateway(tmp_path):
+        # Falling back to the configured mode is right: the file is a convenience, and the
+        # config is what the operator actually declared.
+        for body in ("", "{", "null", "[]", '{"until": "soon"}', '{"other": 1}'):
+            state = tmp_path / f"s-{abs(hash(body))}.json"
+            state.write_text(body)
+            assert ReloadWindow("manual", None, state).is_open() is False
+            assert ReloadWindow("auto", None, state).is_open() is True
+
+    def a_missing_state_file_is_the_normal_case(tmp_path):
+        state = tmp_path / "absent.json"
+        assert ReloadWindow("auto", None, state).is_open() is True
+        assert ReloadWindow("manual", None, state).is_open() is False

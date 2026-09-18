@@ -32,3 +32,7 @@ WEB_UI_PORT = int(os.getenv("SEKIMORE_WEB_PORT", "8080"))
 # Cache settings
 DNS_CACHE_ENABLED = os.getenv("SEKIMORE_DNS_CACHE_ENABLED", "true").lower() == "true"
 DNS_CACHE_REFRESH_INTERVAL = int(os.getenv("SEKIMORE_DNS_CACHE_REFRESH", "30"))
+
+# 0.2.13: where the reload window's state lives. On the gateway's own volume, which the dev
+# container does not mount — the point of the window is that the agent cannot reopen it.
+RELOAD_STATE_PATH = os.getenv("SEKIMORE_RELOAD_STATE", "/data/reload-window.json")
