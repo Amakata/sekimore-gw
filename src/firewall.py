@@ -1,8 +1,26 @@
 """Firewall management - dynamic iptables/ipset rule handling."""
 
+import hashlib
 import subprocess
 
 from .logger import ComponentType, log_error, log_system_event
+
+
+def _ipset_name(domain: str) -> str:
+    """The ipset holding a domain's addresses. At most 31 characters, and unique per domain.
+
+    Truncating to 31 made two domains that agree on their first 25 characters share one set,
+    and setup_domain destroys and recreates it on every resolution — so one domain's addresses
+    would drop the other's, and removing either would take both. A wildcard entry means the
+    subdomains are created as they are resolved, so the pair need not both be in the config.
+    Names short enough to survive intact keep their readable form.
+    """
+    readable = f"allow_{domain.replace('.', '_').replace('*', 'wildcard')}"
+    if len(readable) <= 31:
+        return readable
+    # 7 for the prefix leaves 24 for the digest, which is well clear of a collision.
+    digest = hashlib.sha256(domain.encode()).hexdigest()[:24]
+    return f"allow_h{digest}"
 
 
 class FirewallManager:
@@ -434,9 +452,7 @@ class FirewallManager:
         Returns:
             True on success
         """
-        # Build the ipset name (alphanumerics and underscores only)
-        ipset_name = f"allow_{domain.replace('.', '_').replace('*', 'wildcard')}"
-        ipset_name = ipset_name[:31]  # ipset names are limited to 31 characters
+        ipset_name = _ipset_name(domain)
 
         # LAN-only domain? (ends in .lan, or is a bare container name)
         is_lan_only = domain.endswith(".lan") or "." not in domain
