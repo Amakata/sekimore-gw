@@ -24,6 +24,81 @@ from .proxy_manager import ProxyManager
 from .proxy_monitor import ProxyMonitor
 
 
+class ReloadWindow:
+    """Whether a change to config.yml is applied when it is saved.
+
+    The config file is writable from the dev container, and the gateway applies it on save,
+    so an agent that has read a hostile prompt can rewrite the rules it is held by. Closing
+    the window leaves the gateway on the configuration it already had, where a human can see
+    the change and undo it.
+
+    `auto` keeps the old behaviour, `manual` never applies on save, and a duration opens the
+    window for that long after start-up. The duration is the one to reach for: debugging a
+    policy needs saves to take effect, and a window that expires does not depend on anyone
+    remembering to close it again.
+
+    Only the operator can reopen it, from inside the gateway
+    (`docker compose exec … sekimore-relay reload --follow`), which the agent cannot run.
+    """
+
+    def __init__(self, mode: str, window_seconds: int | None):
+        self.mode = mode
+        self.window_seconds = window_seconds
+        self._opened_at: float | None = time.time() if window_seconds else None
+        self._frozen = False
+        self._lock = threading.Lock()
+
+    def is_open(self) -> bool:
+        """True when a save should be applied."""
+        with self._lock:
+            if self._frozen:
+                return False
+            if self.mode == "auto":
+                return True
+            if self.mode == "manual":
+                return False
+            if self._opened_at is None or self.window_seconds is None:
+                return False
+            return (time.time() - self._opened_at) < self.window_seconds
+
+    def seconds_left(self) -> int | None:
+        """Seconds until the window closes; None when it is not time-limited."""
+        with self._lock:
+            if self._frozen:
+                return None
+            if self._opened_at is None or self.window_seconds is None:
+                return None
+            left = self.window_seconds - (time.time() - self._opened_at)
+            return max(0, int(left))
+
+    def follow(self, seconds: int) -> None:
+        """Reopen the window for `seconds` from now."""
+        with self._lock:
+            self._frozen = False
+            self.window_seconds = seconds
+            self._opened_at = time.time()
+            if self.mode == "manual":
+                self.mode = "windowed"
+
+    def freeze(self) -> None:
+        """Close the window now, whatever the mode. Used before handing the session to an agent."""
+        with self._lock:
+            self._frozen = True
+
+    def describe(self) -> str:
+        """One line for `check` and `whoami`. Says whether a save would be applied right now."""
+        if self.mode == "auto" and not self._frozen:
+            return "auto (applies on save)"
+        if self._frozen:
+            return "frozen (does not apply on save; reload --follow to reopen)"
+        if self.window_seconds is None:
+            return "manual (does not apply on save)"
+        left = self.seconds_left() or 0
+        if left <= 0:
+            return "window closed (does not apply on save; reload --follow to reopen)"
+        return f"open for {left // 60}m {left % 60}s (applies on save)"
+
+
 class ConfigFileEventHandler(FileSystemEventHandler):
     """Event handler that watches the configuration file for changes."""
 
@@ -59,6 +134,18 @@ class ConfigFileEventHandler(FileSystemEventHandler):
             if current_time - self._last_reload_time < 1.0:  # ignore within 1 second
                 return
             self._last_reload_time = current_time
+
+        # 0.2.13: apply only while the reload window is open. The file is writable from dev,
+        # so a change arriving here is not necessarily the operator's.
+        window = getattr(self.orchestrator, "reload_window", None)
+        if window is not None and not window.is_open():
+            log_system_event(
+                "Configuration file modified but not applied",
+                reason="reload window closed",
+                reload=window.describe(),
+            )
+            self.orchestrator.note_unapplied_change()
+            return
 
         log_system_event("Configuration file modified, reloading...")
 
@@ -535,6 +622,13 @@ class SecurityGatewayOrchestrator:
         if self.config.proxy.enabled:
             self.proxy_monitor = ProxyMonitor(db_path=self.config.database_path)
 
+        # 0.2.13: whether a save is applied (see ReloadWindow)
+        self.reload_window = ReloadWindow(
+            "windowed" if self.config.reload_is_windowed() else self.config.reload,
+            self.config.reload_window_seconds(),
+        )
+        self._unapplied_changes = 0
+
         # File watcher that reloads automatically when config.yml changes
         self.config_observer: Observer | None = None  # type: ignore[valid-type]
         # Task checking that the relay is listening (only when git-relay is configured)
@@ -811,6 +905,17 @@ class SecurityGatewayOrchestrator:
         self.ip_manager.cleanup()
 
         log_system_event("Cleanup complete")
+
+    def note_unapplied_change(self) -> None:
+        """Record that config.yml changed while the window was closed.
+
+        The count is what `check` reports; the audit line is written by the caller. A change
+        nobody applied is still worth seeing — it is how an attempt to widen the rules shows up.
+        """
+        self._unapplied_changes += 1
+
+    def has_unapplied_changes(self) -> bool:
+        return self._unapplied_changes > 0
 
     async def reload_config(self) -> bool:
         """Reload the configuration file and apply the differences, without downtime.

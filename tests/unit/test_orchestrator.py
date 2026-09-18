@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from src.orchestrator import SecurityGatewayOrchestrator
+from src.orchestrator import ReloadWindow, SecurityGatewayOrchestrator
 
 
 def describe_security_gateway_orchestrator():
@@ -1298,3 +1298,101 @@ database_path: /tmp/test.db
         assert "pypi.org" in served
         # and it is denied outright, so a wildcard in the allowlist cannot serve it either
         assert "github.com" in relayed
+
+
+def describe_reload_window():
+    """0.2.13: config.yml is writable from dev and the gateway applied it on save, so an
+    agent that has read a hostile prompt could rewrite the rules it is held by. The window
+    decides whether a save takes effect."""
+
+    def auto_applies_on_save_as_before():
+        w = ReloadWindow("auto", None)
+        assert w.is_open() is True
+        assert w.seconds_left() is None
+
+    def manual_never_applies_on_save():
+        w = ReloadWindow("manual", None)
+        assert w.is_open() is False
+
+    def a_window_is_open_at_first_and_shuts_when_it_runs_out():
+        w = ReloadWindow("windowed", 1800)
+        assert w.is_open() is True
+        assert 0 < (w.seconds_left() or 0) <= 1800
+        # A window whose length has already elapsed is shut, which is the state a session
+        # reaches by leaving the gateway running.
+        assert ReloadWindow("windowed", 0).is_open() is False
+
+    def freeze_shuts_it_whatever_the_mode():
+        # What the operator runs before handing the session to an agent.
+        for mode, secs in (("auto", None), ("windowed", 1800)):
+            w = ReloadWindow(mode, secs)
+            assert w.is_open() is True
+            w.freeze()
+            assert w.is_open() is False
+
+    def follow_reopens_it():
+        w = ReloadWindow("manual", None)
+        assert w.is_open() is False
+        w.follow(600)
+        assert w.is_open() is True
+        assert 0 < (w.seconds_left() or 0) <= 600
+
+    def follow_lifts_a_freeze():
+        w = ReloadWindow("windowed", 1800)
+        w.freeze()
+        assert w.is_open() is False
+        w.follow(600)
+        assert w.is_open() is True
+
+    def the_description_says_whether_a_save_applies():
+        # Read by a human deciding whether it is safe to start an agent, so it has to say
+        # what happens, not just name the mode.
+        assert "applies on save" in ReloadWindow("auto", None).describe()
+        assert "does not apply on save" in ReloadWindow("manual", None).describe()
+        assert "does not apply on save" in ReloadWindow("windowed", 0).describe()
+        assert "applies on save" in ReloadWindow("windowed", 1800).describe()
+        w = ReloadWindow("auto", None)
+        w.freeze()
+        assert "does not apply on save" in w.describe()
+        # and how to get it back
+        assert "--follow" in w.describe()
+
+
+def describe_a_change_arriving_with_the_window_shut():
+    """Not applying it is half the job; the attempt has to be visible."""
+
+    @patch("subprocess.run")
+    def it_is_counted_rather_than_applied(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - example.com
+reload: manual
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        assert orch.reload_window.is_open() is False
+        assert orch.has_unapplied_changes() is False
+        orch.note_unapplied_change()
+        assert orch.has_unapplied_changes() is True
+
+    @patch("subprocess.run")
+    def the_window_follows_the_configured_mode(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        for mode, expected in (("auto", True), ("manual", False), ("30m", True)):
+            config_file = tmp_path / f"config-{mode}.yml"
+            config_file.write_text(f"""
+allow_domains:
+  - example.com
+reload: {mode}
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+            assert orch.reload_window.is_open() is expected, mode
