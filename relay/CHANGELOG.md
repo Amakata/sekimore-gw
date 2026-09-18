@@ -2,6 +2,12 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.12 (2026-09-18)
+
+- Squid served the domains the relay owns. It resolves through Docker's DNS, never sees the DNS filter's answers, and served `github.com` to anyone setting `https_proxy=<gateway>:3128` — the real upstream, with none of the project's policy. Open whenever `proxy.enabled` is true
+- `github`, `https-relay` and `deny` domains are now withheld from Squid's allowlist, wildcards covering them included, on startup, reload and restart. `splice` stays: going out directly is what it is for
+- Dropping a handler does not hand its domain back to Squid until the gateway restarts, because that is when the relay actually stops owning it
+
 ## 0.2.11 (2026-09-17)
 
 - `cli/agent.rs` (948 lines) split into `cli/agent/`: the clap tree, the dispatch, the printing and the HTTP client. Each part now knows one thing — printing knows nothing about endpoints, the client nothing about subcommands

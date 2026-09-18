@@ -2,6 +2,12 @@
 
 *[English](CHANGELOG.md)*
 
+## 0.2.12（2026-09-18）
+
+- Squid が関所の持つドメインを通していた。Squid は Docker 内蔵 DNS で自ら名前解決するので DNS フィルタの応答を見ず、`https_proxy=<関所>:3128` を指定したクライアントに `github.com` をそのまま通していた。案件のポリシーを一切通さずに実上流へ到達できる。`proxy.enabled` が true のとき、つまり既定で成立する
+- `github` / `https-relay` / `deny` のドメインを Squid の allowlist から除外するようにした。対象を覆うワイルドカードも同時に。起動・reload・restart の 3 経路すべて。`splice` は直接出ることが目的なので残す
+- handler を消しても、関所が実際に手を離す再起動までは Squid に戻さない
+
 ## 0.2.11（2026-09-17）
 
 - `cli/agent.rs`（948 行）を `cli/agent/` に分割した。clap の定義、dispatch、表示、HTTP クライアント。それぞれが 1 つのことだけを知る形になり、表示はエンドポイントを知らず、クライアントはサブコマンドを知らない

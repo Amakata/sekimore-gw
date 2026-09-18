@@ -1218,3 +1218,81 @@ def describe_relay_settings_change_detection():
         assert _relay_settings_changed(a, Config(network={"allowed_ports": [80, 443]})) is False
         assert _relay_settings_changed(a, b) is True
         assert _allowed_ports_of(object()) == []
+
+
+def describe_squid_never_serves_a_relayed_domain():
+    """Squid resolves names through Docker's DNS, bypassing the DNS filter, and reaches
+    anything in its allowlist. A domain the relay owns must therefore be withheld from it,
+    or `https_proxy=gw:3128` becomes a way around the relay's policy."""
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def the_startup_config_excludes_it(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+  - api.github.com
+  - pypi.org
+domain_handlers:
+  github.com:
+    handler: github
+proxy:
+  enabled: true
+  cache_enabled: false
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        assert orch.config.proxy_allow_domains() == ["api.github.com", "pypi.org"]
+        assert "github.com" in orch.config.allow_domains
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def the_reloaded_config_excludes_it(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+  - pypi.org
+domain_handlers:
+  github.com:
+    handler: github
+proxy:
+  enabled: true
+  cache_enabled: false
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.dns_server.allowed_domains = ["github.com", "pypi.org"]
+        orch.dns_server.blocked_domains = set()
+        orch.firewall.remove_domain = Mock()
+        orch.proxy_manager = Mock()
+        orch.proxy_manager.generate_config = Mock(return_value=True)
+        orch.proxy_manager.reload_config = Mock(return_value=True)
+
+        # Dropping the handler must not hand github.com back to Squid: domain_handlers
+        # changes need a restart, so the relay is still running with the old set.
+        config_file.write_text("""
+allow_domains:
+  - github.com
+  - pypi.org
+proxy:
+  enabled: true
+  cache_enabled: false
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        assert await orch.reload_config() is True
+        served = orch.proxy_manager.generate_config.call_args[0][0]
+        assert "github.com" not in served
+        assert "pypi.org" in served

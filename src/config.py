@@ -274,6 +274,41 @@ class Config(BaseModel):
         """Domains for which DNS answers with the relay IP (git-relay + https-relay)."""
         return self.git_relay_domains() + self.https_relay_domains()
 
+    def proxy_denied_domains(self) -> list[str]:
+        """Domains Squid must not serve, because another component decides for them.
+
+        The DNS filter answers with the relay IP for github / https-relay and with NXDOMAIN
+        for deny, but Squid resolves names itself through Docker's DNS (127.0.0.11) and so
+        never sees those answers. Left in Squid's allowlist, a domain the relay owns stays
+        reachable by pointing a client at the proxy explicitly, which skips the relay's
+        policy entirely. `splice` is not included: it is meant to go out directly.
+        """
+        return [
+            d
+            for d, h in self.domain_handlers.items()
+            if h.handler in ("github", "https-relay", "deny")
+        ]
+
+    def proxy_allow_domains(self) -> list[str]:
+        """`allow_domains` minus the domains another component owns. What Squid may serve.
+
+        A wildcard entry is dropped too when it covers a relayed domain: Squid reads both
+        `.github.com` and `*.github.com` as "github.com and everything under it", so leaving
+        one in would keep serving the exact name the relay is supposed to own.
+        """
+        denied = set(self.proxy_denied_domains())
+        kept = []
+        for entry in self.allow_domains:
+            name = entry.lower().rstrip(".")
+            suffix = name[2:] if name.startswith("*.") else name.lstrip(".")
+            is_wildcard = name.startswith(("*.", "."))
+            if name in denied:
+                continue
+            if is_wildcard and any(d == suffix or d.endswith("." + suffix) for d in denied):
+                continue
+            kept.append(entry)
+        return kept
+
     def has_git_relay(self) -> bool:
         return bool(self.git_relay_domains())
 

@@ -55,6 +55,11 @@ block_ips:
 # (the device flow, the GitHub API), through a corporate proxy. Set it only where one is required.
 # A proxy that does not answer makes `sekimore-relay login` time out, which reads like the upstream
 # being unreachable. It is read only while `enabled` is true.
+#
+# A domain listed under `domain_handlers` as github / https-relay / deny is withheld from Squid's
+# allowlist automatically, wildcards covering it included. Squid resolves names through Docker's
+# DNS and so never sees the DNS filter's answers; served here, a relayed domain would stay
+# reachable through `https_proxy=<gateway>:3128` and skip the relay's policy.
 proxy:
   enabled: true                           # run Squid (not: enable upstream proxying — see above)
   port: 3128                              # Proxy port
