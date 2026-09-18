@@ -2,6 +2,14 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.12 (2026-09-18)
+
+- Squid served the domains the relay owns. It resolves through Docker's DNS, never sees the DNS filter's answers, and served `github.com` to anyone setting `https_proxy=<gateway>:3128` — the real upstream, with none of the project's policy. Open whenever `proxy.enabled` is true
+- The generated squid.conf now denies the `github`, `https-relay` and `deny` domains ahead of the allowlist. The deny names each domain exactly, so `.github.com` keeps serving api.github.com and codeload.github.com — neither is the relay's, and taking the wildcard out would break fetching source tarballs
+- Applied on startup, reload and restart; a reload denies the old and the new handler sets both, since the relay keeps the old one until a restart. With no handlers the file is byte-identical to before
+- Separately: a name listed beside a wildcard that contains it (`deb.debian.org` and `.debian.org`) is a FATAL error to Squid, not a warning, so the proxy would not start at all. The redundant entry is now left out of the generated ACL
+- The squid.conf template is bind-mounted by each deployment, not baked into the image, so upgrading the gateway leaves an older one in place. The deny rule is now inserted into a template that predates it; one too unfamiliar to place it in fails the generation instead
+
 ## 0.2.11 (2026-09-17)
 
 - `cli/agent.rs` (948 lines) split into `cli/agent/`: the clap tree, the dispatch, the printing and the HTTP client. Each part now knows one thing — printing knows nothing about endpoints, the client nothing about subcommands

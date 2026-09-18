@@ -274,6 +274,34 @@ class Config(BaseModel):
         """Domains for which DNS answers with the relay IP (git-relay + https-relay)."""
         return self.git_relay_domains() + self.https_relay_domains()
 
+    def proxy_denied_domains(self) -> list[str]:
+        """Domains Squid must not serve, because another component decides for them.
+
+        The DNS filter answers with the relay IP for github / https-relay and with NXDOMAIN
+        for deny, but Squid resolves names itself through Docker's DNS (127.0.0.11) and so
+        never sees those answers. Left in Squid's allowlist, a domain the relay owns stays
+        reachable by pointing a client at the proxy explicitly, which skips the relay's
+        policy entirely. `splice` is not included: it is meant to go out directly.
+        """
+        return [
+            d
+            for d, h in self.domain_handlers.items()
+            if h.handler in ("github", "https-relay", "deny")
+        ]
+
+    def proxy_allow_domains(self) -> list[str]:
+        """`allow_domains` minus the exact names another component owns.
+
+        Only exact matches are removed. A wildcard stays: `.github.com` is how
+        api.github.com and codeload.github.com are usually allowed, and neither is the
+        relay's to own. The wildcard would still cover github.com itself, so the generated
+        Squid config denies the relayed names explicitly ahead of the allow rule
+        (`ProxyManager._generate_relayed_denial`). Removing the exact entries here as well
+        keeps the allowlist honest about what it is for.
+        """
+        denied = set(self.proxy_denied_domains())
+        return [d for d in self.allow_domains if d.lower().rstrip(".") not in denied]
+
     def has_git_relay(self) -> bool:
         return bool(self.git_relay_domains())
 

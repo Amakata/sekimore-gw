@@ -486,3 +486,62 @@ def describe_https_relay_handler():
         # https-relay without a git-relay is a configuration error
         with pytest.raises(ValidationError, match="needs at least one git-relay"):
             Config(domain_handlers={"ghcr.io": {"handler": "https-relay"}})
+
+
+def describe_proxy_allowlist_excludes_relayed_domains():
+    """Squid resolves names itself through Docker's DNS, so it never sees the DNS filter's
+    answers. A relayed domain left in its allowlist stays reachable by pointing a client at
+    the proxy (`https_proxy=gw:3128`), which skips the relay's policy entirely."""
+
+    def a_relayed_domain_is_removed():
+        cfg = Config(
+            allow_domains=["github.com", "api.github.com", "deb.debian.org"],
+            domain_handlers={"github.com": {"handler": "git-relay"}},
+        )
+        assert cfg.proxy_denied_domains() == ["github.com"]
+        assert cfg.proxy_allow_domains() == ["api.github.com", "deb.debian.org"]
+
+    def https_relay_and_deny_are_removed_too():
+        cfg = Config(
+            allow_domains=["github.com", "ghcr.io", "evil.example.com", "pypi.org"],
+            domain_handlers={
+                "github.com": {"handler": "git-relay"},
+                "ghcr.io": {"handler": "https-relay"},
+                "evil.example.com": {"handler": "deny"},
+            },
+        )
+        assert cfg.proxy_allow_domains() == ["pypi.org"]
+
+    def splice_stays_because_it_is_meant_to_go_out_directly():
+        cfg = Config(
+            allow_domains=["example.com", "github.com"],
+            domain_handlers={
+                "example.com": {"handler": "splice"},
+                "github.com": {"handler": "git-relay"},
+            },
+        )
+        assert cfg.proxy_allow_domains() == ["example.com"]
+
+    def a_wildcard_covering_a_relayed_domain_stays():
+        # `.github.com` is how api.github.com and codeload.github.com are usually allowed, and
+        # neither is the relay's to own. Dropping the wildcard would take them out with it, so
+        # the generated Squid config denies the exact name ahead of the allow rule instead —
+        # see the proxy_manager tests.
+        for wildcard in (".github.com", "*.github.com"):
+            cfg = Config(
+                allow_domains=[wildcard, "api.github.com", "pypi.org"],
+                domain_handlers={"github.com": {"handler": "git-relay"}},
+            )
+            assert cfg.proxy_allow_domains() == [wildcard, "api.github.com", "pypi.org"]
+
+    def without_handlers_the_allowlist_is_unchanged():
+        domains = ["github.com", ".debian.org", "pypi.org"]
+        cfg = Config(allow_domains=domains)
+        assert cfg.proxy_allow_domains() == domains
+
+    def a_trailing_dot_or_upper_case_still_matches():
+        cfg = Config(
+            allow_domains=["GitHub.com.", "pypi.org"],
+            domain_handlers={"github.com": {"handler": "git-relay"}},
+        )
+        assert cfg.proxy_allow_domains() == ["pypi.org"]

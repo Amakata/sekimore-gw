@@ -708,7 +708,9 @@ class SecurityGatewayOrchestrator:
 
         # 6. Configure the Squid proxy, when enabled
         if self.proxy_manager:
-            if not self.proxy_manager.generate_config(self.config.allow_domains):
+            if not self.proxy_manager.generate_config(
+                self.config.proxy_allow_domains(), self.config.proxy_denied_domains()
+            ):
                 log_error(ComponentType.ORCHESTRATOR, "Failed to generate Squid config")
                 # Carry on if the proxy config fails; DNS and the firewall still work
             else:
@@ -867,7 +869,15 @@ class SecurityGatewayOrchestrator:
 
             # Update the Squid proxy configuration, when enabled
             if self.proxy_manager:
-                if not self.proxy_manager.generate_config(new_config.allow_domains):
+                # domain_handlers changes need a restart, so the relay may still be running with
+                # the old set. Take both: a domain either side relays must not be served here.
+                denied = sorted(
+                    set(self.config.proxy_denied_domains()) | set(new_config.proxy_denied_domains())
+                )
+                allowed = [
+                    d for d in new_config.allow_domains if d.lower().rstrip(".") not in set(denied)
+                ]
+                if not self.proxy_manager.generate_config(allowed, denied):
                     log_error(ComponentType.ORCHESTRATOR, "Failed to regenerate Squid config")
                     return False
                 if not self.proxy_manager.reload_config():
@@ -936,7 +946,9 @@ class SecurityGatewayOrchestrator:
 
             # 6. Restart the proxy, when enabled
             if self.proxy_manager:
-                if not self.proxy_manager.generate_config(self.config.allow_domains):
+                if not self.proxy_manager.generate_config(
+                    self.config.proxy_allow_domains(), self.config.proxy_denied_domains()
+                ):
                     log_error(ComponentType.ORCHESTRATOR, "Failed to regenerate Squid config")
                     return False
                 if not self.proxy_manager.start():

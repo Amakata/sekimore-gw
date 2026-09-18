@@ -299,3 +299,173 @@ def describe_proxy_manager():
         result = pm.generate_config(domains)
 
         assert result is False
+
+
+def describe_relayed_domains_are_denied_before_the_allowlist():
+    """Squid resolves names through Docker's DNS and never sees the DNS filter's answers,
+    so a domain the relay owns must be refused here or `https_proxy=<gateway>:3128` reaches
+    the real upstream with none of the project's policy applied."""
+
+    template = Path("config/squid/squid.conf.template")
+
+    def _generate(tmp_path, allowed, relayed):
+        out = tmp_path / "squid.conf"
+        pm = ProxyManager(
+            config_template_path=str(template),
+            config_output_path=str(out),
+            cache_enabled=False,
+        )
+        assert pm.generate_config(allowed, relayed) is True
+        return out.read_text()
+
+    def the_deny_rule_precedes_the_allow_rule(tmp_path):
+        content = _generate(tmp_path, ["pypi.org"], ["github.com"])
+        assert "acl relayed_domains dstdomain github.com" in content
+        # Order is the whole point: Squid takes the first matching http_access line.
+        assert content.index("http_access deny relayed_domains") < content.index(
+            "http_access allow allowed_domains"
+        )
+
+    def a_wildcard_keeps_serving_the_subdomains(tmp_path):
+        # `.github.com` covers github.com too, which is why the exact name needs its own deny.
+        # api. and codeload. are not the relay's, and the wildcard must keep serving them —
+        # they need no ACL line of their own, and Squid would reject one beside the wildcard.
+        content = _generate(tmp_path, [".github.com", "codeload.github.com"], ["github.com"])
+        assert "acl allowed_domains dstdomain .github.com" in content
+        assert "acl relayed_domains dstdomain github.com" in content
+        # Only github.com is refused; the wildcard covering its subdomains is untouched.
+        assert "acl relayed_domains dstdomain codeload.github.com" not in content
+
+    def only_the_relayed_name_is_refused_when_listed_alongside_siblings(tmp_path):
+        # The shape the live config actually has: siblings listed one by one, no wildcard.
+        content = _generate(
+            tmp_path,
+            ["codeload.github.com", "api.github.com", "pypi.org"],
+            ["github.com"],
+        )
+        for kept in ("codeload.github.com", "api.github.com", "pypi.org"):
+            assert f"acl allowed_domains dstdomain {kept}" in content
+        assert "acl relayed_domains dstdomain github.com" in content
+
+    def nothing_relayed_leaves_the_file_as_it_was(tmp_path):
+        # An existing deployment without domain_handlers must get the same file as before.
+        with_none = _generate(tmp_path / "a", ["pypi.org"], [])
+        assert "relayed_domains" not in with_none
+        assert "http_access allow allowed_domains" in with_none
+
+    def the_default_argument_relays_nothing(tmp_path):
+        out = tmp_path / "squid.conf"
+        pm = ProxyManager(
+            config_template_path=str(template),
+            config_output_path=str(out),
+            cache_enabled=False,
+        )
+        assert pm.generate_config(["pypi.org"]) is True
+        assert "relayed_domains" not in out.read_text()
+
+    def every_relayed_domain_gets_an_entry(tmp_path):
+        content = _generate(tmp_path, ["pypi.org"], ["github.com", "ghcr.io", "evil.example.com"])
+        for d in ("github.com", "ghcr.io", "evil.example.com"):
+            assert f"acl relayed_domains dstdomain {d}" in content
+
+
+def describe_redundant_allowlist_entries_are_dropped():
+    """Squid treats a name listed beside a wildcard that contains it as a FATAL config error,
+    not a warning, so `deb.debian.org` next to `.debian.org` stops the proxy from starting.
+    The allowlist is hand-edited and that pairing is a natural thing to write."""
+
+    def _acls(domains):
+        pm = ProxyManager(cache_enabled=False)
+        return [line.split()[-1] for line in pm._generate_domain_acls(domains).splitlines()]
+
+    def a_subdomain_of_a_listed_wildcard_is_dropped():
+        assert _acls(["deb.debian.org", ".debian.org"]) == [".debian.org"]
+
+    def the_order_they_are_written_in_does_not_matter():
+        assert _acls([".debian.org", "deb.debian.org"]) == [".debian.org"]
+
+    def a_wildcard_also_covers_the_bare_name():
+        # Squid reads `.x.com` as x.com and everything under it, so the pair is fatal too.
+        assert _acls(["x.com", "*.x.com"]) == [".x.com"]
+        assert _acls(["*.x.com", "x.com"]) == [".x.com"]
+
+    def several_subdomains_collapse_into_the_one_wildcard():
+        assert _acls(
+            ["production.cloudflare.docker.com", "download.docker.com", ".docker.com"]
+        ) == [".docker.com"]
+
+    def a_deeper_subdomain_is_covered_as_well():
+        assert _acls(["a.b.example.com", ".example.com"]) == [".example.com"]
+
+    def siblings_and_unrelated_names_are_kept():
+        assert _acls(["github.com", "api.github.com"]) == ["github.com", "api.github.com"]
+        assert _acls(["pypi.org", ".pythonhosted.org"]) == ["pypi.org", ".pythonhosted.org"]
+
+    def an_exact_duplicate_appears_once():
+        assert _acls(["dup.com", "dup.com"]) == ["dup.com"]
+
+
+def describe_an_outdated_template_still_gets_the_deny_rule():
+    """The template is bind-mounted by each deployment, so upgrading the gateway image does
+    not upgrade it. Without a backfill, str.format would discard the deny rule with no error
+    and the generated config would serve exactly what the relay owns."""
+
+    old_template = """# Squid Proxy Configuration
+acl CONNECT method CONNECT
+
+# Allowed domains (dynamically generated)
+{ALLOWED_DOMAINS_ACL}
+
+http_access deny manager
+
+# Allow whitelisted domains
+http_access allow allowed_domains
+
+# Deny all other access
+http_access deny all
+
+{CACHE_CONFIG}
+{UPSTREAM_PROXY_CONFIG}
+dns_nameservers {DNS_NAMESERVERS}
+"""
+
+    def _generate(tmp_path, template, relayed):
+        tpl = tmp_path / "squid.conf.template"
+        tpl.write_text(template)
+        out = tmp_path / "squid.conf"
+        pm = ProxyManager(
+            config_template_path=str(tpl),
+            config_output_path=str(out),
+            cache_enabled=False,
+        )
+        ok = pm.generate_config(["pypi.org", ".github.com"], relayed)
+        return ok, (out.read_text() if out.exists() else "")
+
+    def the_rule_is_inserted_before_the_allow(tmp_path):
+        ok, content = _generate(tmp_path, old_template, ["github.com"])
+        assert ok is True
+        assert "acl relayed_domains dstdomain github.com" in content
+        assert content.index("http_access deny relayed_domains") < content.index(
+            "http_access allow allowed_domains"
+        )
+        # and the ACL is defined before the rule that uses it
+        assert content.index("acl relayed_domains") < content.index(
+            "http_access deny relayed_domains"
+        )
+
+    def an_up_to_date_template_is_left_alone(tmp_path):
+        current = Path("config/squid/squid.conf.template").read_text()
+        ok, content = _generate(tmp_path, current, ["github.com"])
+        assert ok is True
+        assert content.count("http_access deny relayed_domains") == 1
+
+    def nothing_is_inserted_when_nothing_is_relayed(tmp_path):
+        ok, content = _generate(tmp_path, old_template, [])
+        assert ok is True
+        assert "relayed_domains" not in content
+
+    def an_unrecognisable_template_fails_instead_of_writing_a_leaky_config(tmp_path):
+        # Better to leave Squid on its previous config than to serve the relayed domains.
+        broken = "{ALLOWED_DOMAINS_ACL}\n{CACHE_CONFIG}\n{UPSTREAM_PROXY_CONFIG}\n{DNS_NAMESERVERS}"
+        ok, _ = _generate(tmp_path, broken, ["github.com"])
+        assert ok is False

@@ -45,11 +45,18 @@ class ProxyManager:
         self.upstream_proxy_username = upstream_proxy_username
         self.upstream_proxy_password = upstream_proxy_password
 
-    def generate_config(self, allowed_domains: list[str]) -> bool:
+    def generate_config(
+        self, allowed_domains: list[str], relayed_domains: list[str] | None = None
+    ) -> bool:
         """Generate the Squid configuration file.
 
         Args:
             allowed_domains: Domain allowlist
+            relayed_domains: Domains another component owns (the relay's github / https-relay,
+                and deny). Squid resolves through Docker's DNS and never sees the DNS filter's
+                answers, so these get an explicit deny placed before the allow rule. Denying
+                rather than dropping them from the allowlist keeps a wildcard like
+                `.github.com` serving api. and codeload. while withholding github.com itself
 
         Returns:
             True on success
@@ -69,19 +76,38 @@ class ProxyManager:
             # Build the allowlist ACLs
             domain_acls = self._generate_domain_acls(allowed_domains)
 
+            # ... and the deny that has to precede them
+            relayed_acls, relayed_rule = self._generate_relayed_denial(relayed_domains or [])
+
             # Cache settings
             cache_config = self._generate_cache_config()
 
             # Upstream proxy settings
             upstream_config = self._generate_upstream_proxy_config()
 
+            # The template is bind-mounted from the deployment, not baked into the image, so a
+            # gateway can run new code against a template that predates the relayed-domain
+            # placeholders. str.format would drop the deny rule silently and leave the relay
+            # reachable through the proxy, so put it in ourselves when the template lacks it.
+            template = self._ensure_relay_placeholders(template)
+
             # Fill in the template
             config = template.format(
                 ALLOWED_DOMAINS_ACL=domain_acls,
+                RELAYED_DOMAINS_ACL=relayed_acls,
+                RELAYED_DOMAINS_RULE=relayed_rule,
                 CACHE_CONFIG=cache_config,
                 UPSTREAM_PROXY_CONFIG=upstream_config,
                 DNS_NAMESERVERS=self.upstream_dns,
             )
+
+            # Belt and braces: never write a config that serves what the relay owns.
+            if relayed_domains and "http_access deny relayed_domains" not in config:
+                log_error(
+                    ComponentType.PROXY,
+                    "Squid config would not refuse the relayed domains; refusing to write it",
+                )
+                return False
 
             # Write out the config file
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,8 +129,47 @@ class ProxyManager:
             )
             return False
 
+    @staticmethod
+    def _ensure_relay_placeholders(template: str) -> str:
+        """Add the relayed-domain placeholders to a template written before they existed.
+
+        The template is bind-mounted by each deployment (see docker-compose.yml), so upgrading
+        the gateway image does not upgrade it. Without this, `str.format` would quietly discard
+        the deny rule and the generated config would serve the domains the relay owns — the
+        failure is silent and reopens the hole the rule exists to close.
+
+        A template that already carries the placeholders is returned untouched.
+        """
+        if "{RELAYED_DOMAINS_RULE}" in template:
+            return template
+
+        allow_rule = "http_access allow allowed_domains"
+        if allow_rule not in template:
+            # Not a shape we recognise. generate_config's check below catches this.
+            log_error(
+                ComponentType.PROXY,
+                "Squid template has neither the relayed-domain placeholders nor the expected "
+                "allow rule; cannot place the deny rule",
+            )
+            return template
+
+        log_system_event(
+            "Squid template predates the relayed-domain rule; inserting it",
+        )
+        template = template.replace(allow_rule, "{RELAYED_DOMAINS_RULE}\n\n" + allow_rule, 1)
+        # The ACL definitions have to precede the rule that uses them.
+        return template.replace(
+            "{ALLOWED_DOMAINS_ACL}", "{ALLOWED_DOMAINS_ACL}\n{RELAYED_DOMAINS_ACL}", 1
+        )
+
     def _generate_domain_acls(self, domains: list[str]) -> str:
         """Build the domain ACLs.
+
+        Entries a wildcard already covers are left out. Squid treats a name listed beside a
+        wildcard that contains it as a fatal configuration error, not a warning, so writing
+        both `deb.debian.org` and `.debian.org` stops the proxy from starting at all. The
+        allowlist is hand-edited and that pairing is a natural thing to write, so drop the
+        redundant one here rather than refuse the config.
 
         Args:
             domains: Domain allowlist
@@ -112,18 +177,57 @@ class ProxyManager:
         Returns:
             ACL configuration snippet
         """
-        acl_lines = []
+        # `*.example.com` and `.example.com` are the same thing to Squid
+        normalized = [(d, d[1:] if d.startswith("*.") else d) for d in domains]
+        # A wildcard covers the bare name too: `.x.com` and `x.com` together are also fatal.
+        covered = {n.lstrip(".") for _, n in normalized if n.startswith(".")}
 
-        # Define one ACL entry per domain
-        for domain in domains:
-            if domain.startswith("*."):
-                # Wildcard: *.example.com -> .example.com
-                acl_lines.append(f"acl allowed_domains dstdomain {domain[1:]}")
-            else:
-                # Plain domain
-                acl_lines.append(f"acl allowed_domains dstdomain {domain}")
+        acl_lines = []
+        seen: set[str] = set()
+        for original, name in normalized:
+            if name in seen:
+                continue
+            if not name.startswith("."):
+                parent: str | None = name
+                while parent:
+                    if parent in covered:
+                        log_system_event(
+                            "Squid ACL: domain omitted, a wildcard already covers it",
+                            domain=original,
+                            covered_by=f".{parent}",
+                        )
+                        break
+                    parent = parent.partition(".")[2]
+                else:
+                    seen.add(name)
+                    acl_lines.append(f"acl allowed_domains dstdomain {name}")
+                continue
+            seen.add(name)
+            acl_lines.append(f"acl allowed_domains dstdomain {name}")
 
         return "\n".join(acl_lines)
+
+    def _generate_relayed_denial(self, relayed_domains: list[str]) -> tuple[str, str]:
+        """Build the ACL and the access rule that withhold the relayed domains.
+
+        Returns a (acl, rule) pair; both are empty when nothing is relayed, leaving the
+        generated file byte-identical to what it was before this existed.
+
+        `dstdomain github.com` matches that exact name only, so a wildcard entry in the
+        allowlist keeps working for everything under it. That matters: `.github.com` is how
+        api.github.com and codeload.github.com are usually allowed, and they are not the
+        relay's to own.
+        """
+        if not relayed_domains:
+            return "", ""
+        acl = "\n".join(f"acl relayed_domains dstdomain {d}" for d in sorted(relayed_domains))
+        rule = (
+            "# Domains the relay owns. Squid must not serve them: it resolves through Docker's\n"
+            "# DNS and never sees the DNS filter, so serving one here would reach the real\n"
+            "# upstream with none of the project's policy applied\n"
+            "http_access deny relayed_domains"
+        )
+        return acl, rule
 
     def _generate_cache_config(self) -> str:
         """Build the cache configuration.
