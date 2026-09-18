@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from src.dns_server import DNSCache, DNSCacheEntry
+from src.dns_server import DNSCache, DNSCacheEntry, domain_matches
 
 
 def describe_dns_cache():
@@ -1368,3 +1368,60 @@ def describe_domain_handlers_backward_compat():
         assert legacy.firewall_manager.setup_domain.call_count == 3
         await legacy.mapping.db.close()
         await empty.mapping.db.close()
+
+
+def describe_domain_matching_stops_at_label_boundaries():
+    """A wildcard covers a name and what is under it, not anything whose text happens to end
+    the same way. `.github.com` matching `evilgithub.com` would hand out an allow for a name
+    anyone can register."""
+
+    def a_wildcard_covers_the_name_and_its_subdomains():
+        for d in ("github.com", "sub.github.com", "a.b.github.com"):
+            assert domain_matches(d, [".github.com"]) is True, d
+
+    def a_wildcard_does_not_cover_a_name_that_merely_ends_the_same():
+        for d in (
+            "evilgithub.com",
+            "attacker-github.com",
+            "xgithub.com",
+            "my-github.com",
+        ):
+            assert domain_matches(d, [".github.com"]) is False, d
+
+    def the_star_form_reads_the_same_way():
+        assert domain_matches("sub.test.org", ["*.test.org"]) is True
+        assert domain_matches("test.org", ["*.test.org"]) is True
+        assert domain_matches("eviltest.org", ["*.test.org"]) is False
+
+    def a_star_without_a_dot_is_taken_as_the_exact_name():
+        # Reading `*github.io` as "anything ending in github.io" would allow evilgithub.io.
+        assert domain_matches("github.io", ["*github.io"]) is True
+        assert domain_matches("evilgithub.io", ["*github.io"]) is False
+        assert domain_matches("mysite.github.io", ["*github.io"]) is False
+
+    def an_exact_entry_stays_exact():
+        assert domain_matches("github.com", ["github.com"]) is True
+        assert domain_matches("sub.github.com", ["github.com"]) is False
+        assert domain_matches("notgithub.com", ["github.com"]) is False
+
+    def case_and_a_trailing_dot_do_not_change_the_answer():
+        assert domain_matches("GitHub.COM", ["github.com"]) is True
+        assert domain_matches("github.com.", [".github.com"]) is True
+        assert domain_matches("github.com", ["  .GitHub.com  "]) is True
+
+    def an_empty_entry_matches_nothing():
+        # Otherwise a stray blank line in the config would allow everything.
+        assert domain_matches("anything.com", ["", "   "]) is False
+
+    def the_allow_block_and_ignore_lists_read_an_entry_the_same_way():
+        # They used to share a copy of the comparison rather than the comparison itself.
+        from src.dns_server import DNSServer
+
+        d = DNSServer.__new__(DNSServer)
+        d.allowed_domains = [".github.com"]
+        d.blocked_domains = {".github.com"}
+        d.ignored_domains = [".github.com"]
+        for name, expected in (("sub.github.com", True), ("evilgithub.com", False)):
+            assert d._is_allowed(name) is expected, name
+            assert d._is_blocked(name) is expected, name
+            assert d._is_ignored(name) is expected, name

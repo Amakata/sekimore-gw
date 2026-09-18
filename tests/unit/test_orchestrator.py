@@ -499,10 +499,17 @@ def describe_security_gateway_orchestrator():
         # Wildcard match *.example.com
         assert orch._match_allowed_domain("subdomain.example.com") is True
         assert orch._match_allowed_domain("deep.subdomain.example.com") is True
+        assert orch._match_allowed_domain("example.com") is True
 
-        # Wildcard match *github.io
-        assert orch._match_allowed_domain("mysite.github.io") is True
+        # A wildcard matches on label boundaries, so a name that merely ends with the same
+        # letters is not covered. `evilexample.com` is a name anyone can register.
+        assert orch._match_allowed_domain("evilexample.com") is False
+        assert orch._match_allowed_domain("attacker-example.com") is False
+
+        # `*github.io` has no dot after the star, so it reads as the exact name github.io.
+        # Taking it as "anything ending in github.io" would allow evilgithub.io.
         assert orch._match_allowed_domain("github.io") is True
+        assert orch._match_allowed_domain("evilgithub.io") is False
 
     @patch("subprocess.run")
     def it_checks_domain_case_insensitivity(mock_run, tmp_path, sample_config_data):
@@ -1454,3 +1461,75 @@ def describe_the_window_survives_a_restart():
         state = tmp_path / "absent.json"
         assert ReloadWindow("auto", None, state).is_open() is True
         assert ReloadWindow("manual", None, state).is_open() is False
+
+
+def describe_a_relayed_domain_stays_out_of_the_allow_ipset():
+    """DNS answers with the gateway's address for these and deliberately skips setup_domain,
+    so the upstream's real address never reaches the ipset. Seeding it at startup would undo
+    that: the agent reaches the address directly and the relay never sees the connection."""
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def apply_domain_rule_refuses_one(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+  - pypi.org
+domain_handlers:
+  github.com:
+    handler: github
+relay:
+  project:
+    name: t
+    repos: []
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.firewall.setup_domain = Mock(return_value=True)
+        orch.dns_server._resolve_domain = AsyncMock(return_value=(["140.82.112.3"], 60))
+
+        assert await orch.apply_domain_rule("github.com", action="allow") is True
+        orch.firewall.setup_domain.assert_not_called()
+
+        # and an ordinary domain still goes through
+        assert await orch.apply_domain_rule("pypi.org", action="allow") is True
+        orch.firewall.setup_domain.assert_called_once()
+
+    @patch("subprocess.run")
+    def the_live_config_has_no_relayed_domain_in_its_startup_set(mock_run, tmp_path):
+        # The shape that made this reachable: a handler added for a domain that was already
+        # in allow_domains, which every https-relay entry is.
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+  - ghcr.io
+  - pypi.org
+domain_handlers:
+  github.com:
+    handler: github
+  ghcr.io:
+    handler: https-relay
+relay:
+  project:
+    name: t
+    repos: []
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        relayed = {d.lower().rstrip(".") for d in orch.config.relay_domains()}
+        seeded = [
+            d
+            for d in orch.config.allow_domains
+            if not d.startswith(".") and d.lower().rstrip(".") not in relayed
+        ]
+        assert seeded == ["pypi.org"]

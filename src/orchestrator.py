@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import fnmatch
 import ipaddress
 import json
 import os
@@ -16,7 +15,7 @@ from watchdog.observers import Observer
 
 from . import constants
 from .config import load_config
-from .dns_server import DNSServer
+from .dns_server import DNSServer, domain_matches
 from .firewall import FirewallManager
 from .firewall_monitor import FirewallMonitor
 from .ip_manager import StaticIPManager
@@ -731,36 +730,14 @@ class SecurityGatewayOrchestrator:
             self.config_observer.schedule(event_handler, str(config_dir), recursive=False)
 
     def _match_allowed_domain(self, domain: str) -> bool:
-        """Check whether a domain is on the allow list.
+        """Whether a domain is on the allow list.
 
-        Args:
-            domain: The domain to check
-
-        Returns:
-            True when it is allowed
+        Defers to the DNS server's matcher. This used to be a third implementation, with its
+        own reading of a wildcard — it accepted `*.x` where DNS did not, and rejected what
+        DNS accepted. Nothing called it, so the disagreement was invisible; the next caller
+        would have inherited it.
         """
-        domain_lower = domain.lower().rstrip(".")
-
-        for allowed in self.config.allow_domains:
-            # Exact match
-            if allowed == domain_lower:
-                return True
-
-            # Wildcard match
-            if allowed.startswith("*."):
-                suffix = allowed[2:]
-                if domain_lower.endswith(suffix):
-                    return True
-            elif allowed.startswith("*"):
-                suffix = allowed[1:]
-                if domain_lower.endswith(suffix):
-                    return True
-
-            # fnmatch, for more flexible patterns
-            if fnmatch.fnmatch(domain_lower, allowed):
-                return True
-
-        return False
+        return domain_matches(domain, self.config.allow_domains)
 
     async def apply_domain_rule(self, domain: str, action: str = "allow") -> bool:
         """Apply a single domain rule across all three layers.
@@ -776,6 +753,14 @@ class SecurityGatewayOrchestrator:
             # Add it to the block list
             self.dns_server.blocked_domains.add(domain)
             log_system_event("Domain blocked", domain=domain)
+            return True
+
+        # A domain the relay answers for keeps its real address out of the allow ipset,
+        # whichever path got here. Reachable by address, it would bypass the relay entirely.
+        if domain.lower().rstrip(".") in {
+            d.lower().rstrip(".") for d in self.config.relay_domains()
+        }:
+            log_system_event("Domain rule refused: the relay answers for it", domain=domain)
             return True
 
         # Allowed domain
@@ -876,13 +861,25 @@ class SecurityGatewayOrchestrator:
             return False
 
         # 4. Apply the rules for allowed domains (only those not starting with ".")
+        relayed = {d.lower().rstrip(".") for d in self.config.relay_domains()}
         for domain in self.config.allow_domains:
             # Wildcards starting with "." are skipped at startup and handled
             # dynamically when a DNS query arrives
-            if not domain.startswith("."):
-                log_system_event(f"Applying domain rule for: {domain}")
-                await self.apply_domain_rule(domain, action="allow")
-                log_system_event(f"Domain rule applied successfully: {domain}")
+            if domain.startswith("."):
+                continue
+            # A domain the relay answers for must not have its real address in the allow
+            # ipset. DNS hands out the gateway's address for these and deliberately skips
+            # setup_domain; seeding the upstream's address here would undo that, and the
+            # agent could reach it by address and miss the relay altogether.
+            if domain.lower().rstrip(".") in relayed:
+                log_system_event(
+                    "Domain rule skipped: the relay answers for it",
+                    domain=domain,
+                )
+                continue
+            log_system_event(f"Applying domain rule for: {domain}")
+            await self.apply_domain_rule(domain, action="allow")
+            log_system_event(f"Domain rule applied successfully: {domain}")
 
         # 5. Enable block logging once every ACCEPT rule is in place, so the LOG rule
         # lands last and only blocked packets get logged
