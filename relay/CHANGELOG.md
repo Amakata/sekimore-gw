@@ -14,7 +14,7 @@
 - An unnamed TLS connection took the default upload cap, so omitting the SNI was a way to ask for whichever cap was loosest. It now takes the tightest of them
 - truncate() cut a byte at a time into a str: an upstream error body echoes what the agent sent, so a Japanese label name was enough to panic the task
 - Two messages that sent people the wrong way: operator commands now say they run inside the gateway, since an agent told to run `sekimore-relay keyscan` ran it in dev and got an unrelated cause; and a login timing out against a proxy inside a docker bridge subnet is now named at start-up
-- An ipset was named after the domain truncated to 31 characters, so two domains agreeing on their first 25 shared one set — and it is destroyed and recreated on every resolution, so each dropped the other's addresses. A wildcard entry creates subdomains as they resolve, so both need not be in the config
+- Two things the config quietly built wrong: a misspelled `domain_handlers` key was ignored, and the ones worth misspelling loosen (`max_uploads_bytes` read as no cap); and an ipset named from the domain cut to 31 characters was shared by any two agreeing on their first 25
 - Also: a missing `merged` field read as true and gated deleting the branch; `repo vocabulary` answered "no labels" when the read had failed; an idle timeout recorded zero bytes sent; SSH session channels were never released; glob_match backtracked exponentially over a ref name the agent chooses
 
 ## 0.2.12 (2026-09-18)
