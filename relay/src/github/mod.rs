@@ -934,7 +934,10 @@ impl GitHub {
                 Some(payload),
             )
             .await?;
-        let merged = out.get("merged").and_then(Value::as_bool).unwrap_or(true);
+        // false when the field is missing or not a bool: it gates the branch deletion below,
+        // and a branch left standing after a merge is recoverable where a branch deleted
+        // without one is not.
+        let merged = out.get("merged").and_then(Value::as_bool).unwrap_or(false);
         let mut res = MergeResult {
             merged,
             sha: str_at(&out, "sha"),
@@ -1390,40 +1393,44 @@ impl GitHub {
         let n = limit.clamp(1, 100);
         let repo = auth.repo();
         // Three independent reads; a failure on one should not lose the others
-        let labels: Value = self
-            .rest("GET", &format!("/repos/{repo}/labels?per_page={n}"), None)
-            .await
-            .unwrap_or(Value::Array(vec![]));
-        let assignees: Value = self
-            .rest(
+        let labels = self
+            .rest::<Value>("GET", &format!("/repos/{repo}/labels?per_page={n}"), None)
+            .await;
+        let assignees = self
+            .rest::<Value>(
                 "GET",
                 &format!("/repos/{repo}/assignees?per_page={n}"),
                 None,
             )
-            .await
-            .unwrap_or(Value::Array(vec![]));
-        let milestones: Value = self
-            .rest(
+            .await;
+        let milestones = self
+            .rest::<Value>(
                 "GET",
                 &format!("/repos/{repo}/milestones?state=open&per_page={n}"),
                 None,
             )
-            .await
-            .unwrap_or(Value::Array(vec![]));
-        let names = |v: &Value, key: &str| -> Vec<String> {
-            v.as_array()
-                .map(|a| {
-                    a.iter()
+            .await;
+        // A failed read reports the failure rather than an empty list. This command exists so
+        // an agent can reuse the labels a repository already has; told there are none, it
+        // creates new ones, and GitHub accepts an unknown label name silently — the very
+        // mistake the command is here to prevent.
+        let field = |r: Result<Value, GhError>, key: &str| -> Value {
+            match r {
+                Ok(v) => json!(v
+                    .as_array()
+                    .map(|a| a
+                        .iter()
                         .filter_map(|x| x.get(key).and_then(Value::as_str))
                         .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default()
+                        .collect::<Vec<_>>())
+                    .unwrap_or_default()),
+                Err(e) => json!({ "error": e.to_string() }),
+            }
         };
         Ok(json!({
-            "labels": names(&labels, "name"),
-            "assignees": names(&assignees, "login"),
-            "milestones": names(&milestones, "title"),
+            "labels": field(labels, "name"),
+            "assignees": field(assignees, "login"),
+            "milestones": field(milestones, "title"),
         }))
     }
 

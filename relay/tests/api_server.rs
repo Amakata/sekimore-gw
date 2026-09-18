@@ -222,7 +222,7 @@ async fn pr_create_reaches_mock_with_required_headers() {
 async fn missing_upstream_token_is_503_not_a_crash() {
     let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, false).await;
     let r = ApiRequest {
-        head: "h".into(),
+        head: "sekimore/topic".into(),
         base: "main".into(),
         title: "t".into(),
         ..req("LibOrg/awesome-lib")
@@ -1937,4 +1937,64 @@ async fn deleting_the_merged_branch_needs_the_operator_to_allow_it() {
     let rec = recorded(&f.recorder);
     assert_eq!(rec.len(), 1, "only the merge itself");
     assert_eq!(rec[0].method, "PUT");
+}
+
+/// A pull request's head is meant to be a branch that arrived through the relay — pushed to
+/// `refs/for/<base>`, or to a branch `push` allows. GitHub also reads `owner:branch` as a
+/// fork, which would put code the relay never saw onto a pull request against a repository
+/// in the project; with `pr:merge` granted, it reaches main.
+#[tokio::test]
+async fn a_pull_request_cannot_be_opened_from_a_fork() {
+    let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;
+    for head in [
+        "attacker/fork:payload",
+        "attacker/fork:sekimore/topic", // the branch name alone is not enough
+        "OtherOrg:sekimore/topic",
+    ] {
+        let mut r = req("LibOrg/awesome-lib");
+        r.head = head.into();
+        r.base = "main".into();
+        r.title = "t".into();
+        let (code, resp) = post(f.addr, "/pr/create", Some(&f.token), &r).await;
+        assert_eq!(code, 403, "{head}");
+        assert!(resp.error.unwrap_or_default().contains("head"), "{head}");
+    }
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "nothing must reach upstream"
+    );
+}
+
+#[tokio::test]
+async fn a_pull_request_head_has_to_be_a_branch_the_project_may_push_to() {
+    let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;
+    // Outside the sekimore/* namespace: the relay never put it there.
+    for head in ["main", "develop", "feature/theirs"] {
+        let mut r = req("LibOrg/awesome-lib");
+        r.head = head.into();
+        r.base = "main".into();
+        r.title = "t".into();
+        let (code, _) = post(f.addr, "/pr/create", Some(&f.token), &r).await;
+        assert_eq!(code, 403, "{head}");
+    }
+    assert!(recorded(&f.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn the_ordinary_head_still_works() {
+    // The check must not break the flow it exists to protect: push to sekimore/<topic>, then
+    // open the PR from it.
+    let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;
+    for head in [
+        "sekimore/topic",
+        "sekimore/main-abcdef1",
+        "LibOrg:sekimore/topic",
+    ] {
+        let mut r = req("LibOrg/awesome-lib");
+        r.head = head.into();
+        r.base = "main".into();
+        r.title = "t".into();
+        let (code, _) = post(f.addr, "/pr/create", Some(&f.token), &r).await;
+        assert_eq!(code, 200, "{head}");
+    }
 }

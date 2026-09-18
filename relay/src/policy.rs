@@ -269,23 +269,71 @@ impl RepoPolicy {
     pub fn allows_push(&self, branch: &str) -> bool {
         self.push.iter().any(|g| glob_match(g, branch))
     }
+    /// Whether a pull request may be opened from `head`.
+    ///
+    /// The model is that a PR's head arrived through the relay: pushed to `refs/for/<base>`,
+    /// or to a branch `push` allows. GitHub's `head` also accepts `owner:branch`, which names
+    /// a fork — code the relay never saw, on a pull request against a repository in the
+    /// project. So a cross-owner head is refused outright, and the branch has to satisfy the
+    /// same globs a direct push would.
+    pub fn allows_head(&self, head: &str) -> bool {
+        match head.split_once(':') {
+            Some((owner, branch)) => {
+                let same_owner = self
+                    .full_name
+                    .split_once('/')
+                    .is_some_and(|(o, _)| o.eq_ignore_ascii_case(owner));
+                same_owner && self.allows_push(branch)
+            }
+            None => self.allows_push(head),
+        }
+    }
     pub fn can_write(&self) -> bool {
         self.mode == Mode::ReadWrite
     }
 }
 
 /// Minimal glob: `*` matches any sequence, `/` included, and `?` matches one character. Everything else is literal.
+///
+/// Iterative, remembering one backtrack point. The recursive form took exponential time on a
+/// pattern with several `*`, and while the patterns come from config, the text is a ref name
+/// the agent chooses — so an operator writing `*a*b*c*` would be handing out a way to stall
+/// receive-pack.
 pub fn glob_match(pattern: &str, text: &str) -> bool {
-    fn rec(p: &[u8], t: &[u8]) -> bool {
-        match (p.first(), t.first()) {
-            (None, None) => true,
-            (Some(b'*'), _) => rec(&p[1..], t) || (!t.is_empty() && rec(p, &t[1..])),
-            (Some(b'?'), Some(_)) => rec(&p[1..], &t[1..]),
-            (Some(a), Some(b)) if a == b => rec(&p[1..], &t[1..]),
-            _ => false,
+    let (p, t) = (pattern.as_bytes(), text.as_bytes());
+    let (mut pi, mut ti) = (0usize, 0usize);
+    // Where to resume if the current `*` turns out to have matched too little.
+    let (mut star, mut resume) = (None, 0usize);
+    while ti < t.len() {
+        match p.get(pi) {
+            Some(b'*') => {
+                star = Some(pi);
+                pi += 1;
+                resume = ti;
+            }
+            Some(b'?') => {
+                pi += 1;
+                ti += 1;
+            }
+            Some(c) if *c == t[ti] => {
+                pi += 1;
+                ti += 1;
+            }
+            _ => match star {
+                // Let the last `*` swallow one more character and try again.
+                Some(s) => {
+                    pi = s + 1;
+                    resume += 1;
+                    ti = resume;
+                }
+                None => return false,
+            },
         }
     }
-    rec(pattern.as_bytes(), text.as_bytes())
+    while p.get(pi) == Some(&b'*') {
+        pi += 1;
+    }
+    pi == p.len()
 }
 
 /// The unit of isolation: a project.
@@ -304,24 +352,45 @@ pub struct Project {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Denied {
     /// Repository is not part of the project
-    RepoNotInProject { repo: String, project: String },
+    RepoNotInProject {
+        repo: String,
+        project: String,
+    },
     /// Write to a read-only repository
-    RepoReadOnly { repo: String, project: String },
+    RepoReadOnly {
+        repo: String,
+        project: String,
+    },
     /// Base branch is not allowed
-    BaseNotAllowed { branch: String },
+    BaseNotAllowed {
+        branch: String,
+    },
+    HeadNotAllowed {
+        branch: String,
+    },
     /// Operation is not allowed by policy (denied by default)
     NotPermitted {
         resource: &'static str,
         action: &'static str,
     },
     /// Anything other than git-upload-pack / git-receive-pack
-    UnsupportedCommand { cmdline: String },
+    UnsupportedCommand {
+        cmdline: String,
+    },
     /// Ref rejected by the namespace or branch restrictions
-    RefNotAllowed { name: String, reason: &'static str },
+    RefNotAllowed {
+        name: String,
+        reason: &'static str,
+    },
     /// Deletion is denied by default
-    DeleteNotAllowed { name: String },
+    DeleteNotAllowed {
+        name: String,
+    },
     /// Not a valid ref name
-    InvalidRef { name: String, reason: &'static str },
+    InvalidRef {
+        name: String,
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for Denied {
@@ -334,6 +403,10 @@ impl fmt::Display for Denied {
                 write!(f, "{repo} is read-only in project {project}")
             }
             Denied::BaseNotAllowed { branch } => write!(f, "base branch {branch} is not allowed"),
+            Denied::HeadNotAllowed { branch } => write!(
+                f,
+                "head {branch} is not allowed: a pull request has to come from a branch this project may push to (repos[].push, default sekimore/*), in this repository"
+            ),
             Denied::NotPermitted { resource, action } => {
                 write!(f, "{resource}:{action} is not allowed by policy")
             }
@@ -361,6 +434,7 @@ impl Denied {
             Denied::RepoNotInProject { .. } => "repo_not_in_project",
             Denied::RepoReadOnly { .. } => "repo_read_only",
             Denied::BaseNotAllowed { .. } => "base_not_allowed",
+            Denied::HeadNotAllowed { .. } => "head_not_allowed",
             Denied::NotPermitted { .. } => "not_permitted",
             Denied::UnsupportedCommand { .. } => "unsupported_command",
             Denied::RefNotAllowed { .. } => "ref_not_allowed",
@@ -715,6 +789,27 @@ impl Project {
         if !auth.repo.allows_base(base) {
             return Err(Denied::BaseNotAllowed {
                 branch: base.to_string(),
+            });
+        }
+        Ok(auth)
+    }
+
+    /// `authorize_pr`, also checking where the pull request's head comes from.
+    ///
+    /// The git path does not need this: it rewrites `refs/for/<base>` into a `sekimore/*`
+    /// branch itself, so the head is known. The API path takes `head` from the agent, and
+    /// without a check it accepts `owner:branch` — a fork, holding code that never passed
+    /// through the relay.
+    pub fn authorize_pr_from(
+        &self,
+        repo: &str,
+        head: &str,
+        base: &str,
+    ) -> Result<Authorized<'_>, Denied> {
+        let auth = self.authorize_pr(repo, base)?;
+        if !auth.repo.allows_head(head) {
+            return Err(Denied::HeadNotAllowed {
+                branch: head.to_string(),
             });
         }
         Ok(auth)
@@ -1156,5 +1251,48 @@ mod tests {
             assert!(all_permission_keys().contains(&k.to_string()), "{k}");
         }
         assert!(all_permission_keys().contains(&"release:create".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod glob_tests {
+    use super::glob_match;
+
+    #[test]
+    fn it_matches_the_patterns_the_config_actually_uses() {
+        assert!(glob_match("sekimore/*", "sekimore/topic"));
+        assert!(glob_match("sekimore/*", "sekimore/main-abcdef1"));
+        // `*` crosses `/` on purpose: sekimore/<base>-<sha> can contain one.
+        assert!(glob_match("sekimore/*", "sekimore/release/v1-abcdef1"));
+        assert!(!glob_match("sekimore/*", "main"));
+        assert!(!glob_match("sekimore/*", "other/topic"));
+        assert!(glob_match("v*", "v0.2.13"));
+        assert!(glob_match("v*.*.*", "v0.2.13"));
+        assert!(!glob_match("v*", "0.2.13"));
+    }
+
+    #[test]
+    fn the_edges_behave() {
+        assert!(glob_match("", ""));
+        assert!(!glob_match("", "x"));
+        assert!(glob_match("*", ""));
+        assert!(glob_match("***", "anything"));
+        assert!(glob_match("a?c", "abc"));
+        assert!(!glob_match("a?c", "ac"));
+        assert!(glob_match("*x", "x"));
+        assert!(glob_match("x*", "x"));
+        assert!(!glob_match("a*b", "ab_"));
+        assert!(glob_match("a*b", "a_b"));
+    }
+
+    /// The recursive form took exponential time here. The text is a ref name, which the agent
+    /// chooses, so this has to stay linear whatever the operator wrote as a pattern.
+    #[test]
+    fn a_pattern_with_many_stars_does_not_blow_up() {
+        let pattern = "*a".repeat(12) + "Z";
+        let text = "a".repeat(200);
+        let t = std::time::Instant::now();
+        assert!(!glob_match(&pattern, &text));
+        assert!(t.elapsed().as_millis() < 100, "{:?}", t.elapsed());
     }
 }

@@ -6,6 +6,7 @@
 //! so it can be read in the clear). Without an SNI, or with no matching upstream, the default upstream is used (same as 0.1.x).
 
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -335,7 +336,10 @@ impl Passthrough {
         // upstream → dev keeps flowing in its own task (aborted, closing the connection, once the cap is hit)
         let down =
             tokio::spawn(async move { copy_touch(ur, cw, &wd_down, true).await.unwrap_or(0) });
-        let up = copy_capped(cr, uw, &wd, cap, already);
+        // Read from outside the future: an idle timeout drops it, and the bytes it had already
+        // forwarded are the record of what left. Zero there would let a pause erase them.
+        let sent_up = AtomicU64::new(0);
+        let up = copy_capped(cr, uw, &wd, cap, already, &sent_up);
         tokio::select! {
             (sent, capped) = up => {
                 if capped {
@@ -350,7 +354,7 @@ impl Passthrough {
             }
             _ = wd.expired() => {
                 down.abort();
-                (0, 0, false)
+                (sent_up.load(Ordering::Relaxed), 0, false)
             }
         }
     }
@@ -364,6 +368,7 @@ async fn copy_capped<R, W>(
     wd: &Watchdog,
     cap: Option<u64>,
     already: u64,
+    seen: &AtomicU64,
 ) -> (u64, bool)
 where
     R: AsyncRead + Unpin,
@@ -371,6 +376,7 @@ where
 {
     let mut buf = vec![0u8; 64 * 1024];
     let mut total = already;
+    seen.store(0, Ordering::Relaxed);
     loop {
         let n = match reader.read(&mut buf).await {
             Ok(0) | Err(_) => break,
@@ -386,6 +392,7 @@ where
             break;
         }
         total += n as u64;
+        seen.store(total - already, Ordering::Relaxed);
         wd.touch();
     }
     let _ = writer.shutdown().await;
