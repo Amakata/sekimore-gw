@@ -5,8 +5,8 @@
 ## 0.2.12 (2026-09-18)
 
 - Squid served the domains the relay owns. It resolves through Docker's DNS, never sees the DNS filter's answers, and served `github.com` to anyone setting `https_proxy=<gateway>:3128` — the real upstream, with none of the project's policy. Open whenever `proxy.enabled` is true
-- `github`, `https-relay` and `deny` domains are now withheld from Squid's allowlist, wildcards covering them included, on startup, reload and restart. `splice` stays: going out directly is what it is for
-- Dropping a handler does not hand its domain back to Squid until the gateway restarts, because that is when the relay actually stops owning it
+- The generated squid.conf now denies the `github`, `https-relay` and `deny` domains ahead of the allowlist. The deny names each domain exactly, so `.github.com` keeps serving api.github.com and codeload.github.com — neither is the relay's, and taking the wildcard out would break fetching source tarballs
+- Applied on startup, reload and restart; a reload denies the old and the new handler sets both, since the relay keeps the old one until a restart. With no handlers the file is byte-identical to before
 
 ## 0.2.11 (2026-09-17)
 

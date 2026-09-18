@@ -299,3 +299,58 @@ def describe_proxy_manager():
         result = pm.generate_config(domains)
 
         assert result is False
+
+
+def describe_relayed_domains_are_denied_before_the_allowlist():
+    """Squid resolves names through Docker's DNS and never sees the DNS filter's answers,
+    so a domain the relay owns must be refused here or `https_proxy=<gateway>:3128` reaches
+    the real upstream with none of the project's policy applied."""
+
+    template = Path("config/squid/squid.conf.template")
+
+    def _generate(tmp_path, allowed, relayed):
+        out = tmp_path / "squid.conf"
+        pm = ProxyManager(
+            config_template_path=str(template),
+            config_output_path=str(out),
+            cache_enabled=False,
+        )
+        assert pm.generate_config(allowed, relayed) is True
+        return out.read_text()
+
+    def the_deny_rule_precedes_the_allow_rule(tmp_path):
+        content = _generate(tmp_path, ["pypi.org"], ["github.com"])
+        assert "acl relayed_domains dstdomain github.com" in content
+        # Order is the whole point: Squid takes the first matching http_access line.
+        assert content.index("http_access deny relayed_domains") < content.index(
+            "http_access allow allowed_domains"
+        )
+
+    def a_wildcard_keeps_serving_the_subdomains(tmp_path):
+        # `.github.com` covers github.com too, which is why the exact name needs its own deny.
+        # api. and codeload. are not the relay's, and must keep working.
+        content = _generate(tmp_path, [".github.com", "codeload.github.com"], ["github.com"])
+        assert "acl allowed_domains dstdomain .github.com" in content
+        assert "acl allowed_domains dstdomain codeload.github.com" in content
+        assert "acl relayed_domains dstdomain github.com" in content
+
+    def nothing_relayed_leaves_the_file_as_it_was(tmp_path):
+        # An existing deployment without domain_handlers must get the same file as before.
+        with_none = _generate(tmp_path / "a", ["pypi.org"], [])
+        assert "relayed_domains" not in with_none
+        assert "http_access allow allowed_domains" in with_none
+
+    def the_default_argument_relays_nothing(tmp_path):
+        out = tmp_path / "squid.conf"
+        pm = ProxyManager(
+            config_template_path=str(template),
+            config_output_path=str(out),
+            cache_enabled=False,
+        )
+        assert pm.generate_config(["pypi.org"]) is True
+        assert "relayed_domains" not in out.read_text()
+
+    def every_relayed_domain_gets_an_entry(tmp_path):
+        content = _generate(tmp_path, ["pypi.org"], ["github.com", "ghcr.io", "evil.example.com"])
+        for d in ("github.com", "ghcr.io", "evil.example.com"):
+            assert f"acl relayed_domains dstdomain {d}" in content

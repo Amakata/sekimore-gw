@@ -522,22 +522,17 @@ def describe_proxy_allowlist_excludes_relayed_domains():
         )
         assert cfg.proxy_allow_domains() == ["example.com"]
 
-    def a_wildcard_covering_a_relayed_domain_is_removed():
-        # Squid reads `.github.com` as "github.com and everything under it", so leaving one in
-        # would keep serving the exact name the relay owns.
+    def a_wildcard_covering_a_relayed_domain_stays():
+        # `.github.com` is how api.github.com and codeload.github.com are usually allowed, and
+        # neither is the relay's to own. Dropping the wildcard would take them out with it, so
+        # the generated Squid config denies the exact name ahead of the allow rule instead —
+        # see the proxy_manager tests.
         for wildcard in (".github.com", "*.github.com"):
             cfg = Config(
                 allow_domains=[wildcard, "api.github.com", "pypi.org"],
                 domain_handlers={"github.com": {"handler": "git-relay"}},
             )
-            assert cfg.proxy_allow_domains() == ["api.github.com", "pypi.org"], wildcard
-
-    def a_wildcard_not_covering_a_relayed_domain_stays():
-        cfg = Config(
-            allow_domains=[".debian.org", ".githubusercontent.com"],
-            domain_handlers={"github.com": {"handler": "git-relay"}},
-        )
-        assert cfg.proxy_allow_domains() == [".debian.org", ".githubusercontent.com"]
+            assert cfg.proxy_allow_domains() == [wildcard, "api.github.com", "pypi.org"]
 
     def without_handlers_the_allowlist_is_unchanged():
         domains = ["github.com", ".debian.org", "pypi.org"]

@@ -290,24 +290,17 @@ class Config(BaseModel):
         ]
 
     def proxy_allow_domains(self) -> list[str]:
-        """`allow_domains` minus the domains another component owns. What Squid may serve.
+        """`allow_domains` minus the exact names another component owns.
 
-        A wildcard entry is dropped too when it covers a relayed domain: Squid reads both
-        `.github.com` and `*.github.com` as "github.com and everything under it", so leaving
-        one in would keep serving the exact name the relay is supposed to own.
+        Only exact matches are removed. A wildcard stays: `.github.com` is how
+        api.github.com and codeload.github.com are usually allowed, and neither is the
+        relay's to own. The wildcard would still cover github.com itself, so the generated
+        Squid config denies the relayed names explicitly ahead of the allow rule
+        (`ProxyManager._generate_relayed_denial`). Removing the exact entries here as well
+        keeps the allowlist honest about what it is for.
         """
         denied = set(self.proxy_denied_domains())
-        kept = []
-        for entry in self.allow_domains:
-            name = entry.lower().rstrip(".")
-            suffix = name[2:] if name.startswith("*.") else name.lstrip(".")
-            is_wildcard = name.startswith(("*.", "."))
-            if name in denied:
-                continue
-            if is_wildcard and any(d == suffix or d.endswith("." + suffix) for d in denied):
-                continue
-            kept.append(entry)
-        return kept
+        return [d for d in self.allow_domains if d.lower().rstrip(".") not in denied]
 
     def has_git_relay(self) -> bool:
         return bool(self.git_relay_domains())

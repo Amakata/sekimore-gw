@@ -1293,6 +1293,8 @@ network:
 database_path: /tmp/test.db
 """)
         assert await orch.reload_config() is True
-        served = orch.proxy_manager.generate_config.call_args[0][0]
+        served, relayed = orch.proxy_manager.generate_config.call_args[0]
         assert "github.com" not in served
         assert "pypi.org" in served
+        # and it is denied outright, so a wildcard in the allowlist cannot serve it either
+        assert "github.com" in relayed

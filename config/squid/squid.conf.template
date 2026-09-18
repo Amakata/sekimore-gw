@@ -11,6 +11,9 @@ acl CONNECT method CONNECT
 # Allowed domains (dynamically generated)
 {ALLOWED_DOMAINS_ACL}
 
+# Domains another component owns (dynamically generated; empty when the relay is not in use)
+{RELAYED_DOMAINS_ACL}
+
 # Deny requests to non-safe ports
 http_access deny !Safe_ports
 http_access deny CONNECT !SSL_ports
@@ -18,6 +21,9 @@ http_access deny CONNECT !SSL_ports
 # Allow localhost
 http_access allow localhost manager
 http_access deny manager
+
+# Refuse the relayed domains before the allowlist is consulted
+{RELAYED_DOMAINS_RULE}
 
 # Allow whitelisted domains
 http_access allow allowed_domains
