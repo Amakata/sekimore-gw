@@ -328,10 +328,23 @@ def describe_relayed_domains_are_denied_before_the_allowlist():
 
     def a_wildcard_keeps_serving_the_subdomains(tmp_path):
         # `.github.com` covers github.com too, which is why the exact name needs its own deny.
-        # api. and codeload. are not the relay's, and must keep working.
+        # api. and codeload. are not the relay's, and the wildcard must keep serving them —
+        # they need no ACL line of their own, and Squid would reject one beside the wildcard.
         content = _generate(tmp_path, [".github.com", "codeload.github.com"], ["github.com"])
         assert "acl allowed_domains dstdomain .github.com" in content
-        assert "acl allowed_domains dstdomain codeload.github.com" in content
+        assert "acl relayed_domains dstdomain github.com" in content
+        # Only github.com is refused; the wildcard covering its subdomains is untouched.
+        assert "acl relayed_domains dstdomain codeload.github.com" not in content
+
+    def only_the_relayed_name_is_refused_when_listed_alongside_siblings(tmp_path):
+        # The shape the live config actually has: siblings listed one by one, no wildcard.
+        content = _generate(
+            tmp_path,
+            ["codeload.github.com", "api.github.com", "pypi.org"],
+            ["github.com"],
+        )
+        for kept in ("codeload.github.com", "api.github.com", "pypi.org"):
+            assert f"acl allowed_domains dstdomain {kept}" in content
         assert "acl relayed_domains dstdomain github.com" in content
 
     def nothing_relayed_leaves_the_file_as_it_was(tmp_path):
@@ -354,3 +367,39 @@ def describe_relayed_domains_are_denied_before_the_allowlist():
         content = _generate(tmp_path, ["pypi.org"], ["github.com", "ghcr.io", "evil.example.com"])
         for d in ("github.com", "ghcr.io", "evil.example.com"):
             assert f"acl relayed_domains dstdomain {d}" in content
+
+
+def describe_redundant_allowlist_entries_are_dropped():
+    """Squid treats a name listed beside a wildcard that contains it as a FATAL config error,
+    not a warning, so `deb.debian.org` next to `.debian.org` stops the proxy from starting.
+    The allowlist is hand-edited and that pairing is a natural thing to write."""
+
+    def _acls(domains):
+        pm = ProxyManager(cache_enabled=False)
+        return [line.split()[-1] for line in pm._generate_domain_acls(domains).splitlines()]
+
+    def a_subdomain_of_a_listed_wildcard_is_dropped():
+        assert _acls(["deb.debian.org", ".debian.org"]) == [".debian.org"]
+
+    def the_order_they_are_written_in_does_not_matter():
+        assert _acls([".debian.org", "deb.debian.org"]) == [".debian.org"]
+
+    def a_wildcard_also_covers_the_bare_name():
+        # Squid reads `.x.com` as x.com and everything under it, so the pair is fatal too.
+        assert _acls(["x.com", "*.x.com"]) == [".x.com"]
+        assert _acls(["*.x.com", "x.com"]) == [".x.com"]
+
+    def several_subdomains_collapse_into_the_one_wildcard():
+        assert _acls(
+            ["production.cloudflare.docker.com", "download.docker.com", ".docker.com"]
+        ) == [".docker.com"]
+
+    def a_deeper_subdomain_is_covered_as_well():
+        assert _acls(["a.b.example.com", ".example.com"]) == [".example.com"]
+
+    def siblings_and_unrelated_names_are_kept():
+        assert _acls(["github.com", "api.github.com"]) == ["github.com", "api.github.com"]
+        assert _acls(["pypi.org", ".pythonhosted.org"]) == ["pypi.org", ".pythonhosted.org"]
+
+    def an_exact_duplicate_appears_once():
+        assert _acls(["dup.com", "dup.com"]) == ["dup.com"]

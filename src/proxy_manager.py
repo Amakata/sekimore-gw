@@ -118,22 +118,45 @@ class ProxyManager:
     def _generate_domain_acls(self, domains: list[str]) -> str:
         """Build the domain ACLs.
 
+        Entries a wildcard already covers are left out. Squid treats a name listed beside a
+        wildcard that contains it as a fatal configuration error, not a warning, so writing
+        both `deb.debian.org` and `.debian.org` stops the proxy from starting at all. The
+        allowlist is hand-edited and that pairing is a natural thing to write, so drop the
+        redundant one here rather than refuse the config.
+
         Args:
             domains: Domain allowlist
 
         Returns:
             ACL configuration snippet
         """
-        acl_lines = []
+        # `*.example.com` and `.example.com` are the same thing to Squid
+        normalized = [(d, d[1:] if d.startswith("*.") else d) for d in domains]
+        # A wildcard covers the bare name too: `.x.com` and `x.com` together are also fatal.
+        covered = {n.lstrip(".") for _, n in normalized if n.startswith(".")}
 
-        # Define one ACL entry per domain
-        for domain in domains:
-            if domain.startswith("*."):
-                # Wildcard: *.example.com -> .example.com
-                acl_lines.append(f"acl allowed_domains dstdomain {domain[1:]}")
-            else:
-                # Plain domain
-                acl_lines.append(f"acl allowed_domains dstdomain {domain}")
+        acl_lines = []
+        seen: set[str] = set()
+        for original, name in normalized:
+            if name in seen:
+                continue
+            if not name.startswith("."):
+                parent: str | None = name
+                while parent:
+                    if parent in covered:
+                        log_system_event(
+                            "Squid ACL: domain omitted, a wildcard already covers it",
+                            domain=original,
+                            covered_by=f".{parent}",
+                        )
+                        break
+                    parent = parent.partition(".")[2]
+                else:
+                    seen.add(name)
+                    acl_lines.append(f"acl allowed_domains dstdomain {name}")
+                continue
+            seen.add(name)
+            acl_lines.append(f"acl allowed_domains dstdomain {name}")
 
         return "\n".join(acl_lines)
 

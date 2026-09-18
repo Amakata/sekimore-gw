@@ -7,6 +7,7 @@
 - Squid が関所の持つドメインを通していた。Squid は Docker 内蔵 DNS で自ら名前解決するので DNS フィルタの応答を見ず、`https_proxy=<関所>:3128` を指定したクライアントに `github.com` をそのまま通していた。案件のポリシーを一切通さずに実上流へ到達できる。`proxy.enabled` が true のとき、つまり既定で成立する
 - 生成する squid.conf で、`github` / `https-relay` / `deny` のドメインを allowlist より前に拒否するようにした。拒否は完全一致なので `.github.com` は残り、api.github.com と codeload.github.com は通る。どちらも関所の管轄ではなく、ワイルドカードごと落とすとソース tarball の取得が壊れる
 - 起動・reload・restart の 3 経路すべてに適用。reload では新旧どちらの handler の分も拒否する（再起動までは旧値で動くため）。handler が無ければ生成されるファイルは従来と完全に同一
+- 別件: ワイルドカードとそれに含まれる名前を並べて書くと（`deb.debian.org` と `.debian.org`）、Squid は警告ではなく FATAL にするため proxy がまったく起動しなかった。冗長な方を ACL から落とすようにした
 
 ## 0.2.11（2026-09-17）
 
