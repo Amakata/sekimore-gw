@@ -1203,7 +1203,7 @@ pub async fn bootstrap(
             "bootstrap is manual",
             &[("peer", peer_ip)],
         );
-        return Err(ApiError { status: StatusCode::NOT_FOUND, message: "bootstrap is disabled (relay.bootstrap: manual); ask the operator to run `sekimore-relay add-key` and `token`".into() });
+        return Err(ApiError { status: StatusCode::NOT_FOUND, message: "bootstrap is disabled (relay.bootstrap: manual); ask the operator to run `docker compose exec sekimore-gw sekimore-relay add-key` and `... token` on the host running docker".into() });
     }
     if ctx.bootstrap_disabled_path.exists() {
         ctx.audit.deny(
