@@ -1,6 +1,8 @@
 """Configuration management - loads and validates config.yml."""
 
+import hashlib
 import ipaddress
+import json
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -190,6 +192,22 @@ def parse_duration(text: str) -> int | None:
     return n * _DURATION_UNITS[text[-1]]
 
 
+def relay_fingerprint(raw: dict[str, Any]) -> str:
+    """sha256 of the `relay` and `domain_handlers` subtrees, taken from the parsed YAML.
+
+    From the raw document rather than the model: the model keeps only the handful of relay
+    keys Python needs, so a change to the project's repositories or permissions leaves it
+    identical. Those are exactly the settings that decide what an agent may reach.
+    """
+    subject = {
+        "relay": raw.get("relay"),
+        "domain_handlers": raw.get("domain_handlers"),
+    }
+    return hashlib.sha256(
+        json.dumps(subject, sort_keys=True, default=str, ensure_ascii=False).encode()
+    ).hexdigest()
+
+
 class Config(BaseModel):
     """AI Security Gateway configuration."""
 
@@ -216,6 +234,16 @@ class Config(BaseModel):
     # Database
     database_path: str = Field(
         default="/data/security_gateway.db", description="Path of the SQLite database"
+    )
+
+    # 0.2.13: a fingerprint of the relay subtree as it was written, not as Python models it.
+    # RelayConfig keeps four keys; everything that decides what an agent may reach —
+    # project.repos, permissions, push, tags, delete, bootstrap, https_max_upload_bytes —
+    # belongs to the Rust binary and is dropped on the way in. Compared through the model,
+    # rewriting the project is indistinguishable from changing nothing, so the reload check
+    # passes it through with no warning and no audit line.
+    relay_fingerprint: str = Field(
+        default="", description="sha256 of the relay / domain_handlers subtree as written"
     )
 
     # 0.2.13: when a change to this file is applied.
@@ -410,12 +438,18 @@ class Config(BaseModel):
         if data is None:
             data = {}
 
-        return cls(**data)
+        # Derived, not written: drop any value that came from the file so a round trip
+        # through to_yaml cannot hand us two.
+        data.pop("relay_fingerprint", None)
+        return cls(**data, relay_fingerprint=relay_fingerprint(data))
 
     def to_yaml(self, path: Path) -> None:
         """Write the configuration to a YAML file."""
+        # relay_fingerprint is computed from the rest, so writing it would put a stale copy
+        # in the file and make the next load disagree with itself.
+        data = self.model_dump(exclude={"relay_fingerprint"})
         with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(self.model_dump(), f, default_flow_style=False, allow_unicode=True)
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
 
 
 def load_config(config_path: Path | None = None) -> Config:

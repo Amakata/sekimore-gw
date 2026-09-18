@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from src.orchestrator import ReloadWindow, SecurityGatewayOrchestrator
+from src.config import Config, relay_fingerprint
+from src.orchestrator import ReloadWindow, SecurityGatewayOrchestrator, _relay_settings_changed
 
 
 def describe_security_gateway_orchestrator():
@@ -1533,3 +1534,162 @@ database_path: /tmp/test.db
             if not d.startswith(".") and d.lower().rstrip(".") not in relayed
         ]
         assert seeded == ["pypi.org"]
+
+
+def describe_rewriting_the_project_is_detected_as_a_change():
+    """RelayConfig models four keys. What decides where an agent may reach — the project's
+    repositories, its permissions, the upload caps — belongs to the Rust binary and is dropped
+    on the way through the model. Compared through it, granting yourself a repository reads as
+    no change, so the reload check passes it with no warning and no audit line."""
+
+    def _cfg(relay):
+        raw = {
+            "allow_domains": ["github.com"],
+            "domain_handlers": {"github.com": {"handler": "github"}},
+            "relay": relay,
+        }
+        return Config(**raw, relay_fingerprint=relay_fingerprint(raw))
+
+    read_only = {
+        "project": {"name": "t", "repos": [{"name": "Org/A", "mode": "read-only", "bases": []}]}
+    }
+
+    def adding_a_repository_counts():
+        after = {
+            "project": {
+                "name": "t",
+                "repos": [
+                    {"name": "Org/A", "mode": "read-only", "bases": []},
+                    {"name": "Attacker/exfil", "mode": "read-write", "bases": ["main"]},
+                ],
+            }
+        }
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def promoting_a_repository_to_read_write_counts():
+        after = {
+            "project": {
+                "name": "t",
+                "repos": [{"name": "Org/A", "mode": "read-write", "bases": ["main"]}],
+            }
+        }
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def granting_a_permission_counts():
+        after = {**read_only, "project": {**read_only["project"], "permissions": ["pr:merge"]}}
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def lifting_the_upload_cap_counts():
+        after = {**read_only, "https_max_upload_bytes": -1}
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def turning_on_automatic_bootstrap_counts():
+        after = {**read_only, "bootstrap": "auto"}
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def allowing_tags_and_deletes_counts():
+        after = {
+            "project": {
+                "name": "t",
+                "repos": [
+                    {
+                        "name": "Org/A",
+                        "mode": "read-only",
+                        "bases": [],
+                        "tags": ["*"],
+                        "delete": True,
+                    }
+                ],
+            }
+        }
+        assert _relay_settings_changed(_cfg(read_only), _cfg(after)) is True
+
+    def an_unchanged_config_is_not_reported_as_changed():
+        # Otherwise every reload claims a restart is needed and the warning stops meaning
+        # anything.
+        assert _relay_settings_changed(_cfg(read_only), _cfg(read_only)) is False
+
+    def a_change_outside_the_relay_does_not_count():
+        a = Config(
+            allow_domains=["github.com"],
+            relay_fingerprint=relay_fingerprint({"allow_domains": ["github.com"]}),
+        )
+        b = Config(
+            allow_domains=["github.com", "pypi.org"],
+            relay_fingerprint=relay_fingerprint({"allow_domains": ["github.com", "pypi.org"]}),
+        )
+        assert _relay_settings_changed(a, b) is False
+
+
+def describe_an_upstream_proxy_inside_our_own_subnet():
+    """Docker picks the bridge subnets and can land on a range the site already uses. A proxy
+    inside that range looks to the container like a neighbour on the same link: it ARPs,
+    nothing answers, the connection times out, and the proxy logs nothing because no packet
+    reached it. The docker host talks to the same address fine. That reads as a firewall
+    problem and sends people to widen allow_ips, which hands the agent a route to the proxy
+    and fixes nothing."""
+
+    def _orch(tmp_path, upstream, iface_line):
+        config_file = tmp_path / "config.yml"
+        config_file.write_text(f"""
+allow_domains:
+  - github.com
+proxy:
+  enabled: true
+  upstream_proxy: {upstream}
+network:
+  lan_subnets: []
+database_path: /tmp/test.db
+""")
+        with patch("subprocess.run") as m:
+            m.return_value = Mock(returncode=0, stdout="", stderr="")
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch._own_subnets = Mock(return_value=iface_line)
+        return orch
+
+    def it_is_reported(tmp_path):
+        orch = _orch(tmp_path, "192.168.0.10:3129", [("eth0", "192.168.0.3/20")])
+        msg = orch._warn_if_upstream_proxy_is_shadowed()
+        assert msg is not None
+        assert "192.168.0.0/20" in msg
+        # and it has to say what will not help, since that is where people go first
+        assert "allow_ips" in msg
+        assert "network.allowed_ports" in msg
+        assert "subnet" in msg
+
+    def a_proxy_outside_our_subnets_is_not_reported(tmp_path):
+        orch = _orch(tmp_path, "10.50.0.10:3129", [("eth0", "192.168.0.3/20")])
+        assert orch._warn_if_upstream_proxy_is_shadowed() is None
+
+    def the_boundaries_of_the_range_are_read_correctly(tmp_path):
+        # /20 from 192.168.0.0 runs to 192.168.15.255. 192.168.16.1 is outside it, and a
+        # check that compared the first two octets would get both of these wrong.
+        inside = _orch(tmp_path, "192.168.15.254:3129", [("eth0", "192.168.0.3/20")])
+        assert inside._warn_if_upstream_proxy_is_shadowed() is not None
+        outside = _orch(tmp_path, "192.168.16.1:3129", [("eth0", "192.168.0.3/20")])
+        assert outside._warn_if_upstream_proxy_is_shadowed() is None
+
+    def no_upstream_proxy_means_nothing_to_say(tmp_path):
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+proxy:
+  enabled: true
+network:
+  lan_subnets: []
+database_path: /tmp/test.db
+""")
+        with patch("subprocess.run") as m:
+            m.return_value = Mock(returncode=0, stdout="", stderr="")
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+        assert orch._warn_if_upstream_proxy_is_shadowed() is None
+
+    def a_name_that_does_not_resolve_is_not_an_error(tmp_path):
+        # The proxy may simply not be up yet; this check is not the place to fail startup.
+        orch = _orch(tmp_path, "proxy.invalid:3129", [("eth0", "192.168.0.3/20")])
+        assert orch._warn_if_upstream_proxy_is_shadowed() is None
+
+    def loopback_is_ignored(tmp_path):
+        orch = _orch(tmp_path, "127.0.0.1:3129", [("eth0", "192.168.0.3/20")])
+        assert orch._warn_if_upstream_proxy_is_shadowed() is None

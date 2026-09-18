@@ -5,6 +5,7 @@ import contextlib
 import ipaddress
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -298,6 +299,10 @@ def _relay_settings_changed(old: object, new: object) -> bool:
         or _relay_ports_of(old) != _relay_ports_of(new)
         or _allowed_ports_of(old) != _allowed_ports_of(new)
         or getattr(old, "relay", None) != getattr(new, "relay", None)
+        # The model keeps four relay keys; the project's repositories, permissions and upload
+        # caps are the Rust binary's and do not survive it. Compared through the model, adding
+        # a repository the agent may write to reads as no change at all.
+        or getattr(old, "relay_fingerprint", "") != getattr(new, "relay_fingerprint", "")
     )
 
 
@@ -831,6 +836,73 @@ class SecurityGatewayOrchestrator:
             )
         return listening
 
+    def _warn_if_upstream_proxy_is_shadowed(self) -> str | None:
+        """Warn when proxy.upstream_proxy sits inside one of our own Docker subnets.
+
+        Docker picks the bridge subnets, and it can land on a range the site already uses —
+        192.168.0.0/20 here. An upstream proxy inside that range then looks to the container
+        like a neighbour on the same link: it ARPs, nothing answers, and the connection times
+        out. Nothing is dropped by a rule, the proxy logs nothing because no packet reaches
+        it, and the docker host can talk to the same address perfectly well.
+
+        That combination reads as a firewall problem and sends people to widen allow_ips or
+        allowed_ports, which hands the agent a route to the proxy and does not fix anything.
+        Returns the warning text, so a caller can show it too.
+        """
+        upstream = getattr(self.config.proxy, "upstream_proxy", None)
+        if not upstream:
+            return None
+        host = str(upstream).rsplit(":", 1)[0].strip("[]")
+        try:
+            addr = ipaddress.ip_address(host)
+        except ValueError:
+            try:
+                addr = ipaddress.ip_address(socket.gethostbyname(host))
+            except (OSError, ValueError):
+                return None
+
+        for iface, cidr in self._own_subnets():
+            try:
+                net = ipaddress.ip_network(cidr, strict=False)
+            except ValueError:
+                continue
+            if addr in net:
+                msg = (
+                    f"proxy.upstream_proxy ({upstream}) resolves to {addr}, which is inside "
+                    f"this container's own {iface} subnet {net}. Connections to it will time "
+                    "out: the address looks like a neighbour on the bridge, so nothing is "
+                    "routed and the proxy never sees a packet. This is not a firewall rule "
+                    "and widening allow_ips or network.allowed_ports will not help — give "
+                    "the docker network a subnet that does not overlap the site's, with "
+                    "`networks.<name>.ipam.config.subnet` in docker-compose.yml."
+                )
+                log_error(ComponentType.ORCHESTRATOR, msg)
+                return msg
+        return None
+
+    def _own_subnets(self) -> list[tuple[str, str]]:
+        """This container's interface subnets, as (interface, cidr)."""
+        out: list[tuple[str, str]] = []
+        try:
+            result = subprocess.run(
+                ["ip", "-o", "-4", "addr", "show"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return out
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 4 or parts[2] != "inet":
+                continue
+            iface, cidr = parts[1], parts[3]
+            if iface == "lo":
+                continue
+            out.append((iface, cidr))
+        return out
+
     async def initialize(self) -> bool:
         """Initialize the security gateway.
 
@@ -838,6 +910,10 @@ class SecurityGatewayOrchestrator:
             True on success
         """
         log_system_event("Initializing Security Gateway...")
+
+        # Before anything else: an upstream proxy inside our own bridge subnet fails in a way
+        # that looks like a firewall problem and is not one.
+        self._warn_if_upstream_proxy_is_shadowed()
 
         # 1. Initialize the firewall
         if not self.firewall.initialize_firewall():
