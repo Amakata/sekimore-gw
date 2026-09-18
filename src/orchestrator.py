@@ -287,12 +287,35 @@ def _allowed_ports_of(config: object) -> list[int]:
     return [p for p in ports if isinstance(p, int) and not isinstance(p, bool)]
 
 
+def _proxy_of(config: object) -> dict[str, object]:
+    """The proxy settings, flattened. ProxyManager is built once at start-up, so every key
+    here is fixed until a restart — including `enabled`, which decides whether there is a
+    Squid to configure at all."""
+    proxy = getattr(config, "proxy", None)
+    if proxy is None:
+        return {}
+    keys = (
+        "enabled",
+        "port",
+        "cache_enabled",
+        "cache_size_mb",
+        "upstream_proxy",
+        "upstream_proxy_tls",
+        "upstream_proxy_username",
+        "upstream_proxy_password",
+    )
+    return {k: getattr(proxy, k, None) for k in keys}
+
+
 def _relay_settings_changed(old: object, new: object) -> bool:
-    """Whether domain_handlers / relay / network.allowed_ports differ, i.e. a restart is needed.
+    """Whether domain_handlers / relay / proxy / network.allowed_ports differ, i.e. a restart is needed.
 
     0.2.0: a changed handler ssh_port (the port opened in INPUT) also needs a restart.
     0.2.2: network.allowed_ports (the FORWARD destination ports) is likewise fixed at
     startup, so it is treated the same way.
+    0.2.14: so is `proxy`. ProxyManager is built once in __init__, so turning proxy.enabled
+    on did nothing until a restart — and nothing said so, which is how an afternoon went
+    into working out why Squid was not running.
     """
     return (
         _domain_handlers_of(old) != _domain_handlers_of(new)
@@ -303,6 +326,7 @@ def _relay_settings_changed(old: object, new: object) -> bool:
         # caps are the Rust binary's and do not survive it. Compared through the model, adding
         # a repository the agent may write to reads as no change at all.
         or getattr(old, "relay_fingerprint", "") != getattr(new, "relay_fingerprint", "")
+        or _proxy_of(old) != _proxy_of(new)
     )
 
 

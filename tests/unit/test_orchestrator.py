@@ -1851,3 +1851,48 @@ database_path: /tmp/test.db
         orch.ip_manager.setup_static_ips.assert_called_once()
         orch.proxy_manager.reload_config.assert_called_once()
         assert "added.example.com" in orch.config.allow_domains
+
+
+def describe_changing_the_proxy_needs_a_restart():
+    """ProxyManager is built once in __init__, so every proxy key is fixed until a restart.
+    Turning proxy.enabled on did nothing and said nothing — which is how an afternoon went
+    into working out why Squid was not running."""
+
+    def _cfg(proxy):
+        raw = {"allow_domains": ["x.com"], "proxy": proxy}
+        return Config(**raw, relay_fingerprint=relay_fingerprint(raw))
+
+    def turning_the_proxy_on_counts():
+        assert _relay_settings_changed(_cfg({"enabled": False}), _cfg({"enabled": True})) is True
+
+    def turning_it_off_counts_too():
+        assert _relay_settings_changed(_cfg({"enabled": True}), _cfg({"enabled": False})) is True
+
+    def changing_the_upstream_proxy_counts():
+        for key, value in (
+            ("upstream_proxy", "proxy.corp.example.com:3128"),
+            ("upstream_proxy_tls", True),
+            ("upstream_proxy_username", "u"),
+            ("cache_size_mb", 500),
+            ("port", 3129),
+        ):
+            before = {"enabled": True}
+            after = {"enabled": True, key: value}
+            assert _relay_settings_changed(_cfg(before), _cfg(after)) is True, key
+
+    def an_unchanged_proxy_is_not_reported():
+        # Otherwise every reload claims a restart is needed and the warning stops meaning
+        # anything.
+        same = {"enabled": True, "cache_size_mb": 1000}
+        assert _relay_settings_changed(_cfg(same), _cfg(same)) is False
+
+    def a_change_elsewhere_does_not_count():
+        a = Config(
+            allow_domains=["x.com"],
+            relay_fingerprint=relay_fingerprint({"allow_domains": ["x.com"]}),
+        )
+        b = Config(
+            allow_domains=["x.com", "y.com"],
+            relay_fingerprint=relay_fingerprint({"allow_domains": ["x.com", "y.com"]}),
+        )
+        assert _relay_settings_changed(a, b) is False
