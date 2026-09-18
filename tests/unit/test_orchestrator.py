@@ -1756,3 +1756,98 @@ database_path: /tmp/test.db
         orch.firewall.remove_domain = Mock()
         orch.ip_manager.setup_static_ips = Mock(return_value=False)
         assert await orch.reload_config() is False
+
+
+def describe_a_refused_reload_changes_nothing():
+    """Generating the Squid config is the step most likely to be refused — Squid has
+    constraints of its own — and the DNS and firewall updates are not undoable. Doing them
+    first left the two halves on different configurations, with the next reload's diff
+    computed from a state that never existed."""
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def the_dns_server_is_untouched_when_squid_refuses(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - example.com
+proxy:
+  enabled: true
+  cache_enabled: false
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.dns_server.allowed_domains = ["example.com"]
+        orch.dns_server.blocked_domains = set()
+        orch.firewall.remove_domain = Mock()
+        orch.ip_manager.setup_static_ips = Mock(return_value=True)
+        orch.proxy_manager = Mock()
+        orch.proxy_manager.generate_config = Mock(return_value=False)  # Squid says no
+        orch.proxy_manager.reload_config = Mock(return_value=True)
+
+        config_file.write_text("""
+allow_domains:
+  - example.com
+  - added.example.com
+proxy:
+  enabled: true
+  cache_enabled: false
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        assert await orch.reload_config() is False
+
+        # Nothing downstream ran, and the gateway is still on the configuration it had.
+        assert orch.dns_server.allowed_domains == ["example.com"]
+        orch.ip_manager.setup_static_ips.assert_not_called()
+        orch.proxy_manager.reload_config.assert_not_called()
+        assert orch.config.allow_domains == ["example.com"]
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def a_reload_that_succeeds_still_applies_everything(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - example.com
+proxy:
+  enabled: true
+  cache_enabled: false
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.dns_server.allowed_domains = ["example.com"]
+        orch.dns_server.blocked_domains = set()
+        orch.firewall.remove_domain = Mock()
+        orch.ip_manager.setup_static_ips = Mock(return_value=True)
+        orch.proxy_manager = Mock()
+        orch.proxy_manager.generate_config = Mock(return_value=True)
+        orch.proxy_manager.reload_config = Mock(return_value=True)
+
+        config_file.write_text("""
+allow_domains:
+  - example.com
+  - added.example.com
+proxy:
+  enabled: true
+  cache_enabled: false
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        assert await orch.reload_config() is True
+        assert "added.example.com" in orch.dns_server.allowed_domains
+        orch.ip_manager.setup_static_ips.assert_called_once()
+        orch.proxy_manager.reload_config.assert_called_once()
+        assert "added.example.com" in orch.config.allow_domains
