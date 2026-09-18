@@ -85,6 +85,12 @@ class ProxyManager:
             # Upstream proxy settings
             upstream_config = self._generate_upstream_proxy_config()
 
+            # The template is bind-mounted from the deployment, not baked into the image, so a
+            # gateway can run new code against a template that predates the relayed-domain
+            # placeholders. str.format would drop the deny rule silently and leave the relay
+            # reachable through the proxy, so put it in ourselves when the template lacks it.
+            template = self._ensure_relay_placeholders(template)
+
             # Fill in the template
             config = template.format(
                 ALLOWED_DOMAINS_ACL=domain_acls,
@@ -94,6 +100,14 @@ class ProxyManager:
                 UPSTREAM_PROXY_CONFIG=upstream_config,
                 DNS_NAMESERVERS=self.upstream_dns,
             )
+
+            # Belt and braces: never write a config that serves what the relay owns.
+            if relayed_domains and "http_access deny relayed_domains" not in config:
+                log_error(
+                    ComponentType.PROXY,
+                    "Squid config would not refuse the relayed domains; refusing to write it",
+                )
+                return False
 
             # Write out the config file
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +128,39 @@ class ProxyManager:
                 f"Failed to generate Squid config: {e}",
             )
             return False
+
+    @staticmethod
+    def _ensure_relay_placeholders(template: str) -> str:
+        """Add the relayed-domain placeholders to a template written before they existed.
+
+        The template is bind-mounted by each deployment (see docker-compose.yml), so upgrading
+        the gateway image does not upgrade it. Without this, `str.format` would quietly discard
+        the deny rule and the generated config would serve the domains the relay owns — the
+        failure is silent and reopens the hole the rule exists to close.
+
+        A template that already carries the placeholders is returned untouched.
+        """
+        if "{RELAYED_DOMAINS_RULE}" in template:
+            return template
+
+        allow_rule = "http_access allow allowed_domains"
+        if allow_rule not in template:
+            # Not a shape we recognise. generate_config's check below catches this.
+            log_error(
+                ComponentType.PROXY,
+                "Squid template has neither the relayed-domain placeholders nor the expected "
+                "allow rule; cannot place the deny rule",
+            )
+            return template
+
+        log_system_event(
+            "Squid template predates the relayed-domain rule; inserting it",
+        )
+        template = template.replace(allow_rule, "{RELAYED_DOMAINS_RULE}\n\n" + allow_rule, 1)
+        # The ACL definitions have to precede the rule that uses them.
+        return template.replace(
+            "{ALLOWED_DOMAINS_ACL}", "{ALLOWED_DOMAINS_ACL}\n{RELAYED_DOMAINS_ACL}", 1
+        )
 
     def _generate_domain_acls(self, domains: list[str]) -> str:
         """Build the domain ACLs.

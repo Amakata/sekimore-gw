@@ -403,3 +403,69 @@ def describe_redundant_allowlist_entries_are_dropped():
 
     def an_exact_duplicate_appears_once():
         assert _acls(["dup.com", "dup.com"]) == ["dup.com"]
+
+
+def describe_an_outdated_template_still_gets_the_deny_rule():
+    """The template is bind-mounted by each deployment, so upgrading the gateway image does
+    not upgrade it. Without a backfill, str.format would discard the deny rule with no error
+    and the generated config would serve exactly what the relay owns."""
+
+    old_template = """# Squid Proxy Configuration
+acl CONNECT method CONNECT
+
+# Allowed domains (dynamically generated)
+{ALLOWED_DOMAINS_ACL}
+
+http_access deny manager
+
+# Allow whitelisted domains
+http_access allow allowed_domains
+
+# Deny all other access
+http_access deny all
+
+{CACHE_CONFIG}
+{UPSTREAM_PROXY_CONFIG}
+dns_nameservers {DNS_NAMESERVERS}
+"""
+
+    def _generate(tmp_path, template, relayed):
+        tpl = tmp_path / "squid.conf.template"
+        tpl.write_text(template)
+        out = tmp_path / "squid.conf"
+        pm = ProxyManager(
+            config_template_path=str(tpl),
+            config_output_path=str(out),
+            cache_enabled=False,
+        )
+        ok = pm.generate_config(["pypi.org", ".github.com"], relayed)
+        return ok, (out.read_text() if out.exists() else "")
+
+    def the_rule_is_inserted_before_the_allow(tmp_path):
+        ok, content = _generate(tmp_path, old_template, ["github.com"])
+        assert ok is True
+        assert "acl relayed_domains dstdomain github.com" in content
+        assert content.index("http_access deny relayed_domains") < content.index(
+            "http_access allow allowed_domains"
+        )
+        # and the ACL is defined before the rule that uses it
+        assert content.index("acl relayed_domains") < content.index(
+            "http_access deny relayed_domains"
+        )
+
+    def an_up_to_date_template_is_left_alone(tmp_path):
+        current = Path("config/squid/squid.conf.template").read_text()
+        ok, content = _generate(tmp_path, current, ["github.com"])
+        assert ok is True
+        assert content.count("http_access deny relayed_domains") == 1
+
+    def nothing_is_inserted_when_nothing_is_relayed(tmp_path):
+        ok, content = _generate(tmp_path, old_template, [])
+        assert ok is True
+        assert "relayed_domains" not in content
+
+    def an_unrecognisable_template_fails_instead_of_writing_a_leaky_config(tmp_path):
+        # Better to leave Squid on its previous config than to serve the relayed domains.
+        broken = "{ALLOWED_DOMAINS_ACL}\n{CACHE_CONFIG}\n{UPSTREAM_PROXY_CONFIG}\n{DNS_NAMESERVERS}"
+        ok, _ = _generate(tmp_path, broken, ["github.com"])
+        assert ok is False
