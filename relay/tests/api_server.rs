@@ -1998,3 +1998,34 @@ async fn the_ordinary_head_still_works() {
         assert_eq!(code, 200, "{head}");
     }
 }
+
+/// `project add-item` takes an issue's node id and nothing handed one out, so an item could
+/// join a board only in the same breath as being created — anything already filed could not
+/// be put on a board at all.
+#[tokio::test]
+async fn a_view_carries_the_node_id_that_add_item_needs() {
+    let f = start_api(
+        project_case_a(&["issue:read", "pr:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+
+    let r = ApiRequest {
+        number: 47,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/view", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let raw = resp.raw.expect("issue view returns the object");
+    assert_eq!(raw["node_id"], "I_kwDO47");
+
+    let r = ApiRequest {
+        number: 7,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/view", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let raw = resp.raw.expect("pr view returns the object");
+    assert_eq!(raw["node_id"], "PR_kwDO7");
+}

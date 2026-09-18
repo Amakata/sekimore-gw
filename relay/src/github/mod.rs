@@ -175,6 +175,9 @@ pub struct IssueResult {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PrView {
     pub number: u64,
+    /// The GraphQL node id. `project add-item` takes one, and nothing else hands it out:
+    /// without this, an item can only join a board in the same breath as being created.
+    pub node_id: String,
     pub title: String,
     pub body: String,
     pub state: String, // open / closed
@@ -195,6 +198,8 @@ pub struct PrView {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct IssueView {
     pub number: u64,
+    /// The GraphQL node id — see `PrView::node_id`.
+    pub node_id: String,
     pub title: String,
     pub body: String,
     pub state: String,
@@ -1608,6 +1613,7 @@ impl GitHub {
             .await?;
         Ok(PrView {
             number: pr.get("number").and_then(Value::as_u64).unwrap_or(number),
+            node_id: str_at(&pr, "node_id"),
             title: str_at(&pr, "title"),
             body: pr
                 .get("body")
@@ -1737,6 +1743,7 @@ impl GitHub {
             .await?;
         Ok(IssueView {
             number: iss.get("number").and_then(Value::as_u64).unwrap_or(number),
+            node_id: str_at(&iss, "node_id"),
             title: str_at(&iss, "title"),
             body: iss
                 .get("body")
