@@ -13,8 +13,8 @@
 - The reload check compared the relay section through a model that keeps four keys, so adding a repository to the project, granting pr:merge or lifting the upload cap all read as no change at all
 - An unnamed TLS connection took the default upload cap, so omitting the SNI was a way to ask for whichever cap was loosest. It now takes the tightest of them
 - truncate() cut a byte at a time into a str: an upstream error body echoes what the agent sent, so a Japanese label name was enough to panic the task
-- Operator commands in error messages now say they run inside the gateway. An agent told to run `sekimore-relay keyscan` ran it in dev, where it read a config that does not exist there and reported a cause unrelated to the real one
-- `sekimore-relay login` timing out against an upstream proxy has a cause that is not a rule in this config: if the proxy's address falls inside a docker bridge subnet, the container never routes to it. Start-up says so, since the natural next step is to widen allow_ips, which does not help
+- Two messages that sent people the wrong way: operator commands now say they run inside the gateway, since an agent told to run `sekimore-relay keyscan` ran it in dev and got an unrelated cause; and a login timing out against a proxy inside a docker bridge subnet is now named at start-up
+- An ipset was named after the domain truncated to 31 characters, so two domains agreeing on their first 25 shared one set — and it is destroyed and recreated on every resolution, so each dropped the other's addresses. A wildcard entry creates subdomains as they resolve, so both need not be in the config
 - Also: a missing `merged` field read as true and gated deleting the branch; `repo vocabulary` answered "no labels" when the read had failed; an idle timeout recorded zero bytes sent; SSH session channels were never released; glob_match backtracked exponentially over a ref name the agent chooses
 
 ## 0.2.12 (2026-09-18)
