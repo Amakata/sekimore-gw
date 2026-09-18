@@ -287,12 +287,35 @@ def _allowed_ports_of(config: object) -> list[int]:
     return [p for p in ports if isinstance(p, int) and not isinstance(p, bool)]
 
 
+def _proxy_of(config: object) -> dict[str, object]:
+    """The proxy settings, flattened. ProxyManager is built once at start-up, so every key
+    here is fixed until a restart — including `enabled`, which decides whether there is a
+    Squid to configure at all."""
+    proxy = getattr(config, "proxy", None)
+    if proxy is None:
+        return {}
+    keys = (
+        "enabled",
+        "port",
+        "cache_enabled",
+        "cache_size_mb",
+        "upstream_proxy",
+        "upstream_proxy_tls",
+        "upstream_proxy_username",
+        "upstream_proxy_password",
+    )
+    return {k: getattr(proxy, k, None) for k in keys}
+
+
 def _relay_settings_changed(old: object, new: object) -> bool:
-    """Whether domain_handlers / relay / network.allowed_ports differ, i.e. a restart is needed.
+    """Whether domain_handlers / relay / proxy / network.allowed_ports differ, i.e. a restart is needed.
 
     0.2.0: a changed handler ssh_port (the port opened in INPUT) also needs a restart.
     0.2.2: network.allowed_ports (the FORWARD destination ports) is likewise fixed at
     startup, so it is treated the same way.
+    0.2.14: so is `proxy`. ProxyManager is built once in __init__, so turning proxy.enabled
+    on did nothing until a restart — and nothing said so, which is how an afternoon went
+    into working out why Squid was not running.
     """
     return (
         _domain_handlers_of(old) != _domain_handlers_of(new)
@@ -303,6 +326,7 @@ def _relay_settings_changed(old: object, new: object) -> bool:
         # caps are the Rust binary's and do not survive it. Compared through the model, adding
         # a repository the agent may write to reads as no change at all.
         or getattr(old, "relay_fingerprint", "") != getattr(new, "relay_fingerprint", "")
+        or _proxy_of(old) != _proxy_of(new)
     )
 
 
@@ -1121,6 +1145,24 @@ class SecurityGatewayOrchestrator:
             added_block_domains = new_block_domains - old_block_domains
             removed_block_domains = old_block_domains - new_block_domains
 
+            # Generate the new Squid configuration before changing anything. It is the step
+            # most likely to be refused — Squid has constraints of its own — and the updates
+            # below are not undoable, so a failure here used to leave DNS and the firewall on
+            # the new config while Squid and self.config stayed on the old one, with the next
+            # reload's diff computed from a state that never existed.
+            if self.proxy_manager:
+                # domain_handlers changes need a restart, so the relay may still be running with
+                # the old set. Take both: a domain either side relays must not be served here.
+                denied = sorted(
+                    set(self.config.proxy_denied_domains()) | set(new_config.proxy_denied_domains())
+                )
+                allowed = [
+                    d for d in new_config.allow_domains if d.lower().rstrip(".") not in set(denied)
+                ]
+                if not self.proxy_manager.generate_config(allowed, denied):
+                    log_error(ComponentType.ORCHESTRATOR, "Failed to regenerate Squid config")
+                    return False
+
             # Update the DNS server
             self.dns_server.allowed_domains = new_config.allow_domains
             self.dns_server.blocked_domains = set(new_config.block_domains)
@@ -1137,22 +1179,20 @@ class SecurityGatewayOrchestrator:
                     # Handled dynamically when a DNS query arrives, so nothing to do here
                     pass
 
-            # Update the Squid proxy configuration, when enabled
-            if self.proxy_manager:
-                # domain_handlers changes need a restart, so the relay may still be running with
-                # the old set. Take both: a domain either side relays must not be served here.
-                denied = sorted(
-                    set(self.config.proxy_denied_domains()) | set(new_config.proxy_denied_domains())
-                )
-                allowed = [
-                    d for d in new_config.allow_domains if d.lower().rstrip(".") not in set(denied)
-                ]
-                if not self.proxy_manager.generate_config(allowed, denied):
-                    log_error(ComponentType.ORCHESTRATOR, "Failed to regenerate Squid config")
-                    return False
-                if not self.proxy_manager.reload_config():
-                    log_error(ComponentType.ORCHESTRATOR, "Failed to reload Squid config")
-                    return False
+            # Re-apply allow_ips / block_ips. These used to be read only at start-up, so
+            # adding an address to block_ips did nothing until the container was restarted —
+            # and nothing said so, which is the wrong way round for a blocklist.
+            if not self.ip_manager.setup_static_ips(
+                allow_ips=new_config.allow_ips,
+                block_ips=new_config.block_ips,
+            ):
+                log_error(ComponentType.ORCHESTRATOR, "Static IP reload failed")
+                return False
+
+            # Tell Squid to read what was written above.
+            if self.proxy_manager and not self.proxy_manager.reload_config():
+                log_error(ComponentType.ORCHESTRATOR, "Failed to reload Squid config")
+                return False
 
             # Swap in the new configuration
             self.config = new_config

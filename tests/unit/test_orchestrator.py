@@ -1693,3 +1693,206 @@ database_path: /tmp/test.db
     def loopback_is_ignored(tmp_path):
         orch = _orch(tmp_path, "127.0.0.1:3129", [("eth0", "192.168.0.3/20")])
         assert orch._warn_if_upstream_proxy_is_shadowed() is None
+
+
+def describe_static_ips_are_re_applied_on_reload():
+    """allow_ips and block_ips were read only at start-up, so adding an address to block_ips
+    did nothing until the container was restarted — and nothing said so. For a blocklist that
+    is the wrong way round: the operator believes the address is blocked."""
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def a_new_block_ip_takes_effect(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - example.com
+block_ips: []
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.dns_server.allowed_domains = ["example.com"]
+        orch.dns_server.blocked_domains = set()
+        orch.firewall.remove_domain = Mock()
+        orch.ip_manager.setup_static_ips = Mock(return_value=True)
+
+        config_file.write_text("""
+allow_domains:
+  - example.com
+block_ips:
+  - 203.0.113.7/32
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        assert await orch.reload_config() is True
+        orch.ip_manager.setup_static_ips.assert_called_once()
+        kwargs = orch.ip_manager.setup_static_ips.call_args.kwargs
+        assert kwargs["block_ips"] == ["203.0.113.7/32"]
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def a_failure_stops_the_reload(mock_run, tmp_path):
+        # Half-applying would leave the firewall and the config disagreeing about what is
+        # blocked, which is worse than refusing the reload.
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - example.com
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.dns_server.allowed_domains = ["example.com"]
+        orch.dns_server.blocked_domains = set()
+        orch.firewall.remove_domain = Mock()
+        orch.ip_manager.setup_static_ips = Mock(return_value=False)
+        assert await orch.reload_config() is False
+
+
+def describe_a_refused_reload_changes_nothing():
+    """Generating the Squid config is the step most likely to be refused — Squid has
+    constraints of its own — and the DNS and firewall updates are not undoable. Doing them
+    first left the two halves on different configurations, with the next reload's diff
+    computed from a state that never existed."""
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def the_dns_server_is_untouched_when_squid_refuses(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - example.com
+proxy:
+  enabled: true
+  cache_enabled: false
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.dns_server.allowed_domains = ["example.com"]
+        orch.dns_server.blocked_domains = set()
+        orch.firewall.remove_domain = Mock()
+        orch.ip_manager.setup_static_ips = Mock(return_value=True)
+        orch.proxy_manager = Mock()
+        orch.proxy_manager.generate_config = Mock(return_value=False)  # Squid says no
+        orch.proxy_manager.reload_config = Mock(return_value=True)
+
+        config_file.write_text("""
+allow_domains:
+  - example.com
+  - added.example.com
+proxy:
+  enabled: true
+  cache_enabled: false
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        assert await orch.reload_config() is False
+
+        # Nothing downstream ran, and the gateway is still on the configuration it had.
+        assert orch.dns_server.allowed_domains == ["example.com"]
+        orch.ip_manager.setup_static_ips.assert_not_called()
+        orch.proxy_manager.reload_config.assert_not_called()
+        assert orch.config.allow_domains == ["example.com"]
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def a_reload_that_succeeds_still_applies_everything(mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - example.com
+proxy:
+  enabled: true
+  cache_enabled: false
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.dns_server.allowed_domains = ["example.com"]
+        orch.dns_server.blocked_domains = set()
+        orch.firewall.remove_domain = Mock()
+        orch.ip_manager.setup_static_ips = Mock(return_value=True)
+        orch.proxy_manager = Mock()
+        orch.proxy_manager.generate_config = Mock(return_value=True)
+        orch.proxy_manager.reload_config = Mock(return_value=True)
+
+        config_file.write_text("""
+allow_domains:
+  - example.com
+  - added.example.com
+proxy:
+  enabled: true
+  cache_enabled: false
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+""")
+        assert await orch.reload_config() is True
+        assert "added.example.com" in orch.dns_server.allowed_domains
+        orch.ip_manager.setup_static_ips.assert_called_once()
+        orch.proxy_manager.reload_config.assert_called_once()
+        assert "added.example.com" in orch.config.allow_domains
+
+
+def describe_changing_the_proxy_needs_a_restart():
+    """ProxyManager is built once in __init__, so every proxy key is fixed until a restart.
+    Turning proxy.enabled on did nothing and said nothing — which is how an afternoon went
+    into working out why Squid was not running."""
+
+    def _cfg(proxy):
+        raw = {"allow_domains": ["x.com"], "proxy": proxy}
+        return Config(**raw, relay_fingerprint=relay_fingerprint(raw))
+
+    def turning_the_proxy_on_counts():
+        assert _relay_settings_changed(_cfg({"enabled": False}), _cfg({"enabled": True})) is True
+
+    def turning_it_off_counts_too():
+        assert _relay_settings_changed(_cfg({"enabled": True}), _cfg({"enabled": False})) is True
+
+    def changing_the_upstream_proxy_counts():
+        for key, value in (
+            ("upstream_proxy", "proxy.corp.example.com:3128"),
+            ("upstream_proxy_tls", True),
+            ("upstream_proxy_username", "u"),
+            ("cache_size_mb", 500),
+            ("port", 3129),
+        ):
+            before = {"enabled": True}
+            after = {"enabled": True, key: value}
+            assert _relay_settings_changed(_cfg(before), _cfg(after)) is True, key
+
+    def an_unchanged_proxy_is_not_reported():
+        # Otherwise every reload claims a restart is needed and the warning stops meaning
+        # anything.
+        same = {"enabled": True, "cache_size_mb": 1000}
+        assert _relay_settings_changed(_cfg(same), _cfg(same)) is False
+
+    def a_change_elsewhere_does_not_count():
+        a = Config(
+            allow_domains=["x.com"],
+            relay_fingerprint=relay_fingerprint({"allow_domains": ["x.com"]}),
+        )
+        b = Config(
+            allow_domains=["x.com", "y.com"],
+            relay_fingerprint=relay_fingerprint({"allow_domains": ["x.com", "y.com"]}),
+        )
+        assert _relay_settings_changed(a, b) is False

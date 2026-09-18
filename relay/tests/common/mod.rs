@@ -197,7 +197,8 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
                 "head": {"ref": "sekimore/topic"}, "base": {"ref": "main"},
                 "user": {"login": "alice"}, "html_url": "https://github.example/pr/7",
                 "comments": 2, "review_comments": 1, "changed_files": 3,
-                "additions": 40, "deletions": 5
+                "additions": 40, "deletions": 5,
+                "node_id": "PR_kwDO7"
             }),
         );
     }
@@ -209,6 +210,7 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
                 "number": 8, "title": "Really a PR", "body": "", "state": "open",
                 "user": {"login": "alice"}, "labels": [], "assignees": [],
                 "html_url": "https://github.example/pr/8", "comments": 0,
+                "node_id": "PR_kwDO8",
                 "pull_request": {"url": "https://github.example/api/pulls/8"}
             }),
         );
@@ -221,7 +223,8 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
                 "state": "open", "user": {"login": "alice"},
                 "labels": [{"name": "bug"}, {"name": "p1"}],
                 "assignees": [{"login": "bob"}],
-                "html_url": "https://github.example/issues/47", "comments": 3
+                "html_url": "https://github.example/issues/47", "comments": 3,
+                "node_id": "I_kwDO47"
             }),
         );
     }

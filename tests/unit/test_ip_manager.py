@@ -147,3 +147,42 @@ def describe_static_ip_manager():
 
         # Should call destroy for both ipsets
         assert mock_run.call_count == 2
+
+
+def describe_the_sets_survive_being_in_use():
+    """On a reload the iptables rules still reference these sets, and ipset refuses to destroy
+    a set in use — so destroying first would fail the reload on a config that is perfectly
+    valid. Flushing empties them instead, which is what makes a removal take effect."""
+
+    @patch("subprocess.run")
+    def it_flushes_before_creating(mock_run):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        m = StaticIPManager()
+        m.create_ipsets()
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        verbs = [c[1] for c in calls if len(c) > 1]
+        assert verbs[0] == "flush", calls
+        assert "destroy" not in verbs, "an in-use set cannot be destroyed"
+
+    @patch("subprocess.run")
+    def a_set_that_is_not_there_yet_is_still_created(mock_run):
+        # flush fails on the first run, when nothing exists.
+        mock_run.side_effect = lambda args, **kw: Mock(
+            returncode=1 if "flush" in args else 0, stdout="", stderr=""
+        )
+        m = StaticIPManager()
+        assert m.create_ipsets() is True
+
+    @patch("subprocess.run")
+    def creating_over_an_existing_set_is_not_an_error(mock_run):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        m = StaticIPManager()
+        m.create_ipsets()
+        creates = [
+            c.args[0]
+            for c in mock_run.call_args_list
+            if len(c.args[0]) > 1 and c.args[0][1] == "create"
+        ]
+        assert creates, "nothing was created"
+        for c in creates:
+            assert "-exist" in c, c
