@@ -2,6 +2,13 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.14 (2026-09-18)
+
+- A reload rebuilt the ipsets from `allow_domains` alone, so `allow_ips` and `block_ips` were dropped until the next restart. Addresses named directly in the config are the ones with no DNS name to fall back on
+- A reload flushed the existing state before generating the new Squid config, so a config that failed to generate left the gateway holding neither the old rules nor the new ones. The config is now built first, and one missing the relayed-domain denial is refused rather than written
+- `ProxyManager` is built once at start-up, so every key under `proxy` is fixed until a restart - `enabled` included. Turning the proxy on did nothing and the reload said nothing about it; the only clue was Squid being absent. The reload check now compares the proxy block too
+- `project add-item` takes a GraphQL node id and nothing handed one out, so an item could join a board only in the same breath as being created - anything already filed could not be put on a board at all. `issue view` and `pr view` now carry `node_id`
+
 ## 0.2.13 (2026-09-18)
 
 - The config file is writable from dev and applied on save, so an agent that read a hostile prompt could rewrite the rules holding it. `reload:` now takes auto (as before), manual, or a duration — a window that runs out rather than a mode someone has to close. Reopened only from inside the gateway
