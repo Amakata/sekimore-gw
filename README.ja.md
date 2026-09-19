@@ -285,6 +285,21 @@ docker build -t sekimore-gw:latest .
 docker pull ghcr.io/Amakata/sekimore-gw:latest
 ```
 
+### 作業用のイメージ (preview)
+
+プルリクエストと `main` への push で、検証用のイメージが焼かれます。**公式版ではありません。**
+
+```bash
+docker pull ghcr.io/Amakata/sekimore-gw:pr-61   # そのプルリクエストの内容
+docker pull ghcr.io/Amakata/sekimore-gw:main    # main の先端
+```
+
+`linux/arm64` のみです。タグは次の push で書き換わるので、動かし続けるものに指しては
+いけません。版番号 (`:0.2.14`) と `:latest` は `v*.*.*` タグからのみ作られます。
+
+これが無いと、変更を実機で試すために公式版を切るしかありません。作業としてのデプロイと
+公式版の公開を分けるためのものです。
+
 ## 複数組織での利用
 
 `COMPOSE_PROJECT_NAME` を変えれば、組織ごとに独立したインスタンスを動かせます:

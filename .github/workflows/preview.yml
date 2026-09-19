@@ -1,0 +1,101 @@
+name: Preview image
+
+# 作業用のイメージ。公式版 (docker-publish.yml, v*.*.* タグ) とは別物で、変更を検証する
+# 人だけが使う。これが無いと、gateway の変更を実機で試すために公式版を切るしかない。
+#
+# arm64 のみ焼く。検証機が Apple Silicon で、毎 push に両アーキテクチャを積む理由が無い
+# ため。公式版は両方のままで、こちらの経路は何も変えていない。
+#
+# マルチアーキテクチャではないので、docker-publish.yml の digest push → manifest merge の
+# 二段構えも要らない。タグを付けて直接 push する。
+on:
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "doc/**"
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "doc/**"
+
+# 同じ PR への連続 push が同じタグを奪い合わないよう、前の実行を打ち切る。
+# 後発が先に終わると古い内容がタグに残るのと、arm64 ランナーの時間の節約と両方。
+concurrency:
+  group: preview-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  preview:
+    # fork からの PR には secrets が渡らないので GHCR に push できない。誰にも直せない赤を
+    # 残さないよう、押せないときは走らせない
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+
+      # Docker の参照は小文字でなければならない (github.repository は大文字を含む)
+      - name: Lowercase image name
+        run: echo "IMAGE_LC=${IMAGE_NAME,,}" >> "$GITHUB_ENV"
+
+      - name: Tag for this build
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            echo "PREVIEW_TAG=pr-${{ github.event.number }}" >> "$GITHUB_ENV"
+          else
+            echo "PREVIEW_TAG=main" >> "$GITHUB_ENV"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (arm64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          # unknown/unknown の attestation manifest を出さない (公式版と揃える)
+          provenance: false
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_LC }}:${{ env.PREVIEW_TAG }}
+          # 公式版のキャッシュは読むが書かない。preview が公式版のキャッシュを汚さないようにする
+          cache-from: |
+            type=gha,scope=preview-arm64
+            type=gha,scope=arm64
+          cache-to: type=gha,mode=max,scope=preview-arm64
+
+      # docker-publish.yml の smoke test と同じ内容。ランナーが arm64 なので --platform は要らない
+      - name: Smoke test relay binary
+        run: |
+          set -u
+          IMAGE="${REGISTRY}/${IMAGE_LC}:${PREVIEW_TAG}"
+          test -f tests/fixtures/config_with_relay.yml || { echo "fixtures missing (no checkout?)"; exit 1; }
+          docker run --rm "$IMAGE" sekimore-relay --version
+          docker run --rm "$IMAGE" sh -c 'ldd /usr/local/bin/sekimore-relay 2>&1 | grep -qi "not a dynamic\|statically"'
+          rc=0; docker run --rm -v "$PWD/tests/fixtures/config_without_relay.yml:/etc/sekimore/config.yml:ro" "$IMAGE" sekimore-relay needs-relay || rc=$?
+          test "$rc" -eq 1
+          rc=0; docker run --rm -v "$PWD/tests/fixtures/config_with_relay.yml:/etc/sekimore/config.yml:ro" "$IMAGE" sekimore-relay needs-relay || rc=$?
+          test "$rc" -eq 0
+
+      - name: How to run it
+        run: |
+          echo "### Preview image" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${REGISTRY}/${IMAGE_LC}:${PREVIEW_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "linux/arm64 only. Not a release; the tag is rewritten by the next push." >> "$GITHUB_STEP_SUMMARY"
