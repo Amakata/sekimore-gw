@@ -292,6 +292,23 @@ docker build -t sekimore-gw:latest .
 docker pull ghcr.io/Amakata/sekimore-gw:latest
 ```
 
+### Preview Images
+
+Pull requests and pushes to `main` build an image for verification. **These are
+not releases.**
+
+```bash
+docker pull ghcr.io/Amakata/sekimore-gw:pr-61   # that pull request
+docker pull ghcr.io/Amakata/sekimore-gw:main    # the tip of main
+```
+
+`linux/arm64` only. The tag is rewritten by the next push, so nothing long-lived
+should point at it. Version numbers (`:0.2.14`) and `:latest` come only from a
+`v*.*.*` tag.
+
+Without these, trying a change on a real machine means cutting a release — which
+is what separates deploying for work from publishing a version.
+
 ## Multi-Organization Support
 
 Each organization can run isolated instances using different `COMPOSE_PROJECT_NAME`:
