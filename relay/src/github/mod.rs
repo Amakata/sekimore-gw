@@ -1226,6 +1226,11 @@ impl GitHub {
         Ok(())
     }
 
+    /// 0.2.15: every item's field values come with it.
+    ///
+    /// Without them a write could not be read back: `update-item` answered `ok` and nothing said
+    /// what the field now held, or whether it still held it. An agent asked to put a board in
+    /// order could not see the board.
     pub async fn list_project_items(
         &self,
         auth: &Authorized<'_>,
@@ -1233,9 +1238,30 @@ impl GitHub {
         first: u32,
     ) -> Result<Value, GhError> {
         auth.ensure(Resource::Project, Action::Read)?;
-        const Q: &str = "query($project:ID!,$first:Int!){ node(id:$project){ ... on ProjectV2 { title items(first:$first){ nodes{ id type content{ ... on Issue { number title } ... on PullRequest { number title } } } } } } }";
-        self.graphql(Q, json!({"project": project_id, "first": first}))
-            .await
+        /// Field values fetched per item. A board with more than this many fields has the rest
+        /// left out of the listing; `project fields` still shows them all.
+        const FIELDS_PER_ITEM: u32 = 20;
+        const Q: &str = r#"
+query($project:ID!,$first:Int!,$fields:Int!){
+  node(id:$project){ ... on ProjectV2 { title
+    items(first:$first){ nodes{
+      id type
+      content{ ... on Issue { number title } ... on PullRequest { number title } }
+      fieldValues(first:$fields){ nodes{
+        __typename
+        ... on ProjectV2ItemFieldSingleSelectValue { name   field{ ... on ProjectV2FieldCommon { name } } }
+        ... on ProjectV2ItemFieldTextValue         { text   field{ ... on ProjectV2FieldCommon { name } } }
+        ... on ProjectV2ItemFieldNumberValue       { number field{ ... on ProjectV2FieldCommon { name } } }
+        ... on ProjectV2ItemFieldDateValue         { date   field{ ... on ProjectV2FieldCommon { name } } }
+      } }
+    } }
+  } }
+}"#;
+        self.graphql(
+            Q,
+            json!({"project": project_id, "first": first, "fields": FIELDS_PER_ITEM}),
+        )
+        .await
     }
 
     /// 0.2.7: the fields of a project board, with the option ids of every single-select.

@@ -15,7 +15,7 @@ use tokio::task::JoinSet;
 
 use super::operator::{build_github_for, open_audit, resolve};
 use crate::api::types::GitDomain;
-use crate::api::{self, ApiContext};
+use crate::api::{self, ApiContext, ResolvedBoard};
 use crate::audit::Actor;
 use crate::config::{HttpsMode, Resolved, Upstream};
 use crate::git::agent_check::{auth_sock_from_env, preflight_agent};
@@ -119,7 +119,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     // per-request path a plain comparison. A board that cannot be resolved (upstream down, wrong
     // number, token cannot see it) is left out and logged rather than failing startup — the relay
     // still serves git, and the effect is that the board stays refused.
-    let mut project_boards: Vec<String> = Vec::new();
+    let mut project_boards: Vec<ResolvedBoard> = Vec::new();
     if !r.relay.project.boards.is_empty() {
         match githubs.get(&r.domain) {
             Some(gh) => {
@@ -130,7 +130,11 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
                     {
                         Ok(id) => {
                             log::info!("project board {} → {id}", b.label());
-                            project_boards.push(id);
+                            project_boards.push(ResolvedBoard {
+                                id,
+                                number: b.number,
+                                label: b.label(),
+                            });
                         }
                         Err(e) => log::warn!(
                             "project board {} could not be resolved ({e}); it stays refused",

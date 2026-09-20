@@ -104,20 +104,64 @@ fn project_anchor<'a>(ctx: &'a ApiContext, req: &'a ApiRequest) -> Result<&'a st
         .ok_or_else(|| ApiError::forbidden("project has no repositories"))
 }
 
-/// 0.2.7: the board has to be one the project declared.
+/// The boards this project declared, as `--board 2 (orgs/Acme/projects/2)`, for a message that
+/// tells the caller what it may name instead of only what it may not.
+fn board_choices(ctx: &ApiContext) -> String {
+    ctx.project_boards
+        .iter()
+        .map(|b| format!("--board {} ({})", b.number, b.label))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Which board this request means, checked against the ones the project declared.
 ///
-/// A Projects v2 node id is opaque and carries no owner, so nothing about the id itself says which
-/// board it is — without this check any board the upstream token can see would be reachable from
-/// `project:add_item`. The ids come from `relay.project.boards`, resolved at startup.
-fn allowed_board(ctx: &ApiContext, project_id: &str) -> Result<(), ApiError> {
-    if ctx.project_boards.iter().any(|b| b == project_id) {
-        return Ok(());
+/// 0.2.7: the board has to be one the project declared. A Projects v2 node id is opaque and
+/// carries no owner, so nothing about the id itself says which board it is — without this check
+/// any board the upstream token can see would be reachable from `project:add_item`.
+///
+/// 0.2.15: `--board <number>` names it the way `relay.project.boards` and the URL do, and a single
+/// configured board is the default. Requiring `--project-id PVT_…` made the agent carry an id it
+/// has no way to obtain — the command that prints it is the operator's — while the relay had the
+/// mapping from start-up all along.
+fn resolve_board(ctx: &ApiContext, req: &ApiRequest) -> Result<String, ApiError> {
+    if ctx.project_boards.is_empty() {
+        return Err(ApiError::forbidden(
+            "no project board is allowed; add relay.project.boards (the org / user and the number from the board's URL)",
+        ));
     }
-    Err(ApiError::forbidden(if ctx.project_boards.is_empty() {
-        "no project board is allowed; add relay.project.boards (the org / user and the number from the board's URL)".to_string()
-    } else {
-        format!("project board {project_id} is not in this project")
-    }))
+    let id = req.project_id.trim();
+    match (id.is_empty(), req.board) {
+        (false, Some(_)) => Err(ApiError::bad_request(
+            "pass --board or --project-id, not both",
+        )),
+        (true, Some(n)) => ctx
+            .project_boards
+            .iter()
+            .find(|b| b.number == n)
+            .map(|b| b.id.clone())
+            .ok_or_else(|| {
+                ApiError::forbidden(format!(
+                    "project board {n} is not in this project; this project has {}",
+                    board_choices(ctx)
+                ))
+            }),
+        (false, None) => ctx
+            .project_boards
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| b.id.clone())
+            .ok_or_else(|| {
+                ApiError::forbidden(format!("project board {id} is not in this project"))
+            }),
+        (true, None) => match ctx.project_boards.as_slice() {
+            [only] => Ok(only.id.clone()),
+            _ => Err(ApiError::bad_request(format!(
+                "--board is required when the project has more than one board: {}",
+                board_choices(ctx)
+            ))),
+        },
+    }
 }
 
 pub async fn dispatch(
@@ -1037,14 +1081,11 @@ async fn issue_unassign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespons
 // ---- Projects ----
 
 async fn project_add_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(
-        !req.project_id.is_empty() && !req.content_id.is_empty(),
-        "project_id and content_id are required",
-    )?;
+    need(!req.content_id.is_empty(), "content_id is required")?;
     let (auth, client) = project_scope(ctx, req, Resource::Project, Action::AddItem)?;
-    allowed_board(ctx, &req.project_id)?;
+    let board = resolve_board(ctx, req)?;
     let item = client
-        .add_project_item(&auth, &req.project_id, &req.content_id)
+        .add_project_item(&auth, &board, &req.content_id)
         .await?;
     Ok(ApiResponse {
         item_id: Some(item),
@@ -1054,30 +1095,27 @@ async fn project_add_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespo
 
 async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need(
-        !req.project_id.is_empty() && !req.item_id.is_empty() && !req.field_id.is_empty(),
-        "project_id, item_id and field_id are required",
+        !req.item_id.is_empty() && !req.field_id.is_empty(),
+        "item_id and field_id are required",
     )?;
     let (auth, client) = project_scope(ctx, req, Resource::Project, Action::UpdateItem)?;
-    allowed_board(ctx, &req.project_id)?;
+    let board = resolve_board(ctx, req)?;
     let value = req.value.clone().unwrap_or(Value::Null);
     client
-        .update_project_item_field(&auth, &req.project_id, &req.item_id, &req.field_id, value)
+        .update_project_item_field(&auth, &board, &req.item_id, &req.field_id, value)
         .await?;
     Ok(ApiResponse::default())
 }
 
 async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.project_id.is_empty(), "project_id is required")?;
     let (auth, client) = project_scope(ctx, req, Resource::Project, Action::Read)?;
-    allowed_board(ctx, &req.project_id)?;
+    let board = resolve_board(ctx, req)?;
     let first = if req.first == 0 || req.first > 100 {
         20
     } else {
         req.first
     };
-    let raw = client
-        .list_project_items(&auth, &req.project_id, first)
-        .await?;
+    let raw = client.list_project_items(&auth, &board, first).await?;
     Ok(ApiResponse {
         raw: Some(raw),
         ..Default::default()
@@ -1086,17 +1124,14 @@ async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
 
 /// 0.2.7: the board's fields and their option ids, which `project update-item` needs.
 async fn project_fields(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    need(!req.project_id.is_empty(), "project_id is required")?;
     let (auth, client) = project_scope(ctx, req, Resource::Project, Action::Read)?;
-    allowed_board(ctx, &req.project_id)?;
+    let board = resolve_board(ctx, req)?;
     let first = if req.first == 0 || req.first > 100 {
         50
     } else {
         req.first
     };
-    let raw = client
-        .list_project_fields(&auth, &req.project_id, first)
-        .await?;
+    let raw = client.list_project_fields(&auth, &board, first).await?;
     Ok(ApiResponse {
         raw: Some(raw),
         ..Default::default()

@@ -32,6 +32,10 @@ pub struct ApiRequest {
     pub event: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub project_id: String,
+    /// 0.2.15: the board's number, the way `relay.project.boards` and the URL write it. An
+    /// alternative to `project_id`, which the agent cannot look up on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<u32>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub item_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

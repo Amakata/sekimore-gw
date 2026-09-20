@@ -48,11 +48,25 @@ pub struct ApiContext {
     pub upstream: String,
     /// 0.2.0: every git domain (the first is the default)
     pub git_domains: Vec<types::GitDomain>,
-    /// 0.2.7: node ids of the Projects v2 boards this project may touch, resolved at startup from
-    /// `relay.project.boards`. A project id the agent sends has to be one of these. Empty refuses
+    /// 0.2.7: the Projects v2 boards this project may touch, resolved at startup from
+    /// `relay.project.boards`. A board the agent names has to be one of these. Empty refuses
     /// every board: a node id is opaque and unbounded, so without a list any board the upstream
     /// token can see would be reachable.
-    pub project_boards: Vec<String>,
+    pub project_boards: Vec<ResolvedBoard>,
+}
+
+/// A configured board and the node id it resolved to.
+///
+/// 0.2.15: the number is kept alongside the id. It was discarded before, which left `--project-id
+/// PVT_…` as the only way to name a board — an id the agent cannot look up, since the command that
+/// would print it is the operator's. The relay held the mapping the whole time.
+#[derive(Clone, Debug)]
+pub struct ResolvedBoard {
+    pub id: String,
+    /// The number in the board's URL, as `relay.project.boards` writes it
+    pub number: u32,
+    /// `orgs/<org>/projects/<n>` or `users/<user>/projects/<n>`, for messages
+    pub label: String,
 }
 
 pub const BOOTSTRAP_RATE_PER_MINUTE: usize = 10;
