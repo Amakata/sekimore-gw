@@ -69,7 +69,20 @@ impl Resource {
     pub fn valid_actions(&self) -> &'static [Action] {
         use Action::*;
         match self {
-            Resource::Pr => &[Create, Comment, Review, Merge, Close, Read, RequestReview],
+            // 0.2.15: Label and Assign are here because GitHub serves pull requests from the
+            // issues endpoints. Labelling one used to need issue:label; a project that draws
+            // the line between the two needs a way to say pr:label instead of losing it.
+            Resource::Pr => &[
+                Create,
+                Comment,
+                Review,
+                Merge,
+                Close,
+                Label,
+                Assign,
+                Read,
+                RequestReview,
+            ],
             Resource::Issue => &[Create, Comment, Close, Label, Assign, Read],
             Resource::Project => &[Read, AddItem, UpdateItem],
             Resource::Repo => &[Read],
@@ -472,6 +485,26 @@ impl<'p> Authorized<'p> {
     }
     /// Lets the upstream caller confirm it got the right kind of proof, stopping a programming mistake
     /// such as calling `pr:merge` with a `pr:create` proof at runtime.
+    /// As `ensure`, for a write where the resource depends on what the number turned out to name.
+    ///
+    /// GitHub serves pull requests from the issues endpoints, so one number reaches either kind and
+    /// the caller cannot know which before looking. `numbered_write_scope` does the looking and
+    /// authorizes against the answer, so by the time this runs the proof already matches; what is
+    /// relaxed here is only that the upstream method cannot tell which of the two it was handed.
+    pub fn ensure_any(&self, allowed: &[(Resource, Action)]) -> Result<(), Denied> {
+        if allowed
+            .iter()
+            .any(|(r, a)| self.resource == *r && self.action == *a)
+        {
+            return Ok(());
+        }
+        let (resource, action) = allowed[0];
+        Err(Denied::NotPermitted {
+            resource: resource.as_str(),
+            action: action.as_str(),
+        })
+    }
+
     pub fn ensure(&self, resource: Resource, action: Action) -> Result<(), Denied> {
         if self.resource == resource && self.action == action {
             Ok(())
@@ -1240,13 +1273,17 @@ mod tests {
         // pr:read (0.1.3) + ci:read (0.1.5) + release:create / release:read (0.2.6)
         // + pr:request_review, issue:read, search:read (0.2.7)
         // + release:publish, ci:rerun (0.2.9)
-        assert_eq!(all_permission_keys().len(), 23);
+        // + pr:label, pr:assign (0.2.15: a number reaches either kind, so labelling a pull
+        //   request needs a permission of its own rather than borrowing issue:label)
+        assert_eq!(all_permission_keys().len(), 25);
         for k in [
             "pr:request_review",
             "issue:read",
             "search:read",
             "release:publish",
             "ci:rerun",
+            "pr:label",
+            "pr:assign",
         ] {
             assert!(all_permission_keys().contains(&k.to_string()), "{k}");
         }

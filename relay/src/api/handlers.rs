@@ -78,6 +78,74 @@ fn numbered_scope<'a>(
     repo_scope(ctx, req, resource, action)
 }
 
+/// What a number turned out to name.
+///
+/// GitHub serves pull requests from the issues endpoints, so `issue close --number <a PR>` reached
+/// a pull request under `issue:close`. A project that withheld `pr:close` deliberately — leaving
+/// review and closing to people — found `issue:close` doing the same job.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Numbered {
+    Issue,
+    PullRequest,
+}
+
+impl Numbered {
+    fn resource(self) -> Resource {
+        match self {
+            Numbered::Issue => Resource::Issue,
+            Numbered::PullRequest => Resource::Pr,
+        }
+    }
+}
+
+/// As `numbered_scope`, for a write where the number may name either kind.
+///
+/// Looks the number up and authorizes against what it is, so the same command reaches an issue
+/// under `issue:<action>` and a pull request under `pr:<action>`.
+///
+/// The order matters. A caller holding neither permission is refused before anything is asked
+/// upstream, so this cannot be used to probe whether a number is a pull request. Only once one of
+/// the two is held does the lookup happen, and the proof that comes back is for whichever the
+/// number turned out to be — so a project with `issue:close` alone is refused on a pull request,
+/// naming `pr:close`.
+async fn numbered_write_scope<'a>(
+    ctx: &'a ApiContext,
+    req: &'a ApiRequest,
+    action: Action,
+) -> Result<(Authorized<'a>, &'a GitHub, Numbered), ApiError> {
+    need_repo(req)?;
+    need(req.number != 0, "number is required")?;
+
+    let holds_issue = ctx
+        .project
+        .authorize(&req.repo, Resource::Issue, action)
+        .is_ok();
+    let holds_pr = ctx
+        .project
+        .authorize(&req.repo, Resource::Pr, action)
+        .is_ok();
+    if !holds_issue && !holds_pr {
+        // Neither: answer in the terms the caller asked in, and reach nothing upstream
+        ctx.project.authorize(&req.repo, Resource::Issue, action)?;
+    }
+    let probe_resource = if holds_issue {
+        Resource::Issue
+    } else {
+        Resource::Pr
+    };
+    let probe = ctx.project.authorize(&req.repo, probe_resource, action)?;
+    let client = gh(ctx, &probe)?;
+    let target = if client.names_a_pull_request(&probe, req.number).await? {
+        Numbered::PullRequest
+    } else {
+        Numbered::Issue
+    };
+    let auth = ctx
+        .project
+        .authorize(&req.repo, target.resource(), action)?;
+    Ok((auth, client, target))
+}
+
 /// As `repo_scope`, but anchored on the project rather than a named repo (Projects v2 and search
 /// carry no repository of their own).
 fn project_scope<'a>(
@@ -987,19 +1055,19 @@ async fn issue_comment(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse
         req.number != 0 && !req.body.is_empty(),
         "number and body are required",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Comment)?;
+    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Comment).await?;
     client.comment_issue(&auth, req.number, &req.body).await?;
     Ok(ApiResponse::default())
 }
 
 async fn issue_close(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Issue, Action::Close)?;
+    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Close).await?;
     client.close_issue(&auth, req.number).await?;
     Ok(ApiResponse::default())
 }
 
 async fn issue_reopen(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Issue, Action::Close)?;
+    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Close).await?;
     client.reopen_issue(&auth, req.number).await?;
     Ok(ApiResponse {
         number: Some(req.number),
@@ -1014,7 +1082,7 @@ async fn issue_label(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, 
         req.number != 0 && !req.labels.is_empty(),
         "number and labels are required",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Label)?;
+    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Label).await?;
     client.label_issue(&auth, req.number, &req.labels).await?;
     Ok(ApiResponse::default())
 }
@@ -1029,7 +1097,7 @@ async fn issue_unlabel(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse
         req.number != 0 && !req.labels.is_empty(),
         "number and labels are required",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Label)?;
+    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Label).await?;
     for label in &req.labels {
         client.unlabel_issue(&auth, req.number, label).await?;
     }
@@ -1050,7 +1118,7 @@ async fn issue_assign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
         req.number != 0 && !req.assignees.is_empty(),
         "number and assignees are required",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Assign)?;
+    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Assign).await?;
     client
         .assign_issue(&auth, req.number, &req.assignees)
         .await?;
@@ -1063,7 +1131,7 @@ async fn issue_unassign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespons
         req.number != 0 && !req.assignees.is_empty(),
         "number and assignees are required",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Assign)?;
+    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Assign).await?;
     client
         .unassign_issue(&auth, req.number, &req.assignees)
         .await?;
