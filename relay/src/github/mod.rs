@@ -1076,7 +1076,12 @@ impl GitHub {
         number: u64,
         body: &str,
     ) -> Result<(), GhError> {
-        auth.ensure(Resource::Issue, Action::Comment)?;
+        // A number reaches either kind (see numbered_write_scope); the proof already
+        // matches whichever it turned out to be
+        auth.ensure_any(&[
+            (Resource::Issue, Action::Comment),
+            (Resource::Pr, Action::Comment),
+        ])?;
         self.rest::<Value>(
             "POST",
             &format!("/repos/{}/issues/{number}/comments", auth.repo()),
@@ -1087,7 +1092,12 @@ impl GitHub {
     }
 
     pub async fn close_issue(&self, auth: &Authorized<'_>, number: u64) -> Result<(), GhError> {
-        auth.ensure(Resource::Issue, Action::Close)?;
+        // A number reaches either kind (see numbered_write_scope); the proof already
+        // matches whichever it turned out to be
+        auth.ensure_any(&[
+            (Resource::Issue, Action::Close),
+            (Resource::Pr, Action::Close),
+        ])?;
         self.rest::<Value>(
             "PATCH",
             &format!("/repos/{}/issues/{number}", auth.repo()),
@@ -1100,7 +1110,12 @@ impl GitHub {
     /// 0.2.9: the inverse of `close_issue`, under the same permission — reopening undoes a close
     /// rather than adding a new power.
     pub async fn reopen_issue(&self, auth: &Authorized<'_>, number: u64) -> Result<(), GhError> {
-        auth.ensure(Resource::Issue, Action::Close)?;
+        // A number reaches either kind (see numbered_write_scope); the proof already
+        // matches whichever it turned out to be
+        auth.ensure_any(&[
+            (Resource::Issue, Action::Close),
+            (Resource::Pr, Action::Close),
+        ])?;
         self.rest::<Value>(
             "PATCH",
             &format!("/repos/{}/issues/{number}", auth.repo()),
@@ -1116,7 +1131,12 @@ impl GitHub {
         number: u64,
         labels: &[String],
     ) -> Result<(), GhError> {
-        auth.ensure(Resource::Issue, Action::Label)?;
+        // A number reaches either kind (see numbered_write_scope); the proof already
+        // matches whichever it turned out to be
+        auth.ensure_any(&[
+            (Resource::Issue, Action::Label),
+            (Resource::Pr, Action::Label),
+        ])?;
         self.rest::<Value>(
             "POST",
             &format!("/repos/{}/issues/{number}/labels", auth.repo()),
@@ -1132,7 +1152,12 @@ impl GitHub {
         number: u64,
         assignees: &[String],
     ) -> Result<(), GhError> {
-        auth.ensure(Resource::Issue, Action::Assign)?;
+        // A number reaches either kind (see numbered_write_scope); the proof already
+        // matches whichever it turned out to be
+        auth.ensure_any(&[
+            (Resource::Issue, Action::Assign),
+            (Resource::Pr, Action::Assign),
+        ])?;
         self.rest::<Value>(
             "POST",
             &format!("/repos/{}/issues/{number}/assignees", auth.repo()),
@@ -1154,7 +1179,12 @@ impl GitHub {
         number: u64,
         label: &str,
     ) -> Result<(), GhError> {
-        auth.ensure(Resource::Issue, Action::Label)?;
+        // A number reaches either kind (see numbered_write_scope); the proof already
+        // matches whichever it turned out to be
+        auth.ensure_any(&[
+            (Resource::Issue, Action::Label),
+            (Resource::Pr, Action::Label),
+        ])?;
         self.rest::<Value>(
             "DELETE",
             &format!(
@@ -1176,7 +1206,12 @@ impl GitHub {
         number: u64,
         assignees: &[String],
     ) -> Result<(), GhError> {
-        auth.ensure(Resource::Issue, Action::Assign)?;
+        // A number reaches either kind (see numbered_write_scope); the proof already
+        // matches whichever it turned out to be
+        auth.ensure_any(&[
+            (Resource::Issue, Action::Assign),
+            (Resource::Pr, Action::Assign),
+        ])?;
         self.rest::<Value>(
             "DELETE",
             &format!("/repos/{}/issues/{number}/assignees", auth.repo()),
@@ -1784,6 +1819,32 @@ impl GitHub {
             comments: u64_at(&iss, "comments"),
             is_pull_request: iss.get("pull_request").is_some(),
         })
+    }
+
+    /// Whether `number` names a pull request rather than an issue.
+    ///
+    /// GitHub serves pull requests from the issues endpoints, so the number alone does not say
+    /// which it is, and the permission that should apply depends on the answer.
+    ///
+    /// Deliberately not `ensure(Issue, Read)`. This is not a read of the issue's content — only of
+    /// which of the two kinds the number is — and requiring the read permission would mean a
+    /// project granting a write and not the read could not be told apart correctly. That is where
+    /// the 0.2.13 attempt stalled. A proof is still required, so nothing reaches upstream without
+    /// passing the policy; what it does not require is a *particular* proof, because deciding which
+    /// one applies is the question being asked.
+    pub async fn names_a_pull_request(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+    ) -> Result<bool, GhError> {
+        let iss: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{}/issues/{number}", auth.repo()),
+                None,
+            )
+            .await?;
+        Ok(iss.get("pull_request").is_some())
     }
 
     /// The conversation on an issue. Issues have only the one kind of comment.

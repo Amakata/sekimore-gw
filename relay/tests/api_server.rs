@@ -1413,9 +1413,11 @@ async fn reopening_rides_on_the_permission_that_closes() {
         let (code, resp) = post(f.addr, path, Some(&f.token), &r).await;
         assert_eq!(code, 200, "{path}: {:?}", resp.error);
         let rec = recorded(&f.recorder);
-        assert_eq!(rec.len(), 1, "{path}");
-        assert_eq!(rec[0].method, "PATCH", "{path}");
-        assert_eq!(rec[0].body["state"], "open", "{path}");
+        // 0.2.15: an issue write looks the number up first, to learn whether it names a pull
+        // request. /pr/reopen already knows what it is addressing and does not.
+        let writes: Vec<_> = rec.iter().filter(|c| c.method == "PATCH").collect();
+        assert_eq!(writes.len(), 1, "{path}");
+        assert_eq!(writes[0].body["state"], "open", "{path}");
     }
 }
 
@@ -1462,7 +1464,12 @@ async fn removing_a_label_and_an_assignee_is_the_permission_that_adds_them() {
 
     let rec = recorded(&f.recorder);
     // GitHub removes one label per request, so two names are two calls.
-    let paths: Vec<&str> = rec.iter().map(|c| c.path.as_str()).collect();
+    // 0.2.15: each write is preceded by the kind lookup, which is a GET on the issue itself
+    let paths: Vec<&str> = rec
+        .iter()
+        .filter(|c| c.method != "GET")
+        .map(|c| c.path.as_str())
+        .collect();
     assert_eq!(
         paths,
         vec![
@@ -1471,8 +1478,9 @@ async fn removing_a_label_and_an_assignee_is_the_permission_that_adds_them() {
             "/api/v3/repos/LibOrg/awesome-lib/issues/47/assignees",
         ]
     );
-    assert!(rec.iter().all(|c| c.method == "DELETE"));
-    assert_eq!(rec[2].body["assignees"][0], "bob");
+    let writes: Vec<_> = rec.iter().filter(|c| c.method != "GET").collect();
+    assert!(writes.iter().all(|c| c.method == "DELETE"));
+    assert_eq!(writes[2].body["assignees"][0], "bob");
 }
 
 #[tokio::test]
@@ -1514,9 +1522,11 @@ async fn a_label_name_cannot_escape_the_repository_path() {
         };
         let (_, _) = post(f.addr, "/issue/unlabel", Some(&f.token), &r).await;
         for call in recorded(&f.recorder) {
+            // 0.2.15: the kind lookup (GET .../issues/47) happens first, so the prefix stops
+            // at the issue. A label that resolved out of the repository still fails this.
             assert!(
                 call.path
-                    .starts_with("/api/v3/repos/LibOrg/awesome-lib/issues/47/labels/"),
+                    .starts_with("/api/v3/repos/LibOrg/awesome-lib/issues/47"),
                 "label {evil:?} reached {} — outside the project",
                 call.path
             );
@@ -2175,4 +2185,130 @@ async fn list_carries_the_field_values() {
         .pointer("/data/node/items/nodes/0/fieldValues/nodes/1/name")
         .and_then(|v| v.as_str());
     assert_eq!(status, Some("Todo"), "field values should come back: {raw}");
+}
+
+// ---- 0.2.15: a number reaches either kind, and the permission follows what it is ----
+// GitHub serves pull requests from the issues endpoints. #8 in the mock is one; #47 is an issue.
+
+#[tokio::test]
+async fn closing_a_pull_request_is_refused_by_issue_close_alone() {
+    // The whole of #52: a project that withheld pr:close deliberately found issue:close doing it.
+    let f = start_api(project_case_a(&["issue:close"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 8,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/close", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    let msg = resp.error.unwrap_or_default();
+    assert!(msg.contains("pr:close"), "should name pr:close: {msg}");
+    assert!(
+        !recorded(&f.recorder).iter().any(|c| c.method == "PATCH"),
+        "the pull request must not be touched"
+    );
+}
+
+#[tokio::test]
+async fn closing_a_pull_request_works_with_pr_close() {
+    // The case 0.2.13 could not reach: the proof has to be the pr one, and the lookup that decides
+    // this cannot itself require issue:read, which is what stalled that attempt.
+    let f = start_api(project_case_a(&["pr:close"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 8,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/close", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert!(recorded(&f.recorder).iter().any(|c| c.method == "PATCH"));
+}
+
+#[tokio::test]
+async fn closing_an_issue_still_needs_issue_close() {
+    // The converse: pr:close must not have become a way to close issues.
+    let f = start_api(project_case_a(&["pr:close"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 47,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/close", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    let msg = resp.error.unwrap_or_default();
+    assert!(
+        msg.contains("issue:close"),
+        "should name issue:close: {msg}"
+    );
+    assert!(!recorded(&f.recorder).iter().any(|c| c.method == "PATCH"));
+}
+
+#[tokio::test]
+async fn neither_permission_asks_upstream_nothing() {
+    // The lookup must not become a way for a caller with nothing to probe what a number is.
+    let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;
+    for path in [
+        "/issue/close",
+        "/issue/label",
+        "/issue/assign",
+        "/issue/comment",
+    ] {
+        let r = ApiRequest {
+            number: 8,
+            body: "x".into(),
+            labels: vec!["bug".into()],
+            assignees: vec!["bob".into()],
+            ..req("LibOrg/awesome-lib")
+        };
+        let (code, _) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(code, 403, "{path}");
+    }
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "a caller with neither permission learned nothing about the numbers"
+    );
+}
+
+#[tokio::test]
+async fn labelling_a_pull_request_needs_pr_label() {
+    let f = start_api(project_case_a(&["issue:label"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 8,
+        labels: vec!["bug".into()],
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/label", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    assert!(resp.error.unwrap_or_default().contains("pr:label"));
+    assert!(!recorded(&f.recorder).iter().any(|c| c.method == "POST"));
+}
+
+#[tokio::test]
+async fn pr_label_can_be_granted_and_labels_a_pull_request() {
+    // Resource::Pr gained Label and Assign so the capability stays expressible rather than being
+    // removed: a project that wants its agent to label pull requests says pr:label.
+    let f = start_api(project_case_a(&["pr:label"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 8,
+        labels: vec!["bug".into()],
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/label", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert!(recorded(&f.recorder).iter().any(|c| c.method == "POST"));
+}
+
+#[tokio::test]
+async fn commenting_on_a_pull_request_needs_pr_comment() {
+    let f = start_api(
+        project_case_a(&["issue:comment"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 8,
+        body: "a note".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/comment", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    assert!(resp.error.unwrap_or_default().contains("pr:comment"));
 }
