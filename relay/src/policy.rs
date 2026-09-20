@@ -51,6 +51,10 @@ pub enum Action {
     /// 0.2.9: re-run or cancel a workflow run. Separate from `Read`, because re-running spends
     /// Actions minutes and runs workflow code with the repository's secrets
     Rerun,
+    /// 0.2.15: correct an issue's title or body. Separate from `Create`, because an issue body is
+    /// the change instruction the agent is working from: a project can want issues opened without
+    /// wanting what a person wrote to be rewritable
+    Update,
 }
 
 impl Resource {
@@ -83,7 +87,7 @@ impl Resource {
                 Read,
                 RequestReview,
             ],
-            Resource::Issue => &[Create, Comment, Close, Label, Assign, Read],
+            Resource::Issue => &[Create, Comment, Close, Label, Assign, Read, Update],
             Resource::Project => &[Read, AddItem, UpdateItem],
             Resource::Repo => &[Read],
             Resource::Ci => &[Read, Rerun],
@@ -118,6 +122,7 @@ impl Action {
             Action::RequestReview => "request_review",
             Action::Publish => "publish",
             Action::Rerun => "rerun",
+            Action::Update => "update",
         }
     }
 }
@@ -156,6 +161,7 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "request_review" => Action::RequestReview,
         "publish" => Action::Publish,
         "rerun" => Action::Rerun,
+        "update" => Action::Update,
         other => return Err(format!("unknown action {other:?}")),
     };
     if !resource.valid_actions().contains(&action) {
@@ -1275,7 +1281,9 @@ mod tests {
         // + release:publish, ci:rerun (0.2.9)
         // + pr:label, pr:assign (0.2.15: a number reaches either kind, so labelling a pull
         //   request needs a permission of its own rather than borrowing issue:label)
-        assert_eq!(all_permission_keys().len(), 25);
+        // + issue:update (0.2.15: an issue body is the change instruction, so correcting one is
+        //   separate from opening one)
+        assert_eq!(all_permission_keys().len(), 26);
         for k in [
             "pr:request_review",
             "issue:read",
@@ -1284,6 +1292,7 @@ mod tests {
             "ci:rerun",
             "pr:label",
             "pr:assign",
+            "issue:update",
         ] {
             assert!(all_permission_keys().contains(&k.to_string()), "{k}");
         }

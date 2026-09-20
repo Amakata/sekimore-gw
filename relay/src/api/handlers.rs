@@ -259,6 +259,7 @@ pub async fn dispatch(
         "/ci/log" => ci_log(ctx, req).await,
         "/issue/create" => issue_create(ctx, req).await,
         "/issue/comment" => issue_comment(ctx, req).await,
+        "/issue/update" => issue_update(ctx, req).await,
         "/issue/close" => issue_close(ctx, req).await,
         "/issue/reopen" => issue_reopen(ctx, req).await,
         "/issue/label" => issue_label(ctx, req).await,
@@ -1058,6 +1059,32 @@ async fn issue_comment(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse
     let (auth, client, _) = numbered_write_scope(ctx, req, Action::Comment).await?;
     client.comment_issue(&auth, req.number, &req.body).await?;
     Ok(ApiResponse::default())
+}
+
+/// 0.2.15: correct an issue's title or body.
+///
+/// A pull request is refused rather than reaching `pr:*`: `pr update` already edits one, and a
+/// second way in under a different permission is the shape #52 was about.
+async fn issue_update(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(
+        !req.title.is_empty() || !req.body.is_empty(),
+        "title or body is required",
+    )?;
+    let (auth, client) = numbered_scope(ctx, req, Resource::Issue, Action::Update)?;
+    if client.names_a_pull_request(&auth, req.number).await? {
+        return Err(ApiError::bad_request(format!(
+            "#{} is a pull request; use sekimore pr update",
+            req.number
+        )));
+    }
+    let title = (!req.title.is_empty()).then_some(req.title.as_str());
+    let body = (!req.body.is_empty()).then_some(req.body.as_str());
+    client.update_issue(&auth, req.number, title, body).await?;
+    Ok(ApiResponse {
+        number: Some(req.number),
+        message: Some(format!("updated #{}", req.number)),
+        ..ApiResponse::ok()
+    })
 }
 
 async fn issue_close(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {

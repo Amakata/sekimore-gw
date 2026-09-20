@@ -245,6 +245,16 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     req.body = body;
                     leaf
                 }
+                IssueCmd::Update {
+                    number,
+                    title,
+                    body,
+                } => {
+                    req.number = number;
+                    req.title = title.unwrap_or_default();
+                    req.body = body.unwrap_or_default();
+                    leaf
+                }
                 IssueCmd::Close { number } => {
                     req.number = number;
                     leaf

@@ -53,6 +53,7 @@ sekimore issue create --title "…" --body="…" [--labels a,b]   [issue:create]
 sekimore issue view --number N                                [issue:read]  title, body, labels, assignees
 sekimore issue comments --number N                            [issue:read]
 sekimore issue list [--state open] [--labels bug]             [issue:read]
+sekimore issue update --number N [--title "…"] [--body="…"]    [issue:update]  the body is the change instruction; do not rewrite what a person wrote
 sekimore issue comment --number N --body="…"                  [issue:comment]
 sekimore issue close --number N                               [issue:close]
 sekimore issue reopen --number N                              [issue:close]  the inverse of close

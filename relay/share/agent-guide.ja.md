@@ -53,6 +53,7 @@ sekimore issue create --title "…" --body="…" [--labels a,b]   [issue:create]
 sekimore issue view --number N                                [issue:read]  タイトル、本文、ラベル、担当者
 sekimore issue comments --number N                            [issue:read]
 sekimore issue list [--state open] [--labels bug]             [issue:read]
+sekimore issue update --number N [--title "…"] [--body="…"]    [issue:update]  本文は変更指示そのもの。人が書いたものは直さない
 sekimore issue comment --number N --body="…"                  [issue:comment]
 sekimore issue close --number N                               [issue:close]
 sekimore issue reopen --number N                              [issue:close]  close の逆
