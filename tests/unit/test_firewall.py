@@ -717,3 +717,87 @@ def describe_ipset_names_are_unique_per_domain():
 
     def a_wildcard_keeps_its_own_name():
         assert _ipset_name("*.example.com") != _ipset_name(".example.com")
+
+
+def describe_concurrent_rule_changes():
+    """0.2.15: the config watcher and the DNS handler both reach these methods.
+
+    domain_ipsets had no lock, and the NFLOG bracket is worse than a plain race: setup_domain and
+    remove_domain each remove the LOG rule, change the ACCEPTs and put it back, so two brackets
+    crossing can leave it ahead of the ACCEPTs or drop it — blocked packets stop being logged, or
+    every packet is.
+    """
+
+    def _recording_firewall():
+        """A FirewallManager whose commands are recorded with the thread that ran them.
+
+        The sleep widens the window: without the lock the two callers interleave essentially
+        every run, and with it they cannot.
+        """
+        import threading
+        import time
+
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        trace: list[tuple[int, str]] = []
+        trace_lock = threading.Lock()
+
+        def record(cmd):
+            with trace_lock:
+                trace.append((threading.get_ident(), " ".join(cmd)))
+            time.sleep(0.001)
+            # _remove_block_log_rule deletes NFLOG rules until one fails, so a fake that always
+            # succeeds never leaves the loop
+            return "NFLOG" not in cmd
+
+        fw._run_command = record  # type: ignore[method-assign]
+        return fw, trace
+
+    def it_serializes_two_callers():
+        import threading
+
+        fw, trace = _recording_firewall()
+        fw.domain_ipsets["b.example.com"] = "sekimore_b"
+
+        threads = [
+            threading.Thread(target=fw.setup_domain, args=("a.example.com", ["10.0.0.1"])),
+            threading.Thread(target=fw.remove_domain, args=("b.example.com",)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Every command of one caller comes before every command of the other. Without the lock
+        # the two runs interleave and this switches back and forth.
+        switches = sum(1 for a, b in zip(trace, trace[1:], strict=False) if a[0] != b[0])
+        assert switches <= 1, f"the two callers interleaved: {trace}"
+
+    def it_keeps_the_log_rule_bracket_contiguous():
+        """The LOG rule must go back before anyone else starts moving ACCEPT rules."""
+        import threading
+
+        fw, trace = _recording_firewall()
+        fw.domain_ipsets["b.example.com"] = "sekimore_b"
+
+        threads = [
+            threading.Thread(target=fw.setup_domain, args=("a.example.com", ["10.0.0.1"])),
+            threading.Thread(target=fw.setup_domain, args=("c.example.com", ["10.0.0.2"])),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        switches = sum(1 for a, b in zip(trace, trace[1:], strict=False) if a[0] != b[0])
+        assert switches <= 1, f"two setup_domain brackets crossed: {trace}"
+        assert set(fw.domain_ipsets) == {"a.example.com", "b.example.com", "c.example.com"}
+
+    def it_is_reentrant_so_update_can_call_setup():
+        """update_domain_ips calls setup_domain, and cleanup calls remove_domain."""
+        fw, _ = _recording_firewall()
+
+        assert fw.update_domain_ips("new.example.com", ["10.0.0.9"]) is True
+        assert "new.example.com" in fw.domain_ipsets
+
+        fw.cleanup()
+        assert fw.domain_ipsets == {}
