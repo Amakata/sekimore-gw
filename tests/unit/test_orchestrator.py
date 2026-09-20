@@ -1898,3 +1898,67 @@ def describe_changing_the_proxy_needs_a_restart():
             relay_fingerprint=relay_fingerprint({"allow_domains": ["x.com", "y.com"]}),
         )
         assert _relay_settings_changed(a, b) is False
+
+
+def describe_auto_reload_runs_on_the_main_loop():
+    """0.2.15: watchdog calls the handler on a plain thread.
+
+    It used to spin up a fresh event loop and run reload_config there, so the reload touched the
+    firewall while the DNS handler on the main loop could be touching it for a query arriving at
+    the same moment. Handing the coroutine to the main loop makes them take turns.
+    """
+
+    def _handler(orch):
+        from pathlib import Path
+
+        from src.orchestrator import ConfigFileEventHandler
+
+        h = ConfigFileEventHandler(orch, Path("/etc/sekimore/config.yml"))
+        h._last_reload_time = 0.0
+        return h
+
+    def _event():
+        ev = Mock()
+        ev.is_directory = False
+        ev.src_path = "/etc/sekimore/config.yml"
+        return ev
+
+    def it_runs_the_reload_on_the_loop_the_gateway_is_using():
+        import asyncio
+        import threading
+
+        ran_on: list[object] = []
+
+        async def fake_reload():
+            ran_on.append(asyncio.get_running_loop())
+            return True
+
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever, daemon=True)
+        thread.start()
+        try:
+            orch = Mock()
+            orch.reload_window = None
+            orch._main_loop = loop
+            orch.reload_config = fake_reload
+            _handler(orch).on_modified(_event())
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join(timeout=5)
+            loop.close()
+
+        # Without the fix this ran on a loop created inside the handler, not the gateway's
+        assert ran_on == [loop]
+
+    def it_skips_the_reload_when_the_main_loop_is_gone():
+        """Shutting down should not leave a reload running against a closed loop."""
+        orch = Mock()
+        orch.reload_window = None
+        orch._main_loop = None
+        orch.reload_config = Mock()
+
+        with patch("src.orchestrator.log_error") as mock_err:
+            _handler(orch).on_modified(_event())
+
+        assert not orch.reload_config.called
+        assert any("main loop" in str(c.args) for c in mock_err.call_args_list)

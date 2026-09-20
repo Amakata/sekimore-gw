@@ -1,7 +1,11 @@
 """Firewall management - dynamic iptables/ipset rule handling."""
 
+import functools
 import hashlib
 import subprocess
+import threading
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from .logger import ComponentType, log_error, log_system_event
 
@@ -21,6 +25,30 @@ def _ipset_name(domain: str) -> str:
     # 7 for the prefix leaves 24 for the digest, which is well clear of a collision.
     digest = hashlib.sha256(domain.encode()).hexdigest()[:24]
     return f"allow_h{digest}"
+
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _serialized(method: F) -> F:
+    """Run under the firewall's rules lock.
+
+    0.2.15: the config watcher and the DNS handler both reach these. `domain_ipsets` had no lock,
+    and the NFLOG bracket is worse than a plain race: `setup_domain` and `remove_domain` each
+    remove the LOG rule, change the ACCEPTs and put the LOG rule back, so two brackets crossing
+    can leave it ahead of the ACCEPTs or drop it — blocked packets stop being logged, or every
+    packet is.
+
+    Reentrant, because `update_domain_ips` calls `setup_domain` and `cleanup` calls
+    `remove_domain`.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: "FirewallManager", *args: Any, **kwargs: Any) -> Any:
+        with self._rules_lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper  # type: ignore[return-value]
 
 
 class FirewallManager:
@@ -46,6 +74,8 @@ class FirewallManager:
         self.relay_ports: list[int] = list(relay_ports or [])
         self.allowed_ports: list[int] = list(allowed_ports or [])
         self.domain_ipsets: dict[str, str] = {}  # domain -> ipset_name
+        # Guards domain_ipsets and the NFLOG bracket (see _serialized)
+        self._rules_lock = threading.RLock()
 
         # iptables/ipset commands (the legacy variant)
         self.iptables_cmd = "iptables-legacy"
@@ -352,6 +382,7 @@ class FirewallManager:
         )
         return True
 
+    @_serialized
     def enable_block_logging(self) -> bool:
         """Enable logging of blocked packets.
 
@@ -442,6 +473,7 @@ class FirewallManager:
             return [base + tail]
         return [base + ["-p", "tcp", "--dport", str(port)] + tail for port in self.allowed_ports]
 
+    @_serialized
     def setup_domain(self, domain: str, ips: list[str]) -> bool:
         """Set up the ipset and iptables rules for a domain.
 
@@ -506,6 +538,7 @@ class FirewallManager:
 
         return True
 
+    @_serialized
     def update_domain_ips(self, domain: str, new_ips: list[str]) -> bool:
         """Update a domain's IP list, e.g. when the TTL expires.
 
@@ -563,6 +596,7 @@ class FirewallManager:
 
         return True
 
+    @_serialized
     def remove_domain(self, domain: str) -> bool:
         """Remove a domain's rules.
 
@@ -1068,6 +1102,7 @@ class FirewallManager:
             )
             return False
 
+    @_serialized
     def cleanup(self) -> None:
         """Tear down the firewall rules."""
         # Remove every domain rule

@@ -25,6 +25,10 @@ from .logger import ComponentType, log_error, log_system_event, setup_logging
 from .proxy_manager import ProxyManager
 from .proxy_monitor import ProxyMonitor
 
+# How long the watcher thread waits for a reload it handed to the main loop. Bounded so a reload
+# that never returns cannot pin a watchdog thread for the life of the process.
+RELOAD_TIMEOUT_SECONDS = 120.0
+
 
 class ReloadWindow:
     """Whether a change to config.yml is applied when it is saved.
@@ -240,19 +244,29 @@ class ConfigFileEventHandler(FileSystemEventHandler):
 
         log_system_event("Configuration file modified, reloading...")
 
-        # Run the async method synchronously: watchdog calls us from a plain thread.
+        # watchdog calls this on a plain thread. Hand the reload to the main loop rather than
+        # running it on a loop of our own: reload_config touches the firewall, and so does the
+        # DNS handler for a query arriving at the same moment. On one loop they take turns.
+        loop = self.orchestrator._main_loop
+        if loop is None or loop.is_closed():
+            log_error(
+                ComponentType.ORCHESTRATOR,
+                "Auto-reload skipped: the main loop is not running",
+            )
+            return
         try:
-            # Create a fresh event loop and run on it
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                success = loop.run_until_complete(self.orchestrator.reload_config())
-                if success:
-                    log_system_event("Configuration reloaded automatically")
-                else:
-                    log_error(ComponentType.ORCHESTRATOR, "Auto-reload failed")
-            finally:
-                loop.close()
+            future = asyncio.run_coroutine_threadsafe(self.orchestrator.reload_config(), loop)
+            # Bounded so a reload that never returns cannot pin a watchdog thread for good
+            success = future.result(timeout=RELOAD_TIMEOUT_SECONDS)
+            if success:
+                log_system_event("Configuration reloaded automatically")
+            else:
+                log_error(ComponentType.ORCHESTRATOR, "Auto-reload failed")
+        except TimeoutError:
+            log_error(
+                ComponentType.ORCHESTRATOR,
+                f"Auto-reload did not finish within {RELOAD_TIMEOUT_SECONDS}s",
+            )
         except Exception as e:
             log_error(ComponentType.ORCHESTRATOR, f"Auto-reload error: {e}")
 
@@ -752,6 +766,8 @@ class SecurityGatewayOrchestrator:
         self.config_observer: Observer | None = None  # type: ignore[valid-type]
         # Task checking that the relay is listening (only when git-relay is configured)
         self._relay_check_task: asyncio.Task[bool] | None = None
+        # The loop reload_config runs on. Set when start() is running; the watcher thread reads it
+        self._main_loop: asyncio.AbstractEventLoop | None = None
         if self.config_path:
             # Watch the directory containing the configuration file
             config_dir = Path(self.config_path).parent
@@ -1043,7 +1059,10 @@ class SecurityGatewayOrchestrator:
         if self.proxy_monitor:
             proxy_monitor_task = asyncio.create_task(self.proxy_monitor.start())
 
-        # Start watching the file, to reload automatically when config.yml changes
+        # Start watching the file, to reload automatically when config.yml changes.
+        # 0.2.15: the handler runs on a watchdog thread and needs this loop to hand the reload
+        # back to, so it is captured before the observer can deliver anything.
+        self._main_loop = asyncio.get_running_loop()
         if self.config_observer:
             self.config_observer.start()  # type: ignore[attr-defined]
             log_system_event("Configuration file monitoring started")
