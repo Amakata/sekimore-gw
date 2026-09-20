@@ -10,6 +10,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .domains import domain_matches
+
 
 class DNSConfig(BaseModel):
     """DNS settings.
@@ -329,6 +331,30 @@ class Config(BaseModel):
     def relay_domains(self) -> list[str]:
         """Domains for which DNS answers with the relay IP (git-relay + https-relay)."""
         return self.git_relay_domains() + self.https_relay_domains()
+
+    @model_validator(mode="after")
+    def validate_relayed_domains_are_allowed(self) -> "Config":
+        """A relayed domain has to be covered by `allow_domains` (0.2.15).
+
+        DNS answers with the gateway's own address for these (`dns_server.py`), so one the allow
+        list does not cover leaves the relay trying to reach itself. Reproduced on a live gateway
+        on 2026-09-18: `api.github.com` was added as a handler and dropped from `allow_domains`,
+        and the relayed calls began failing with nothing saying why.
+
+        Only the handlers that redirect DNS are checked. A `deny` entry exists to refuse a domain,
+        so requiring it in the allow list would be backwards, and `splice` resolves normally.
+
+        A wildcard counts as covering, on label boundaries: `.github.com` covers `api.github.com`
+        and not `evilgithub.com`.
+        """
+        missing = [d for d in self.relay_domains() if not domain_matches(d, self.allow_domains)]
+        if missing:
+            raise ValueError(
+                f"domain_handlers: {', '.join(missing)} not covered by allow_domains. "
+                "DNS answers with the gateway for a relayed domain, so the relay would try to "
+                "reach itself. Add them to allow_domains (a wildcard such as '.github.com' counts)"
+            )
+        return self
 
     @field_validator("reload")
     @classmethod

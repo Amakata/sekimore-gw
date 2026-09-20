@@ -16,7 +16,8 @@ from watchdog.observers import Observer
 
 from . import constants
 from .config import load_config
-from .dns_server import DNSServer, domain_matches
+from .dns_server import DNSServer
+from .domains import domain_matches
 from .firewall import FirewallManager
 from .firewall_monitor import FirewallMonitor
 from .ip_manager import StaticIPManager

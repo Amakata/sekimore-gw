@@ -1201,17 +1201,19 @@ def describe_relay_settings_change_detection():
         from src.config import Config
         from src.orchestrator import _relay_settings_changed
 
+        allow = ["github.com", "ghe.example.com"]
         base = {
             "github.com": {"handler": "git-relay"},
             "ghe.example.com": {"handler": "git-relay", "ssh_port": 2222},
         }
-        old = Config(domain_handlers=base)
-        same = Config(domain_handlers=base)
+        old = Config(allow_domains=allow, domain_handlers=base)
+        same = Config(allow_domains=allow, domain_handlers=base)
         moved = Config(
+            allow_domains=allow,
             domain_handlers={
                 **base,
                 "ghe.example.com": {"handler": "git-relay", "ssh_port": 2223},
-            }
+            },
         )
         assert _relay_settings_changed(old, same) is False
         assert _relay_settings_changed(old, moved) is True

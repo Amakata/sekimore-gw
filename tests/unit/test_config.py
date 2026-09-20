@@ -299,11 +299,12 @@ def describe_domain_handlers():
 
     def it_parses_git_relay_and_normalizes_keys():
         config = Config(
+            allow_domains=["github.com"],
             domain_handlers={
                 "GitHub.COM.": {"handler": "git-relay"},
                 "telemetry.example.com": {"handler": "deny"},
                 "static.example.com": {},
-            }
+            },
         )
         assert config.domain_handlers["github.com"].handler == "github"
         assert config.domain_handlers["telemetry.example.com"].handler == "deny"
@@ -314,8 +315,9 @@ def describe_domain_handlers():
 
     def it_still_accepts_the_original_git_relay_spelling(sample_config_data):
         """0.2.6 renamed the handler to `github`; a config written for 0.1.x must keep working."""
-        old = Config(domain_handlers={"github.com": {"handler": "git-relay"}})
-        new = Config(domain_handlers={"github.com": {"handler": "github"}})
+        allow = ["github.com", "ghe.example.com"]
+        old = Config(allow_domains=allow, domain_handlers={"github.com": {"handler": "git-relay"}})
+        new = Config(allow_domains=allow, domain_handlers={"github.com": {"handler": "github"}})
         assert old.domain_handlers["github.com"].handler == "github"
         assert old.model_dump() == new.model_dump()
         # Everything downstream of the name behaves the same
@@ -324,10 +326,11 @@ def describe_domain_handlers():
         assert old.relay_input_ports() == new.relay_input_ports()
         # Mixing the two spellings across domains is fine; both normalize
         mixed = Config(
+            allow_domains=allow,
             domain_handlers={
                 "github.com": {"handler": "git-relay"},
                 "ghe.example.com": {"handler": "github", "ssh_port": 2222},
-            }
+            },
         )
         assert sorted(mixed.git_relay_domains()) == ["ghe.example.com", "github.com"]
 
@@ -358,22 +361,25 @@ def describe_domain_handlers():
         # Two entries without an ssh_port both land on 22
         with pytest.raises(ValidationError, match="both listen on ssh port 22"):
             Config(
+                allow_domains=["a.example.com", "b.example.com"],
                 domain_handlers={
                     "a.example.com": {"handler": "git-relay"},
                     "b.example.com": {"handler": "git-relay"},
-                }
+                },
             )
         with pytest.raises(ValidationError, match="both listen on ssh port 2222"):
             Config(
+                allow_domains=["a.example.com", "b.example.com"],
                 domain_handlers={
                     "a.example.com": {"handler": "git-relay", "ssh_port": 2222},
                     "b.example.com": {"handler": "git-relay", "ssh_port": 2222},
-                }
+                },
             )
 
     def it_splits_multiple_git_relay_domains_by_ssh_port():
         # 0.2.0: every upstream after the first listens on its own port, and the firewall opens that port in INPUT
         config = Config(
+            allow_domains=["github.com", "ghe.example.com"],
             domain_handlers={
                 "github.com": {"handler": "git-relay"},
                 "ghe.example.com": {
@@ -382,18 +388,22 @@ def describe_domain_handlers():
                     "upstream": "ghe.example.com",
                     "oauth_client_id": "abc",  # Keys only the relay reads are ignored here
                 },
-            }
+            },
         )
         assert config.git_relay_domains() == ["github.com", "ghe.example.com"]
         assert config.git_relay_ssh_ports() == {"github.com": 22, "ghe.example.com": 2222}
         assert config.relay_input_ports() == [22, 2222, 8420, 443]
         assert config.domain_handlers["ghe.example.com"].upstream == "ghe.example.com"
         # A single entry with an explicit ssh_port works too (no duplicate when it matches the listen port)
-        one = Config(domain_handlers={"github.com": {"handler": "git-relay", "ssh_port": 22}})
+        one = Config(
+            allow_domains=["github.com"],
+            domain_handlers={"github.com": {"handler": "git-relay", "ssh_port": 22}},
+        )
         assert one.relay_input_ports() == [22, 8420, 443]
 
     def it_reads_relay_ports_and_ignores_relay_only_keys():
         config = Config(
+            allow_domains=["github.com"],
             domain_handlers={"github.com": {"handler": "git-relay"}},
             relay={
                 "ssh_listen": "0.0.0.0:2222",
@@ -435,11 +445,88 @@ def describe_domain_handlers():
     def it_round_trips_through_yaml(tmp_path):
         from pathlib import Path
 
-        config = Config(domain_handlers={"github.com": {"handler": "git-relay"}})
+        config = Config(
+            allow_domains=["github.com"],
+            domain_handlers={"github.com": {"handler": "git-relay"}},
+        )
         out = tmp_path / "out.yml"
         config.to_yaml(Path(out))
         again = Config.from_yaml(Path(out))
         assert again.domain_handlers["github.com"].handler == "github"
+
+
+def describe_relayed_domains_must_be_allowed():
+    """0.2.15: DNS answers with the gateway for a relayed domain, so allow_domains has to cover it.
+
+    Reproduced on a live gateway on 2026-09-18: api.github.com was added as a handler and dropped
+    from allow_domains, and the relayed calls began failing with nothing saying why.
+    """
+
+    def it_refuses_a_relayed_domain_the_allow_list_does_not_cover():
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="not covered by allow_domains"):
+            Config(
+                allow_domains=["github.com"],
+                domain_handlers={
+                    "github.com": {"handler": "git-relay"},
+                    "api.github.com": {"handler": "https-relay"},
+                },
+            )
+
+    def it_accepts_a_wildcard_that_covers_it():
+        cfg = Config(
+            allow_domains=[".github.com"],
+            domain_handlers={
+                "github.com": {"handler": "git-relay"},
+                "api.github.com": {"handler": "https-relay"},
+            },
+        )
+        assert cfg.relay_domains() == ["github.com", "api.github.com"]
+
+    def it_matches_on_label_boundaries():
+        """`.github.com` covers api.github.com and not evilgithub.com — a name anyone can register."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="evilgithub.com"):
+            Config(
+                allow_domains=[".github.com"],
+                domain_handlers={
+                    "github.com": {"handler": "git-relay"},
+                    "evilgithub.com": {"handler": "https-relay"},
+                },
+            )
+
+    def it_ignores_deny_and_splice():
+        """A deny entry exists to refuse a domain; requiring it in the allow list is backwards.
+
+        splice resolves normally, so it never points at the gateway either. Only the handlers that
+        redirect DNS are checked.
+        """
+        cfg = Config(
+            allow_domains=["github.com"],
+            domain_handlers={
+                "github.com": {"handler": "git-relay"},
+                "telemetry.example.com": {"handler": "deny"},
+                "static.example.com": {"handler": "splice"},
+            },
+        )
+        assert cfg.relay_domains() == ["github.com"]
+
+    def it_says_which_domains_are_missing():
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as e:
+            Config(
+                allow_domains=["github.com"],
+                domain_handlers={
+                    "github.com": {"handler": "git-relay"},
+                    "ghcr.io": {"handler": "https-relay"},
+                    "pkg-containers.githubusercontent.com": {"handler": "https-relay"},
+                },
+            )
+        msg = str(e.value)
+        assert "ghcr.io" in msg and "pkg-containers.githubusercontent.com" in msg
 
 
 def describe_allowed_ports_config():
@@ -465,11 +552,12 @@ def describe_https_relay_handler():
         from pydantic import ValidationError
 
         cfg = Config(
+            allow_domains=["github.com", "ghcr.io", "registry-1.docker.io"],
             domain_handlers={
                 "github.com": {"handler": "git-relay", "max_upload_bytes": 262144},
                 "ghcr.io": {"handler": "https-relay", "max_upload_bytes": -1},
                 "registry-1.docker.io": {"handler": "https-relay"},
-            }
+            },
         )
         assert cfg.https_relay_domains() == ["ghcr.io", "registry-1.docker.io"]
         assert cfg.relay_domains() == ["github.com", "ghcr.io", "registry-1.docker.io"]
