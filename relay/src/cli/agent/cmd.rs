@@ -398,14 +398,18 @@ endpoints! {
 endpoints! {
     pub enum ProjectCmd {
         AddItem("/project/add-item") = t("agent.project.add_item") => {
+            #[arg(long, help = t("agent.project.board"))]
+            board: Option<u32>,
             #[arg(long, help = t("agent.project.project_id"))]
-            project_id: String,
+            project_id: Option<String>,
             #[arg(long, help = t("agent.project.content_id"))]
             content_id: String,
         },
         UpdateItem("/project/update-item") = t("agent.project.update_item") => {
+            #[arg(long, help = t("agent.project.board"))]
+            board: Option<u32>,
             #[arg(long, help = t("agent.project.project_id"))]
-            project_id: String,
+            project_id: Option<String>,
             #[arg(long, help = t("agent.project.item_id"))]
             item_id: String,
             #[arg(long, help = t("agent.project.field_id"))]
@@ -414,14 +418,18 @@ endpoints! {
             value: String,
         },
         List("/project/list") = t("agent.project.list") => {
+            #[arg(long, help = t("agent.project.board"))]
+            board: Option<u32>,
             #[arg(long, help = t("agent.project.project_id"))]
-            project_id: String,
+            project_id: Option<String>,
             #[arg(long, default_value_t = 20)]
             first: u32,
         },
         Fields("/project/fields") = t("agent.project.fields") => {
+            #[arg(long, help = t("agent.project.board"))]
+            board: Option<u32>,
             #[arg(long, help = t("agent.project.project_id"))]
-            project_id: String,
+            project_id: Option<String>,
             #[arg(long, default_value_t = 50)]
             first: u32,
         },

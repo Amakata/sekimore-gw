@@ -2029,3 +2029,150 @@ async fn a_view_carries_the_node_id_that_add_item_needs() {
     let raw = resp.raw.expect("pr view returns the object");
     assert_eq!(raw["node_id"], "PR_kwDO7");
 }
+
+// ---- 0.2.15: naming a board by its number ----
+
+#[tokio::test]
+async fn a_board_can_be_named_by_its_number() {
+    let f = start_api(project_case_a(&["project:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        board: Some(TEST_BOARD_NUMBER),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+}
+
+#[tokio::test]
+async fn the_number_selects_the_board_it_names() {
+    // The whole point of keeping the mapping: with two boards, the id that goes upstream has to be
+    // the one --board named. Accepting the request is not evidence that it picked the right one.
+    let f = start_api_with_boards(
+        project_case_a(&["project:read"]),
+        BootstrapMode::Auto,
+        true,
+        vec![board(2, "PVT_two"), board(3, "PVT_three")],
+    )
+    .await;
+    let r = ApiRequest {
+        board: Some(3),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let sent = recorded(&f.recorder);
+    let call = sent
+        .iter()
+        .find(|c| c.path.contains("graphql"))
+        .expect("a graphql call should have been made");
+    assert_eq!(
+        call.body
+            .pointer("/variables/project")
+            .and_then(|v| v.as_str()),
+        Some("PVT_three"),
+        "--board 3 must resolve to the third board, not merely be accepted"
+    );
+}
+
+#[tokio::test]
+async fn a_number_that_is_not_a_declared_board_is_refused() {
+    let f = start_api(project_case_a(&["project:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        board: Some(TEST_BOARD_NUMBER + 1),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    let msg = resp.error.unwrap_or_default();
+    assert!(
+        msg.contains(&format!("--board {TEST_BOARD_NUMBER}")),
+        "the refusal should name the boards this project does have: {msg}"
+    );
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "nothing should reach upstream"
+    );
+}
+
+#[tokio::test]
+async fn a_single_board_is_the_default() {
+    let f = start_api(project_case_a(&["project:read"]), BootstrapMode::Auto, true).await;
+    let (code, resp) = post(
+        f.addr,
+        "/project/list",
+        Some(&f.token),
+        &req("LibOrg/awesome-lib"),
+    )
+    .await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+}
+
+#[tokio::test]
+async fn with_several_boards_one_has_to_be_named() {
+    let f = start_api_with_boards(
+        project_case_a(&["project:read"]),
+        BootstrapMode::Auto,
+        true,
+        vec![board(2, "PVT_two"), board(3, "PVT_three")],
+    )
+    .await;
+    let (code, resp) = post(
+        f.addr,
+        "/project/list",
+        Some(&f.token),
+        &req("LibOrg/awesome-lib"),
+    )
+    .await;
+    assert_eq!(code, 400);
+    let msg = resp.error.unwrap_or_default();
+    assert!(
+        msg.contains("--board 2") && msg.contains("--board 3"),
+        "the caller should be told what it may name: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn naming_a_board_two_ways_at_once_is_refused() {
+    let f = start_api(project_case_a(&["project:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        board: Some(TEST_BOARD_NUMBER),
+        project_id: TEST_BOARD.into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 400, "{:?}", resp.error);
+}
+
+#[tokio::test]
+async fn a_node_id_outside_the_project_is_still_refused() {
+    // The 0.2.7 check has to survive the rewrite: --board must not have opened a way past it.
+    let f = start_api(project_case_a(&["project:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        project_id: "PVT_elsewhere".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "nothing should reach upstream"
+    );
+}
+
+#[tokio::test]
+async fn list_carries_the_field_values() {
+    // 0.2.15: without these a write could not be read back — update-item answered ok and the
+    // board stayed invisible.
+    let f = start_api(project_case_a(&["project:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        board: Some(TEST_BOARD_NUMBER),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let raw = resp.raw.expect("the listing");
+    let status = raw
+        .pointer("/data/node/items/nodes/0/fieldValues/nodes/1/name")
+        .and_then(|v| v.as_str());
+    assert_eq!(status, Some("Todo"), "field values should come back: {raw}");
+}

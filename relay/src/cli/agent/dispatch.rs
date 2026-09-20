@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::client::AgentClient;
 use super::cmd::{AgentCmd, CiCmd, IssueCmd, PrCmd, ProjectCmd, ReleaseCmd, RepoCmd};
-use super::print::{print_ci_log, print_pr_status, print_response};
+use super::print::{print_ci_log, print_pr_status, print_project_items, print_response};
 use crate::api::types::ApiRequest;
 
 fn split_csv(s: &str) -> Vec<String> {
@@ -305,20 +305,24 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
             let leaf = cmd.path();
             match cmd {
                 ProjectCmd::AddItem {
+                    board,
                     project_id,
                     content_id,
                 } => {
-                    req.project_id = project_id;
+                    req.board = board;
+                    req.project_id = project_id.unwrap_or_default();
                     req.content_id = content_id;
                     leaf
                 }
                 ProjectCmd::UpdateItem {
+                    board,
                     project_id,
                     item_id,
                     field_id,
                     value,
                 } => {
-                    req.project_id = project_id;
+                    req.board = board;
+                    req.project_id = project_id.unwrap_or_default();
                     req.item_id = item_id;
                     req.field_id = field_id;
                     req.value = Some(
@@ -327,13 +331,23 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     );
                     leaf
                 }
-                ProjectCmd::List { project_id, first } => {
-                    req.project_id = project_id;
+                ProjectCmd::List {
+                    board,
+                    project_id,
+                    first,
+                } => {
+                    req.board = board;
+                    req.project_id = project_id.unwrap_or_default();
                     req.first = first;
                     leaf
                 }
-                ProjectCmd::Fields { project_id, first } => {
-                    req.project_id = project_id;
+                ProjectCmd::Fields {
+                    board,
+                    project_id,
+                    first,
+                } => {
+                    req.board = board;
+                    req.project_id = project_id.unwrap_or_default();
                     req.first = first;
                     leaf
                 }
@@ -439,7 +453,12 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
         eprintln!("sekimore: denied: {}", resp.error.unwrap_or_default());
         return Ok(1);
     }
-    print_response(&resp);
+    // project list carries the board's field values, which pretty-printed JSON buries
+    if path == "/project/list" {
+        print_project_items(&resp);
+    } else {
+        print_response(&resp);
+    }
     Ok(0)
 }
 

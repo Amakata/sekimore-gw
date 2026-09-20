@@ -14,7 +14,7 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use sekimore_relay::api::types::{ApiRequest, ApiResponse, BootstrapRequest, BootstrapResponse};
-use sekimore_relay::api::{self, ApiContext};
+use sekimore_relay::api::{self, ApiContext, ResolvedBoard};
 use sekimore_relay::audit::Audit;
 use sekimore_relay::config::BootstrapMode;
 use sekimore_relay::github::upstream_token::UpstreamTokenStore;
@@ -317,11 +317,11 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
         );
     }
     if p == "/api/graphql" {
-        // 0.2.7: the fields query asks for `fields(`; the items query does not
-        let asks_for_fields = body
-            .get("query")
-            .and_then(|q| q.as_str())
-            .is_some_and(|q| q.contains("fields(first:"));
+        // 0.2.7: the fields query asks for `fields(`; the items query does not.
+        // 0.2.15: the items query now asks for `fieldValues(`, which must not be read as the
+        // fields query — the two answers have different shapes.
+        let query = body.get("query").and_then(|q| q.as_str()).unwrap_or("");
+        let asks_for_fields = query.contains(" fields(first:");
         if asks_for_fields {
             return (
                 StatusCode::OK,
@@ -334,7 +334,17 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
         }
         return (
             StatusCode::OK,
-            serde_json::json!({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_1"}}, "node": {"title": "Board", "items": {"nodes": []}}}}),
+            serde_json::json!({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_1"}}, "node": {"title": "Board", "items": {"nodes": [
+                {"id": "PVTI_1", "type": "ISSUE",
+                 "content": {"number": 7, "title": "in project, an issue"},
+                 "fieldValues": {"nodes": [
+                    // The built-in Title field repeats the title, and is dropped when rendering
+                    {"__typename": "ProjectV2ItemFieldTextValue", "text": "in project, an issue", "field": {"name": "Title"}},
+                    {"__typename": "ProjectV2ItemFieldSingleSelectValue", "name": "Todo", "field": {"name": "Status"}},
+                    // A value type the query did not ask for: __typename alone, no field
+                    {"__typename": "ProjectV2ItemFieldLabelValue"}
+                 ]}}
+            ]}}}}),
         );
     }
     // 0.2.9: merging with options, and deleting the head branch afterwards.
@@ -441,6 +451,17 @@ pub struct ApiFixture {
 /// The Projects v2 board the fixture allows by default, so tests that are not about board scoping
 /// do not have to care. Use `start_api_with_boards` to vary it.
 pub const TEST_BOARD: &str = "PVT_board";
+/// Its number, the way `relay.project.boards` and the board's URL write it.
+pub const TEST_BOARD_NUMBER: u32 = 2;
+
+/// A resolved board, as start-up would have produced it from `relay.project.boards`.
+pub fn board(number: u32, id: &str) -> ResolvedBoard {
+    ResolvedBoard {
+        id: id.to_string(),
+        number,
+        label: format!("users/tester/projects/{number}"),
+    }
+}
 
 pub async fn start_api(
     project: Project,
@@ -451,7 +472,7 @@ pub async fn start_api(
         project,
         bootstrap,
         upstream_token,
-        vec![TEST_BOARD.to_string()],
+        vec![board(TEST_BOARD_NUMBER, TEST_BOARD)],
     )
     .await
 }
@@ -460,7 +481,7 @@ pub async fn start_api_with_boards(
     project: Project,
     bootstrap: BootstrapMode,
     upstream_token: bool,
-    project_boards: Vec<String>,
+    project_boards: Vec<ResolvedBoard>,
 ) -> ApiFixture {
     let dir = tempfile::tempdir().unwrap();
     let (api_base, recorder) = mock_github().await;

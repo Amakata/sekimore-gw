@@ -67,10 +67,13 @@ sekimore release view --tag vX.Y.Z                            [release:read]
 sekimore release list                                         [release:read]
 sekimore release edit --tag vX.Y.Z --draft false              [release:publish]  draft の公開だけ
                                                               #   draft のままの編集は release:create
-sekimore project list --project-id PVT_…                      [project:read]
-sekimore project fields --project-id PVT_…                    [project:read]  update-item に要る field と option の id
-sekimore project add-item / update-item                       [project:add_item] / [project:update_item]
+sekimore project list --board 2                                [project:read]  アイテムと、その Status などのフィールド値
+sekimore project fields --board 2                             [project:read]  update-item に要る field と option の id
+sekimore project add-item / update-item --board 2             [project:add_item] / [project:update_item]
 ```
+
+- ボードは `--board <番号>` で指定します。config.yml と URL（`github.com/users/<user>/projects/<n>`）と同じ書き方です。案件のボードが1枚ならその1枚が既定値になるので、省略できます。`--project-id PVT_…` も受け付けますが、その node ID を調べるコマンドは操作者のものなので、あなたは取得できません。
+- `--board` と `--project-id` の両方を渡すとエラーです。案件にないボードを指すと、代わりに指せるボードが拒否メッセージに並びます。
 
 - repo は `--repo Org/Repo` で指定します（省略時は `SEKIMORE_REPO`）。上流が複数あるときは `--repo ghe.example.com/Org/Repo` のようにホストを付けられます。
 - `--body` の値が `-` で始まるときは必ず `--body="…"` の形にしてください（オプションと誤解されます）。

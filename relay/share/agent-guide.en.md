@@ -67,10 +67,13 @@ sekimore release view --tag vX.Y.Z                            [release:read]
 sekimore release list                                         [release:read]
 sekimore release edit --tag vX.Y.Z --draft false              [release:publish]  publishing a draft only
                                                               #   editing one that stays a draft is release:create
-sekimore project list --project-id PVT_…                      [project:read]
-sekimore project fields --project-id PVT_…                    [project:read]  field and option ids for update-item
-sekimore project add-item / update-item                       [project:add_item] / [project:update_item]
+sekimore project list --board 2                                [project:read]  the items, with their Status and other field values
+sekimore project fields --board 2                             [project:read]  field and option ids for update-item
+sekimore project add-item / update-item --board 2             [project:add_item] / [project:update_item]
 ```
+
+- Name a board with `--board <number>`, the way config.yml and the URL write it (`github.com/users/<user>/projects/<n>`). With one board configured it is the default and can be left out. `--project-id PVT_…` still works, but the command that prints that node id is the operator's, so it is not something you can look up.
+- Passing both `--board` and `--project-id` is an error. Naming a board the project does not have lists the ones it does.
 
 - Select the repository with `--repo Org/Repo`, or leave it to `SEKIMORE_REPO`. With several upstreams you can prefix the host: `--repo ghe.example.com/Org/Repo`.
 - When the value of `--body` starts with `-`, always write it as `--body="…"`, otherwise it is read as an option.
