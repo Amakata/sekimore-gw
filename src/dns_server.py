@@ -14,6 +14,7 @@ import dns.resolver
 from dnslib import AAAA, QTYPE, RR, A, DNSRecord
 
 from . import constants
+from .domains import domain_matches
 from .logger import ComponentType, log_dns_query, log_error, log_system_event
 
 if TYPE_CHECKING:
@@ -303,37 +304,6 @@ class DNSMapping:
         """Close the database connection."""
         if self.db:
             await self.db.close()
-
-
-def domain_matches(domain: str, patterns: list[str]) -> bool:
-    """Whether `domain` is covered by any entry in `patterns`.
-
-    An entry is an exact name, or `.example.com` / `*.example.com` for a name and everything
-    under it. The match is on label boundaries: `.github.com` covers `sub.github.com` and
-    `github.com`, and does not cover `evilgithub.com` — a name anyone can register, which a
-    plain suffix comparison would have accepted.
-
-    Shared by the allow, block and ignore lists so the three cannot drift apart.
-    """
-    d = domain.lower().rstrip(".")
-    for entry in patterns:
-        p = entry.lower().rstrip(".").strip()
-        if not p:
-            continue
-        if p.startswith("*."):
-            p = p[1:]
-        elif p.startswith("*"):
-            # `*github.io` with no dot would mean "anything ending in github.io", which takes
-            # in evilgithub.io — a name anyone can register. Read it as the exact name, the
-            # same conservative reading a label-boundary wildcard gets.
-            p = p[1:]
-        if p.startswith("."):
-            base = p[1:]
-            if d == base or d.endswith(p):
-                return True
-        elif d == p:
-            return True
-    return False
 
 
 class DNSServer:
