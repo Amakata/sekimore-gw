@@ -47,16 +47,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Makes a rebuild of this commit produce the same image as the last one: a layer's tar
-      # carries mtimes, so without this two builds of identical source differ. That is what #90
-      # was after.
+      # A fixed epoch, not the commit's. `rewrite-timestamp` normalises every layer's mtimes to
+      # this, so a layer whose *contents* did not change produces the same digest even when it was
+      # rebuilt from scratch — which is what stops a release re-pulling 160 MB of identical
+      # content (#97). The commit date would defeat that: a different release, a different value,
+      # a different digest.
       #
-      # It is *not* what stops the 160 MB re-pull between releases (#97) — the epoch comes from
-      # the commit, so a different release normalises to a different value and a cold rebuild
-      # still moves the digest. The registry cache below is what stops that, by not rebuilding
-      # the layer at all.
-      - name: Timestamp the layers from the commit
-        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+      # The value is arbitrary but must never change. 2020-01-01T00:00:00Z.
+      - name: Normalise the layer timestamps
+        run: echo "SOURCE_DATE_EPOCH=1577836800" >> "$GITHUB_ENV"
 
       - name: Build and push by digest (${{ matrix.arch }})
         id: build
@@ -66,19 +65,15 @@ jobs:
           platforms: ${{ matrix.platform }}
           # Do not emit the unknown/unknown attestation (provenance) manifest (matches base)
           provenance: false
-          # Push only the digest, no manifest. Tagging happens all together in the merge job.
-          # rewrite-timestamp normalises the layer mtimes to SOURCE_DATE_EPOCH above
+          # Push only the digest, no manifest. Tagging happens all together in the merge job
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_LC }},push-by-digest=true,name-canonical=true,push=true,rewrite-timestamp=true
-          # Registry cache, not type=gha: this workflow runs only on v*.*.* tags, and a GitHub
-          # Actions cache is scoped by ref — one written under refs/tags/v0.2.19 cannot be read
-          # from refs/tags/v0.2.20. Every release was writing a cache nobody would ever read and
-          # building from cold. A registry cache has no ref scoping
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_LC }}:buildcache-${{ matrix.arch }}
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_LC }}:buildcache-${{ matrix.arch }},mode=max
+          # No build cache, deliberately. Measured on 0.2.20's amd64 build: the image built in
+          # 4m00s and `cache-to: mode=max` then spent **3m38s** writing layers — for a cache that
+          # #97 showed was never read, since this workflow only runs on tags and a GitHub Actions
+          # cache is scoped by ref. Even reachable, exporting cost more than the 2m16s of build it
+          # could save. The timestamp normalisation above is what keeps the digests stable, which
+          # is the part that actually mattered; the build itself is cheap enough to just do.
 
-      # Pass the digest as an artifact rather than through job outputs: every matrix instance writes to the
-      # same outputs map, so a key one of them does not set can be overwritten with an empty string (losing a
-      # digest, depending on completion order). An artifact is reliable
       - name: Export digest
         run: |
           mkdir -p /tmp/digests
