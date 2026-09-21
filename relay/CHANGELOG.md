@@ -6,6 +6,20 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.29 (2026-09-21)
+
+### Security
+
+- served a filtered ssh-agent on a shared unix socket for the dev container: one fingerprint, SSHSIG in namespace `git` only, everything else answers FAILURE and is audited. The private key never leaves the host agent (#136)
+- refused a push under `signing: required` when any commit it brings lacks a signature; a commit arriving as a delta or missing from the pack is settled with the upstream API and fails closed (#137)
+- set the signing socket's mode through its own descriptor and its owner with `lchown`, so a symlink planted on the shared volume cannot redirect either (#136)
+
+### Enhancement
+
+- added `relay.signing_key {source: agent, fingerprint, namespace, timeout, socket, socket_uid}`; `/bootstrap` tells dev where the socket is and `check` shows whether the host agent holds the key (#136)
+- added `signing: required | optional | off` at project, upstream and repo level, default `optional`; `whoami` and the written guide say so only under `required` (#137)
+- added `unlock --stdin` for a passphrase piped from the host: refused on a terminal, and on a store that has no passphrase yet (#135)
+
 ## 0.2.28 (2026-09-21)
 
 ### Enhancement

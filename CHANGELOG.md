@@ -13,6 +13,18 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.29 (2026-09-21)
+
+### Security
+
+- signed the dev container's commits with the operator's own key through the relay's filtered ssh-agent when `relay.signing_key` is set; `agent-setup.sh` stops generating a disposable signing key and points `SSH_AUTH_SOCK` at the socket (#136)
+
+### Enhancement
+
+- unlocked the store from the host's own secret store: `gw:unlock-auto` reads the passphrase from the macOS Keychain, the Secret Service or a root-owned file and pipes it into `unlock --stdin` (#135)
+- ran that unlock from `gw:recreate` itself; `SGW_NO_AUTO_UNLOCK=1` leaves the store locked (#135)
+- added `gw:keychain-set` to store the passphrase once per host (#135)
+
 ## 0.2.28 (2026-09-21)
 
 ### Enhancement

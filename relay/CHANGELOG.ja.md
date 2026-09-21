@@ -5,6 +5,20 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.29（2026-09-21）
+
+### Security
+
+- dev コンテナ向けにフィルタ付き ssh-agent を共有 unix socket で提供した。fingerprint 1 本、namespace `git` の SSHSIG だけを通し、それ以外は FAILURE を返して監査に残す。秘密鍵はホストの agent から出ない (#136)
+- `signing: required` の push で、持ち込む commit に署名の無いものがあれば拒否するようにした。delta で届く commit や pack に無い commit は上流 API で確かめ、分からなければ拒否に倒す (#137)
+- 署名 socket のモードは自身の descriptor 経由で、所有者は `lchown` で設定するようにした。共有ボリュームに置かれた symlink でどちらも逸らせない (#136)
+
+### Enhancement
+
+- `relay.signing_key {source: agent, fingerprint, namespace, timeout, socket, socket_uid}` を足した。`/bootstrap` が dev に socket の場所を伝え、`check` がホスト agent に鍵があるかを出す (#136)
+- `signing: required | optional | off` を案件 / 上流 / repo で設定できるようにした。既定は `optional`。`whoami` と書き出すガイドは `required` のときだけ言及する (#137)
+- ホストからパイプで渡すパスフレーズ用に `unlock --stdin` を足した。端末と、パスフレーズがまだ無いストアには拒否する (#135)
+
 ## 0.2.28（2026-09-21）
 
 ### Enhancement
