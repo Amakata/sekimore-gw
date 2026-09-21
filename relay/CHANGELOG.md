@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.22 (2026-09-21)
+
+### Security
+
+- added `proxy-credential set` / `clear`, so the corporate proxy's credential lives in the secret store rather than in `config.yml` or `.devcontainer/.env`, both of which the agent can read (#105)
+
 ## 0.2.21 (2026-09-21)
 
 ### Fix
