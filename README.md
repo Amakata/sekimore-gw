@@ -103,6 +103,31 @@ ai-agent:
 
 The agent will automatically discover the gateway and route all traffic through it.
 
+### Operator tasks (mise)
+
+The `gw:*` tasks an operator drives the gateway with are shipped in the image, at
+`/usr/local/share/sekimore/gateway.mise.toml`. A project includes that file rather than keeping a
+copy of the tasks, which falls behind the relay:
+
+```bash
+docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.toml \
+  > .devcontainer/gateway.mise.toml
+```
+
+```toml
+# the project's mise.toml
+[task_config]
+includes = [".devcontainer/gateway.mise.toml"]
+
+[env]
+SGW = "{{config_root}}/.devcontainer/scripts/sgw.sh"
+```
+
+The project owns `sgw.sh` (it is what finds the container, so it cannot come from the image). The
+tasks use only its `gw`, `gw-tty`, `id` and `recreate` subcommands. `gw-tty` — `docker exec -it`
+unconditionally — is required by `gw:unlock` and `gw:passphrase`, which read a passphrase from the
+terminal.
+
 ## Configuration
 
 ### Environment Variables (Optional)
