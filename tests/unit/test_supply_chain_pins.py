@@ -365,9 +365,10 @@ def describe_supply_chain_pins():
 
     @pytest.mark.parametrize("path", DOCKERFILES, ids=lambda p: p.name)
     def it_does_not_ship_the_package_managers_cache(path):
-        # uv keeps every wheel it downloaded under /root/.cache/uv and it ends up in the layer.
-        # Measured on the published 0.2.24 image: 1,195 files, 44 MB, in an image that never
-        # installs anything again. It had been there since uv was adopted.
+        # uv keeps every wheel it downloaded under /root/.cache/uv and it ends up in the layer:
+        # 1,195 files in the published 0.2.24 image. Size-neutral — uv hardlinks from the cache
+        # into site-packages — but a package cache in an image that never installs again is
+        # clutter, and one less thing to explain in a layer diff.
         body = path.read_text(encoding="utf-8")
         uncached = [
             line.strip()
@@ -380,4 +381,25 @@ def describe_supply_chain_pins():
         assert uncached == [], (
             f"{path.name}: `uv pip install --no-cache`, or the wheels it downloaded ship with "
             f"the image: {uncached}"
+        )
+
+    @pytest.mark.parametrize(
+        "tool, lockfile",
+        [("cargo audit", "relay/Cargo.lock"), ("pip-audit", "uv.lock")],
+        ids=["rust", "python"],
+    )
+    def it_audits_both_halves_on_every_pull_request(tool, lockfile):
+        # `cargo audit` reads relay/Cargo.lock and nothing else, and for a while it was the only
+        # audit a pull request ran. The green check was read as "the repository is clean" while
+        # the Python side — most of the gateway — had 18 open alerts on the Security tab that
+        # nobody was looking at (#75). Both lockfiles get a reader on every pull request.
+        on_pull_request = [
+            p
+            for p in WORKFLOWS
+            if "pull_request" in p.read_text(encoding="utf-8")
+            and tool in p.read_text(encoding="utf-8")
+        ]
+        assert on_pull_request, (
+            f"no workflow triggered by pull_request runs `{tool}`, so {lockfile} has no audit "
+            f"before a change lands"
         )
