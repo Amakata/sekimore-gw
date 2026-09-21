@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.26 (2026-09-21)
+
+### Enhancement
+
+- no change to the relay; 0.2.25 and 0.2.26 are the same binary. The release ships the gateway with no Python bytecode (#121)
+
 ## 0.2.25 (2026-09-21)
 
 ### Enhancement
