@@ -74,7 +74,7 @@ sekimore_signing_key_comment() {
 # For any other tool, put the output of `sekimore guide` wherever that tool expects it.
 # SEKIMORE_AGENT_INSTRUCTIONS=claude,codex (default), or none to disable. Idempotent: a re-run replaces the block.
 sekimore_agent_instructions() {
-  local home=$1 own=$2
+  local home=$1 own=$2 signing_mode=${3:-}
   local targets=${SEKIMORE_AGENT_INSTRUCTIONS:-claude,codex}
   if [ "$targets" = none ] || [ -z "$targets" ]; then return 0; fi
   if ! command -v sekimore-relay >/dev/null 2>&1; then
@@ -94,6 +94,29 @@ sekimore_agent_instructions() {
   fi
   local version
   version=$(sekimore-relay --version 2>/dev/null | awk '{print $2}')
+  # 0.2.29 (#59): the guide gets a signing section only where the relay actually refuses an
+  # unsigned commit. Telling an agent about a rule that does not apply to it is how the rules
+  # that do apply stop being read.
+  local signing_note=""
+  if [ "$signing_mode" = required ]; then
+    signing_note=$(cat <<'SIGNING_EOF'
+
+## Signing is required here
+
+Every commit you push has to carry a signature. The relay reads the pack and refuses the push
+otherwise — `pushing refs/heads/... is not allowed: commit <sha> carries no signature`.
+
+This container is already set up to sign: plain `git commit` signs. So if a push is refused for
+this, the commit was made in a way that went around that setup (`-c commit.gpgsign=false`, a
+`--no-gpg-sign`, or a commit written by a tool of its own).
+
+- Fix the tip with `git commit -S --amend --no-edit`, and older commits with `git rebase --exec 'git commit -S --amend --no-edit' <base>`.
+- **Do not turn signing off.** `git config commit.gpgsign false` makes every later commit fail
+  the same check, one at a time. If signing itself is broken, say so and stop; it is the
+  operator's to fix, not something to work around.
+SIGNING_EOF
+)
+  fi
   case ",$targets," in
     *,claude,*)
       local skill_dir="$home/.claude/skills/sekimore-relay"
@@ -105,6 +128,7 @@ sekimore_agent_instructions() {
         echo "---"
         echo
         printf '%s\n' "$guide"
+        if [ -n "$signing_note" ]; then printf '%s\n' "$signing_note"; fi
       } > "$skill_dir/SKILL.md.tmp.$$"
       mv -f "$skill_dir/SKILL.md.tmp.$$" "$skill_dir/SKILL.md"
       chown -R "$own" "$home/.claude/skills" 2>/dev/null || true
@@ -125,6 +149,9 @@ sekimore_agent_instructions() {
         echo "In this environment git push, pull requests, CI checks and the GitHub API all go through sekimore-relay. Run \`sekimore guide\` before you start working."
         echo "In short: push to \`HEAD:refs/heads/sekimore/<topic>\` (then \`sekimore pr create\`) or to \`HEAD:refs/for/<base>\`. Direct pushes to main, tags, deletions and HTTPS git are refused."
         echo "Check your permissions and repositories with \`sekimore whoami\`. Denials are printed on stderr as \`sekimore: …\`. The operator's credentials are not in this environment; do not try to work around the relay."
+        if [ -n "$signing_note" ]; then
+          echo "Every commit you push has to be signed; plain \`git commit\` signs here. If a push is refused for a missing signature, amend with \`git commit -S --amend --no-edit\` — never turn \`commit.gpgsign\` off."
+        fi
         echo "<!-- <<< sekimore-relay <<< -->"
       } >> "$tmpa"
       mv -f "$tmpa" "$agents"
@@ -188,7 +215,7 @@ sekimore_relay_setup() {
   case $- in *x*) xtrace=1 ;; esac
   set +x
   local token="" token_expires="" repo="" git_domain="" git_domains="" resp=""
-  local sig_sock="" sig_fp=""
+  local sig_sock="" sig_fp="" sig_mode=""
   if [ -r "$env_file" ]; then
     token=$(sed -n 's/^SEKIMORE_TOKEN=//p' "$env_file" | head -1)
     token_expires=$(sed -n 's/^SEKIMORE_TOKEN_EXPIRES=//p' "$env_file" | head -1)
@@ -200,6 +227,7 @@ sekimore_relay_setup() {
     # knows where the gateway's signing socket is
     sig_sock=$(sed -n 's/^SEKIMORE_SIGNING_SOCK=//p' "$env_file" | head -1)
     sig_fp=$(sed -n 's/^SEKIMORE_SIGNING_KEY=//p' "$env_file" | head -1)
+    sig_mode=$(sed -n 's/^SEKIMORE_SIGNING_MODE=//p' "$env_file" | head -1)
   fi
   if [ -n "$token" ] && curl -fsS -m 5 -o /dev/null -X POST -H "Authorization: Bearer $token" \
        -H 'Content-Type: application/json' -d '{}' "$endpoint/whoami" 2>/dev/null; then
@@ -237,6 +265,7 @@ sekimore_relay_setup() {
         sb=$(printf '%s' "$resp" | grep -o '"signing":{[^}]*}') || sb=""
         sig_sock=$(printf '%s' "$sb" | grep -o '"socket":"[^"]*"' | cut -d'"' -f4)
         sig_fp=$(printf '%s' "$sb" | grep -o '"fingerprint":"[^"]*"' | cut -d'"' -f4)
+        sig_mode=$(printf '%s' "$sb" | grep -o '"mode":"[^"]*"' | cut -d'"' -f4)
       else
         echo "[agent] relay: WARNING: bootstrap did not return a token: $(printf '%s' "$resp" | head -c 300)"
         echo "[agent] relay:   the operator can register the key and issue a token on the gateway:"
@@ -306,6 +335,7 @@ sekimore_relay_setup() {
       echo "SEKIMORE_SIGNING_SOCK=$sig_sock"
       if [ -n "$sig_fp" ]; then echo "SEKIMORE_SIGNING_KEY=$sig_fp"; fi
     fi
+    if [ -n "$sig_mode" ]; then echo "SEKIMORE_SIGNING_MODE=$sig_mode"; fi
     if [ "$signing_mode" = gateway ]; then
       # git signs through the gateway's filtered agent. Exporting it is not an authentication
       # path: the socket refuses everything that is not an SSHSIG blob in namespace git, and the
@@ -409,9 +439,13 @@ sekimore_relay_setup() {
   if [ -f "$home/.gitconfig" ]; then chown "$own" "$home/.gitconfig"; fi
 
   # ---- put the agent guide where each tool reads it (Claude Code skill / Codex AGENTS.md) ----
-  sekimore_agent_instructions "$home" "$own" || echo "[agent] relay: WARNING: could not write agent instructions"
+  sekimore_agent_instructions "$home" "$own" "$sig_mode" || echo "[agent] relay: WARNING: could not write agent instructions"
 
   echo "[agent] relay: ready — git via $git_domains → $gw, API $endpoint, env $env_file $token_note"
+  if [ "$sig_mode" = required ] && [ -z "$signing_pub" ]; then
+    echo "[agent] relay: ERROR: this project is signing: required and there is no key to sign with."
+    echo "[agent] relay:   Every push to a branch will be refused until the operator fixes the signing key above."
+  fi
   case $signing_mode in
     gateway)
       # Nothing for anyone to register: the key is the operator's and was registered once.

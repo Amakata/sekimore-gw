@@ -138,6 +138,7 @@ def describe_relay_api():
                 "tags": [],
                 "delete": False,
                 "signed_tags": True,
+                "signing": "optional",
                 "permissions": ["issue:comment", "pr:create"],
             },
             {
@@ -149,6 +150,7 @@ def describe_relay_api():
                 "tags": [],
                 "delete": False,
                 "signed_tags": True,
+                "signing": "optional",
                 "permissions": ["issue:comment", "pr:create"],
             },
         ]
@@ -308,7 +310,7 @@ relay:
     repos:
       - {name: Org/App, mode: read-write, bases: [main], tags: ["v*"], permissions: {add_is_not_a_key: 1}}
       - {name: Org/Lib, mode: read-only, permissions: {allow: [pr:merge, issue:label], deny: [ci:read]}}
-      - {name: Org/Old, mode: read-only, permissions: [pr:read], delete: true, signed_tags: false}
+      - {name: Org/Old, mode: read-only, permissions: [pr:read], delete: true, signed_tags: false, signing: required}
 """
 
     def it_computes_effective_permissions_tags_and_delete(tmp_path):
@@ -337,6 +339,9 @@ relay:
         # 0.2.27 (#89): signed tags are required unless the repo (or the project) says otherwise
         assert repos["Org/App"]["signed_tags"] is True
         assert repos["Org/Old"]["signed_tags"] is False
+        # #59: the dashboard shows the same value the relay enforces
+        assert repos["Org/App"]["signing"] == "optional"
+        assert repos["Org/Old"]["signing"] == "required"
 
 
 def describe_multi_upstream():

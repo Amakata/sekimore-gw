@@ -186,4 +186,12 @@ database_path: "/data/security_gateway.db"
 #                                               # signature (`git tag -s`, any format). Lightweight and unsigned tags
 #                                               # are refused. Presence is checked, not whose key it is. Override with
 #                                               # repos[].signed_tags
-#     # repos[] takes mode / bases / push / tags / delete / signed_tags / permissions ({allow, deny}, a diff against the project defaults; deny wins)
+#     signing: optional                         # 0.2.29+ (#59) whether a push to a branch may carry an unsigned
+#                                               # commit. required | optional | off; optional when unset, so no
+#                                               # existing project changes behaviour. `required` refuses a push to
+#                                               # refs/heads/* or refs/for/* when any commit it brings has no
+#                                               # signature — presence, not validity, like signed_tags. Enforcement
+#                                               # has to live here: the guide is advice, and an agent handed a
+#                                               # commit that will not sign turns commit.gpgsign off, helpfully.
+#                                               # Override per upstream or with repos[].signing
+#     # repos[] takes mode / bases / push / tags / delete / signed_tags / signing / permissions ({allow, deny}, a diff against the project defaults; deny wins)

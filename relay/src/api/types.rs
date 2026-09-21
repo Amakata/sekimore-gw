@@ -192,6 +192,11 @@ pub struct SigningBlock {
     pub namespace: String,
     /// `ssh-ed25519 AAAA… comment`, for `user.signingkey` and `allowed_signers`
     pub public_key: String,
+    /// 0.2.29 (#59): the strictest `signing` any repository in this project asks for —
+    /// `required` | `optional` | `off`. `agent-setup.sh` writes the guide's signing section only
+    /// when it is `required`, so an agent is not told about a rule that does not apply to it
+    #[serde(default)]
+    pub mode: String,
 }
 
 /// 0.2.0: one git domain the relay serves (agent-setup uses it to write `Host <domain>` and `Port`).

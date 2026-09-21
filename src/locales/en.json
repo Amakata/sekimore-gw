@@ -133,6 +133,7 @@
   "relay.repo.direct_push": "direct push:",
   "relay.repo.tags": "tags:",
   "relay.repo.signed_tags": "signed tags:",
+  "relay.repo.signing": "commit signing:",
   "relay.repo.delete": "delete:",
   "relay.repo.permissions": "permissions:",
   "relay.token.issued": "issued:",

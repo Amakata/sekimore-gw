@@ -133,6 +133,7 @@
   "relay.repo.direct_push": "直接 push:",
   "relay.repo.tags": "タグ:",
   "relay.repo.signed_tags": "署名付きタグ:",
+  "relay.repo.signing": "コミット署名:",
   "relay.repo.delete": "削除:",
   "relay.repo.permissions": "権限:",
   "relay.token.issued": "発行:",

@@ -18,7 +18,7 @@ use sekimore_relay::git::upstream_local::LocalGitUpstream;
 use sekimore_relay::git::GitContext;
 use sekimore_relay::github::upstream_token::UpstreamTokenStore;
 use sekimore_relay::github::GitHub;
-use sekimore_relay::policy::{Mode, Project, RepoPolicy};
+use sekimore_relay::policy::{Mode, Project, RepoPolicy, SigningMode};
 use sekimore_relay::ssh::authorized_keys::AuthorizedKeys;
 use sekimore_relay::ssh::{load_or_create_host_key, server_config, SshServer};
 use std::os::unix::fs::PermissionsExt;
@@ -593,6 +593,118 @@ async fn only_a_signed_tag_object_goes_up() {
     );
     e.ok(&work, &["push", "origin", "v4"]);
     assert!(e.bare_ref("LibOrg/awesome-lib", "refs/tags/v4").is_some());
+}
+
+/// #59: with `signing: required`, a branch push carrying an unsigned commit is refused, and a
+/// signed one goes up. Decided from the pack, the same way the tag check is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signing_required_refuses_an_unsigned_commit_and_takes_a_signed_one() {
+    require_tools!();
+    if !have("ssh-keygen") {
+        if std::env::var("SEKIMORE_E2E_REQUIRED").is_ok() {
+            panic!("ssh-keygen is required for the signing test");
+        }
+        eprintln!("skipping: ssh-keygen not available");
+        return;
+    }
+    // pr:create so that the refs/for case below gets as far as the pack
+    let e = setup_tuned(&["pr:create"], |p| {
+        for r in &mut p.repos {
+            r.signing = SigningMode::Required;
+        }
+    })
+    .await;
+    seed_main(&e, "LibOrg/awesome-lib");
+    let work = clone(&e, "LibOrg/awesome-lib", "work");
+
+    // Unsigned: the shape every push had before this existed
+    e.commit_file(&work, "a.txt", b"a\n");
+    let o = e.git(&work, &["push", "origin", "HEAD:refs/heads/sekimore/topic"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "an unsigned commit must fail:\n{err}");
+    assert!(err.contains("carries no signature"), "{err}");
+    // The message has to name both ways out: sign it, or change the policy
+    assert!(err.contains("git commit -S"), "{err}");
+    assert!(err.contains("signing: optional"), "{err}");
+    assert!(err.contains("[remote rejected]"), "{err}");
+    assert!(!err.contains("hung up"), "{err}");
+    assert!(e
+        .bare_ref("LibOrg/awesome-lib", "refs/heads/sekimore/topic")
+        .is_none());
+    let audit = std::fs::read_to_string(&e.audit_path).unwrap();
+    assert!(audit.contains("push_denied_commit_not_signed"), "{audit}");
+
+    // Signed, with the same key shape the dev container uses
+    let key = e.dir.path().join("signing_ed25519");
+    let o = Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(&key)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let key_arg = format!("user.signingkey={}", key.display());
+    let sign = |args: &[&str]| {
+        let mut v = vec!["-c", "gpg.format=ssh", "-c", &key_arg];
+        v.extend_from_slice(args);
+        e.ok(&work, &v)
+    };
+    sign(&["commit", "-q", "--amend", "--no-edit", "-S"]);
+    e.ok(&work, &["push", "origin", "HEAD:refs/heads/sekimore/topic"]);
+    assert!(e
+        .bare_ref("LibOrg/awesome-lib", "refs/heads/sekimore/topic")
+        .is_some());
+
+    // Pointing a second branch at a commit the upstream already has sends an empty pack. There
+    // is nothing to judge, and refusing it would be a refusal with no commit behind it.
+    e.ok(&work, &["push", "origin", "HEAD:refs/heads/sekimore/same"]);
+    assert!(e
+        .bare_ref("LibOrg/awesome-lib", "refs/heads/sekimore/same")
+        .is_some());
+
+    // A second push on top: one signed commit and one not. The tip being signed must not carry
+    // the unsigned commit underneath it.
+    e.commit_file(&work, "b.txt", b"b\n");
+    std::fs::write(work.join("c.txt"), b"c\n").unwrap();
+    e.ok(&work, &["add", "c.txt"]);
+    sign(&["commit", "-q", "-m", "signed tip", "-S"]);
+    let o = e.git(&work, &["push", "origin", "HEAD:refs/heads/sekimore/topic"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        !o.status.success(),
+        "an unsigned commit under a signed tip must fail:\n{err}"
+    );
+    assert!(err.contains("carries no signature"), "{err}");
+
+    // refs/for goes to a branch too, so it is judged the same way
+    let o = e.git(&work, &["push", "origin", "HEAD:refs/for/main"]);
+    assert!(!o.status.success());
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("carries no signature"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+/// The default. Nothing about an existing project asked for the check, so nothing changes for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signing_optional_takes_a_commit_either_way() {
+    require_tools!();
+    let e = setup(&[]).await;
+    assert_eq!(
+        RepoPolicy::new("x", Mode::ReadWrite).signing,
+        SigningMode::Optional,
+        "this test is about the default; if the default moves it is testing nothing"
+    );
+    seed_main(&e, "LibOrg/awesome-lib");
+    let work = clone(&e, "LibOrg/awesome-lib", "work");
+    e.commit_file(&work, "a.txt", b"a\n");
+    e.ok(&work, &["push", "origin", "HEAD:refs/heads/sekimore/topic"]);
+    assert!(e
+        .bare_ref("LibOrg/awesome-lib", "refs/heads/sekimore/topic")
+        .is_some());
+    // and stage C still streams: nothing was asked of the pack, so nothing held the trailer
+    let audit = std::fs::read_to_string(&e.audit_path).unwrap();
+    assert!(!audit.contains("commit_not_signed"), "{audit}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

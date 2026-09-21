@@ -258,6 +258,7 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 | `tags` | `[]` | push を許すタグ glob。空は拒否 |
 | `delete` | `false` | ブランチとタグの削除、および既に upstream にあるタグを動かすこと。削除して作り直すのと強制更新は同じ結果なので、権限も同じ。まだ無いタグを作るだけなら `tags` で足りる |
 | `delete_merged_branch` | `false` | `pr merge --delete-branch` がマージしたブランチを消してよいか。そのブランチだけなので `delete` とは別の権限。forge 側で自動削除している場合は不要 |
+| `signing` | `optional` | 0.2.29（#59）branch への push が署名の無いコミットを含んでよいか — `required` \| `optional` \| `off`。`required` は `refs/heads/*` / `refs/for/*` への push に署名の無いコミットがあれば拒否する。`signed_tags` と同じく有無だけを見る。未指定は `optional` なので既存の案件の挙動は変わらない。上流層と repo で上書きできる |
 | `boards` | `[]` | この案件が触れてよい Projects v2 のボード。URL のとおりに書く: `github.com/orgs/acme/projects/3` なら `{ org: acme, number: 3 }`、`{ user: someone, number: 1 }` も可。空なら Projects の操作を全て拒否 |
 | `repos` | `[]` | リポジトリ。`Org/Repo` は既定上流、`host/Org/Repo` で上流を明示 |
 | `upstreams.<domain>` | | 上流ごとの層。`permissions`（差分）、`push` / `tags` / `delete`（その上流の既定）、`repos` |

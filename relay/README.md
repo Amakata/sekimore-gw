@@ -261,6 +261,7 @@ Keys are exact FQDN matches. Listing `github` more than once gives you more than
 | `tags` | `[]` | Tag globs that may be pushed. Empty means denied |
 | `delete` | `false` | Deleting branches and tags, and moving a tag that already exists upstream. Delete-and-recreate and a forced update leave the same result, so they share one authority. Creating a tag that is not there yet only needs `tags` |
 | `delete_merged_branch` | `false` | Whether `pr merge --delete-branch` may remove the branch it just merged. Only that branch, so it is not the same authority as `delete`. Leave it off where the forge already deletes merged branches itself |
+| `signing` | `optional` | 0.2.29 (#59): whether a push to a branch may carry an unsigned commit — `required` \| `optional` \| `off`. `required` refuses a push to `refs/heads/*` or `refs/for/*` when any commit it brings has no signature; presence, not validity, like `signed_tags`. `optional` when unset, so no existing project changes behaviour. Overridable per upstream and per repo |
 | `boards` | `[]` | The Projects v2 boards this project may touch, written the way the URL reads: `{ org: acme, number: 3 }` for `github.com/orgs/acme/projects/3`, or `{ user: someone, number: 1 }`. Empty refuses every Projects operation |
 | `repos` | `[]` | Repositories. `Org/Repo` means the default upstream; `host/Org/Repo` names one explicitly |
 | `upstreams.<domain>` | | A per-upstream layer: `permissions` (a delta), `push` / `tags` / `delete` (that upstream's defaults), and `repos` |
