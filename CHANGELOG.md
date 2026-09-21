@@ -13,6 +13,12 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.25 (2026-09-21)
+
+### Enhancement
+
+- passed `--no-cache` to `uv pip install`: every wheel it downloaded was shipping in the image, 1,195 files and 44 MB, in a container that never installs anything again (#118)
+
 ## 0.2.24 (2026-09-21)
 
 ### Fix
