@@ -130,6 +130,12 @@ SGW = "{{config_root}}/.devcontainer/scripts/sgw.sh"
 `gw` / `gw-tty` / `id` / `recreate` の 4 つだけです。`gw-tty`（常に `docker exec -it`）は、
 端末からパスフレーズを読む `gw:unlock` と `gw:passphrase` に必要です。
 
+0.2.29 から、作り直しのたびにパスフレーズを打つ必要はありません。`mise run gw:keychain-set` で
+ホスト側の秘密の置き場（macOS Keychain / Secret Service / `/etc/sekimore` 以下の root 所有ファイル）に
+一度保存すれば、`gw:recreate` が自分で解錠します（`SGW_NO_AUTO_UNLOCK=1` で施錠のまま）。
+ゲートウェイ側は関与しません。パスフレーズは今までどおり control socket 経由で届き、
+コンテナの中から取りに行く手段はありません。`gw:unlock` は変わらず、何も保存していないときの入口です。
+
 ## 設定
 
 ### 環境変数（任意）

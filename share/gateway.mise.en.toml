@@ -66,6 +66,143 @@ description = "Unlock the secret store (needed after every gateway recreate; the
 raw = true
 run = 'bash "$SGW" gw-tty sekimore-relay unlock'
 
+# 0.2.29: gw:unlock-auto takes the same passphrase from whatever this host already keeps secrets
+# in, so a recreate needs nobody at the keyboard. The gateway is unchanged by it — the passphrase
+# still arrives over the control socket, and nothing inside the gateway can go and find it.
+["gw:unlock-auto"]
+description = "Unlock the secret store with the passphrase this host has stored (macOS Keychain / Secret Service / a root-owned file). Says so and exits 0 when there is none"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+# Feed the gateway its passphrase from wherever this host already keeps secrets. The value is
+# never an argument and never exported: it sits in one shell variable and leaves it only down the
+# pipe into `unlock --stdin`, which reads it as one line. The gateway learns nothing new — the
+# passphrase still arrives over the control socket, exactly as when it is typed.
+
+project=$(basename "${MISE_PROJECT_ROOT:-$PWD}")
+dir=${SGW_PASSPHRASE_DIR:-/etc/sekimore}
+# The file sources below are root-owned by design. Read as ourselves first (the operator may be
+# root already, or may own the file), sudo -n after. Never an interactive sudo: this runs inside
+# gw:recreate, where a password prompt would hang an unattended restart.
+maybe_root() { "$@" 2>/dev/null || sudo -n "$@" 2>/dev/null; }
+
+pass=""
+from=""
+# What was consulted, for the message at the end. A backend that is installed but answered
+# nothing (a locked keyring, an entry under another name) is otherwise indistinguishable from a
+# host that has no backend at all, and the two want different things done about them.
+tried=""
+if command -v security >/dev/null 2>&1; then
+  tried="$tried the macOS Keychain"
+  pass=$(security find-generic-password -s sekimore-gw -a "$project" -w 2>/dev/null || true)
+  if [ -n "$pass" ]; then from="the macOS Keychain"; fi
+fi
+if [ -z "$pass" ] && command -v secret-tool >/dev/null 2>&1; then
+  tried="$tried the Secret Service"
+  pass=$(secret-tool lookup service sekimore-gw project "$project" 2>/dev/null || true)
+  if [ -n "$pass" ]; then from="the Secret Service"; fi
+fi
+# A server has neither of those. systemd-creds first: it ties the file to this machine's TPM or
+# host key, so a copied disk does not carry a usable passphrase. The plain file does, which is
+# why it is last.
+if [ -z "$pass" ] && [ -e "$dir/$project.passphrase.cred" ]; then
+  tried="$tried $dir/$project.passphrase.cred"
+  pass=$(maybe_root systemd-creds decrypt --name=sekimore-gw "$dir/$project.passphrase.cred" - || true)
+  if [ -n "$pass" ]; then from="$dir/$project.passphrase.cred"; fi
+fi
+if [ -z "$pass" ] && [ -e "$dir/$project.passphrase" ]; then
+  tried="$tried $dir/$project.passphrase"
+  pass=$(maybe_root cat "$dir/$project.passphrase" || true)
+  if [ -n "$pass" ]; then from="$dir/$project.passphrase"; fi
+fi
+
+# Exit 0 with nothing stored: gw:recreate calls this unconditionally, and a host that never set a
+# passphrase up is not a failed recreate.
+if [ -z "$pass" ]; then
+  echo "gw:unlock-auto: no passphrase stored for '$project' on this host${tried:+ (asked:$tried)}. Store one with: mise run gw:keychain-set   (or unlock by hand with: mise run gw:unlock)"
+  exit 0
+fi
+
+echo "gw:unlock-auto: unlocking from $from"
+printf '%s\n' "$pass" | bash "$SGW" gw sekimore-relay unlock --stdin
+'''
+
+["gw:keychain-set"]
+description = "Store the secret store's passphrase in this host's own keychain, once, so that gw:recreate unlocks by itself afterwards"
+# raw: the backend prompts for the passphrase on this terminal, and mise must not sit between
+raw = true
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+# Put the gateway's passphrase into this host's own secret store, once. Read back afterwards: a
+# store that silently did not happen looks exactly like one that did, until the next recreate.
+
+project=$(basename "${MISE_PROJECT_ROOT:-$PWD}")
+dir=${SGW_PASSPHRASE_DIR:-/etc/sekimore}
+
+if command -v security >/dev/null 2>&1; then
+  # security prompts for the password itself, echo off and with a retype. Handing it over as
+  # -w <value> would put the passphrase in ps for as long as the command runs.
+  security add-generic-password -U -s sekimore-gw -a "$project" -w
+  stored=$(security find-generic-password -s sekimore-gw -a "$project" -w 2>/dev/null || true)
+  if [ -z "$stored" ]; then
+    echo "gw:keychain-set: nothing was stored - the Keychain has no sekimore-gw entry for '$project'" >&2
+    exit 1
+  fi
+  echo "gw:keychain-set: the macOS Keychain now holds a passphrase for '$project' (${#stored} characters). mise run gw:recreate will use it."
+  exit 0
+fi
+
+if command -v secret-tool >/dev/null 2>&1; then
+  # Typed twice. Nothing here can tell a mistyped passphrase from the right one, and stored
+  # wrong it fails at every recreate from now on rather than at the keyboard.
+  printf 'Passphrase for %s: ' "$project" >&2
+  read -rs pass
+  echo >&2
+  printf 'Again: ' >&2
+  read -rs again
+  echo >&2
+  if [ -z "$pass" ]; then
+    echo "gw:keychain-set: an empty passphrase is not accepted; nothing was stored" >&2
+    exit 1
+  fi
+  if [ "$pass" != "$again" ]; then
+    echo "gw:keychain-set: the two did not match; nothing was stored" >&2
+    exit 1
+  fi
+  printf '%s\n' "$pass" | secret-tool store --label="sekimore-gw $project" service sekimore-gw project "$project"
+  stored=$(secret-tool lookup service sekimore-gw project "$project" 2>/dev/null || true)
+  if [ "$stored" != "$pass" ]; then
+    echo "gw:keychain-set: the Secret Service did not give back what was stored for '$project'" >&2
+    exit 1
+  fi
+  echo "gw:keychain-set: the Secret Service now holds a passphrase for '$project' (${#stored} characters). mise run gw:recreate will use it."
+  exit 0
+fi
+
+cat >&2 <<EOF
+gw:keychain-set: this host has neither the macOS Keychain (security) nor a Secret Service
+(secret-tool), so there is nowhere to put it. On a server, use a root-owned file instead.
+This is the host's own $dir - the gateway has a directory of the same name inside the
+container, and mounting this one into it would hand the gateway its own passphrase.
+
+Preferred - tied to this machine, so a copied disk does not carry a usable passphrase:
+
+  sudo install -d -m 0755 $dir
+  sudo systemd-creds encrypt --name=sekimore-gw - $dir/$project.passphrase.cred
+      (type the passphrase, then Ctrl-D)
+
+Without systemd-creds - the file itself is the secret, so a copy of it is the store:
+
+  sudo install -d -m 0755 $dir
+  sudo install -m 0600 /dev/null $dir/$project.passphrase
+  sudo tee $dir/$project.passphrase >/dev/null   (type the passphrase and Enter, then Ctrl-D)
+
+mise run gw:unlock-auto reads either of those. Set SGW_PASSPHRASE_DIR to use another directory.
+EOF
+exit 1
+'''
+
 ["gw:lock"]
 description = "Forget the secret store's key (the GitHub API stops until the next unlock; since 0.2.19 the cached token goes with it)"
 run = 'bash "$SGW" gw sekimore-relay lock'
@@ -154,8 +291,23 @@ description = "Restart the gateway (after changing domain_handlers / relay in co
 run = 'docker restart "$(bash "$SGW" id sekimore-gw)"'
 
 ["gw:recreate"]
-description = "Pull the latest image and recreate the gateway (after raising the image tag in compose; docker restart does not swap the image)"
-run = 'bash "$SGW" recreate'
+description = "Pull the latest image and recreate the gateway (after raising the image tag in compose; docker restart does not swap the image), then unlock the store when this host has the passphrase (SGW_NO_AUTO_UNLOCK=1 to leave it locked)"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+bash "$SGW" recreate
+# A recreated gateway starts locked, and a locked store means no GitHub API at all. Unlocking
+# here is the difference between a recreate and a recreate plus a person. On a host with nothing
+# stored, gw:unlock-auto says so and exits 0, so this stays quiet there.
+if [ -n "${SGW_NO_AUTO_UNLOCK:-}" ]; then
+  echo "gw:recreate: SGW_NO_AUTO_UNLOCK is set, so the store was left locked. Unlock it with: mise run gw:unlock"
+  exit 0
+fi
+if ! mise run gw:unlock-auto; then
+  echo "gw:recreate: the gateway was recreated, but the automatic unlock failed. Unlock it with: mise run gw:unlock" >&2
+  exit 1
+fi
+'''
 
 ["gw:shell"]
 description = "A shell on the gateway (root)"

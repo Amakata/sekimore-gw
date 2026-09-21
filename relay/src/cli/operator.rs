@@ -919,15 +919,20 @@ pub fn bootstrap(path: &Path, action: BootstrapAction) -> anyhow::Result<()> {
 /// 0.2.15: the passphrase is typed here and sent over the relay's control socket, which lives on a
 /// volume the dev container does not mount. It is never an argument or an environment variable —
 /// either would put it in `ps`, and an argument would put it in shell history too.
-pub async fn unlock(path: &Path) -> anyhow::Result<()> {
+///
+/// 0.2.29: `--stdin` reads it from a pipe instead, so the host can feed it from its own keychain
+/// (`mise run gw:unlock-auto`) and a recreate needs nobody at the keyboard. Only the typing
+/// changes — the passphrase still arrives over the same socket, and the gateway still has no way
+/// to find it on its own.
+pub async fn unlock(path: &Path, from_stdin: bool) -> anyhow::Result<()> {
     let paths = store_paths(path)?;
     let (_, state) = store::control::call(&paths, r#"{"op":"status"}"#).await?;
-    match state.as_str() {
-        "unlocked" => {
+    match unlock_step(&state, from_stdin)? {
+        UnlockStep::AlreadyUnlocked => {
             println!("the secret store is already unlocked");
             Ok(())
         }
-        "not initialised" => {
+        UnlockStep::SetTheFirstPassphrase => {
             eprintln!(
                 "No secret store yet. Choose a passphrase.\n\
                  Nothing stored can be read without it, and there is no way to recover it — keep a\n\
@@ -941,10 +946,42 @@ pub async fn unlock(path: &Path) -> anyhow::Result<()> {
             }
             send_passphrase(&paths, PassphraseFor::NewStore, &first).await
         }
-        _ => {
-            let pass = store::control::prompt("Passphrase")?;
+        UnlockStep::Open => {
+            let pass = if from_stdin {
+                store::control::passphrase_from_stdin()?
+            } else {
+                store::control::prompt("Passphrase")?
+            };
             send_passphrase(&paths, PassphraseFor::ExistingStore, &pass).await
         }
+    }
+}
+
+/// What `unlock` does with the state the store reports.
+#[derive(Debug, PartialEq, Eq)]
+enum UnlockStep {
+    AlreadyUnlocked,
+    SetTheFirstPassphrase,
+    Open,
+}
+
+/// Separated from `unlock` so the one case that has to be refused can be tested: everything else
+/// in `unlock` needs a control socket and a terminal.
+///
+/// `--stdin` is refused on a store that has no passphrase yet. The first one is chosen rather
+/// than recalled, which is why it is typed twice and checked against itself; a pipe has no second
+/// copy, and a mistyped passphrase written straight into a keychain hides the mistake rather than
+/// catching it — the store would then be sealed with bytes nobody meant to choose.
+fn unlock_step(state: &str, from_stdin: bool) -> anyhow::Result<UnlockStep> {
+    match state {
+        "unlocked" => Ok(UnlockStep::AlreadyUnlocked),
+        "not initialised" if from_stdin => anyhow::bail!(
+            "there is no secret store yet, and the first passphrase is chosen at a prompt that \
+             asks for it twice. Run `mise run gw:unlock` once, then `mise run gw:keychain-set` \
+             to store it"
+        ),
+        "not initialised" => Ok(UnlockStep::SetTheFirstPassphrase),
+        _ => Ok(UnlockStep::Open),
     }
 }
 
@@ -1169,6 +1206,27 @@ pub async fn change_passphrase(path: &Path, kdf: Option<&str>) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The adversarial case for `--stdin`: a passphrase nobody confirmed becoming the one the
+    /// store is created with. Nothing would look wrong at the time — the store opens with it —
+    /// and the mistake surfaces as a keychain entry nobody can reproduce.
+    #[test]
+    fn a_piped_passphrase_is_refused_on_a_store_that_has_none_yet() {
+        let err = unlock_step("not initialised", true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("gw:unlock"), "say what to run instead: {err}");
+        // and the three that are allowed through
+        assert_eq!(
+            unlock_step("not initialised", false).unwrap(),
+            UnlockStep::SetTheFirstPassphrase
+        );
+        assert_eq!(unlock_step("locked", true).unwrap(), UnlockStep::Open);
+        assert_eq!(
+            unlock_step("unlocked", true).unwrap(),
+            UnlockStep::AlreadyUnlocked
+        );
+    }
 
     #[test]
     fn parse_keyscan_output_keeps_keys_and_drops_comments() {

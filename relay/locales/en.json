@@ -11,6 +11,7 @@
   "cli.whoami": "Show which upstream identity the relay acts as",
   "cli.check": "Show the resolved policy and state (agent / known_hosts / token / keys)",
   "cli.unlock": "Unlock the secret store (prompts; sets the passphrase the first time)",
+  "cli.unlock.stdin": "Read the passphrase from stdin as one line instead of prompting (what mise run gw:unlock-auto pipes into). Refused at a terminal",
   "cli.lock": "Forget the secret store's key until it is unlocked again",
   "cli.passphrase": "Change the secret store's passphrase (prompts for the old one and the new)",
   "cli.passphrase.kdf": "argon2id (default) | pbkdf2-sha256. PBKDF2 is what FIPS approves and is weaker against GPUs for the same passphrase",

@@ -11,6 +11,7 @@
   "cli.whoami": "関所がどの上流 identity として動くか",
   "cli.check": "解決済みポリシーと状態（agent / known_hosts / token / keys）を表示する",
   "cli.unlock": "秘密ストアを解錠する (プロンプト。初回はパスフレーズの設定)",
+  "cli.unlock.stdin": "パスフレーズをプロンプトではなく標準入力から 1 行で読む (mise run gw:unlock-auto が流し込む)。端末では拒否する",
   "cli.lock": "秘密ストアの鍵を忘れる (次の解錠まで使えなくなる)",
   "cli.passphrase": "秘密ストアのパスフレーズを変更する (旧と新をプロンプトで尋ねる)",
   "cli.passphrase.kdf": "argon2id (既定) | pbkdf2-sha256。PBKDF2 は FIPS 承認だが、同じパスフレーズなら GPU に対して弱い",
