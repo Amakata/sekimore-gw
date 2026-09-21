@@ -10,10 +10,10 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
 
@@ -36,3 +36,9 @@ jobs:
       # as in the test suite, because a changelog problem is a lint problem: nothing is broken.
       - name: Check the changelog style
         run: uv run pytest tests/unit/test_changelog_style.py -q --no-cov
+
+      # Same shape as the changelog: a step that slipped back to a floating tag breaks nothing, so
+      # it needs somewhere to be noticed. Cheap, so it sits in the fast lane rather than waiting
+      # for the test job.
+      - name: Check the action and image pins
+        run: uv run pytest tests/unit/test_supply_chain_pins.py -q --no-cov
