@@ -2,6 +2,18 @@
 
 *[English](CHANGELOG.md)*
 
+## 0.2.15（2026-09-21）
+
+- `project list` / `fields` / `add-item` / `update-item` が `--board 2` を取る。`config.yml` と URL と同じ番号。`--project-id` も従来どおりで、ボードが1枚の案件はどちらも省略できる
+- `project list` が各アイテムのフィールド値（single-select / text / number / date）を返す。`update-item` で書いた値を読み戻せる
+- 番号がプルリクエストを指すとき、`issue` の書き込みが `pr:*` を要求する。GitHub がプルリクエストを issues のエンドポイントで返すため `issue:close` が届いていた。`pr:label` と `pr:assign` を新設
+- `issue update --number N [--title …] [--body …]`。`issue:create` ではなく新設の `issue:update` の下
+- 設定の reload がゲートウェイ本体のイベントループで走り、firewall の規則変更がロックを取る。交錯すると NFLOG ルールが ACCEPT より前に残るか消えていた
+- `domain_handlers` が中継するドメインを `allow_domains` が覆っていない設定を、ドメイン名を挙げて起動時に拒否する。`deny` と `splice` は対象外
+- 秘密ストアを追加。専用ファイルの SQLite、値ごとの AES-256-GCM、レコードの身元を AAD に結合。まだ誰も使っていない
+- `sekimore-relay unlock` / `lock` / `store-status` / `passphrase`。エージェント向け API ではなく、関所の状態ディレクトリに置いた unix socket 経由。`mise run gw:unlock` ほか
+- プルリクエストと `main` への push が `:pr-<n>` と `:main` を arm64 で作る。版番号を使わずにゲートウェイの変更を試せる
+
 ## 0.2.14（2026-09-18）
 
 - reload が ipset を `allow_domains` だけから作り直していたので、`allow_ips` と `block_ips` が次の再起動まで消えていた。設定に直接書く IP は、DNS 名で代替できないものだけに使う

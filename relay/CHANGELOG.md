@@ -2,6 +2,18 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.15 (2026-09-21)
+
+- `project list` / `fields` / `add-item` / `update-item` take `--board 2`, the number `config.yml` and the URL already use. `--project-id` still works, and a project with one board can leave both out
+- `project list` carries each item's field values — single-select, text, number and date — so a field written with `update-item` can be read back
+- The `issue` writes require `pr:*` when the number names a pull request: GitHub serves pull requests from the issues endpoints, so `issue:close` reached one. `pr:label` and `pr:assign` are new
+- `issue update --number N [--title …] [--body …]`, under a new `issue:update` rather than `issue:create`
+- The config reload runs on the gateway's own event loop and the firewall's rule changes hold a lock. They could interleave, leaving the NFLOG rule ahead of the ACCEPTs or gone
+- A config whose `domain_handlers` relays a domain `allow_domains` does not cover is refused at start-up, naming it. `deny` and `splice` entries are not checked
+- A secret store: SQLite in its own file, AES-256-GCM per value, the record's identity as associated data. Nothing consumes it yet
+- `sekimore-relay unlock` / `lock` / `store-status` / `passphrase`, over a unix socket beside the relay's state rather than the agent-facing API. `mise run gw:unlock` and friends
+- A pull request and a push to `main` build `:pr-<n>` and `:main` for arm64, so a gateway change can be tried without spending a version number
+
 ## 0.2.14 (2026-09-18)
 
 - A reload rebuilt the ipsets from `allow_domains` alone, so `allow_ips` and `block_ips` were dropped until the next restart. Addresses named directly in the config are the ones with no DNS name to fall back on
