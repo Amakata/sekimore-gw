@@ -5,7 +5,7 @@
 # TARGETARCH with cargo-zigbuild, because building arm64 under QEMU takes over 40 minutes.
 # Being static musl, it does not depend on the glibc generation and works as-is when COPY --from'd
 # into the devcontainer base image.
-FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.20.1@sha256:af1bc2b869c5d76c1300f7a4685c2f1793d068e6e895c9f5c399b517b31a731e AS relay-builder
+FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.23.4@sha256:d8313491ec5798de0633fdc1c5753761bff79967bea69076020dc78121b2cca8 AS relay-builder
 ARG TARGETARCH
 WORKDIR /build
 # Install the toolchain version from rust-toolchain.toml first (a layer source changes do not invalidate)
