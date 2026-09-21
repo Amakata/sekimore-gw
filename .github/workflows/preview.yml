@@ -33,7 +33,15 @@ jobs:
   preview:
     # fork からの PR には secrets が渡らないので GHCR に push できない。誰にも直せない赤を
     # 残さないよう、押せないときは走らせない
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    #
+    # Dependabot の PR も同じ理由で外す。ブランチはこのリポジトリにあるので上の fork 判定は
+    # 通ってしまうが、dependabot[bot] が起こした pull_request の GITHUB_TOKEN は read-only に
+    # 落とされ、packages: write を書いても効かない。放っておくと依存更新の PR が毎回赤くなる。
+    # push (main) 側は誰が押しても焼く。
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]')
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read

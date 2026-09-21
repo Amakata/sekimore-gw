@@ -1,0 +1,126 @@
+# The consumer of the pins. #87 put every `uses:` on a commit sha and kept the version as a
+# trailing comment; #93 put both base images on a digest. Both were written to be read by a
+# machine, and until this file existed none was: every pin moved by hand (#103).
+#
+# Weekly, not daily. On a repository this size a daily run is the same set of bumps delivered in
+# smaller pieces, and the ones that cannot wait a week are opened as Dependabot *security*
+# updates the moment the advisory lands, on their own schedule, not this one.
+#
+# No `target-branch`, deliberately. Version updates then go to the default branch, `main`, which
+# is what CI runs on (`pull_request: branches: [master, main]`). Naming a branch here would also
+# switch security updates off for that ecosystem, and those are the half worth keeping.
+#
+# What Dependabot does NOT maintain in this repository, so that nobody goes looking:
+#
+#   - the Debian packages (`apt-get install iptables=1.8.11-2 …`) in Dockerfile and
+#     Dockerfile.agent, and the `ARG DEBIAN_SNAPSHOT=…` archive they resolve against. There is no
+#     reader for either. They move by hand, and `tests/unit/test_supply_chain_pins.py` fails once
+#     the snapshot is more than 90 days old — that test is the whole of the guard.
+#   - the `# syntax=docker/dockerfile:1.7@sha256:…` frontend directive. The Docker parser matches
+#     `FROM` lines and Kubernetes-shaped YAML, and nothing else.
+#   - the Rust toolchain. Dependabot does have a `rust-toolchain` ecosystem, and it is left out
+#     on purpose rather than for want of one: `1.89.0` is written in relay/rust-toolchain.toml,
+#     as `rust-version` in relay/Cargo.toml, as `rust = "1.89.0"` in mise.toml, and as the ref of
+#     dtolnay/rust-toolchain below. It would move one of the four and desync the other three.
+
+version: 2
+
+updates:
+  # ---- GitHub Actions ----
+  # 10 distinct actions over 26 `uses:` lines in five workflows. Grouped into one pull request:
+  # ungrouped, an actions/checkout bump alone rewrites five files, and an ordinary week is six or
+  # seven pull requests for what is one decision.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Asia/Tokyo"
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+    ignore:
+      # Pinned to the head of the *branch* `1.89.0`; this action publishes exactly one tag, `v1`.
+      # The step passes no `toolchain:` input, so the ref is the Rust version — the only bump
+      # Dependabot could offer is from a fixed version to a floating one, silently. See the note
+      # above: the toolchain moves in four files at once, by hand.
+      - dependency-name: "dtolnay/rust-toolchain"
+
+  # ---- Rust (relay/Cargo.toml, relay/Cargo.lock) ----
+  # Minor and patch in one pull request. A major is left on its own, because that is the one
+  # whose diff has to be read rather than whose CI result has to be looked at.
+  - package-ecosystem: "cargo"
+    directory: "/relay"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Asia/Tokyo"
+    commit-message:
+      prefix: "relay"
+    groups:
+      cargo:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ---- Python (pyproject.toml, uv.lock) ----
+  # `uv` is its own ecosystem; `pip` covers pip / pip-compile / pipenv / Poetry and does not read
+  # uv.lock. Runtime and dev tooling are separated so that a ruff bump failing `ci:py-lint` is not
+  # in the same pull request as a pydantic bump failing the tests.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Asia/Tokyo"
+    commit-message:
+      prefix: "chore"
+    groups:
+      python:
+        dependency-type: "production"
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      python-dev:
+        dependency-type: "development"
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ---- Docker (the `FROM` digests in Dockerfile and Dockerfile.agent) ----
+  # No `update-types` filter: a base image bump is usually the digest moving under an unchanged
+  # tag (`python:3.13-slim@sha256:…`), which has no semver shape to filter on. Both files are at
+  # the repository root and the fetcher matches any name containing `dockerfile`, so one entry
+  # covers Dockerfile.agent too.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Asia/Tokyo"
+    commit-message:
+      prefix: "ci"
+    groups:
+      images:
+        patterns: ["*"]
+
+  # ---- Docker Compose ----
+  # tests/docker-compose.test.yml pins python:3.11-slim by digest, and the `docker` ecosystem does
+  # not read compose files. `/` is listed as well: docker-compose.yml builds both its services and
+  # so has nothing to bump today, but an `image:` added to it later is covered from the start
+  # rather than whenever someone remembers the file exists — the same reason
+  # test_supply_chain_pins.py already lists it.
+  - package-ecosystem: "docker-compose"
+    directories:
+      - "/"
+      - "/tests"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Asia/Tokyo"
+    commit-message:
+      prefix: "ci"
