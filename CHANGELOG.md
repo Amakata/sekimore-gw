@@ -13,6 +13,21 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.27 (2026-09-21)
+
+### Security
+
+- refused a pushed tag that is not a signed tag object — lightweight, unsigned, or not in the push. Presence of a signature, not validity; `signed_tags: false` turns it off per project, upstream or repo (#128)
+
+### Fix
+
+- ran `pip-audit` over `uv.lock` on every pull request; `ci:py-audit` had never worked and was in no workflow, so `cargo audit` alone stood for the whole repository (#123)
+
+### Enhancement
+
+- grouped the RustCrypto crates for Dependabot, so a new generation of them arrives as one pull request instead of the pair that could not build (#125)
+- took Dependabot's bumps: actions/checkout 7, upload/download-artifact, setup-python 7 (#112); cargo-zigbuild 0.23.4 (#106); russh 0.63.3, clap 4.6.7 (#107); getrandom 0.4 (#110); base64 0.23 (#111)
+
 ## 0.2.26 (2026-09-21)
 
 ### Enhancement

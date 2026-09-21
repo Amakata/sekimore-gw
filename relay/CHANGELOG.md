@@ -6,6 +6,19 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.27 (2026-09-21)
+
+### Security
+
+- refused a pushed tag that is not an annotated tag object carrying a signature: the pack is read on the way through and its trailer withheld, so the upstream unpacks nothing and reports ng (#128)
+- refused lightweight tags, `tag.gpgsign=false` tags and tags whose object is not in the push; `signed_tags` (default true) at project / upstream / repo turns it off, audited as `push_denied_tag_not_signed` (#128)
+
+### Enhancement
+
+- moved to the RustCrypto 0.11 generation — sha2 0.11, hmac 0.13, aes-gcm 0.11, argon2 0.6 — dropping the 0.10 tree the relay had carried beside russh's 0.11 (#129)
+- took rusqlite 0.40 (#127), getrandom 0.4 (#110), base64 0.23 (#111), russh 0.63.3 and clap 4.6.7 (#107)
+- showed `signed_tags` per repository in `check` and in the Web UI's Relay tab (#128)
+
 ## 0.2.26 (2026-09-21)
 
 ### Enhancement
