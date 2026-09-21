@@ -12,6 +12,13 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.28（2026-09-21）
+
+### Enhancement
+
+- Python の依存を lock から、マニフェストは bind mount で入れるようにした。依存レイヤには版を知るものが何も残らない。`uv pip install .` がプロジェクト自身の版付き dist-info を書き込んでいた (#131)
+- Dependabot アラートを関所経由で読む・却下する。`security alerts` / `view` は `security:read`、`dismiss` / `reopen` は `security:dismiss`。トークンに `security_events` scope が要るので `gw:login` をやり直す (#133)
+
 ## 0.2.27（2026-09-21）
 
 ### Security

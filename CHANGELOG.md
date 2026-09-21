@@ -13,6 +13,13 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.28 (2026-09-21)
+
+### Enhancement
+
+- installed the Python dependencies from the lock with the manifests bind-mounted, so the dependency layer holds nothing that knows which release it is; `uv pip install .` had been writing the project's versioned dist-info into it (#131)
+- read and dismiss Dependabot alerts through the gateway: `security alerts` / `view` under `security:read`, `dismiss` / `reopen` under `security:dismiss`. The token needs the `security_events` scope — `gw:login` again to get it (#133)
+
 ## 0.2.27 (2026-09-21)
 
 ### Security
