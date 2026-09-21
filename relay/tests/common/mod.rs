@@ -215,6 +215,48 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
             }),
         );
     }
+    // 0.2.28: Dependabot alerts (#132)
+    if method == "GET" && p.contains("/dependabot/alerts/") {
+        return (
+            StatusCode::OK,
+            serde_json::json!({
+                "number": 7, "state": "open",
+                "dependency": {"package": {"ecosystem": "pip", "name": "urllib3"},
+                               "manifest_path": "uv.lock", "scope": "runtime"},
+                "security_advisory": {"ghsa_id": "GHSA-xxxx-yyyy-zzzz", "cve_id": "CVE-2026-0001",
+                                      "severity": "high", "summary": "urllib3 redirects leak headers"},
+                "security_vulnerability": {"first_patched_version": {"identifier": "2.6.0"}},
+                "html_url": "https://github.example/security/dependabot/7"
+            }),
+        );
+    }
+    if method == "GET" && p.contains("/dependabot/alerts") {
+        return (
+            StatusCode::OK,
+            serde_json::json!([
+                {"number": 7, "state": "open",
+                 "dependency": {"package": {"ecosystem": "pip", "name": "urllib3"},
+                                "manifest_path": "uv.lock", "scope": "runtime"},
+                 "security_advisory": {"ghsa_id": "GHSA-xxxx-yyyy-zzzz", "cve_id": "CVE-2026-0001",
+                                       "severity": "high", "summary": "urllib3 redirects leak headers"},
+                 "security_vulnerability": {"first_patched_version": {"identifier": "2.6.0"}},
+                 "html_url": "https://github.example/security/dependabot/7"},
+                {"number": 3, "state": "open",
+                 "dependency": {"package": {"ecosystem": "cargo", "name": "rustls"},
+                                "manifest_path": "relay/Cargo.lock", "scope": null},
+                 "security_advisory": {"ghsa_id": "GHSA-aaaa-bbbb-cccc", "cve_id": null,
+                                       "severity": "low", "summary": "rustls panics on a malformed hello"},
+                 "security_vulnerability": {"first_patched_version": null},
+                 "html_url": "https://github.example/security/dependabot/3"}
+            ]),
+        );
+    }
+    if method == "PATCH" && p.contains("/dependabot/alerts/") {
+        return (
+            StatusCode::OK,
+            serde_json::json!({"number": 7, "state": body.get("state").cloned().unwrap_or_default()}),
+        );
+    }
     if method == "GET" && p.contains("/issues/") && !p.ends_with("/comments") {
         return (
             StatusCode::OK,

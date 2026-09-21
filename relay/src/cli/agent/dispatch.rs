@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context};
 use serde_json::Value;
 
 use super::client::AgentClient;
-use super::cmd::{AgentCmd, CiCmd, IssueCmd, PrCmd, ProjectCmd, ReleaseCmd, RepoCmd};
+use super::cmd::{AgentCmd, CiCmd, IssueCmd, PrCmd, ProjectCmd, ReleaseCmd, RepoCmd, SecurityCmd};
 use super::print::{print_ci_log, print_pr_status, print_project_items, print_response};
 use crate::api::types::ApiRequest;
 
@@ -368,6 +368,34 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
             match cmd {
                 RepoCmd::Vocabulary {} => leaf,
             }
+        }
+        AgentCmd::Security { cmd } => {
+            let leaf = cmd.path();
+            let json = match cmd {
+                SecurityCmd::Alerts { state, json } => {
+                    req.state = state;
+                    json
+                }
+                SecurityCmd::View { number, json } => {
+                    req.number = number;
+                    json
+                }
+                SecurityCmd::Dismiss {
+                    number,
+                    reason,
+                    comment,
+                } => {
+                    req.number = number;
+                    req.reason = reason;
+                    req.body = comment.unwrap_or_default();
+                    false
+                }
+                SecurityCmd::Reopen { number } => {
+                    req.number = number;
+                    false
+                }
+            };
+            return call_and_print(&client, leaf, &req, json).await;
         }
         AgentCmd::Search { query, limit, json } => {
             req.query = query;

@@ -116,6 +116,10 @@ endpoints_root! {
             #[command(subcommand)]
             cmd: RepoCmd,
         },
+        Security(_) = t("agent.security") => {
+            #[command(subcommand)]
+            cmd: SecurityCmd,
+        },
         Search("/search/issues") = t("agent.search") => {
             #[arg(help = t("agent.search.query"))]
             query: String,
@@ -226,6 +230,35 @@ endpoints! {
             limit: u32,
             #[arg(long, help = t("agent.json"))]
             json: bool,
+        },
+    }
+}
+
+endpoints! {
+    pub enum SecurityCmd {
+        Alerts("/security/alerts") = t("agent.security.alerts") => {
+            #[arg(long, default_value = "open", help = t("agent.security.alerts.state"))]
+            state: String,
+            #[arg(long, help = t("agent.json"))]
+            json: bool,
+        },
+        View("/security/alert") = t("agent.security.view") => {
+            #[arg(long, help = t("agent.security.number"))]
+            number: u64,
+            #[arg(long, help = t("agent.json"))]
+            json: bool,
+        },
+        Dismiss("/security/dismiss") = t("agent.security.dismiss") => {
+            #[arg(long, help = t("agent.security.number"))]
+            number: u64,
+            #[arg(long, help = t("agent.security.dismiss.reason"))]
+            reason: String,
+            #[arg(long, help = t("agent.security.dismiss.comment"))]
+            comment: Option<String>,
+        },
+        Reopen("/security/reopen") = t("agent.security.reopen") => {
+            #[arg(long, help = t("agent.security.number"))]
+            number: u64,
         },
     }
 }

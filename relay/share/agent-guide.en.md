@@ -50,6 +50,10 @@ sekimore ci jobs --number N                                   [ci:read]  which j
 sekimore ci log --number N                                    [ci:read]  the failed job's log from the end; --before pages back
 sekimore ci rerun --run-id N [--all]                          [ci:rerun]  not ci:read — it spends Actions minutes
 sekimore ci cancel --run-id N                                 [ci:rerun]
+sekimore security alerts [--state open|dismissed|fixed|all]   [security:read]  Dependabot alerts: severity, package, manifest, advisory, first fixed version
+sekimore security view --number N                             [security:read]  one alert, with its link
+sekimore security dismiss --number N --reason not_used        [security:dismiss]  not security:read — it makes a vulnerability stop being shown; the reason is required, --comment optional
+sekimore security reopen --number N                           [security:dismiss]  the inverse
 sekimore issue create --title "…" --body="…" [--labels a,b]   [issue:create]
 sekimore issue view --number N                                [issue:read]  title, body, labels, assignees
 sekimore issue comments --number N                            [issue:read]

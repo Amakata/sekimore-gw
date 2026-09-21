@@ -29,6 +29,9 @@ pub enum Resource {
     /// 0.2.7: searching across repositories. Its own resource because a search is not scoped to one
     /// repository the way every other operation is; results are filtered back to the project
     Search,
+    /// 0.2.28 (#132): Dependabot alerts. Reading is one authority, dismissing — making a
+    /// vulnerability stop being shown — is another, so the two are separate actions
+    Security,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,6 +54,9 @@ pub enum Action {
     /// 0.2.9: re-run or cancel a workflow run. Separate from `Read`, because re-running spends
     /// Actions minutes and runs workflow code with the repository's secrets
     Rerun,
+    /// 0.2.28: dismiss a Dependabot alert (or reopen one). Not `Close`: an alert is not closed,
+    /// it is set aside with a reason, and the reason is what the audit wants
+    Dismiss,
     /// 0.2.15: correct an issue's title or body. Separate from `Create`, because an issue body is
     /// the change instruction the agent is working from: a project can want issues opened without
     /// wanting what a person wrote to be rewritable
@@ -67,6 +73,7 @@ impl Resource {
             Resource::Ci => "ci",
             Resource::Release => "release",
             Resource::Search => "search",
+            Resource::Security => "security",
         }
     }
     /// The actions that exist for this resource. Used to reject typos in the config.
@@ -93,9 +100,10 @@ impl Resource {
             Resource::Ci => &[Read, Rerun],
             Resource::Release => &[Create, Read, Publish],
             Resource::Search => &[Read],
+            Resource::Security => &[Read, Dismiss],
         }
     }
-    pub const ALL: [Resource; 7] = [
+    pub const ALL: [Resource; 8] = [
         Resource::Pr,
         Resource::Issue,
         Resource::Project,
@@ -103,6 +111,7 @@ impl Resource {
         Resource::Ci,
         Resource::Release,
         Resource::Search,
+        Resource::Security,
     ];
 }
 
@@ -123,6 +132,7 @@ impl Action {
             Action::Publish => "publish",
             Action::Rerun => "rerun",
             Action::Update => "update",
+            Action::Dismiss => "dismiss",
         }
     }
 }
@@ -141,9 +151,10 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "ci" => Resource::Ci,
         "release" => Resource::Release,
         "search" => Resource::Search,
+        "security" => Resource::Security,
         other => {
             return Err(format!(
-                "unknown resource {other:?} (known: ci, issue, pr, project, release, repo, search)"
+                "unknown resource {other:?} (known: ci, issue, pr, project, release, repo, search, security)"
             ))
         }
     };
@@ -162,6 +173,7 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "publish" => Action::Publish,
         "rerun" => Action::Rerun,
         "update" => Action::Update,
+        "dismiss" => Action::Dismiss,
         other => return Err(format!("unknown action {other:?}")),
     };
     if !resource.valid_actions().contains(&action) {
@@ -1316,8 +1328,15 @@ mod tests {
         //   request needs a permission of its own rather than borrowing issue:label)
         // + issue:update (0.2.15: an issue body is the change instruction, so correcting one is
         //   separate from opening one)
-        assert_eq!(all_permission_keys().len(), 26);
+        // + security:read, security:dismiss (0.2.28: Dependabot alerts; hiding one is not
+        //   reading one)
+        assert_eq!(all_permission_keys().len(), 28);
+        // dismissing is not a kind of reading, and reading is not a kind of dismissing
+        assert!(parse_permission("security:close").is_err());
+        assert!(parse_permission("pr:dismiss").is_err());
         for k in [
+            "security:read",
+            "security:dismiss",
             "pr:request_review",
             "issue:read",
             "search:read",

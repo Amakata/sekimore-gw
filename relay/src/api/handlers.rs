@@ -11,6 +11,7 @@ use super::{read_body, ApiContext, ApiError};
 use crate::audit::Actor;
 use crate::config::BootstrapMode;
 use crate::github::GitHub;
+use crate::github::SecurityAlert;
 use crate::policy::{Action, Authorized, Resource};
 use crate::ssh::authorized_keys::Added;
 use crate::tokens::TokenRecord;
@@ -290,6 +291,10 @@ pub async fn dispatch(
         "/release/edit" => release_edit(ctx, req).await,
         "/ci/rerun" => ci_rerun(ctx, req).await,
         "/ci/cancel" => ci_cancel(ctx, req).await,
+        "/security/alerts" => security_alerts(ctx, req).await,
+        "/security/alert" => security_alert(ctx, req).await,
+        "/security/dismiss" => security_dismiss(ctx, req).await,
+        "/security/reopen" => security_reopen(ctx, req).await,
         _ => Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: format!("unknown endpoint {path}"),
@@ -918,6 +923,143 @@ async fn ci_cancel(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
     client.cancel_ci(&auth, req.run_id).await?;
     Ok(ApiResponse {
         message: Some(format!("cancelled run {}", req.run_id)),
+        ..ApiResponse::ok()
+    })
+}
+
+// ---- Dependabot alerts (0.2.28, #132) ----
+
+/// GitHub's own list; a dismissal without one of these is refused by the API too, but the
+/// message here names them.
+const DISMISS_REASONS: &[&str] = &[
+    "fix_started",
+    "inaccurate",
+    "no_bandwidth",
+    "not_used",
+    "tolerable_risk",
+];
+const ALERT_STATES: &[&str] = &["open", "dismissed", "fixed", "auto_dismissed", "all"];
+/// GitHub's limit on `dismissed_comment`
+const DISMISS_COMMENT_MAX: usize = 280;
+
+fn alert_line(a: &SecurityAlert) -> String {
+    let mut line = format!(
+        "#{} [{}] {}/{} {}",
+        a.number, a.severity, a.ecosystem, a.package, a.manifest_path
+    );
+    if !a.scope.is_empty() {
+        line.push_str(&format!(" ({})", a.scope));
+    }
+    line.push(' ');
+    line.push_str(&a.ghsa_id);
+    if let Some(cve) = &a.cve_id {
+        line.push_str(&format!(" {cve}"));
+    }
+    match &a.fixed_in {
+        Some(v) => line.push_str(&format!(" fixed in {v}")),
+        None => line.push_str(" no fix yet"),
+    }
+    if a.state != "open" {
+        line.push_str(&format!(" [{}", a.state));
+        if let Some(r) = &a.dismissed_reason {
+            line.push_str(&format!(": {r}"));
+        }
+        line.push(']');
+    }
+    line.push_str(" — ");
+    line.push_str(&a.summary);
+    line
+}
+
+async fn security_alerts(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need_repo(req)?;
+    let state = if req.state.is_empty() {
+        "open"
+    } else {
+        req.state.as_str()
+    };
+    need(
+        ALERT_STATES.contains(&state),
+        "state is one of open / dismissed / fixed / auto_dismissed / all",
+    )?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Security, Action::Read)?;
+    let alerts = client.security_alerts(&auth, state).await?;
+    let raw = serde_json::to_value(&alerts).unwrap_or(serde_json::Value::Null);
+    let msg = alerts.iter().map(alert_line).collect::<Vec<_>>().join("\n");
+    Ok(ApiResponse {
+        ok: true,
+        raw: Some(raw),
+        message: Some(if msg.is_empty() {
+            format!("no {state} Dependabot alerts in {}", req.repo)
+        } else {
+            msg
+        }),
+        ..Default::default()
+    })
+}
+
+async fn security_alert(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    let (auth, client) = numbered_scope(ctx, req, Resource::Security, Action::Read)?;
+    let a = client.security_alert(&auth, req.number).await?;
+    let mut msg = alert_line(&a);
+    if let Some(u) = &a.url {
+        msg.push('\n');
+        msg.push_str(u);
+    }
+    Ok(ApiResponse {
+        ok: true,
+        number: Some(a.number),
+        url: a.url.clone(),
+        raw: Some(serde_json::to_value(&a).unwrap_or(serde_json::Value::Null)),
+        message: Some(msg),
+        ..Default::default()
+    })
+}
+
+async fn security_dismiss(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    let (auth, client) = numbered_scope(ctx, req, Resource::Security, Action::Dismiss)?;
+    need(
+        DISMISS_REASONS.contains(&req.reason.as_str()),
+        "reason is one of fix_started / inaccurate / no_bandwidth / not_used / tolerable_risk",
+    )?;
+    need(
+        req.body.chars().count() <= DISMISS_COMMENT_MAX,
+        "comment is at most 280 characters",
+    )?;
+    client
+        .security_alert_dismiss(&auth, req.number, &req.reason, &req.body)
+        .await?;
+    // The generic api_ok line has the path; the reason is what a reader of the audit wants
+    ctx.audit.log(
+        "security_alert_dismissed",
+        Actor::Agent,
+        &[
+            ("repo", auth.repo()),
+            ("number", &req.number.to_string()),
+            ("reason", &req.reason),
+            ("comment", &req.body),
+        ],
+    );
+    Ok(ApiResponse {
+        number: Some(req.number),
+        message: Some(format!("dismissed alert #{} ({})", req.number, req.reason)),
+        ..ApiResponse::ok()
+    })
+}
+
+/// The inverse of dismissing, under the same permission: `security:dismiss` already lets the
+/// agent change an alert's state, and reopening is the less destructive direction.
+async fn security_reopen(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    let (auth, client) = numbered_scope(ctx, req, Resource::Security, Action::Dismiss)?;
+    client.security_alert_reopen(&auth, req.number).await?;
+    ctx.audit.log(
+        "security_alert_reopened",
+        Actor::Agent,
+        &[("repo", auth.repo()), ("number", &req.number.to_string())],
+    );
+    Ok(ApiResponse {
+        number: Some(req.number),
+        message: Some(format!("reopened alert #{}", req.number)),
         ..ApiResponse::ok()
     })
 }
