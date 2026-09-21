@@ -6,6 +6,8 @@ These tests verify the agent setup script's network discovery and configuration 
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 def describe_agent_setup_script():
     """Integration tests for agent-setup.sh script."""
@@ -759,6 +761,163 @@ esac
         assert kh.startswith(f"[ghe.example.com]:2222,[{gw}]:2222 ssh-ed25519 ")
         assert "Port 2222" in (home / ".ssh" / "config").read_text()
         assert re.search(r"ssh-keyscan .*-p 2222", log.read_text())
+
+    def _signing_agent(tmp_path: Path):
+        """A real ssh-agent holding one key.
+
+        From agent-setup.sh's side this is indistinguishable from the gateway's filtered socket,
+        which is the point: dev needs no sekimore-specific code to sign, only SSH_AUTH_SOCK.
+        The private key is removed afterwards, so nothing here can sign without the agent.
+        """
+        import shutil
+
+        for tool in ("ssh-agent", "ssh-add", "ssh-keygen"):
+            if shutil.which(tool) is None:
+                pytest.skip(f"{tool} is not available")
+        sock = tmp_path / "signing-agent.sock"
+        key = tmp_path / "operator_ed25519"
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-C",
+                "operator signing key",
+                "-f",
+                str(key),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        out = subprocess.run(
+            ["ssh-agent", "-a", str(sock)], check=True, capture_output=True, text=True
+        ).stdout
+        pid = out.split("SSH_AGENT_PID=")[1].split(";")[0]
+        subprocess.run(
+            ["ssh-add", str(key)],
+            env={**os.environ, "SSH_AUTH_SOCK": str(sock)},
+            check=True,
+            capture_output=True,
+        )
+        pub = (tmp_path / "operator_ed25519.pub").read_text().strip()
+        key.unlink()
+        return sock, pub, pid
+
+    def _bootstrap_with_signing(socket: str, fingerprint="SHA256:opkeyfingerprint"):
+        return (
+            '{"ok":true,"fingerprint":"SHA256:x","added":true,"token":"' + token + '",'
+            '"token_expires":"2026-01-01T00:00:00Z","project":"case-a",'
+            '"repos":["LibOrg/awesome-lib"],"git_domain":"ghe.example.com",'
+            '"upstream":"ghe.example.com",'
+            '"signing":{"socket":"' + socket + '","fingerprint":"' + fingerprint + '",'
+            '"namespace":"git","public_key":"ssh-ed25519 AAAAFAKE operator signing key"}}'
+        )
+
+    def it_signs_through_the_gateway_socket_and_generates_no_key_of_its_own(tmp_path):
+        """#59: with a signing socket offered, nothing is generated here and nothing is registered.
+
+        The key that signs is the operator's, held on the host. What lands in the container is the
+        public half and a socket path — which is what makes the key able to outlive the volume.
+        """
+        sock, pub, pid = _signing_agent(tmp_path)
+        try:
+            shim, log = _shims(tmp_path, bootstrap_json=_bootstrap_with_signing(str(sock)))
+            proc, home = _run(tmp_path, shim)
+            out = proc.stdout + proc.stderr
+            assert proc.returncode == 0, out
+            keydir = home / ".ssh" / "sekimore"
+            # The disposable auth key is untouched; the signing key is NOT generated
+            assert (keydir / "id_ed25519").exists()
+            assert not (keydir / "signing_ed25519").exists(), "no key may be generated here"
+            assert (keydir / "signing.pub").read_text().strip() == pub
+            assert stat.S_IMODE((keydir / "signing.pub").stat().st_mode) == 0o644
+
+            gitconfig = (home / ".gitconfig").read_text()
+            assert f"signingkey = {keydir}/signing.pub" in gitconfig
+            assert "gpgsign = true" in gitconfig
+
+            text = (tmp_path / "etc" / "env").read_text()
+            assert f"SSH_AUTH_SOCK={sock}" in text
+            assert f"SEKIMORE_SIGNING_SOCK={sock}" in text
+            assert "SEKIMORE_SIGNING_KEY=SHA256:opkeyfingerprint" in text
+
+            signers = (home / ".config" / "git" / "allowed_signers").read_text().splitlines()
+            assert len(signers) == 1
+            assert signers[0].endswith(" ".join(pub.split()[:2]))
+            assert "filtered agent" in out
+        finally:
+            subprocess.run(
+                ["ssh-agent", "-k"], env={**os.environ, "SSH_AGENT_PID": pid}, capture_output=True
+            )
+
+    def it_does_not_sign_at_all_when_the_offered_socket_is_missing(tmp_path):
+        """A named socket that is not in the container means the shared volume was not mounted.
+
+        Falling back to a generated key would quietly reintroduce #59 — an unregistered key
+        signing everything — so signing is turned off instead, loudly.
+        """
+        shim, log = _shims(
+            tmp_path, bootstrap_json=_bootstrap_with_signing(str(tmp_path / "absent.sock"))
+        )
+        proc, home = _run(tmp_path, shim)
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 0, out
+        assert not (home / ".ssh" / "sekimore" / "signing_ed25519").exists()
+        assert not (home / ".ssh" / "sekimore" / "signing.pub").exists()
+        gitconfig = (home / ".gitconfig").read_text()
+        assert "gpgsign = false" in gitconfig
+        assert "gpgsign = true" not in gitconfig
+        assert "not in this container" in out
+        assert "NOT be signed" in out
+
+    def it_stops_signing_when_the_socket_stops_holding_the_key(tmp_path):
+        """The gateway offers the socket, the host agent has lost the key.
+
+        This is the state #59 was found in — a key that had silently gone. It has to be said out
+        loud and it must not be replaced by a substitute.
+        """
+        sock, _pub, pid = _signing_agent(tmp_path)
+        subprocess.run(
+            ["ssh-add", "-D"], env={**os.environ, "SSH_AUTH_SOCK": str(sock)}, capture_output=True
+        )
+        try:
+            shim, log = _shims(tmp_path, bootstrap_json=_bootstrap_with_signing(str(sock)))
+            proc, home = _run(tmp_path, shim)
+            out = proc.stdout + proc.stderr
+            assert proc.returncode == 0, out
+            assert not (home / ".ssh" / "sekimore" / "signing_ed25519").exists()
+            assert "gpgsign = false" in (home / ".gitconfig").read_text()
+            assert "holds no key" in out
+            assert "SHA256:opkeyfingerprint" in out
+        finally:
+            subprocess.run(
+                ["ssh-agent", "-k"], env={**os.environ, "SSH_AGENT_PID": pid}, capture_output=True
+            )
+
+    def it_remembers_the_signing_socket_across_a_run_that_keeps_its_token(tmp_path):
+        """A run that skips /bootstrap still has to find the socket, or signing would flap off."""
+        sock, pub, pid = _signing_agent(tmp_path)
+        try:
+            shim, log = _shims(
+                tmp_path,
+                valid_token=token,
+                bootstrap_json=_bootstrap_with_signing(str(sock)),
+            )
+            # First run bootstraps and caches; the second keeps its token and never calls /bootstrap
+            _run(tmp_path, shim)
+            proc, home = _run(tmp_path, shim)
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            assert log.read_text().count("bootstrap-called") == 1
+            assert (home / ".ssh" / "sekimore" / "signing.pub").read_text().strip() == pub
+            assert f"SSH_AUTH_SOCK={sock}" in (tmp_path / "etc" / "env").read_text()
+            assert "gpgsign = true" in (home / ".gitconfig").read_text()
+        finally:
+            subprocess.run(
+                ["ssh-agent", "-k"], env={**os.environ, "SSH_AGENT_PID": pid}, capture_output=True
+            )
 
     def it_names_the_signing_key_after_the_operator_and_project(tmp_path):
         """The signing key comment becomes the Title when registered on GitHub. It carries the project name

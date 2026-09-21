@@ -109,11 +109,11 @@ GitHub's audit log cannot tell the agent's actions from a human's, so the relay'
 
 `agent-setup.sh` (in sgw-devcontainer-base, `/usr/local/bin/sekimore-agent-setup.sh`, run from postStartCommand on every start) does all of this automatically once it finds the relay.
 
-- Generates a disposable authentication key `~/.ssh/sekimore/id_ed25519` and a signing key `~/.ssh/sekimore/signing_ed25519` (reusing them if they exist).
+- Generates a disposable authentication key `~/.ssh/sekimore/id_ed25519` (reusing it if it exists).
 - Registers the public keys with `POST /bootstrap` and receives a project token. It does not reissue while a valid token exists.
 - Writes the connection details to `/etc/sekimore-agent/env` (0600). The `sekimore` wrapper reads that file and renews the token automatically when it expires.
 - Writes a `Host` block in `~/.ssh/config` and a known_hosts entry per upstream.
-- Points commit signing at the AI's own key. Register that signing key's public half on GitHub as a "Signing Key" by hand — it is printed in the log.
+- Points commit signing at a key. Which key depends on `relay.signing_key` (below).
 - Installs the agent-facing usage guide (`sekimore guide`) as a Claude Code skill and in Codex's `AGENTS.md`.
 
 Environment variables for tuning:
@@ -123,6 +123,58 @@ Environment variables for tuning:
 | `SEKIMORE_BOOTSTRAP=manual` | The operator registers the key and issues the token (`add-key` and `token`) |
 | `SEKIMORE_PROJECT` / `SEKIMORE_SIGNING_KEY_COMMENT` | The signing key's comment (its Title when registered on GitHub) |
 | `SEKIMORE_AGENT_USER` / `SEKIMORE_KEY_DIR` / `SEKIMORE_AGENT_ENV_FILE` | Target user and where things are stored |
+
+### The signing key (0.2.29, #59)
+
+The authentication key above is disposable, and that is right: it grants access, so a short life
+is a safeguard. A signing key is the opposite. It grants nothing, it is registered with GitHub by
+a person, and deleting it takes the Verified badge off every commit it ever signed — so losing one
+is not a regeneration, it is data loss. Generating it per container produced a new key on every
+wiped volume, each needing to be registered by hand and none of them ever removable.
+
+With `relay.signing_key` set, there is **one key per person** instead. It lives in the host
+ssh-agent that is already mounted into the gateway, it is registered with GitHub once, and the
+relay offers dev a **filtered** agent socket on a shared volume:
+
+| request | answer |
+|---|---|
+| `REQUEST_IDENTITIES` | the one configured fingerprint, nothing else |
+| `SIGN_REQUEST` | forwarded only when the fingerprint matches **and** the data is an SSHSIG blob whose namespace is `git` |
+| add / remove / lock / extension | `SSH_AGENT_FAILURE` |
+
+git's signature covers `"SSHSIG" ++ namespace ++ …`; an SSH *authentication* signature covers a
+length-prefixed session id and can never begin with that magic. So the socket cannot authenticate
+anywhere, the relay's own sshd included, even if the same key is registered as an auth key too.
+The operator's other keys may sit in the same agent and stay invisible, by fingerprint. Refusals
+are audited as `signing_agent_refused` and successful signatures as `signing_agent_signed`.
+
+Dev needs no sekimore-specific command — plain `git commit`. `agent-setup.sh` writes the public
+half to `~/.ssh/sekimore/signing.pub`, points `user.signingkey` at it and puts `SSH_AUTH_SOCK` in
+`/etc/sekimore-agent/env`.
+
+```yaml
+# config.yml
+relay:
+  signing_key:
+    fingerprint: "SHA256:…"    # ssh-keygen -lf <key>.pub; NOT the operator's own signing key
+```
+
+```yaml
+# docker-compose: the socket's volume, in both services
+services:
+  sekimore-gw:
+    volumes: [sekimore-signing:/run/sekimore]
+  dev:
+    volumes: [sekimore-signing:/run/sekimore]
+```
+
+`sekimore-relay check` prints the fingerprint and whether the host agent actually holds it. When
+it does not, `agent-setup.sh` sets `commit.gpgsign false` and says so, rather than substituting a
+key nobody registered.
+
+Without `relay.signing_key`, the old behaviour stands: `~/.ssh/sekimore/signing_ed25519` is
+generated here and its public half has to be registered on GitHub as a "Signing Key" by hand — it
+is printed in the log.
 
 ## Everyday use (agent)
 
@@ -192,6 +244,7 @@ Keys are exact FQDN matches. Listing `github` more than once gives you more than
 | `ssh_config` | none | A file passed to the upstream ssh as `-F` (advanced) |
 | `upstream` / `upstream_ssh_port` / `api_base` / `graphql_base` / `oauth_client_id` | | For the default upstream. Setting these on the handler is the newer style |
 | `limits` | | Session counts and timeouts |
+| `signing_key` | none | 0.2.29 (#59): the key the dev container commits with, offered through a filtered agent socket. Keys: `source` (`agent`), `fingerprint` (`SHA256:…`), `namespace` (`git`), `timeout` (`15s`), `socket` (`/run/sekimore/signing-agent.sock`), `socket_uid` (`1000`). Without it the dev container generates its own — see below |
 | `project` | required | The project (below) |
 
 ### `relay.project`

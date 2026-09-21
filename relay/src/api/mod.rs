@@ -53,6 +53,9 @@ pub struct ApiContext {
     /// id is opaque and unbounded, so without a list any board the upstream token can see would
     /// be reachable.
     pub project_boards: ProjectBoards,
+    /// 0.2.29 (#59): the filtered signing agent, when one is running. `/bootstrap` tells the dev
+    /// container where the socket is and which public key to point `user.signingkey` at
+    pub signing: Option<Arc<crate::git::agent_proxy::SigningAgent>>,
 }
 
 /// The declared boards, and their node ids once something has needed them.

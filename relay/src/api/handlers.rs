@@ -6,7 +6,7 @@ use hyper::body::Incoming;
 use hyper::{Request, StatusCode};
 use serde_json::Value;
 
-use super::types::{ApiRequest, ApiResponse, BootstrapRequest, BootstrapResponse};
+use super::types::{ApiRequest, ApiResponse, BootstrapRequest, BootstrapResponse, SigningBlock};
 use super::{read_body, ApiContext, ApiError};
 use crate::audit::Actor;
 use crate::config::BootstrapMode;
@@ -1573,6 +1573,21 @@ pub async fn bootstrap(
         git_domain: Some(ctx.git_domain.clone()),
         upstream: Some(ctx.upstream.clone()),
         git_domains: ctx.git_domains.clone(),
+        signing: signing_block(ctx).await,
+    })
+}
+
+/// The signing block for `/bootstrap`, or nothing when the gateway has no key to offer.
+///
+/// Asked of the agent on every request rather than cached: the operator may load the key into the
+/// host agent after the gateway is already up, and `agent-setup.sh` runs on every container start.
+async fn signing_block(ctx: &ApiContext) -> Option<SigningBlock> {
+    let id = ctx.signing.as_ref()?.identity().await?;
+    Some(SigningBlock {
+        socket: id.socket.display().to_string(),
+        fingerprint: id.fingerprint,
+        namespace: id.namespace,
+        public_key: id.public_key,
     })
 }
 

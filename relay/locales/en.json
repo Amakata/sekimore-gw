@@ -211,5 +211,10 @@
   "op.check.token_missing": "  upstream token:  MISSING — run `{hint}`",
   "op.check.token_error": "  upstream token:  ERROR — {error}",
   "op.check.keys": "  authorized_keys: {n} key(s) ({path})",
-  "op.check.tokens": "  project tokens:  {active} active / {total} total"
+  "op.check.tokens": "  project tokens:  {active} active / {total} total",
+  "op.check.signing": "signing key:",
+  "op.check.signing_on": "{fingerprint} (namespace {namespace}, socket {socket}, uid {uid})",
+  "op.check.signing_off": "none — the dev container generates its own (relay.signing_key)",
+  "op.check.signing_key_ok": "  signing key:     in the host agent ({key})",
+  "op.check.signing_key_missing": "  signing key:     NOT IN THE HOST AGENT — ssh-add {fingerprint} on the host; commits will not be signed"
 }

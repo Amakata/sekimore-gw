@@ -174,6 +174,24 @@ pub struct BootstrapResponse {
     /// 0.2.0: every git domain the relay serves (with each domain's SSH port). The first is the default upstream
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub git_domains: Vec<GitDomain>,
+    /// 0.2.29 (#59): the signing key the gateway offers through its filtered agent socket.
+    /// Absent means there is none, and `agent-setup.sh` falls back to generating one
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing: Option<SigningBlock>,
+}
+
+/// 0.2.29 (#59): what the dev container needs in order to sign with the operator's key without
+/// ever holding it — the socket to set `SSH_AUTH_SOCK` to, and the public half of the one key
+/// behind it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SigningBlock {
+    /// Path of the filtered agent socket, on the volume the gateway and dev share
+    pub socket: String,
+    pub fingerprint: String,
+    /// The SSHSIG namespace the socket admits (`git`)
+    pub namespace: String,
+    /// `ssh-ed25519 AAAA… comment`, for `user.signingkey` and `allowed_signers`
+    pub public_key: String,
 }
 
 /// 0.2.0: one git domain the relay serves (agent-setup uses it to write `Host <domain>` and `Port`).

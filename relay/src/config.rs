@@ -403,6 +403,113 @@ pub struct StoreConfig {
     pub unlock: StoreUnlock,
 }
 
+/// 0.2.29 (#59): where the signing key the dev container commits with comes from.
+///
+/// The key is the operator's property, registered with the forge once and kept for as long as the
+/// person is. It never enters the dev container: the relay speaks to the host ssh-agent that holds
+/// it and offers dev a **filtered** agent socket instead (`git/agent_proxy.rs`), which answers for
+/// this one fingerprint and signs nothing that is not an SSHSIG blob in `namespace`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SigningKeySource {
+    /// The host ssh-agent mounted into the gateway (`SSH_AUTH_SOCK`). The only source in 0.2.29
+    Agent,
+    /// The secret store, for platforms where agent forwarding is unreliable. Declared so that
+    /// adding it later is not a parse break; writing it today is a configuration error rather
+    /// than an unknown-variant message that says nothing about when it will work
+    Store,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SigningKeyConfig {
+    #[serde(default = "d_signing_source")]
+    pub source: SigningKeySource,
+    /// `SHA256:…` as `ssh-keygen -lf` prints it. Matched against base64(sha256(key blob)) with the
+    /// blob kept opaque, so `sk-*` and certificate-bearing keys work without a special case
+    pub fingerprint: String,
+    /// The SSHSIG namespace the filter admits. git signs commits and tags under `git`; `file` and
+    /// `email` are the other namespaces `ssh-keygen -Y sign` can be asked for, and neither belongs
+    /// on this socket
+    #[serde(default = "d_signing_namespace")]
+    pub namespace: String,
+    /// How long one round trip to the host agent may take. A hardware key waiting for a touch is
+    /// the reason this is seconds rather than milliseconds
+    #[serde(default = "d_signing_timeout", with = "humantime_serde")]
+    pub timeout: Duration,
+    /// Where the filtered socket is created. It has to be on a volume both the gateway and dev
+    /// mount, because `SSH_AUTH_SOCK` is a path
+    #[serde(default = "d_signing_socket")]
+    pub socket: PathBuf,
+    /// The uid the socket is given, so the dev container's user can open it. 1000 is `vscode` in
+    /// the devcontainer images. The mode is 0600, so no other uid on that volume can reach it
+    #[serde(default = "d_signing_socket_uid")]
+    pub socket_uid: u32,
+}
+
+fn d_signing_source() -> SigningKeySource {
+    SigningKeySource::Agent
+}
+fn d_signing_namespace() -> String {
+    "git".to_string()
+}
+fn d_signing_timeout() -> Duration {
+    Duration::from_secs(15)
+}
+fn d_signing_socket() -> PathBuf {
+    PathBuf::from("/run/sekimore/signing-agent.sock")
+}
+fn d_signing_socket_uid() -> u32 {
+    1000
+}
+
+impl SigningKeyConfig {
+    /// Everything that can be decided without talking to the agent.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let bad = |m: String| ConfigError::Invalid(format!("relay.signing_key: {m}"));
+        if self.source != SigningKeySource::Agent {
+            return Err(bad(
+                "source: store is not implemented yet; use source: agent (the host ssh-agent mounted into the gateway) and keep the key there"
+                    .to_string(),
+            ));
+        }
+        let fp = self.fingerprint.trim();
+        let Some(b64) = fp.strip_prefix("SHA256:") else {
+            return Err(bad(format!(
+                "fingerprint {fp:?} must be the SHA256 form `ssh-keygen -lf <key>.pub` prints, e.g. SHA256:BPnhv9Y0VNYlhPNIiXwzhO9SAdWH9wgtxfOUtvGJko"
+            )));
+        };
+        // 32 bytes of sha256 in unpadded base64 is exactly 43 characters; anything else is a
+        // truncated paste, and a prefix match would then accept a key nobody chose
+        if b64.len() != 43
+            || !b64
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'+' || c == b'/')
+        {
+            return Err(bad(format!(
+                "fingerprint {fp:?} is not 43 characters of base64 after SHA256: (that is what a sha256 digest is); copy the whole line from `ssh-keygen -lf <key>.pub`"
+            )));
+        }
+        if self.namespace.is_empty() || self.namespace.bytes().any(|c| !(0x21..=0x7e).contains(&c))
+        {
+            return Err(bad(format!(
+                "namespace {:?} must be a non-empty printable ASCII word (git signs under `git`)",
+                self.namespace
+            )));
+        }
+        if !self.socket.is_absolute() {
+            return Err(bad(format!(
+                "socket {} must be an absolute path on a volume the dev container also mounts",
+                self.socket.display()
+            )));
+        }
+        if self.timeout.is_zero() {
+            return Err(bad("timeout must be greater than zero".to_string()));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RelayConfig {
@@ -456,6 +563,11 @@ pub struct RelayConfig {
     pub bootstrap: BootstrapMode,
     #[serde(default)]
     pub limits: Limits,
+    /// 0.2.29 (#59): the signing key dev commits with, offered through a filtered agent socket.
+    /// Absent means the old behaviour — the dev container generates its own key, which is
+    /// disposable and therefore cannot stay registered with the forge
+    #[serde(default)]
+    pub signing_key: Option<SigningKeyConfig>,
     pub project: ProjectConfig,
     /// Test only: run a command instead of the upstream ssh (the parent directory for `["git", "receive-pack", "<bare-dir>"]`)
     #[cfg(feature = "test-hooks")]
@@ -657,6 +769,12 @@ impl Loaded {
             .as_ref()
             .ok_or(ConfigError::NoRelaySection)?;
         self.resolve_upstreams(relay)?;
+        // `needs-relay` is what start-relay.sh asks before exec'ing `serve`, so a signing_key the
+        // relay would refuse at start-up has to be an invalid configuration here too — otherwise
+        // the gateway comes up and the failure only shows in the relay's own log.
+        if let Some(sk) = &relay.signing_key {
+            sk.validate()?;
+        }
         Ok(true)
     }
 
@@ -814,6 +932,9 @@ impl Loaded {
             .ok_or(ConfigError::NoRelaySection)?;
         for b in &relay.project.boards {
             b.validate().map_err(ConfigError::Invalid)?;
+        }
+        if let Some(sk) = &relay.signing_key {
+            sk.validate()?;
         }
         let upstreams = self.resolve_upstreams(&relay)?;
         let default_up = upstreams[0].clone();
@@ -1567,6 +1688,99 @@ relay:
             p(bad).unwrap().resolve(),
             Err(ConfigError::Invalid(_))
         ));
+    }
+
+    /// #59: `relay.signing_key` and the shape of a fingerprint it accepts.
+    #[test]
+    fn a_signing_key_takes_its_defaults_and_refuses_a_fingerprint_that_is_not_one() {
+        let with = |body: &str| {
+            format!(
+                "domain_handlers:\n  github.com: {{ handler: git-relay }}\nrelay:\n  signing_key:\n{body}  project:\n    name: x\n    repos: [{{ name: Org/App, mode: read-write }}]\n"
+            )
+        };
+        let good = "    fingerprint: \"SHA256:jKUukqk9WD+ycgT05yemhOEOxL4M5i+0l4Ibm7ZMqnw\"\n";
+        let sk = p(&with(good))
+            .unwrap()
+            .resolve()
+            .unwrap()
+            .relay
+            .signing_key
+            .unwrap();
+        assert_eq!(sk.source, SigningKeySource::Agent);
+        assert_eq!(sk.namespace, "git");
+        assert_eq!(sk.timeout, Duration::from_secs(15));
+        assert_eq!(sk.socket, PathBuf::from("/run/sekimore/signing-agent.sock"));
+        assert_eq!(sk.socket_uid, 1000);
+        // Omitting the section entirely is the old behaviour, not an error
+        let none = "domain_handlers:\n  github.com: { handler: git-relay }\nrelay:\n  project:\n    name: x\n    repos: [{ name: Org/App, mode: read-write }]\n";
+        assert!(p(none)
+            .unwrap()
+            .resolve()
+            .unwrap()
+            .relay
+            .signing_key
+            .is_none());
+
+        // Every one of these is a fingerprint-shaped value that is not one. The truncated forms
+        // matter most: a prefix match would accept a key the operator never chose.
+        let bad = [
+            (
+                "    fingerprint: \"jKUukqk9WD+ycgT05yemhOEOxL4M5i+0l4Ibm7ZMqnw\"\n",
+                "SHA256:",
+            ),
+            (
+                "    fingerprint: \"SHA256:jKUukqk9WD+ycgT05yemhOEOxL4M5i\"\n",
+                "43 characters",
+            ),
+            (
+                "    fingerprint: \"SHA256:jKUukqk9WD+ycgT05yemhOEOxL4M5i+0l4Ibm7ZMqnw=\"\n",
+                "43 characters",
+            ),
+            (
+                "    fingerprint: \"MD5:16:27:ac:a5:76:28:2d:36:63:1b:56:4d:eb:df:a6:48\"\n",
+                "SHA256:",
+            ),
+            (
+                "    fingerprint: \"SHA256:jKUukqk9WD+ycgT05yemhOEOxL4M5i+0l4Ibm7ZMqn!\"\n",
+                "43 characters",
+            ),
+        ];
+        for (line, want) in bad {
+            let e = p(&with(line)).unwrap().resolve().unwrap_err().to_string();
+            assert!(e.contains(want), "{line}: {e}");
+        }
+        // `store` parses (so adding it later is not a parse break) and is refused with the reason
+        let e = p(&with(&format!("    source: store\n{good}")))
+            .unwrap()
+            .resolve()
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("not implemented yet"), "{e}");
+        // and the rest of the validation
+        for (line, want) in [
+            ("    namespace: \"\"\n", "printable ASCII"),
+            ("    namespace: \"git commit\"\n", "printable ASCII"),
+            ("    socket: run/signing.sock\n", "absolute path"),
+            ("    timeout: 0s\n", "greater than zero"),
+        ] {
+            let e = p(&with(&format!("{good}{line}")))
+                .unwrap()
+                .resolve()
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(want), "{line}: {e}");
+        }
+        // A typo under signing_key is an error, like everywhere else under relay:
+        assert!(p(&with(&format!("{good}    fingerprints: x\n")))
+            .unwrap_err()
+            .to_string()
+            .contains("fingerprints"));
+        // needs-relay has to refuse the same configuration `serve` would, or the gateway comes up
+        // and only the relay's log knows
+        assert!(p(&with(&format!("    source: store\n{good}")))
+            .unwrap()
+            .needs_relay()
+            .is_err());
     }
 
     /// #89: signed tags are required unless a layer says otherwise, project → upstream → repo.

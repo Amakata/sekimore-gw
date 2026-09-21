@@ -141,6 +141,22 @@ database_path: "/data/security_gateway.db"
 #   https_max_upload_bytes: 1048576   # 0.2.2+ per-connection cap on what dev may send upstream over the 443 passthrough (an exfiltration control). -1 for unlimited
 #   bootstrap: auto               # register the disposable key and issue the project token via POST /bootstrap: auto | manual
 #   token_ttl: 12h
+#   # 0.2.29+ (#59) the key dev commits with. Omit this and the dev container generates its own,
+#   # which dies with its volume and therefore cannot stay registered with the forge — every commit
+#   # it signed before that shows as Unverified, and no one finds out until they look.
+#   # With it, one key per person: the operator's, held in the host ssh-agent that is already
+#   # mounted into the gateway, registered with the forge once. The private half never enters dev;
+#   # the relay offers a *filtered* agent socket instead, which answers for this one fingerprint
+#   # and signs nothing that is not a git signature. The operator's other keys may sit in the same
+#   # agent and stay invisible. Needs the socket's volume in both services (docker-compose.relay.yml).
+#   signing_key:
+#     source: agent               # agent (the host ssh-agent). `store` is reserved and not implemented yet
+#     fingerprint: "SHA256:…"     # `ssh-keygen -lf <key>.pub` prints it. Use a key that is NOT the operator's own
+#                                 # signing key, so AI commits stay distinguishable in the history
+#     namespace: git              # the SSHSIG namespace the socket admits. `file` / `email` are refused
+#     timeout: 15s                # one round trip to the host agent; generous because a hardware key may want a touch
+#     socket: /run/sekimore/signing-agent.sock   # on a volume the dev container mounts at the same path
+#     socket_uid: 1000            # the dev container's user (vscode). The socket is 0600 and owned by it
 #   project:
 #     name: case-a
 #     repos:

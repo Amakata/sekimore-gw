@@ -108,11 +108,11 @@ GitHub の監査ログではエージェントと人間の操作を区別でき�
 
 `agent-setup.sh`（sgw-devcontainer-base では `/usr/local/bin/sekimore-agent-setup.sh`、postStartCommand で毎起動）が、関所を見つけたら自動で行います。
 
-- 使い捨て認証鍵 `~/.ssh/sekimore/id_ed25519` と署名鍵 `~/.ssh/sekimore/signing_ed25519` を生成します（あれば再利用）。
+- 使い捨て認証鍵 `~/.ssh/sekimore/id_ed25519` を生成します（あれば再利用）。
 - `POST /bootstrap` で公開鍵を登録し、案件トークンを受け取ります。有効なトークンがあれば再発行しません。
 - `/etc/sekimore-agent/env`（0600）に接続情報を書きます。`sekimore` ラッパーはこのファイルを読み、期限切れなら自動で取り直します。
 - 上流ごとに `~/.ssh/config` の `Host` ブロックと known_hosts を書きます。
-- コミット署名を AI 専用鍵に設定します。署名鍵の公開鍵は GitHub に「Signing Key」として手で登録してください（ログに表示されます）。
+- コミット署名を設定します。どの鍵を使うかは `relay.signing_key`（下記）で決まります。
 - AI エージェント向けの使い方（`sekimore guide`）を Claude Code の skill と Codex の `AGENTS.md` に置きます。
 
 調整用の環境変数:
@@ -122,6 +122,57 @@ GitHub の監査ログではエージェントと人間の操作を区別でき�
 | `SEKIMORE_BOOTSTRAP=manual` | 鍵登録とトークン発行を操作者が行う（`add-key` と `token`） |
 | `SEKIMORE_PROJECT` / `SEKIMORE_SIGNING_KEY_COMMENT` | 署名鍵のコメント（GitHub 登録時の Title） |
 | `SEKIMORE_AGENT_USER` / `SEKIMORE_KEY_DIR` / `SEKIMORE_AGENT_ENV_FILE` | 対象ユーザーと保存先 |
+
+### 署名鍵（0.2.29、#59）
+
+上の認証鍵が使い捨てなのは正しい。アクセスを与える鍵だから、寿命が短いこと自体が安全側に働く。
+署名鍵は逆である。何の権限も与えず、GitHub には人が手で登録し、消すとその鍵が署名した全ての
+コミットから Verified が外れる。つまり失うことは「作り直し」ではなく喪失である。コンテナごとに
+生成すると、volume を消すたびに新しい鍵が生まれ、そのたびに手で登録が要り、しかも古い鍵は
+消せないまま溜まっていく。
+
+`relay.signing_key` を書くと、**人につき 1 本**になる。鍵はすでに gateway にマウントされている
+ホストの ssh-agent にあり、GitHub には一度だけ登録する。relay は共有 volume 上に**絞り込んだ**
+agent socket を作って dev に渡す。
+
+| 要求 | 応答 |
+|---|---|
+| `REQUEST_IDENTITIES` | 設定した fingerprint の 1 本だけ |
+| `SIGN_REQUEST` | fingerprint が一致し、**かつ** データが namespace `git` の SSHSIG blob のときだけ転送 |
+| add / remove / lock / extension | `SSH_AGENT_FAILURE` |
+
+git の署名は `"SSHSIG" ++ namespace ++ …` を覆う。SSH の**認証**署名が覆うのは長さ前置きの
+session id で始まる別の構造で、`SSHSIG` の 6 バイトで始まることはない。だからこの socket は
+どこに対しても認証に使えない（relay 自身の sshd を含む）。同じ鍵が認証鍵としても登録されていても
+同じである。依頼者の他の鍵は同じ agent にあっても fingerprint で隠れる。拒否は
+`signing_agent_refused`、成功した署名は `signing_agent_signed` として監査に残る。
+
+dev 側に sekimore 専用のコマンドは要らない。素の `git commit` でよい。`agent-setup.sh` が公開鍵を
+`~/.ssh/sekimore/signing.pub` に書き、`user.signingkey` をそこに向け、`SSH_AUTH_SOCK` を
+`/etc/sekimore-agent/env` に書く。
+
+```yaml
+# config.yml
+relay:
+  signing_key:
+    fingerprint: "SHA256:…"    # ssh-keygen -lf <key>.pub。依頼者自身の署名鍵とは別の鍵にする
+```
+
+```yaml
+# docker-compose: socket の volume を両方のサービスに
+services:
+  sekimore-gw:
+    volumes: [sekimore-signing:/run/sekimore]
+  dev:
+    volumes: [sekimore-signing:/run/sekimore]
+```
+
+`sekimore-relay check` は fingerprint と、それがホストの agent に実際にあるかを表示する。無い
+ときは `agent-setup.sh` が `commit.gpgsign false` にしてそう言う。誰も登録していない鍵で代用は
+しない。
+
+`relay.signing_key` を書かなければ従来どおり。`~/.ssh/sekimore/signing_ed25519` をここで生成し、
+その公開鍵を GitHub に「Signing Key」として手で登録する（ログに表示される）。
 
 ## 日常の使い方（エージェント）
 
@@ -190,6 +241,7 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 | `ssh_config` | 無し | 上流 ssh に `-F` で渡すファイル（上級者向け） |
 | `upstream` / `upstream_ssh_port` / `api_base` / `graphql_base` / `oauth_client_id` | | 既定上流用。handler 側に書くのが新しい書き方 |
 | `limits` | | セッション数やタイムアウト |
+| `signing_key` | 無し | 0.2.29（#59）dev がコミット署名に使う鍵。絞り込んだ agent socket 経由で渡す。キーは `source`（`agent`）、`fingerprint`（`SHA256:…`）、`namespace`（`git`）、`timeout`（`15s`）、`socket`（`/run/sekimore/signing-agent.sock`）、`socket_uid`（`1000`）。書かなければ dev が自分で鍵を生成する（下記） |
 | `project` | 必須 | 案件（下記） |
 
 ### `relay.project`
