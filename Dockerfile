@@ -101,6 +101,13 @@ COPY scripts/start-relay.sh /app/scripts/start-relay.sh
 # agent-setup.sh is shipped in the image so that sgw-devcontainer-base can COPY --from it
 # (same tag as the relay binary => the two always match)
 COPY agent-setup.sh /usr/local/share/sekimore/agent-setup.sh
+# The gw:* mise tasks, for the same reason: the operator's interface belongs to the gateway, not
+# to a copy in every project's mise.toml. A project reads one out of the image (or COPY --from's
+# it) and includes it, so the tasks and the relay that serves them always come from one release.
+# Two languages, as with agent-guide.{en,ja}.md: the descriptions are what `mise tasks` prints on
+# the operator's terminal. The task set is the same in both, and a test holds them to that.
+COPY share/gateway.mise.en.toml /usr/local/share/sekimore/gateway.mise.en.toml
+COPY share/gateway.mise.ja.toml /usr/local/share/sekimore/gateway.mise.ja.toml
 RUN uv pip install --system --no-deps .
 
 # sekimore-relay binary (starts only when config.yml has a git-relay handler)

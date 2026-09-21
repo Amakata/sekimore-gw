@@ -103,6 +103,33 @@ ai-agent:
 
 エージェントは自動でゲートウェイを見つけ、すべての通信をそこへ流します。
 
+### 操作者向けの mise タスク
+
+ホストからゲートウェイを操作する `gw:*` タスクはイメージに同梱しています。日本語版
+`/usr/local/share/sekimore/gateway.mise.ja.toml` と英語版 `gateway.mise.en.toml` の 2 つがあります。
+各プロジェクトはどちらかを取り込んで使ってください。タスクをコピーすると、関所の更新から取り残されます:
+
+```bash
+docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.ja.toml \
+  > .devcontainer/gateway.mise.toml
+```
+
+言語の違いは `mise tasks` に出る説明文だけです。タスク名と実行するコマンドは両者で同一で、
+テストがそれを保証しています。
+
+```toml
+# プロジェクト側の mise.toml
+[task_config]
+includes = [".devcontainer/gateway.mise.toml"]
+
+[env]
+SGW = "{{config_root}}/.devcontainer/scripts/sgw.sh"
+```
+
+`sgw.sh` はプロジェクトのものです（コンテナを見つける役なので、イメージからは配れません）。タスクが使うのは
+`gw` / `gw-tty` / `id` / `recreate` の 4 つだけです。`gw-tty`（常に `docker exec -it`）は、
+端末からパスフレーズを読む `gw:unlock` と `gw:passphrase` に必要です。
+
 ## 設定
 
 ### 環境変数（任意）

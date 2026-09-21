@@ -1,0 +1,156 @@
+# The gateway's own operator interface, as mise tasks. Shipped inside the sekimore-gw image so a
+# project *includes* this file instead of copying the tasks into its own mise.toml. A copy drifts:
+# the sample project went four releases without `gw:unlock`, and from 0.2.19 that makes the
+# gateway unusable, because the upstream API token lives in the secret store.
+#
+# In the image: /usr/local/share/sekimore/gateway.mise.en.toml (next to agent-setup.sh, same tag
+# as the relay binary, so the tasks always match the gateway they drive). The Japanese one is
+# gateway.mise.ja.toml; the only difference is what `mise tasks` prints — the tasks are identical.
+#
+#   docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.en.toml > .devcontainer/gateway.mise.toml
+#
+# and in the project's own mise.toml:
+#
+#   [task_config]
+#   includes = [".devcontainer/gateway.mise.toml"]
+#
+#   [env]
+#   SGW = "{{config_root}}/.devcontainer/scripts/sgw.sh"
+#
+# Two things the project owns and has to provide:
+#
+# 1. `SGW` — the path to the project's `sgw.sh`. Every task here runs through it, and nothing here
+#    sets it. Unset, the tasks fail with `bash: : No such file or directory`.
+# 2. The `sgw.sh` primitives these tasks use: `gw`, `gw-tty`, `id`, `recreate`. Nothing else, so
+#    that sgw.sh — the one file that cannot come from the image, since it is what finds the
+#    container — stays small and needs no updating.
+#
+#    `gw-tty` is the one to check for: it arrived late and the published sample never had it. It
+#    is `docker exec -it` unconditionally, for the commands that read a passphrase from the
+#    terminal (`gw:unlock`, `gw:passphrase`). The plain `gw` decides `-t` by looking at stdout as
+#    well, and a task runner that prefixes output makes stdout a pipe, so the passphrase prompt
+#    ends up with no terminal.
+#
+# Format note: in a file listed under `task_config.includes` the task names are top-level tables.
+# Writing them as `[tasks."gw:unlock"]` is rejected by mise with `unknown field`.
+
+["gw"]
+description = "Run sekimore-relay <args> on the gateway (e.g. mise run gw -- revoke --label skm_xxxxxxxx)"
+run = 'bash "$SGW" gw sekimore-relay'
+
+["gw:login"]
+description = "Log in to GitHub with the device flow (keeps the upstream token and known_hosts in /data/relay; first time only)"
+run = 'bash "$SGW" gw sekimore-relay login'
+
+["gw:logout"]
+description = "Delete the upstream token"
+run = 'bash "$SGW" gw sekimore-relay logout'
+
+["gw:whoami"]
+description = "Which GitHub identity the gateway acts as"
+run = 'bash "$SGW" gw sekimore-relay whoami'
+
+["gw:check"]
+description = "The relay's configuration and state (ssh-agent / known_hosts / upstream token / registered keys / token count)"
+run = 'bash "$SGW" gw sekimore-relay check'
+
+# ---- secret store (0.2.15) ----
+# The passphrase is taken at a prompt and nowhere else: an argument or an environment variable
+# would show up in `ps`. That is what `gw-tty` is for.
+#
+# Since 0.2.19 the upstream API token lives in the store. While it is locked the relay cannot use
+# the GitHub API at all (git push/pull still work — they go over SSH). Unlock after every recreate.
+
+["gw:unlock"]
+description = "Unlock the secret store (needed after every gateway recreate; the first run sets the passphrase. Locked, the GitHub API does not work)"
+raw = true
+run = 'bash "$SGW" gw-tty sekimore-relay unlock'
+
+["gw:lock"]
+description = "Forget the secret store's key (the GitHub API stops until the next unlock; since 0.2.19 the cached token goes with it)"
+run = 'bash "$SGW" gw sekimore-relay lock'
+
+["gw:store-status"]
+description = "Whether the secret store is unlocked, locked, or not initialised yet"
+run = 'bash "$SGW" gw sekimore-relay store-status'
+
+["gw:passphrase"]
+description = "Change the secret store's passphrase (--kdf pbkdf2-sha256 switches the KDF as well)"
+raw = true
+run = 'bash "$SGW" gw-tty sekimore-relay passphrase'
+
+# export works while locked (it needs no key). The envelope is sealed, but the passphrase is all
+# that protects it. raw: the JSON goes to stdout as it is — a prefix from the task runner breaks it.
+["gw:store-export"]
+description = "Write the secret store out sealed: mise run gw:store-export > store.json"
+raw = true
+run = 'bash "$SGW" gw sekimore-relay store-export'
+
+["gw:store-import"]
+description = "Replace an empty secret store with an envelope: mise run gw:store-import < store.json"
+raw = true
+run = 'bash "$SGW" gw sekimore-relay store-import'
+
+# ---- project tokens ----
+["gw:tokens"]
+description = "The project tokens that have been issued (label / expiry / use count / state)"
+run = 'bash "$SGW" gw sekimore-relay tokens'
+
+["gw:revoke"]
+description = "Revoke one token: mise run gw:revoke -- --label skm_xxxxxxxx"
+run = 'bash "$SGW" gw sekimore-relay revoke'
+
+["gw:revoke-project"]
+description = "Revoke every token of the project (when the project ends)"
+run = 'bash "$SGW" gw sekimore-relay revoke-project'
+
+["gw:bootstrap"]
+description = "The kill-switch for automatic registration: mise run gw:bootstrap -- disable|enable"
+run = 'bash "$SGW" gw sekimore-relay bootstrap'
+
+# ---- log database ----
+["gw:db-stats"]
+description = "Rows, period, size and indexes of the gateway's log DB (DNS / firewall / proxy) (gw 0.2.3+)"
+run = 'bash "$SGW" gw python -m src.maint db-stats'
+
+["gw:db-prune"]
+description = "Delete logs older than N days (kept by default, so this is explicit): mise run gw:db-prune -- --before-days 90 --yes [--vacuum]"
+run = 'bash "$SGW" gw python -m src.maint db-prune'
+
+["gw:db-reset"]
+description = "Empty the log DB and VACUUM (the relay's audit log is a separate file): mise run gw:db-reset -- --yes"
+run = 'bash "$SGW" gw python -m src.maint db-reset'
+
+# ---- config.yml reload window ----
+["gw:reload-status"]
+description = "Whether saving config.yml takes effect right now (gw 0.2.13+). Check this before handing work to an AI"
+run = 'bash "$SGW" gw python -m src.maint reload-status'
+
+["gw:reload-follow"]
+description = "Open the reload window (30m by default): mise run gw:reload-follow -- 1h. Only while you are editing config.yml"
+run = 'bash "$SGW" gw python -m src.maint reload-follow'
+
+["gw:reload-freeze"]
+description = "Close the reload window now. config.yml is writable from dev, so run this before handing work to an AI"
+run = 'bash "$SGW" gw python -m src.maint reload-freeze'
+
+# ---- logs and lifecycle ----
+["gw:audit"]
+description = "Follow the relay's audit log (every denial and every operation. Ctrl-C to stop)"
+run = 'bash "$SGW" gw tail -n 50 -f /data/relay/audit.jsonl'
+
+["gw:logs"]
+description = "Follow the gateway container's log"
+run = 'docker logs -f --tail 100 "$(bash "$SGW" id sekimore-gw)"'
+
+["gw:restart"]
+description = "Restart the gateway (after changing domain_handlers / relay in config.yml. dev keeps running)"
+run = 'docker restart "$(bash "$SGW" id sekimore-gw)"'
+
+["gw:recreate"]
+description = "Pull the latest image and recreate the gateway (after raising the image tag in compose; docker restart does not swap the image)"
+run = 'bash "$SGW" recreate'
+
+["gw:shell"]
+description = "A shell on the gateway (root)"
+run = 'bash "$SGW" gw bash'
