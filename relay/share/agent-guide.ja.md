@@ -17,6 +17,7 @@
   - `git push origin HEAD:refs/for/<base>` — `sekimore/<base>-<sha7>` というブランチに置かれ、PR（base=`<base>`）が自動で作られます。PR のタイトルは定型なので、タイトルや本文を自分で書きたいときは次の方法を使ってください。
   - `git push origin HEAD:refs/heads/sekimore/<topic>` — 作業ブランチ。PR は `sekimore pr create` で作ります（推奨）。
 - `main` などへの直接 push、タグ、ブランチ削除は既定で拒否されます。許可されている repo だけ通ります（`sekimore whoami` で確認）。
+- 既に upstream にあるタグは動かせません。公開済みの名前を別のコードに向け直すのではなく、新しい版を切ってください（動かすにはタグ削除と同じ権限が要ります）。
 - 自分の `sekimore/*` の中での force push は関所では止めません。必要な場所では上流のブランチ保護が拒否します。他の人が作業しているかもしれないブランチを書き換えないでください。
 - コミットは AI 専用鍵で自動署名されます。署名の設定を変えないでください。
 - リポジトリの HTTPS URL（`https://github.com/…`）での push / clone は使えません。SSH の URL を使ってください。
@@ -100,6 +101,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `push to refs/heads/main is not allowed` | 直接 push 不可 | `refs/heads/sekimore/<topic>` に push して PR を作る |
 | `base branch X is not allowed` | その base への PR は不可 | 許可された base（`sekimore whoami`）を使う |
 | `tag is not allowed for this repository` | タグの push は不可 | 人間にタグを頼む、または許可の追加を頼む |
+| `updating refs/tags/vX is not allowed` | そのタグは既に公開済み | 新しい版を切る。公開済みタグを動かすにはタグ削除と同じ権限が要る |
 | `denied: pr:merge is not allowed by policy` | 権限が無い | 人間にマージを頼む |
 | `denied: token expired` | トークン期限切れ | 自動更新される。続くなら人間に agent-setup の再実行を頼む |
 | `head X is not allowed` | PR の head が `sekimore/*` の外、または fork を指している | 先に関所経由でブランチを push し、それを head にする |

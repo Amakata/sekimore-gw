@@ -17,6 +17,7 @@ Start with `sekimore whoami` to see your project, your permissions and the repos
   - `git push origin HEAD:refs/for/<base>` puts the commits on a branch named `sekimore/<base>-<sha7>` and opens a pull request against `<base>` automatically. The title is generated, so use the other form when you want to write the title and body yourself.
   - `git push origin HEAD:refs/heads/sekimore/<topic>` is a working branch. Open the pull request with `sekimore pr create`. This is the recommended path.
 - Direct pushes to `main`, tags and branch deletions are refused by default. They work only for repositories where they are allowed; check with `sekimore whoami`.
+- A tag that already exists upstream cannot be moved. Cut a new version instead of pointing a released name at different code; moving one needs the same authority as deleting it.
 - A force push inside your own `sekimore/*` namespace is not blocked by the relay. Branch protection upstream is what refuses one where it matters. Do not rewrite a branch someone else may be working from.
 - Commits are signed automatically with the AI signing key. Do not change the signing configuration.
 - The HTTPS URL of a repository (`https://github.com/…`) cannot be used for push or clone. Use the SSH URL.
@@ -100,6 +101,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `push to refs/heads/main is not allowed` | no direct push | push to `refs/heads/sekimore/<topic>` and open a PR |
 | `base branch X is not allowed` | no PR against that base | use an allowed base, see `sekimore whoami` |
 | `tag is not allowed for this repository` | tags are refused | ask a human to tag, or to allow tags |
+| `updating refs/tags/vX is not allowed` | the tag is already published upstream | cut a new version; moving a released tag needs the same authority as deleting one |
 | `denied: pr:merge is not allowed by policy` | permission missing | ask a human to merge |
 | `denied: token expired` | the project token expired | it renews itself; if it keeps failing ask a human to re-run agent-setup |
 | `head X is not allowed` | the PR's head is outside `sekimore/*`, or names a fork | push the branch through the relay first, then open the PR from it |

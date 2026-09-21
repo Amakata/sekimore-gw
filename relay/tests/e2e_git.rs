@@ -117,6 +117,11 @@ impl E2e {
 }
 
 async fn setup(grants: &[&str]) -> E2e {
+    setup_tuned(grants, |_| {}).await
+}
+
+/// As `setup`, with a last word on the project — a repository's tag globs, say.
+async fn setup_tuned(grants: &[&str], tune: impl FnOnce(&mut Project)) -> E2e {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("upstream");
     for repo in ["LibOrg/awesome-lib", "VendorOrg/reference-impl"] {
@@ -175,6 +180,7 @@ async fn setup(grants: &[&str]) -> E2e {
     for g in grants {
         project = project.grant(g);
     }
+    tune(&mut project);
     let ctx = Arc::new(GitContext {
         project,
         host: String::new(),
@@ -428,6 +434,60 @@ async fn policy_denials_are_explicit_and_leave_upstream_untouched() {
         common::recorded(&e.recorder).is_empty(),
         "no PR must be created"
     );
+}
+
+/// #89: a tag that is already published may not be moved, while cutting a new one still works.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_published_tag_cannot_be_moved_but_a_new_one_still_goes_up() {
+    require_tools!();
+    let e = setup_tuned(&[], |p| {
+        for r in &mut p.repos {
+            r.tags = vec!["v*".to_string()];
+        }
+    })
+    .await;
+    seed_main(&e, "LibOrg/awesome-lib");
+    // The bare upstream here refuses non-fast-forwards; GitHub does not, and in #89 it did not.
+    // Turning it off leaves the relay as the only thing between the force push and the tag.
+    Command::new("git")
+        .args(["config", "receive.denyNonFastForwards", "false"])
+        .current_dir(e.bare("LibOrg/awesome-lib"))
+        .output()
+        .unwrap();
+    let work = clone(&e, "LibOrg/awesome-lib", "work");
+
+    e.ok(&work, &["tag", "-a", "v1", "-m", "v1"]);
+    e.ok(&work, &["push", "origin", "v1"]);
+    let published = e.bare_ref("LibOrg/awesome-lib", "refs/tags/v1").unwrap();
+
+    // Move v1 onto another commit and force it up, exactly as in the issue.
+    e.commit_file(&work, "x.txt", b"x\n");
+    e.ok(&work, &["tag", "-f", "-a", "v1", "-m", "v1 again"]);
+    let o = e.git(&work, &["push", "--force", "origin", "v1"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "moving v1 must fail:\n{err}");
+    assert!(
+        err.contains("updating refs/tags/v1 is not allowed"),
+        "{err}"
+    );
+    assert!(err.contains("cut a new version"), "{err}");
+    assert!(err.contains("[remote rejected]"), "{err}");
+    assert_eq!(
+        e.bare_ref("LibOrg/awesome-lib", "refs/tags/v1").unwrap(),
+        published,
+        "the published tag must still name what it named"
+    );
+    // Its own audit event, not an ordinary push denial.
+    let audit = std::fs::read_to_string(&e.audit_path).unwrap();
+    assert!(
+        audit.contains("push_denied_tag_update_not_allowed"),
+        "{audit}"
+    );
+
+    // A version that is not there yet still goes up.
+    e.ok(&work, &["tag", "-a", "v2", "-m", "v2"]);
+    e.ok(&work, &["push", "origin", "v2"]);
+    assert!(e.bare_ref("LibOrg/awesome-lib", "refs/tags/v2").is_some());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
