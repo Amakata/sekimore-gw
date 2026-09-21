@@ -22,6 +22,9 @@ IMAGE_FILES = [
     ROOT / "Dockerfile",
     ROOT / "Dockerfile.agent",
     ROOT / "tests" / "docker-compose.test.yml",
+    # No `image:` of its own today — both services build. Listed so that one added later is
+    # covered from the start rather than whenever someone remembers this file exists.
+    ROOT / "docker-compose.yml",
 ]
 
 # `uses: owner/repo@<40 hex> # v1.2.3`. The version after the `#` is free-form because the actions
