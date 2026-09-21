@@ -50,6 +50,10 @@ sekimore ci jobs --number N                                   [ci:read]  どの�
 sekimore ci log --number N                                    [ci:read]  失敗ジョブのログを末尾から。--before で前へ
 sekimore ci rerun --run-id N [--all]                          [ci:rerun]  ci:read ではない。Actions の分数を消費する
 sekimore ci cancel --run-id N                                 [ci:rerun]
+sekimore security alerts [--state open|dismissed|fixed|all]   [security:read]  Dependabot アラート: 重大度、パッケージ、マニフェスト、アドバイザリ、最初の修正版
+sekimore security view --number N                             [security:read]  1 件をリンク付きで
+sekimore security dismiss --number N --reason not_used        [security:dismiss]  security:read ではない。脆弱性を見えなくする操作。理由は必須、--comment は任意
+sekimore security reopen --number N                           [security:dismiss]  却下の取り消し
 sekimore issue create --title "…" --body="…" [--labels a,b]   [issue:create]
 sekimore issue view --number N                                [issue:read]  タイトル、本文、ラベル、担当者
 sekimore issue comments --number N                            [issue:read]

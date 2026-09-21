@@ -93,6 +93,10 @@ pub struct ApiRequest {
     pub set_draft: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set_prerelease: Option<bool>,
+    /// 0.2.28: why a Dependabot alert is dismissed (`security dismiss --reason`); the comment
+    /// travels in `body`
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
     /// 0.2.9: `ci rerun --all` re-runs every job instead of only the failed ones
     #[serde(default, skip_serializing_if = "is_false")]
     pub all: bool,

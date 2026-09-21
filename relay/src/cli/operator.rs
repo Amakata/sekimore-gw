@@ -24,7 +24,10 @@ use crate::ssh::authorized_keys::{fingerprint, Added, AuthorizedKeys};
 use crate::store;
 use crate::tokens::TokenStore;
 
-pub const DEVICE_FLOW_SCOPES: &[&str] = &["repo", "project"];
+// 0.2.28: `security_events` is what the Dependabot alerts endpoints want (#132). A token
+// issued before it was added lacks it; `security alerts` then gets GitHub's 403 and the way out
+// is `gw:login` once more.
+pub const DEVICE_FLOW_SCOPES: &[&str] = &["repo", "project", "security_events"];
 
 /// Pad a label to `width` display columns (CJK characters count as two).
 fn pad_label(label: &str, width: usize) -> String {

@@ -561,6 +561,184 @@ async fn an_agent_cannot_escape_its_repository_through_a_ci_ref() {
     }
 }
 
+// ---- Dependabot alerts (0.2.28, #132) ----
+
+#[tokio::test]
+async fn security_alerts_are_one_line_each_and_need_security_read() {
+    let f = start_api(
+        project_case_a(&["security:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let (st, resp) = post(
+        f.addr,
+        "/security/alerts",
+        Some(&f.token),
+        &req("LibOrg/awesome-lib"),
+    )
+    .await;
+    assert_eq!(st, 200);
+    let msg = resp.message.unwrap();
+    // severity, ecosystem/package, manifest, advisory, fix — the triage columns, in one line
+    assert!(
+        msg.contains("#7 [high] pip/urllib3 uv.lock (runtime) GHSA-xxxx-yyyy-zzzz CVE-2026-0001 fixed in 2.6.0 — urllib3"),
+        "{msg}"
+    );
+    assert!(
+        msg.contains(
+            "#3 [low] cargo/rustls relay/Cargo.lock GHSA-aaaa-bbbb-cccc no fix yet — rustls"
+        ),
+        "{msg}"
+    );
+    // The default filter is open alerts, and the call stays inside the repository
+    let calls = recorded(&f.recorder);
+    let get = calls.iter().find(|c| c.method == "GET").unwrap();
+    assert!(
+        get.path
+            .starts_with("/api/v3/repos/LibOrg/awesome-lib/dependabot/alerts?"),
+        "{}",
+        get.path
+    );
+    assert!(get.path.contains("state=open"), "{}", get.path);
+
+    // `all` drops the filter; anything else is refused before reaching GitHub
+    let n = calls.len();
+    let r = ApiRequest {
+        state: "all".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (st, _) = post(f.addr, "/security/alerts", Some(&f.token), &r).await;
+    assert_eq!(st, 200);
+    let last = recorded(&f.recorder).into_iter().last().unwrap();
+    assert!(!last.path.contains("state="), "{}", last.path);
+    let r = ApiRequest {
+        state: "everything".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (st, resp) = post(f.addr, "/security/alerts", Some(&f.token), &r).await;
+    assert_eq!(st, 400);
+    assert!(resp.error.unwrap().contains("open / dismissed / fixed"));
+    assert_eq!(
+        recorded(&f.recorder).len(),
+        n + 1,
+        "the bad state must not reach GitHub"
+    );
+
+    // A project without the key gets nothing, and GitHub is never asked
+    let g = start_api(
+        project_case_a(&["ci:read", "pr:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let (st, _) = post(
+        g.addr,
+        "/security/alerts",
+        Some(&g.token),
+        &req("LibOrg/awesome-lib"),
+    )
+    .await;
+    assert_eq!(st, 403);
+    assert!(recorded(&g.recorder).is_empty());
+}
+
+#[tokio::test]
+async fn dismissing_an_alert_is_its_own_permission_and_needs_a_reason() {
+    // security:read is not enough: hiding a vulnerability is a different authority from seeing it
+    let f = start_api(
+        project_case_a(&["security:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 7,
+        reason: "tolerable_risk".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (st, _) = post(f.addr, "/security/dismiss", Some(&f.token), &r).await;
+    assert_eq!(st, 403);
+    let (st, _) = post(f.addr, "/security/reopen", Some(&f.token), &r).await;
+    assert_eq!(st, 403);
+    assert!(
+        recorded(&f.recorder).iter().all(|c| c.method != "PATCH"),
+        "nothing may be written without security:dismiss"
+    );
+
+    let g = start_api(
+        project_case_a(&["security:dismiss"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    // The reason has to be one GitHub knows, and the comment stays within its limit
+    let bad = ApiRequest {
+        number: 7,
+        reason: "meh".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (st, resp) = post(g.addr, "/security/dismiss", Some(&g.token), &bad).await;
+    assert_eq!(st, 400);
+    assert!(resp.error.unwrap().contains("tolerable_risk"));
+    let long = ApiRequest {
+        number: 7,
+        reason: "not_used".into(),
+        body: "x".repeat(281),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (st, _) = post(g.addr, "/security/dismiss", Some(&g.token), &long).await;
+    assert_eq!(st, 400);
+    assert!(recorded(&g.recorder).is_empty(), "refused before GitHub");
+
+    // The real thing: state, reason and comment reach the alert, and nothing else does
+    let ok = ApiRequest {
+        number: 7,
+        reason: "not_used".into(),
+        body: "test-only dependency".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (st, resp) = post(g.addr, "/security/dismiss", Some(&g.token), &ok).await;
+    assert_eq!(st, 200);
+    assert_eq!(resp.message.unwrap(), "dismissed alert #7 (not_used)");
+    let patch = recorded(&g.recorder)
+        .into_iter()
+        .find(|c| c.method == "PATCH")
+        .unwrap();
+    assert_eq!(
+        patch.path,
+        "/api/v3/repos/LibOrg/awesome-lib/dependabot/alerts/7"
+    );
+    assert_eq!(patch.body["state"], "dismissed");
+    assert_eq!(patch.body["dismissed_reason"], "not_used");
+    assert_eq!(patch.body["dismissed_comment"], "test-only dependency");
+
+    // Reopening under the same key, with no comment carried over
+    let (st, resp) = post(
+        g.addr,
+        "/security/reopen",
+        Some(&g.token),
+        &ApiRequest {
+            number: 7,
+            ..req("LibOrg/awesome-lib")
+        },
+    )
+    .await;
+    assert_eq!(st, 200);
+    assert_eq!(resp.message.unwrap(), "reopened alert #7");
+    let last = recorded(&g.recorder).into_iter().last().unwrap();
+    assert_eq!(last.body, serde_json::json!({"state": "open"}));
+
+    // The audit knows the difference between the two writes
+    let audit = std::fs::read_to_string(&g.audit_path).unwrap();
+    assert!(audit.contains("security_alert_dismissed"), "{audit}");
+    assert!(
+        audit.contains("not_used"),
+        "the reason is in the audit: {audit}"
+    );
+    assert!(audit.contains("security_alert_reopened"), "{audit}");
+}
+
 // ---- reviewer requests and project fields (0.2.7) ----
 
 #[tokio::test]

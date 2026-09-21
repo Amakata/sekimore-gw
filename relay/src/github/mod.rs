@@ -567,6 +567,57 @@ pub struct CiRun {
     pub url: Option<String>,
 }
 
+/// One Dependabot alert (0.2.28, #132): what is vulnerable, how badly, and what fixes it. The
+/// fields are the ones a triage reads; the whole object is in `raw` for anything else.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SecurityAlert {
+    pub number: u64,
+    pub state: String,    // open / dismissed / fixed / auto_dismissed
+    pub severity: String, // low / medium / high / critical
+    pub ecosystem: String,
+    pub package: String,
+    pub manifest_path: String,
+    pub scope: String, // runtime / development / ""
+    pub ghsa_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cve_id: Option<String>,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_in: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dismissed_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+impl SecurityAlert {
+    fn from_json(a: &Value) -> Self {
+        let s = |v: Option<&Value>| v.and_then(Value::as_str).unwrap_or("").to_string();
+        let opt = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_string);
+        let adv = a.get("security_advisory");
+        let dep = a.get("dependency");
+        let pkg = dep.and_then(|d| d.get("package"));
+        SecurityAlert {
+            number: a.get("number").and_then(Value::as_u64).unwrap_or(0),
+            state: s(a.get("state")),
+            severity: s(adv.and_then(|v| v.get("severity"))),
+            ecosystem: s(pkg.and_then(|v| v.get("ecosystem"))),
+            package: s(pkg.and_then(|v| v.get("name"))),
+            manifest_path: s(dep.and_then(|v| v.get("manifest_path"))),
+            scope: s(dep.and_then(|v| v.get("scope"))),
+            ghsa_id: s(adv.and_then(|v| v.get("ghsa_id"))),
+            cve_id: opt(adv.and_then(|v| v.get("cve_id"))),
+            summary: s(adv.and_then(|v| v.get("summary"))),
+            fixed_in: opt(a
+                .get("security_vulnerability")
+                .and_then(|v| v.get("first_patched_version"))
+                .and_then(|v| v.get("identifier"))),
+            dismissed_reason: opt(a.get("dismissed_reason")),
+            url: opt(a.get("html_url")),
+        }
+    }
+}
+
 /// The CI jobs of a PR (to see which ones failed).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CiJob {
@@ -727,6 +778,90 @@ impl GitHub {
         }
         out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         Ok(out)
+    }
+
+    /// The repository's Dependabot alerts (0.2.28, #132). `state` is GitHub's filter — open /
+    /// dismissed / fixed / auto_dismissed — or `all` for no filter. Needs the `security_events`
+    /// OAuth scope on the upstream token; without it GitHub answers 403 and this says so.
+    pub async fn security_alerts(
+        &self,
+        auth: &Authorized<'_>,
+        state: &str,
+    ) -> Result<Vec<SecurityAlert>, GhError> {
+        auth.ensure(Resource::Security, Action::Read)?;
+        let repo = auth.repo();
+        let filter = if state == "all" {
+            String::new()
+        } else {
+            format!("&state={state}")
+        };
+        let v: Value = self
+            .rest(
+                "GET",
+                &format!(
+                    "/repos/{repo}/dependabot/alerts?per_page=100&sort=created&direction=desc{filter}"
+                ),
+                None,
+            )
+            .await?;
+        Ok(v.as_array()
+            .map(|arr| arr.iter().map(SecurityAlert::from_json).collect())
+            .unwrap_or_default())
+    }
+
+    pub async fn security_alert(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+    ) -> Result<SecurityAlert, GhError> {
+        auth.ensure(Resource::Security, Action::Read)?;
+        let v: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{}/dependabot/alerts/{number}", auth.repo()),
+                None,
+            )
+            .await?;
+        Ok(SecurityAlert::from_json(&v))
+    }
+
+    /// Set an alert aside. `reason` is one of GitHub's five; `comment` is optional and at most
+    /// 280 characters — both are checked by the handler, and GitHub checks them again.
+    pub async fn security_alert_dismiss(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        reason: &str,
+        comment: &str,
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Security, Action::Dismiss)?;
+        let mut body = json!({"state": "dismissed", "dismissed_reason": reason});
+        if !comment.is_empty() {
+            body["dismissed_comment"] = Value::String(comment.to_string());
+        }
+        self.rest::<Value>(
+            "PATCH",
+            &format!("/repos/{}/dependabot/alerts/{number}", auth.repo()),
+            Some(body),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// The inverse of dismissing, under the same authority.
+    pub async fn security_alert_reopen(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Security, Action::Dismiss)?;
+        self.rest::<Value>(
+            "PATCH",
+            &format!("/repos/{}/dependabot/alerts/{number}", auth.repo()),
+            Some(json!({"state": "open"})),
+        )
+        .await?;
+        Ok(())
     }
 
     /// The jobs of a run.
