@@ -12,6 +12,18 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.29（2026-09-21）
+
+### Security
+
+- `relay.signing_key` を設定すると、dev コンテナの commit を relay のフィルタ付き ssh-agent 経由で操作者自身の鍵で署名するようにした。`agent-setup.sh` は使い捨て署名鍵の生成をやめ、`SSH_AUTH_SOCK` をその socket に向ける (#136)
+
+### Enhancement
+
+- ホスト自身のシークレットストアからストアを解錠できるようにした。`gw:unlock-auto` が macOS Keychain / Secret Service / root 所有ファイルからパスフレーズを読み `unlock --stdin` に渡す (#135)
+- その解錠を `gw:recreate` 自身が行うようにした。`SGW_NO_AUTO_UNLOCK=1` で施錠のままにできる (#135)
+- パスフレーズをホストごとに一度保存する `gw:keychain-set` を足した (#135)
+
 ## 0.2.28（2026-09-21）
 
 ### Enhancement
