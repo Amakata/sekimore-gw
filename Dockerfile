@@ -103,22 +103,31 @@ WORKDIR /app
 # Install uv
 RUN pip install --no-cache-dir --no-compile uv
 
-# Dependencies first, from the manifest alone. The source arrives after, so editing it does not
-# rebuild site-packages — the same shape the relay-builder stage above uses for cargo. A stand-in
-# package is enough for `uv pip install .` to resolve and install everything but the project.
-COPY pyproject.toml .
-COPY README.md .
-RUN mkdir -p src/sekimore_placeholder \
-    && touch src/sekimore_placeholder/__init__.py \
-    # --no-cache keeps /root/.cache/uv out of the image. It is size-neutral — uv hardlinks from
-    # the cache into site-packages, so the bytes were never duplicated — but a cache directory in
-    # an image that never installs again is clutter, and one less thing to explain in a layer diff.
-    && uv pip install --system --no-cache . \
-    && rm -rf src \
+# Dependencies first, from the lock alone. The source arrives after, so editing it does not
+# rebuild site-packages — the same shape the relay-builder stage above uses for cargo.
+#
+# The manifests are bind-mounted, not COPY'd, and the project is left out of the install. Both for
+# #97: a COPY is a layer, and pyproject.toml carries the version, so that layer moved every
+# release; and `uv pip install .` — even with a stand-in package — wrote the project's own
+# dist-info, version and all, into site-packages, so *this* layer moved by a few bytes every
+# release too, with not one dependency changed. What this RUN leaves behind now is the
+# dependencies and nothing that knows which release it is.
+#
+# --no-cache keeps /root/.cache/uv out of the image. It is size-neutral — uv hardlinks from the
+# cache into site-packages, so the bytes were never duplicated — but a cache directory in an image
+# that never installs again is clutter, and one less thing to explain in a layer diff.
+RUN --mount=type=bind,source=pyproject.toml,target=/app/pyproject.toml \
+    --mount=type=bind,source=uv.lock,target=/app/uv.lock \
+    --mount=type=bind,source=README.md,target=/app/README.md \
+    uv export --frozen --no-dev --no-emit-project --quiet -o /tmp/requirements.txt \
+    && uv pip install --system --no-cache -r /tmp/requirements.txt \
+    && rm -f /tmp/requirements.txt \
     # uv does not compile bytecode today; this holds if that default ever changes
     && find /usr/local/lib/python3.13/site-packages -name '__pycache__' -type d -prune -exec rm -rf {} +
 
 # The project itself, and everything that changes with it
+COPY pyproject.toml .
+COPY README.md .
 COPY src/ ./src/
 COPY config/ulogd.conf /etc/ulogd.conf
 COPY entrypoint.sh /app/entrypoint.sh
