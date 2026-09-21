@@ -199,3 +199,32 @@ pub fn new_salt() -> Result<Vec<u8>, StoreError> {
 pub fn pbkdf2_for_test(password: &[u8], salt: &[u8], iterations: u32, out: &mut [u8]) {
     pbkdf2_sha256(password, salt, iterations, out)
 }
+
+/// The key the manifest MAC is taken under: derived from the DEK rather than the DEK itself, so a
+/// key is used for one thing only.
+pub fn manifest_key(dek: &Secret) -> Secret {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac =
+        <Hmac<Sha256> as Mac>::new_from_slice(dek.as_bytes()).expect("hmac takes any key length");
+    mac.update(b"sekimore-store/manifest/v1");
+    Secret::new(mac.finalize().into_bytes().to_vec())
+}
+
+/// HMAC-SHA-256 over the canonical manifest.
+pub fn manifest_mac(key: &Secret, manifest: &str) -> Vec<u8> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac =
+        <Hmac<Sha256> as Mac>::new_from_slice(key.as_bytes()).expect("hmac takes any key length");
+    mac.update(manifest.as_bytes());
+    mac.finalize().into_bytes().to_vec()
+}
+
+/// Constant time, so a wrong MAC does not leak how much of it was right.
+pub fn mac_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
