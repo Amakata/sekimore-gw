@@ -321,6 +321,19 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
         // 0.2.15: the items query now asks for `fieldValues(`, which must not be read as the
         // fields query — the two answers have different shapes.
         let query = body.get("query").and_then(|q| q.as_str()).unwrap_or("");
+        // 0.2.21: resolving a declared board to its node id. Asked on the first Projects request
+        // now rather than at start-up, so the mock has to answer it (#99).
+        if query.contains("projectV2(number:$number){ id }") {
+            let owner = if query.contains("organization(login:") {
+                "organization"
+            } else {
+                "user"
+            };
+            return (
+                StatusCode::OK,
+                serde_json::json!({"data": {owner: {"projectV2": {"id": "PVT_board2"}}}}),
+            );
+        }
         let asks_for_fields = query.contains(" fields(first:");
         if asks_for_fields {
             return (
@@ -446,6 +459,9 @@ pub struct ApiFixture {
     pub recorder: Recorder,
     pub token: String,
     pub audit_path: std::path::PathBuf,
+    /// The upstream token store, so a test can give the relay a token after start-up — which is
+    /// what unlocking the secret store looks like from the relay's side (#99).
+    pub tokens: Arc<UpstreamTokenStore>,
 }
 
 /// The Projects v2 board the fixture allows by default, so tests that are not about board scoping
@@ -483,6 +499,19 @@ pub async fn start_api_with_boards(
     upstream_token: bool,
     project_boards: Vec<ResolvedBoard>,
 ) -> ApiFixture {
+    start_api_full(project, bootstrap, upstream_token, project_boards, None).await
+}
+
+/// As `start_api_with_boards`, and `locked` hands back the store so a test can lock it. Used by
+/// the #99 regression: resolving a board needs the upstream token, so a locked store has to be
+/// something the request path recovers from rather than a state it caches forever.
+pub async fn start_api_full(
+    project: Project,
+    bootstrap: BootstrapMode,
+    upstream_token: bool,
+    project_boards: Vec<ResolvedBoard>,
+    declared: Option<Vec<sekimore_relay::config::BoardRef>>,
+) -> ApiFixture {
     let dir = tempfile::tempdir().unwrap();
     let (api_base, recorder) = mock_github().await;
     let graphql = Url::parse(&format!(
@@ -505,7 +534,13 @@ pub async fn start_api_with_boards(
             .unwrap();
     }
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
-    let gh = Arc::new(GitHub::new(api_base, graphql, http, store, audit.clone()));
+    let gh = Arc::new(GitHub::new(
+        api_base,
+        graphql,
+        http,
+        store.clone(),
+        audit.clone(),
+    ));
     let tokens = TokenStore::new(&dir.path().join("tokens.json"));
     let (token, _) = tokens
         .issue(&project.name, Duration::from_secs(3600))
@@ -524,7 +559,10 @@ pub async fn start_api_with_boards(
         git_domain: "github.com".into(),
         upstream: "github.com".into(),
         git_domains: vec![],
-        project_boards,
+        project_boards: match declared {
+            Some(d) => sekimore_relay::api::ProjectBoards::new(d),
+            None => sekimore_relay::api::ProjectBoards::already_resolved(project_boards),
+        },
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -536,6 +574,7 @@ pub async fn start_api_with_boards(
         recorder,
         token,
         audit_path,
+        tokens: store,
     }
 }
 

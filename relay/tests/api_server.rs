@@ -2400,3 +2400,89 @@ async fn updating_an_issue_outside_the_project_is_refused() {
     assert_eq!(code, 403);
     assert!(recorded(&f.recorder).is_empty());
 }
+
+/// #99: resolving a declared board to its node id needs the upstream API token, and since 0.2.19
+/// that token lives in the secret store, which starts locked. Doing it at start-up meant every
+/// board failed to resolve and stayed refused for the life of the process — unlocking afterwards
+/// never revisited it, and the denial claimed no board had been configured.
+#[tokio::test]
+async fn a_declared_board_is_resolved_on_first_use_not_at_start_up() {
+    let f = start_api_full(
+        project_case_a(&["project:read"]),
+        BootstrapMode::Auto,
+        true,
+        vec![],
+        Some(vec![sekimore_relay::config::BoardRef {
+            org: None,
+            user: Some("Amakata".into()),
+            number: 2,
+        }]),
+    )
+    .await;
+
+    // Nothing resolved anything at start-up, so the first request is what does it.
+    let r = ApiRequest {
+        board: Some(2),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+
+    let sent = recorded(&f.recorder);
+    assert!(
+        sent.iter().any(|c| c
+            .body
+            .to_string()
+            .contains("projectV2(number:$number){ id }")),
+        "the board was never resolved; the id must have come from somewhere it should not"
+    );
+    assert!(
+        sent.iter()
+            .any(|c| c.body.to_string().contains("PVT_board2")),
+        "the resolved id did not reach the upstream call"
+    );
+}
+
+/// The other half of #99: a board that could not be resolved must not be remembered as refused.
+/// The usual reason is a locked store, and the operator unlocking is meant to fix it without a
+/// restart.
+#[tokio::test]
+async fn a_board_that_could_not_be_resolved_is_tried_again() {
+    let f = start_api_full(
+        project_case_a(&["project:read"]),
+        BootstrapMode::Auto,
+        // No upstream token: the resolve call cannot authenticate, exactly as a locked store
+        false,
+        vec![],
+        Some(vec![sekimore_relay::config::BoardRef {
+            org: None,
+            user: Some("Amakata".into()),
+            number: 2,
+        }]),
+    )
+    .await;
+    let r = ApiRequest {
+        board: Some(2),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp.error);
+    let msg = resp.error.unwrap_or_default();
+    assert!(
+        msg.contains("gw:unlock"),
+        "a declared board that would not resolve must not read as one that was never configured: {msg}"
+    );
+
+    // The token arrives (the operator unlocked). The same request has to work now — the failure
+    // must not have been cached.
+    f.tokens
+        .save("upstream.test", "gho_test", "repo")
+        .await
+        .unwrap();
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(
+        code, 200,
+        "a failed resolve was remembered: {:?}",
+        resp.error
+    );
+}

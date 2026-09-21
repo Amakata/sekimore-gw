@@ -48,11 +48,97 @@ pub struct ApiContext {
     pub upstream: String,
     /// 0.2.0: every git domain (the first is the default)
     pub git_domains: Vec<types::GitDomain>,
-    /// 0.2.7: the Projects v2 boards this project may touch, resolved at startup from
-    /// `relay.project.boards`. A board the agent names has to be one of these. Empty refuses
-    /// every board: a node id is opaque and unbounded, so without a list any board the upstream
-    /// token can see would be reachable.
-    pub project_boards: Vec<ResolvedBoard>,
+    /// 0.2.7: the Projects v2 boards this project may touch, from `relay.project.boards`. A
+    /// board the agent names has to be one of these. Declaring none refuses every board: a node
+    /// id is opaque and unbounded, so without a list any board the upstream token can see would
+    /// be reachable.
+    pub project_boards: ProjectBoards,
+}
+
+/// The declared boards, and their node ids once something has needed them.
+///
+/// **Resolved on first use, not at start-up.** Turning `{ user: …, number: 2 }` into a node id is
+/// a GraphQL call, so it needs the upstream API token — and since 0.2.19 that token lives in the
+/// secret store, which starts locked. Resolving at start-up meant the call failed, the board was
+/// dropped, and unlocking afterwards never revisited it: every Projects operation stayed refused
+/// for the life of the process, reported as though no board had been configured (#99).
+///
+/// Doing it on demand also covers the case the old code accepted and shrugged at — the upstream
+/// being unreachable at start-up permanently refusing a board that is perfectly valid.
+pub struct ProjectBoards {
+    declared: Vec<crate::config::BoardRef>,
+    /// `None` until the first attempt. A failed attempt is not cached: the reason is usually
+    /// temporary (locked store, upstream down) and the next request should try again.
+    resolved: tokio::sync::Mutex<Option<Vec<ResolvedBoard>>>,
+}
+
+impl ProjectBoards {
+    pub fn new(declared: Vec<crate::config::BoardRef>) -> Self {
+        ProjectBoards {
+            declared,
+            resolved: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    /// Boards that are already resolved. For the tests that inject a mapping rather than have
+    /// one looked up, and for nothing else — a deployment always starts from the declaration.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn already_resolved(boards: Vec<ResolvedBoard>) -> Self {
+        ProjectBoards {
+            declared: boards
+                .iter()
+                .map(|b| crate::config::BoardRef {
+                    org: None,
+                    user: Some("test".into()),
+                    number: b.number,
+                })
+                .collect(),
+            resolved: tokio::sync::Mutex::new(Some(boards)),
+        }
+    }
+
+    /// Whether the operator declared any at all. Readable without the upstream, so a message can
+    /// tell "none configured" apart from "configured but not resolvable yet".
+    pub fn is_declared_empty(&self) -> bool {
+        self.declared.is_empty()
+    }
+
+    /// The resolved boards, resolving them if this is the first call that needed them.
+    ///
+    /// Every board resolving is the success case. A partial result is returned rather than an
+    /// error so that one bad entry does not take the others down, but it is not cached — see
+    /// `resolved`.
+    pub async fn get(&self, gh: &crate::github::GitHub) -> Vec<ResolvedBoard> {
+        let mut slot = self.resolved.lock().await;
+        if let Some(found) = slot.as_ref() {
+            return found.clone();
+        }
+        let mut out = Vec::new();
+        for b in &self.declared {
+            match gh
+                .resolve_project_board(b.org.as_deref(), b.user.as_deref(), b.number)
+                .await
+            {
+                Ok(id) => {
+                    log::info!("project board {} → {id}", b.label());
+                    out.push(ResolvedBoard {
+                        id,
+                        number: b.number,
+                        label: b.label(),
+                    });
+                }
+                Err(e) => log::warn!(
+                    "project board {} could not be resolved ({e}); it stays refused until the \
+                     next attempt",
+                    b.label()
+                ),
+            }
+        }
+        if out.len() == self.declared.len() {
+            *slot = Some(out.clone());
+        }
+        out
+    }
 }
 
 /// A configured board and the node id it resolved to.

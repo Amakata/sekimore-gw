@@ -15,7 +15,7 @@ use tokio::task::JoinSet;
 
 use super::operator::{build_github_for, open_audit, resolve};
 use crate::api::types::GitDomain;
-use crate::api::{self, ApiContext, ResolvedBoard};
+use crate::api::{self, ApiContext, ProjectBoards};
 use crate::audit::Actor;
 use crate::config::{HttpsMode, Resolved, Upstream};
 use crate::git::agent_check::{auth_sock_from_env, preflight_agent};
@@ -189,41 +189,11 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         ssh_servers.push((ssh, listener));
     }
 
-    // 0.2.7: resolve the configured Projects v2 boards to their node ids. The operator writes a
-    // board the way its URL reads; the API only speaks node ids. Resolving once here keeps the
-    // per-request path a plain comparison. A board that cannot be resolved (upstream down, wrong
-    // number, token cannot see it) is left out and logged rather than failing startup — the relay
-    // still serves git, and the effect is that the board stays refused.
-    let mut project_boards: Vec<ResolvedBoard> = Vec::new();
-    if !r.relay.project.boards.is_empty() {
-        match githubs.get(&r.domain) {
-            Some(gh) => {
-                for b in &r.relay.project.boards {
-                    match gh
-                        .resolve_project_board(b.org.as_deref(), b.user.as_deref(), b.number)
-                        .await
-                    {
-                        Ok(id) => {
-                            log::info!("project board {} → {id}", b.label());
-                            project_boards.push(ResolvedBoard {
-                                id,
-                                number: b.number,
-                                label: b.label(),
-                            });
-                        }
-                        Err(e) => log::warn!(
-                            "project board {} could not be resolved ({e}); it stays refused",
-                            b.label()
-                        ),
-                    }
-                }
-            }
-            None => log::warn!(
-                "no upstream client for {}; project boards stay refused",
-                r.domain
-            ),
-        }
-    } else if !r.project.granted().is_empty()
+    // 0.2.7: the boards a project may touch. Resolving one to its node id is a GraphQL call, so
+    // it needs the upstream API token — which since 0.2.19 lives in the secret store, locked at
+    // start-up. Doing it here meant every board failed to resolve and stayed refused for the life
+    // of the process, even after someone unlocked (#99). `ProjectBoards` does it on first use.
+    if r.relay.project.boards.is_empty()
         && r.project
             .granted()
             .iter()
@@ -248,7 +218,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         git_domain: r.domain.clone(),
         upstream: r.upstream.clone(),
         git_domains: git_domains(&r),
-        project_boards,
+        project_boards: ProjectBoards::new(r.relay.project.boards.clone()),
     });
     // The control socket last, now that the token caches exist. `lock` has to reach them: a key
     // dropped from the store while a decrypted token sits in a cache is a lock that leaves that
