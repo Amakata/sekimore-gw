@@ -104,7 +104,12 @@ COPY README.md .
 RUN mkdir -p src/sekimore_placeholder \
     && touch src/sekimore_placeholder/__init__.py \
     && uv pip install --system . \
-    && rm -rf src
+    && rm -rf src \
+    # In this layer, not a later one. A .pyc carries the source's mtime inside its header, so
+    # every build writes a different byte and the layer moves (#97); `unchecked-hash` puts the
+    # source's hash there instead. Recompiling the whole tree from the *last* layer instead would
+    # copy every dependency's bytecode into it — 10 MB, measured, on top of the copy already here.
+    && python -m compileall -q --invalidation-mode unchecked-hash /usr/local/lib/python3.13
 
 # The project itself, and everything that changes with it
 COPY src/ ./src/
@@ -122,14 +127,11 @@ COPY agent-setup.sh /usr/local/share/sekimore/agent-setup.sh
 COPY share/gateway.mise.en.toml /usr/local/share/sekimore/gateway.mise.en.toml
 COPY share/gateway.mise.ja.toml /usr/local/share/sekimore/gateway.mise.ja.toml
 RUN uv pip install --system --no-deps . \
-    # A .pyc carries the source file's mtime in its header, so every build writes a different
-    # byte there and the whole site-packages layer changes. BuildKit normalises the mtimes *on*
-    # files; it cannot reach a number written *inside* one. Recompiling with an unchecked hash
-    # replaces that field with the source's hash, which does not move between builds.
-    #
-    # Both installs above are covered: this runs after them and rewrites every __pycache__.
-    && find /usr/local/lib/python3.13 -name '__pycache__' -type d -prune -exec rm -rf {} + \
-    && python -m compileall -q --invalidation-mode unchecked-hash /usr/local/lib/python3.13
+    # Only what this install added. The dependencies were compiled in their own layer above, and
+    # redoing them here would put a second copy of every .pyc in this one.
+    && find /usr/local/lib/python3.13/site-packages -maxdepth 1 -name 'sekimore*' \
+        -exec python -m compileall -q --invalidation-mode unchecked-hash {} + \
+    && python -m compileall -q --invalidation-mode unchecked-hash /app/src
 
 # sekimore-relay binary (starts only when config.yml has a git-relay handler)
 COPY --from=relay-builder /sekimore-relay /usr/local/bin/sekimore-relay
