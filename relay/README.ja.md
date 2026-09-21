@@ -175,6 +175,19 @@ services:
 ときは `agent-setup.sh` が `commit.gpgsign false` にしてそう言う。誰も登録していない鍵で代用は
 しない。
 
+### `signing: required` は上流に 1 つだけ問い合わせる
+
+pack には上流が持っていないものしか入らない。だから push の履歴が pack から出た地点は、
+本来なら「上流が既に持っている履歴」である。ところが、上流にある object を base とする delta に
+隠れたコミットは、pack の中から見ると全く同じに見える。手で作ったその形の pack は、署名の無い
+コミットをそのまま通してしまう。`git push` はその pack を作らない（`pack-objects` が thin の
+base にするのは tree と blob だけ）が、ここでの client は AI エージェントである。
+
+そこで境界では `GET /repos/{repo}/git/commits/{sha}` を投げる。pack に blob delta が何個あっても
+1 push あたり 1〜2 回で、権限はその push が既に通した認可の範囲。答えが得られなければ拒否する。
+つまり **`required` は解錠（`mise run gw:unlock`）と login が要る**。できていないときは拒否の
+メッセージがそう言う。
+
 `relay.signing_key` を書かなければ従来どおり。`~/.ssh/sekimore/signing_ed25519` をここで生成し、
 その公開鍵を GitHub に「Signing Key」として手で登録する（ログに表示される）。
 
@@ -258,7 +271,7 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 | `tags` | `[]` | push を許すタグ glob。空は拒否 |
 | `delete` | `false` | ブランチとタグの削除、および既に upstream にあるタグを動かすこと。削除して作り直すのと強制更新は同じ結果なので、権限も同じ。まだ無いタグを作るだけなら `tags` で足りる |
 | `delete_merged_branch` | `false` | `pr merge --delete-branch` がマージしたブランチを消してよいか。そのブランチだけなので `delete` とは別の権限。forge 側で自動削除している場合は不要 |
-| `signing` | `optional` | 0.2.29（#59）branch への push が署名の無いコミットを含んでよいか — `required` \| `optional` \| `off`。`required` は `refs/heads/*` / `refs/for/*` への push に署名の無いコミットがあれば拒否する。`signed_tags` と同じく有無だけを見る。未指定は `optional` なので既存の案件の挙動は変わらない。上流層と repo で上書きできる |
+| `signing` | `optional` | 0.2.29（#59）branch への push が署名の無いコミットを含んでよいか — `required` \| `optional` \| `off`。`required` は `refs/heads/*` / `refs/for/*` への push に署名の無いコミットがあれば拒否する。`signed_tags` と同じく有無だけを見る。**上流 API を使う**（下記）ので、解錠と login が要る。未指定は `optional` なので既存の案件の挙動は変わらない。上流層と repo で上書きできる |
 | `boards` | `[]` | この案件が触れてよい Projects v2 のボード。URL のとおりに書く: `github.com/orgs/acme/projects/3` なら `{ org: acme, number: 3 }`、`{ user: someone, number: 1 }` も可。空なら Projects の操作を全て拒否 |
 | `repos` | `[]` | リポジトリ。`Org/Repo` は既定上流、`host/Org/Repo` で上流を明示 |
 | `upstreams.<domain>` | | 上流ごとの層。`permissions`（差分）、`push` / `tags` / `delete`（その上流の既定）、`repos` |

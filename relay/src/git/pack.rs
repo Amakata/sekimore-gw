@@ -704,7 +704,7 @@ pub fn tag_is_signed(body: &[u8]) -> bool {
     false
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-hooks"))]
 pub mod testutil {
     //! Building packs for tests. Also used by receive_pack's tests.
     use super::*;

@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use sekimore_relay::audit::Audit;
 use sekimore_relay::config::Limits;
+use sekimore_relay::git::pack::testutil::{insert_only_delta, pack, sha_of, Entry};
 use sekimore_relay::git::upstream_local::LocalGitUpstream;
 use sekimore_relay::git::GitContext;
 use sekimore_relay::github::upstream_token::UpstreamTokenStore;
@@ -223,6 +224,98 @@ async fn setup_tuned(grants: &[&str], tune: impl FnOnce(&mut Project)) -> E2e {
 }
 
 /// Seed the upstream bare repo with an initial commit on main, directly over the file transport.
+const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
+
+/// `git cat-file <kind> <rev>` in the bare upstream, as text.
+fn cat_file(e: &E2e, repo: &str, rev: &str, kind: &str) -> String {
+    String::from_utf8_lossy(&cat_file_raw(e, repo, rev, kind))
+        .trim()
+        .to_string()
+}
+
+/// The same, raw — a commit object's exact bytes, which a delta's base size has to match.
+fn cat_file_raw(e: &E2e, repo: &str, rev: &str, kind: &str) -> Vec<u8> {
+    let args: Vec<&str> = if kind == "tree" && rev.ends_with("^{tree}") {
+        vec!["rev-parse", rev]
+    } else {
+        vec!["cat-file", kind, rev]
+    };
+    let o = Command::new("git")
+        .args(&args)
+        .current_dir(e.bare(repo))
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    o.stdout
+}
+
+fn hex_into(hex: &str, out: &mut [u8; 20]) {
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("a sha");
+    }
+}
+
+/// Speak `git-receive-pack` over the relay's SSH directly, with a pack of our own making.
+///
+/// `git push` will not build the pack this is for, and the point of the check is the client that
+/// does not behave like `git push`.
+fn raw_receive_pack(
+    e: &E2e,
+    repo: &str,
+    old: &str,
+    new: &str,
+    name: &str,
+    pack_bytes: &[u8],
+) -> Output {
+    use std::io::Write;
+    let mut input = Vec::new();
+    // One command line, `report-status` so the refusal comes back as an ng rather than a hang up
+    let line = format!("{old} {new} {name}\0report-status\n");
+    input.extend_from_slice(format!("{:04x}", line.len() + 4).as_bytes());
+    input.extend_from_slice(line.as_bytes());
+    input.extend_from_slice(b"0000");
+    input.extend_from_slice(pack_bytes);
+
+    let mut child = Command::new("ssh")
+        .args([
+            "-i",
+            e.key_path.to_str().unwrap(),
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-p",
+            &e.addr.port().to_string(),
+            "git@127.0.0.1",
+            &format!("git-receive-pack '{repo}.git'"),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run ssh");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(&input)
+        .expect("write the command section and pack");
+    drop(child.stdin.take());
+    child.wait_with_output().expect("wait for ssh")
+}
+
+/// `seed_main`, returning the sha it left on main.
+fn seed_main_sha(e: &E2e, repo: &str) -> String {
+    seed_main(e, repo);
+    e.bare_ref(repo, "refs/heads/main").unwrap()
+}
+
 fn seed_main(e: &E2e, repo: &str) -> PathBuf {
     let seed = e
         .dir
@@ -682,6 +775,149 @@ async fn signing_required_refuses_an_unsigned_commit_and_takes_a_signed_one() {
         String::from_utf8_lossy(&o.stderr).contains("carries no signature"),
         "{}",
         String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+/// #59, the bypass: an unsigned commit smuggled in as a delta against an object the upstream has.
+///
+/// `git push` does not build this pack — `pack-objects` offers only trees and blobs as thin bases
+/// — so it is written by hand and pushed by speaking receive-pack directly, which is what an agent
+/// that wanted to get around the check would do. Without the boundary lookup the relay sees an
+/// empty `by_sha`, reads that as "the upstream already has it", and the commit goes up unsigned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unsigned_commit_cannot_arrive_as_a_delta_on_an_upstream_object() {
+    require_tools!();
+    let e = setup_tuned(&[], |p| {
+        for r in &mut p.repos {
+            r.signing = SigningMode::Required;
+        }
+    })
+    .await;
+    let main_sha = seed_main_sha(&e, "LibOrg/awesome-lib");
+
+    // The commit to smuggle: unsigned, parented on main so the upstream can apply it.
+    let tree = cat_file(
+        &e,
+        "LibOrg/awesome-lib",
+        &format!("{main_sha}^{{tree}}"),
+        "tree",
+    );
+    let unsigned = format!(
+        "tree {tree}\nparent {main_sha}\nauthor e2e <e2e@example.invalid> 0 +0000\ncommitter e2e <e2e@example.invalid> 0 +0000\n\nsmuggled\n"
+    );
+    let tip = sha_of("commit", unsigned.as_bytes());
+    // …as a delta against main's own commit object, which the upstream holds and the pack does not
+    let base = cat_file_raw(&e, "LibOrg/awesome-lib", &main_sha, "commit");
+    let delta = insert_only_delta(&base, unsigned.as_bytes());
+    let mut base_sha = [0u8; 20];
+    hex_into(&main_sha, &mut base_sha);
+    let crafted = pack(&[Entry::RefDelta {
+        base_sha,
+        delta: &delta,
+    }]);
+
+    let out = raw_receive_pack(
+        &e,
+        "LibOrg/awesome-lib",
+        ZERO_SHA,
+        &tip,
+        "refs/heads/sekimore/smuggled",
+        &crafted,
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("not on the upstream"),
+        "the smuggled commit must be refused:\n{text}"
+    );
+    assert!(text.contains("--no-thin"), "{text}");
+    assert!(
+        e.bare_ref("LibOrg/awesome-lib", "refs/heads/sekimore/smuggled")
+            .is_none(),
+        "the ref must not have moved"
+    );
+    let audit = std::fs::read_to_string(&e.audit_path).unwrap();
+    assert!(audit.contains("push_denied_commit_not_signed"), "{audit}");
+}
+
+/// The other side of the same question: a branch cut from a commit the upstream really does have.
+/// It leaves the pack at a sha nothing advertised, and it has to be allowed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_branch_cut_from_an_older_upstream_commit_is_allowed() {
+    require_tools!();
+    if !have("ssh-keygen") {
+        if std::env::var("SEKIMORE_E2E_REQUIRED").is_ok() {
+            panic!("ssh-keygen is required for the signing test");
+        }
+        return;
+    }
+    let e = setup_tuned(&[], |p| {
+        for r in &mut p.repos {
+            r.signing = SigningMode::Required;
+        }
+    })
+    .await;
+    seed_main(&e, "LibOrg/awesome-lib");
+    let work = clone(&e, "LibOrg/awesome-lib", "work");
+    let key = e.dir.path().join("signing_ed25519");
+    assert!(Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(&key)
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let key_arg = format!("user.signingkey={}", key.display());
+    let commit_signed = |msg: &str, file: &str| {
+        std::fs::write(work.join(file), b"x\n").unwrap();
+        e.ok(&work, &["add", file]);
+        e.ok(
+            &work,
+            &[
+                "-c",
+                "gpg.format=ssh",
+                "-c",
+                &key_arg,
+                "commit",
+                "-q",
+                "-S",
+                "-m",
+                msg,
+            ],
+        );
+        e.ok(&work, &["rev-parse", "HEAD"]).trim().to_string()
+    };
+    let b = commit_signed("first", "a.txt");
+    e.ok(&work, &["push", "origin", "HEAD:refs/heads/sekimore/topic"]);
+    let _c = commit_signed("second", "b.txt");
+    e.ok(&work, &["push", "origin", "HEAD:refs/heads/sekimore/topic"]);
+
+    // `b` is now an ancestor of the topic tip, so it is upstream history that nothing advertises.
+    // The push below sends no objects at all and leaves the pack straight away at `b`.
+    let o = e.git(
+        &work,
+        &["push", "origin", &format!("{b}:refs/heads/sekimore/fromB")],
+    );
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        !o.status.success(),
+        "without the upstream confirming `b`, this has to fail closed:\n{err}"
+    );
+    assert!(err.contains("not on the upstream"), "{err}");
+
+    // Once the upstream answers for it, the same push goes through.
+    common::upstream_holds_commit(&b);
+    e.ok(
+        &work,
+        &["push", "origin", &format!("{b}:refs/heads/sekimore/fromB")],
+    );
+    assert_eq!(
+        e.bare_ref("LibOrg/awesome-lib", "refs/heads/sekimore/fromB")
+            .unwrap(),
+        b
     );
 }
 

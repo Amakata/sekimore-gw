@@ -305,11 +305,12 @@ pub fn plan_push(
 ///
 /// A pack this relay could not read refuses whatever was being asked of it: "cannot tell" fails
 /// closed, because the whole point is that nobody could tell before.
-pub fn judge_pack(
+pub async fn judge_pack(
     scanned: Result<Objects, PackError>,
     tags: &[TagCheck],
     commits: &[CommitCheck],
     adv_shas: &HashSet<String>,
+    upstream: &dyn UpstreamCommits,
 ) -> Result<(), Denied> {
     let objects = match scanned {
         Ok(o) => o,
@@ -335,56 +336,145 @@ pub fn judge_pack(
         }
     };
     judge_tags(&objects, tags)?;
-    judge_commits(&objects, commits, adv_shas)
+    judge_commits(&objects, commits, adv_shas, upstream).await
 }
+
+/// How `judge_commits` asks the upstream whether a commit is already there.
+///
+/// A trait rather than a closure so the tests can answer for a sha without an upstream, and so the
+/// only implementation that reaches the network is the one holding a `GitAuthorized`.
+#[async_trait::async_trait]
+pub trait UpstreamCommits: Sync {
+    /// `Ok(true)` when the upstream holds this commit. An `Err` is "cannot tell", and the caller
+    /// fails closed on it.
+    async fn has_commit(&self, sha: &str) -> Result<bool, String>;
+}
+
+/// The real one: the upstream's API, scoped by the authorization this push already passed.
+pub struct ApiUpstreamCommits<'a> {
+    pub github: Option<&'a crate::github::GitHub>,
+    pub auth: &'a GitAuthorized<'a>,
+}
+
+#[async_trait::async_trait]
+impl UpstreamCommits for ApiUpstreamCommits<'_> {
+    async fn has_commit(&self, sha: &str) -> Result<bool, String> {
+        let Some(gh) = self.github else {
+            return Err("this relay has no API client for the upstream".to_string());
+        };
+        gh.commit_exists(self.auth, sha)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// How many commits one push may make this relay ask the upstream about.
+///
+/// An honest push asks about one — where its branch left the history the upstream has — or a
+/// handful for a merge. The cap is what stops a pack built to make the relay spend calls.
+const MAX_UPSTREAM_LOOKUPS: usize = 32;
 
 /// Every commit this push adds, against `signing: required` (#59).
 ///
-/// The walk starts at each updated ref's new sha and follows parents. A sha the pack does not
-/// hold ends that line: a pack carries exactly what the upstream lacks, so anything outside it is
-/// history the upstream already has and this push did not bring. A sha the upstream advertised
-/// ends it too, which is the same statement made from the other side.
+/// The walk starts at each updated ref's new sha and follows parents, and every commit it reaches
+/// inside the pack has to carry a signature. Where it leaves the pack it has to establish which
+/// of two things it is looking at, because from inside the pack they are identical:
 ///
-/// The one way a commit could hide from this is by arriving as a delta against another commit,
-/// which this scan does not apply — `unresolved_commit_deltas` counts exactly that, and it fails
-/// closed. Unresolved tree and blob deltas are ordinary and say nothing about commits.
-fn judge_commits(
+///   - history the upstream already has, which this push did not bring and is not answerable for
+///   - a commit that *is* in this push, hidden behind a delta whose base lives upstream
+///
+/// The second is not something `git push` produces — `pack-objects` builds thin bases with
+/// `add_preferred_base`, which dereferences a commit to its tree, so an external base is a tree or
+/// a blob — but the client here is an AI agent and the pack is whatever it chose to send. A
+/// hand-built REF_DELTA against any commit the upstream has would otherwise carry an unsigned
+/// commit straight through, so the boundary is settled by asking the upstream, which is one or two
+/// calls per push however many blob deltas the pack holds.
+///
+/// A delta against a commit *in* this pack is the other way a commit can hide, and that one is
+/// counted exactly (`unresolved_commit_deltas`) and refused without asking anyone.
+async fn judge_commits(
     objects: &Objects,
     checks: &[CommitCheck],
     adv_shas: &HashSet<String>,
+    upstream: &dyn UpstreamCommits,
 ) -> Result<(), Denied> {
+    // Shared across the checks in one push: two branches off the same base ask once.
+    let mut known: HashMap<String, bool> = HashMap::new();
+    let mut lookups = 0usize;
     for c in checks {
         if objects.unresolved_commit_deltas > 0 {
             return Err(Denied::CommitNotSigned {
                 name: c.name.clone(),
                 sha: c.sha.clone(),
-                reason: "arrived in a form this relay could not read — a commit delta against another commit. `git push --no-thin` sends whole objects".to_string(),
+                reason: "arrived in a form this relay could not read — a commit delta against another commit in the same pack. `git push --no-thin` sends whole objects".to_string(),
             });
+        }
+        // An advertised sha is a tip the upstream already has; there is no new history under it.
+        if adv_shas.contains(&c.sha) {
+            continue;
         }
         // Breadth-first from the tip, so the commit named in the denial is the one nearest it —
         // the one the person is most likely looking at.
-        let mut queue: VecDeque<&str> = VecDeque::from([c.sha.as_str()]);
-        let mut seen: HashSet<&str> = HashSet::from([c.sha.as_str()]);
+        let mut queue: VecDeque<String> = VecDeque::from([c.sha.clone()]);
+        let mut seen: HashSet<String> = HashSet::from([c.sha.clone()]);
         while let Some(sha) = queue.pop_front() {
-            let Some(Object::Commit { signed, parents }) = objects.by_sha.get(sha) else {
-                // Not a commit this push brought: either the upstream already has it, or the ref
-                // is being pointed at an object that is not a commit, which the upstream will
-                // refuse on its own terms.
-                continue;
-            };
-            if !signed {
-                return Err(Denied::CommitNotSigned {
-                    name: c.name.clone(),
-                    sha: sha.to_string(),
-                    reason: "carries no signature".to_string(),
-                });
-            }
-            for p in parents {
-                if adv_shas.contains(p.as_str()) {
-                    continue;
+            match objects.by_sha.get(&sha) {
+                Some(Object::Commit { signed, parents }) => {
+                    if !signed {
+                        return Err(Denied::CommitNotSigned {
+                            name: c.name.clone(),
+                            sha: sha.clone(),
+                            reason: "carries no signature".to_string(),
+                        });
+                    }
+                    for p in parents {
+                        if adv_shas.contains(p) {
+                            continue;
+                        }
+                        if seen.insert(p.clone()) {
+                            queue.push_back(p.clone());
+                        }
+                    }
                 }
-                if seen.insert(p.as_str()) {
-                    queue.push_back(p.as_str());
+                // The boundary. Not a commit this pack brought — or not one this pack *admits* to
+                // bringing.
+                _ => {
+                    if let Some(upstream_has) = known.get(&sha) {
+                        if *upstream_has {
+                            continue;
+                        }
+                    } else {
+                        if lookups >= MAX_UPSTREAM_LOOKUPS {
+                            return Err(Denied::CommitNotSigned {
+                                name: c.name.clone(),
+                                sha: sha.clone(),
+                                reason: format!(
+                                    "is one of more than {MAX_UPSTREAM_LOOKUPS} commits this push leaves unaccounted for, which is more than this relay will ask the upstream about. `git push --no-thin` sends whole objects"
+                                ),
+                            });
+                        }
+                        lookups += 1;
+                        let answer = upstream.has_commit(&sha).await.map_err(|e| {
+                            // Fail closed. The usual cause is the store being locked after a
+                            // restart, and the operator has to hear which command that is.
+                            Denied::CommitNotSigned {
+                                name: c.name.clone(),
+                                sha: sha.clone(),
+                                reason: format!(
+                                    "could not be looked up on the upstream ({e}); signing: required needs the upstream API, so the gateway has to be unlocked (`mise run gw:unlock`) and logged in"
+                                ),
+                            }
+                        })?;
+                        known.insert(sha.clone(), answer);
+                        if answer {
+                            continue;
+                        }
+                    }
+                    return Err(Denied::CommitNotSigned {
+                        name: c.name.clone(),
+                        sha: sha.clone(),
+                        reason: "is not on the upstream and did not arrive as a whole object, so this relay cannot see whether it is signed — a delta against an object the upstream already has. `git push --no-thin` sends whole objects".to_string(),
+                    });
                 }
             }
         }
@@ -457,6 +547,7 @@ async fn copy_judging_pack<R, W>(
     tags: &[TagCheck],
     commits: &[CommitCheck],
     adv_shas: &HashSet<String>,
+    upstream: &dyn UpstreamCommits,
 ) -> std::io::Result<(u64, Result<(), Denied>)>
 where
     R: AsyncRead + Unpin,
@@ -483,7 +574,14 @@ where
                         tail.drain(..forward);
                     }
                     if s.is_complete() {
-                        let v = judge_pack(scan.take().unwrap().finish(), tags, commits, adv_shas);
+                        let v = judge_pack(
+                            scan.take().unwrap().finish(),
+                            tags,
+                            commits,
+                            adv_shas,
+                            upstream,
+                        )
+                        .await;
                         if v.is_ok() {
                             w.write_all(&tail).await?;
                             w.flush().await?;
@@ -519,7 +617,16 @@ where
     let verdict = match verdict {
         Some(v) => v,
         // EOF before the pack was whole: nothing to judge, and nothing the upstream can use
-        None => judge_pack(scan.take().unwrap().finish(), tags, commits, adv_shas),
+        None => {
+            judge_pack(
+                scan.take().unwrap().finish(),
+                tags,
+                commits,
+                adv_shas,
+                upstream,
+            )
+            .await
+        }
     };
     if let Some(mut w) = writer.take() {
         w.flush().await?;
@@ -768,6 +875,12 @@ pub async fn relay_receive_pack(
     // Owned here rather than borrowed from `proc`, so stage C can drop it: on a child's pipe
     // `shutdown()` does nothing in tokio, and dropping the handle is the only way to send EOF
     let mut upstream_stdin = Some(proc.stdin);
+    // #59: what settles the boundary of the history this push brings. Built here because it
+    // borrows the same `auth` the push was allowed under.
+    let upstream_commits = ApiUpstreamCommits {
+        github: ctx.github.as_deref(),
+        auth,
+    };
     let pack_fut = async {
         if !plan.tag_checks.is_empty() || !plan.commit_checks.is_empty() {
             // #89 / #59: read the pack on the way through and hold the trailer until it is judged
@@ -780,6 +893,7 @@ pub async fn relay_receive_pack(
                 &plan.tag_checks,
                 &plan.commit_checks,
                 &plan.adv_shas,
+                &upstream_commits,
             )
             .await?;
             return Ok::<(u64, Option<Denied>), std::io::Error>((n, verdict.err()));
@@ -1329,21 +1443,81 @@ mod tests {
             s.feed(bytes);
             s.finish()
         }
+        /// An upstream that holds exactly the shas it was given, and can be made to fail.
+        struct FakeUpstream {
+            has: HashSet<String>,
+            error: Option<String>,
+            asked: std::sync::Mutex<Vec<String>>,
+        }
+        impl FakeUpstream {
+            fn holding(shas: &[&str]) -> Self {
+                FakeUpstream {
+                    has: shas.iter().map(|s| s.to_string()).collect(),
+                    error: None,
+                    asked: std::sync::Mutex::new(Vec::new()),
+                }
+            }
+            fn broken() -> Self {
+                FakeUpstream {
+                    has: HashSet::new(),
+                    error: Some("the secret store is locked".into()),
+                    asked: std::sync::Mutex::new(Vec::new()),
+                }
+            }
+            fn asked(&self) -> Vec<String> {
+                self.asked.lock().unwrap().clone()
+            }
+        }
+        #[async_trait::async_trait]
+        impl super::super::UpstreamCommits for FakeUpstream {
+            async fn has_commit(&self, sha: &str) -> Result<bool, String> {
+                self.asked.lock().unwrap().push(sha.to_string());
+                match &self.error {
+                    Some(e) => Err(e.clone()),
+                    None => Ok(self.has.contains(sha)),
+                }
+            }
+        }
+
         /// The tag half of `judge_pack`, which is what these cases are about.
         fn judge_tags(
             scanned: Result<crate::git::pack::Objects, PackError>,
             checks: &[TagCheck],
         ) -> Result<(), Denied> {
-            judge_pack(scanned, checks, &[], &HashSet::new())
+            block_on(judge_pack(
+                scanned,
+                checks,
+                &[],
+                &HashSet::new(),
+                &FakeUpstream::holding(&[]),
+            ))
         }
-        /// The commit half.
+        /// The commit half. The upstream holds nothing unless a case says otherwise, so a walk
+        /// that leaves the pack has to justify itself.
         fn judge_commits(
             scanned: Result<crate::git::pack::Objects, PackError>,
             checks: &[CommitCheck],
             adv: &[&str],
         ) -> Result<(), Denied> {
+            judge_commits_with(scanned, checks, adv, &FakeUpstream::holding(&[]))
+        }
+        fn judge_commits_with(
+            scanned: Result<crate::git::pack::Objects, PackError>,
+            checks: &[CommitCheck],
+            adv: &[&str],
+            upstream: &dyn super::super::UpstreamCommits,
+        ) -> Result<(), Denied> {
             let adv: HashSet<String> = adv.iter().map(|s| s.to_string()).collect();
-            judge_pack(scanned, &[], checks, &adv)
+            block_on(judge_pack(scanned, &[], checks, &adv, upstream))
+        }
+        /// These cases are about the judgement, not about concurrency; a current-thread runtime
+        /// keeps them ordinary `#[test]`s.
+        fn block_on<F: std::future::Future>(f: F) -> F::Output {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(f)
         }
         fn branch(sha: &str) -> Vec<CommitCheck> {
             vec![CommitCheck {
@@ -1455,25 +1629,113 @@ mod tests {
 
         #[test]
         fn history_the_upstream_already_has_is_not_this_pushs_to_answer_for() {
-            // The parent is not in the pack, so the upstream has it: an unsigned commit from
-            // before the policy was turned on must not block every later push.
+            // The parent is not in the pack and the upstream confirms it holds it: an unsigned
+            // commit from before the policy was turned on must not block every later push. This
+            // is "branch off main~3" — the ordinary shape, and the one that must not be refused.
             let old = commit_body(&[], false, "from before");
+            let old_sha = sha_of("commit", &old);
+            let new = commit_body(&[&old_sha], true, "new work");
+            let p = pack(&[Entry::Whole(1, &new)]);
+            let up = FakeUpstream::holding(&[&old_sha]);
+            assert_eq!(
+                judge_commits_with(scan(&p), &branch(&sha_of("commit", &new)), &[], &up),
+                Ok(())
+            );
+            assert_eq!(
+                up.asked(),
+                vec![old_sha.clone()],
+                "one call, at the boundary"
+            );
+
+            // and the same when it *is* in the pack but the advertisement names it — no call at
+            // all, because the advertisement already said so
+            let p = pack(&[Entry::Whole(1, &old), Entry::Whole(1, &new)]);
+            let up = FakeUpstream::holding(&[]);
+            assert_eq!(
+                judge_commits_with(scan(&p), &branch(&sha_of("commit", &new)), &[&old_sha], &up),
+                Ok(())
+            );
+            assert!(up.asked().is_empty(), "{:?}", up.asked());
+        }
+
+        #[test]
+        fn a_commit_hidden_behind_a_delta_on_an_upstream_base_does_not_pass_for_upstream_history() {
+            // The bypass. `git push` does not build this — `pack-objects` only ever offers trees
+            // and blobs as thin bases — but the client is an agent and the pack is whatever it
+            // sent. A REF_DELTA against any commit the upstream already has leaves the tip absent
+            // from `by_sha`, which is indistinguishable from "the upstream has it" unless someone
+            // asks. So the relay asks, and the upstream says no.
+            let unsigned = commit_body(&[], false, "not signed");
+            let tip = sha_of("commit", &unsigned);
+            let delta = crate::git::pack::testutil::insert_only_delta(b"base", &unsigned);
+            let p = pack(&[Entry::RefDelta {
+                base_sha: [7u8; 20],
+                delta: &delta,
+            }]);
+            let up = FakeUpstream::holding(&[]);
+            let (sha, why) = why_commit(judge_commits_with(scan(&p), &branch(&tip), &[], &up));
+            assert_eq!(sha, tip);
+            assert!(why.contains("not on the upstream"), "{why}");
+            assert!(why.contains("--no-thin"), "{why}");
+            assert_eq!(up.asked(), vec![tip.clone()]);
+
+            // The very same pack is accepted once the upstream confirms the sha is its own
+            // history — which is what makes the refusal above about the answer, not the shape
+            let up = FakeUpstream::holding(&[&tip]);
+            assert_eq!(
+                judge_commits_with(scan(&p), &branch(&tip), &[], &up),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn a_boundary_the_upstream_cannot_be_asked_about_fails_closed() {
+            // The store is locked after a restart, so the API cannot answer. "Cannot tell" is a
+            // refusal, and the message has to send the operator to the command that fixes it.
+            let old = commit_body(&[], true, "upstream history");
             let new = commit_body(&[&sha_of("commit", &old)], true, "new work");
             let p = pack(&[Entry::Whole(1, &new)]);
-            assert_eq!(
-                judge_commits(scan(&p), &branch(&sha_of("commit", &new)), &[]),
-                Ok(())
+            let (_, why) = why_commit(judge_commits_with(
+                scan(&p),
+                &branch(&sha_of("commit", &new)),
+                &[],
+                &FakeUpstream::broken(),
+            ));
+            assert!(why.contains("the secret store is locked"), "{why}");
+            assert!(why.contains("gw:unlock"), "{why}");
+        }
+
+        #[test]
+        fn a_push_cannot_make_the_relay_ask_the_upstream_without_end() {
+            // A pack whose commits all name parents that are nowhere. An honest push asks once.
+            let mut entries = Vec::new();
+            let bodies: Vec<Vec<u8>> = (0..40)
+                .map(|i| commit_body(&[&format!("{:040x}", i + 1)], true, "signed"))
+                .collect();
+            for b in &bodies {
+                entries.push(Entry::Whole(1, b));
+            }
+            // one ref per commit, so the walk reaches every one of those parents
+            let checks: Vec<CommitCheck> = bodies
+                .iter()
+                .enumerate()
+                .map(|(i, b)| CommitCheck {
+                    name: format!("refs/heads/sekimore/topic{i}"),
+                    sha: sha_of("commit", b),
+                })
+                .collect();
+            let up = FakeUpstream::holding(
+                &(0..40)
+                    .map(|i| format!("{:040x}", i + 1))
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>(),
             );
-            // and the same when it *is* in the pack but the advertisement names it
-            let p = pack(&[Entry::Whole(1, &old), Entry::Whole(1, &new)]);
-            assert_eq!(
-                judge_commits(
-                    scan(&p),
-                    &branch(&sha_of("commit", &new)),
-                    &[&sha_of("commit", &old)]
-                ),
-                Ok(())
-            );
+            let p = pack(&entries);
+            let e = judge_commits_with(scan(&p), &checks, &[], &up).unwrap_err();
+            assert!(e.to_string().contains("more than 32"), "{e}");
+            assert!(up.asked().len() <= 32, "{}", up.asked().len());
         }
 
         #[test]
@@ -1513,7 +1775,12 @@ mod tests {
             let a2 = commit_body(&[&sha_of("commit", &b)], true, "a");
             let p = pack(&[Entry::Whole(1, &a2), Entry::Whole(1, &b)]);
             assert_eq!(
-                judge_commits(scan(&p), &branch(&sha_of("commit", &a2)), &[]),
+                judge_commits_with(
+                    scan(&p),
+                    &branch(&sha_of("commit", &a2)),
+                    &[],
+                    &FakeUpstream::holding(&[&sha_a])
+                ),
                 Ok(())
             );
         }

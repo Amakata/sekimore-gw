@@ -117,9 +117,42 @@ fn percent_decode(s: &str) -> String {
     out
 }
 
+/// Commits the mock upstream claims to hold (#59: `GET /repos/{repo}/git/commits/{sha}`).
+///
+/// A set rather than a canned answer because the two cases a test needs are opposites: a sha the
+/// upstream really has, and one it does not. Shas are unique per test, so one set is enough for
+/// the whole binary.
+static UPSTREAM_COMMITS: std::sync::LazyLock<Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+
+/// Tell the mock that the upstream holds this commit.
+pub fn upstream_holds_commit(sha: &str) {
+    UPSTREAM_COMMITS
+        .lock()
+        .unwrap()
+        .insert(sha.to_ascii_lowercase());
+}
+
 fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, serde_json::Value) {
     let decoded = percent_decode(path);
     let p = decoded.split('?').next().unwrap_or(&decoded);
+    // 0.2.29 (#59): the boundary lookup. 404 unless a test said the upstream has it, which is
+    // what a real upstream answers for a sha it does not hold.
+    if method == "GET" {
+        if let Some((_, sha)) = p.split_once("/git/commits/") {
+            if UPSTREAM_COMMITS
+                .lock()
+                .unwrap()
+                .contains(&sha.to_ascii_lowercase())
+            {
+                return (StatusCode::OK, serde_json::json!({"sha": sha}));
+            }
+            return (
+                StatusCode::NOT_FOUND,
+                serde_json::json!({"message": "Not Found"}),
+            );
+        }
+    }
     // 0.2.7: search. The answer deliberately mixes in a repository outside the project, so the
     // filter in the client is actually exercised rather than assumed.
     if method == "GET" && p == "/api/v3/search/issues" {

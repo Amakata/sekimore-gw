@@ -176,6 +176,19 @@ services:
 it does not, `agent-setup.sh` sets `commit.gpgsign false` and says so, rather than substituting a
 key nobody registered.
 
+### `signing: required` asks the upstream one question
+
+A pack carries only what the upstream lacks, so where a push's history leaves the pack, that is
+*supposed* to be history the upstream already has. A commit hidden behind a delta whose base lives
+upstream looks exactly the same from inside the pack — and a hand-built pack of that shape would
+carry an unsigned commit straight through the check. `git push` never builds one (`pack-objects`
+offers only trees and blobs as thin bases), but the client here is an AI agent.
+
+So at that boundary the relay asks: `GET /repos/{repo}/git/commits/{sha}`. One or two calls per
+push, however many blob deltas the pack holds, scoped by the authorization the push already
+passed. An answer it cannot get is a refusal — so **`required` needs the gateway unlocked
+(`mise run gw:unlock`) and logged in**, and the denial says so when it is not.
+
 Without `relay.signing_key`, the old behaviour stands: `~/.ssh/sekimore/signing_ed25519` is
 generated here and its public half has to be registered on GitHub as a "Signing Key" by hand — it
 is printed in the log.
@@ -261,7 +274,7 @@ Keys are exact FQDN matches. Listing `github` more than once gives you more than
 | `tags` | `[]` | Tag globs that may be pushed. Empty means denied |
 | `delete` | `false` | Deleting branches and tags, and moving a tag that already exists upstream. Delete-and-recreate and a forced update leave the same result, so they share one authority. Creating a tag that is not there yet only needs `tags` |
 | `delete_merged_branch` | `false` | Whether `pr merge --delete-branch` may remove the branch it just merged. Only that branch, so it is not the same authority as `delete`. Leave it off where the forge already deletes merged branches itself |
-| `signing` | `optional` | 0.2.29 (#59): whether a push to a branch may carry an unsigned commit — `required` \| `optional` \| `off`. `required` refuses a push to `refs/heads/*` or `refs/for/*` when any commit it brings has no signature; presence, not validity, like `signed_tags`. `optional` when unset, so no existing project changes behaviour. Overridable per upstream and per repo |
+| `signing` | `optional` | 0.2.29 (#59): whether a push to a branch may carry an unsigned commit — `required` \| `optional` \| `off`. `required` refuses a push to `refs/heads/*` or `refs/for/*` when any commit it brings has no signature; presence, not validity, like `signed_tags`. It **needs the upstream API** (see below), so the store has to be unlocked and logged in. `optional` when unset, so no existing project changes behaviour. Overridable per upstream and per repo |
 | `boards` | `[]` | The Projects v2 boards this project may touch, written the way the URL reads: `{ org: acme, number: 3 }` for `github.com/orgs/acme/projects/3`, or `{ user: someone, number: 1 }`. Empty refuses every Projects operation |
 | `repos` | `[]` | Repositories. `Org/Repo` means the default upstream; `host/Org/Repo` names one explicitly |
 | `upstreams.<domain>` | | A per-upstream layer: `permissions` (a delta), `push` / `tags` / `delete` (that upstream's defaults), and `repos` |

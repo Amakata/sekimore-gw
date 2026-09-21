@@ -726,6 +726,47 @@ impl GitHub {
             rollup,
         })
     }
+    /// 0.2.29 (#59): whether the upstream already holds this commit object.
+    ///
+    /// Asked while judging a push under `signing: required`. A pack carries only what the upstream
+    /// lacks, so a sha the scan did not see is *supposed* to be history the upstream already has —
+    /// but a commit hidden behind a delta whose base lives upstream looks exactly the same from
+    /// inside the pack, and that is a way to push an unsigned commit past the check. The upstream
+    /// is the only thing that can tell the two apart.
+    ///
+    /// Scoped by the push's own authorization rather than by an API permission: the question is
+    /// about a commit in the repository this push was already allowed to write to, so
+    /// `GitAuthorized` is exactly the proof it needs. Demanding `repo:read` instead would make
+    /// `signing: required` refuse every push in a project that does not grant it.
+    pub async fn commit_exists(
+        &self,
+        auth: &crate::policy::GitAuthorized<'_>,
+        sha: &str,
+    ) -> Result<bool, GhError> {
+        // The sha comes off the wire. A path segment is escaped everywhere else in this file for
+        // the same reason, and this one is also checked to be a sha at all, because anything that
+        // is not cannot name a commit and asking would only spend a call.
+        if sha.len() != 40 || !sha.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(false);
+        }
+        match self
+            .rest::<Value>(
+                "GET",
+                &format!("/repos/{}/git/commits/{}", auth.repo(), path_segment(sha)),
+                None,
+            )
+            .await
+        {
+            Ok(_) => Ok(true),
+            // 404 is "no such object"; 422 is what GitHub answers for a sha that is well-formed
+            // but names something that is not a commit
+            Err(GhError::Status {
+                status: 404 | 422, ..
+            }) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Resolve a ref (tag name / branch name / SHA) to a SHA. `GET /repos/{repo}/commits/{ref}` accepts all three forms.
     async fn resolve_sha(&self, repo: &str, git_ref: &str) -> Result<String, GhError> {
         let c: Value = self
