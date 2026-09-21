@@ -6,6 +6,18 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.20 (2026-09-21)
+
+### Enhancement
+
+- no change to the relay; 0.2.19 and 0.2.20 are the same binary. The release ships the gateway's own mise tasks in the image (#95)
+
+## 0.2.20 (2026-09-21)
+
+### Enhancement
+
+- no change to the relay; 0.2.19 and 0.2.20 are the same binary. The release ships the gateway's own `gw:*` mise tasks in the image (#95)
+
 ## 0.2.19 (2026-09-21)
 
 ### Security

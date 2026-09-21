@@ -12,6 +12,14 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.20（2026-09-21）
+
+### Enhancement
+
+- gateway 自身の `gw:*` mise タスクをイメージに同梱した。各プロジェクトは自分の `mise.toml` に複製せず include する (#95)
+- `gw:revoke` を追加した。`mise run gw -- revoke --label …` でしか届かなかった (#95)
+- 運用サブコマンドに漏れなくタスクがあること、英日で同じ集合であること、`sgw.sh` に無い原始的な口を要求しないことを CI で検査するようにした (#95)
+
 ## 0.2.19（2026-09-21）
 
 ### Security
