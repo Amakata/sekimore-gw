@@ -14,6 +14,7 @@
 //! ```
 
 pub mod agent_check;
+pub mod pack;
 pub mod receive_pack;
 pub mod response;
 pub mod upload_pack;

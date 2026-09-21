@@ -258,6 +258,12 @@ pub struct RepoPolicy {
     /// 0.2.9: delete the head branch once `pr merge` succeeds. Only the branch just merged, which
     /// is why it is not the same authority as `delete`
     pub delete_merged_branch: bool,
+    /// 0.2.27 (#89): a pushed tag has to be an annotated tag object carrying a signature block.
+    /// Presence, not validity — whose keys count is not something the configuration knows yet.
+    /// A lightweight tag (a bare commit sha) and an annotated tag made with `tag.gpgsign=false`
+    /// are both refused. On by default: every tag this project has ever published is signed,
+    /// and the one that was not is how #89 was found
+    pub signed_tags: bool,
     /// Delta on top of the project defaults: permissions to add, and permissions to remove (a deny wins at any layer)
     pub allow: Vec<String>,
     pub deny: Vec<String>,
@@ -274,6 +280,7 @@ impl RepoPolicy {
             tags: Vec::new(),
             delete: false,
             delete_merged_branch: false,
+            signed_tags: true,
             allow: Vec::new(),
             deny: Vec::new(),
         }
@@ -411,6 +418,12 @@ pub enum Denied {
     TagUpdateNotAllowed {
         name: String,
     },
+    /// 0.2.27 (#89): the pushed tag is not an annotated, signed tag object. Decided from the pack
+    /// itself, so it is the one denial that arrives after the bytes have started flowing
+    TagNotSigned {
+        name: String,
+        reason: String,
+    },
     /// Not a valid ref name
     InvalidRef {
         name: String,
@@ -451,6 +464,12 @@ impl fmt::Display for Denied {
                     "updating {name} is not allowed: the tag already exists upstream, and moving it makes a name people already have point at different code; cut a new version instead of moving a published one (deleting and recreating it is the same act, so both need repos[].delete / relay.project.delete)"
                 )
             }
+            Denied::TagNotSigned { name, reason } => {
+                write!(
+                    f,
+                    "pushing {name} is not allowed: {reason}. A tag goes up as a signed tag object (`git tag -s`); to accept others, set signed_tags: false under relay.project (or per repo)"
+                )
+            }
             Denied::InvalidRef { name, reason } => write!(f, "invalid ref {name:?}: {reason}"),
         }
     }
@@ -471,6 +490,7 @@ impl Denied {
             Denied::RefNotAllowed { .. } => "ref_not_allowed",
             Denied::DeleteNotAllowed { .. } => "delete_not_allowed",
             Denied::TagUpdateNotAllowed { .. } => "tag_update_not_allowed",
+            Denied::TagNotSigned { .. } => "tag_not_signed",
             Denied::InvalidRef { .. } => "invalid_ref",
         }
     }

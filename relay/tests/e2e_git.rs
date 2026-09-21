@@ -21,16 +21,23 @@ use sekimore_relay::github::GitHub;
 use sekimore_relay::policy::{Mode, Project, RepoPolicy};
 use sekimore_relay::ssh::authorized_keys::AuthorizedKeys;
 use sekimore_relay::ssh::{load_or_create_host_key, server_config, SshServer};
+use std::os::unix::fs::PermissionsExt;
 use tokio::net::TcpListener;
 use url::Url;
 
 fn have(bin: &str) -> bool {
-    // ssh has no --version (it prints its version for -V)
-    let flag = if bin == "ssh" { "-V" } else { "--version" };
-    Command::new(bin)
-        .arg(flag)
-        .output()
-        .map(|o| o.status.success())
+    // Look the name up on PATH rather than run it: the three tools disagree on how to ask for a
+    // version (ssh wants -V, ssh-keygen has no such flag and exits 1 on any of them), and a
+    // probe that exits non-zero read as "absent" — which made the signed-tag test skip
+    // wherever SEKIMORE_E2E_REQUIRED was unset and fail wherever it was set.
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                let p = dir.join(bin);
+                p.is_file()
+                    && std::fs::metadata(&p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+            })
+        })
         .unwrap_or(false)
 }
 
@@ -446,6 +453,9 @@ async fn a_published_tag_cannot_be_moved_but_a_new_one_still_goes_up() {
     let e = setup_tuned(&[], |p| {
         for r in &mut p.repos {
             r.tags = vec!["v*".to_string()];
+            // This test is about moving a tag, not about what kind of tag; the tags below are
+            // plain `-a` ones, which the signed_tags default would refuse first
+            r.signed_tags = false;
         }
     })
     .await;
@@ -491,6 +501,98 @@ async fn a_published_tag_cannot_be_moved_but_a_new_one_still_goes_up() {
     e.ok(&work, &["tag", "-a", "v2", "-m", "v2"]);
     e.ok(&work, &["push", "origin", "v2"]);
     assert!(e.bare_ref("LibOrg/awesome-lib", "refs/tags/v2").is_some());
+}
+
+/// #89, second half: a tag goes up only as a signed tag object. Decided from the pack itself,
+/// after the command section was already accepted, by withholding the pack's trailer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_a_signed_tag_object_goes_up() {
+    require_tools!();
+    if !have("ssh-keygen") {
+        if std::env::var("SEKIMORE_E2E_REQUIRED").is_ok() {
+            panic!("ssh-keygen is required for the signed-tag test");
+        }
+        eprintln!("skipping: ssh-keygen not available");
+        return;
+    }
+    let e = setup_tuned(&[], |p| {
+        for r in &mut p.repos {
+            r.tags = vec!["v*".to_string()];
+        }
+    })
+    .await;
+    seed_main(&e, "LibOrg/awesome-lib");
+    let work = clone(&e, "LibOrg/awesome-lib", "work");
+
+    // A lightweight tag: the name points straight at the commit, which the upstream already has
+    e.ok(&work, &["tag", "v1"]);
+    let o = e.git(&work, &["push", "origin", "v1"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "a lightweight tag must fail:\n{err}");
+    assert!(err.contains("pushing refs/tags/v1 is not allowed"), "{err}");
+    assert!(err.contains("git tag -s"), "{err}");
+    assert!(err.contains("[remote rejected]"), "{err}");
+    assert!(!err.contains("hung up"), "{err}");
+    assert!(e.bare_ref("LibOrg/awesome-lib", "refs/tags/v1").is_none());
+
+    // An annotated tag without a signature — how 0.2.18 got its first tag
+    e.ok(&work, &["tag", "-a", "v2", "-m", "v2"]);
+    let o = e.git(&work, &["push", "origin", "v2"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "an unsigned tag must fail:\n{err}");
+    assert!(err.contains("without a signature"), "{err}");
+    assert!(err.contains("[remote rejected]"), "{err}");
+    assert!(e.bare_ref("LibOrg/awesome-lib", "refs/tags/v2").is_none());
+
+    // Its own audit event
+    let audit = std::fs::read_to_string(&e.audit_path).unwrap();
+    assert!(audit.contains("push_denied_tag_not_signed"), "{audit}");
+
+    // A signed one (SSH format, the one this project uses) goes up
+    let key = e.dir.path().join("signing_ed25519");
+    let o = Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(&key)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let key_arg = format!("user.signingkey={}", key.display());
+    e.ok(
+        &work,
+        &[
+            "-c",
+            "gpg.format=ssh",
+            "-c",
+            &key_arg,
+            "tag",
+            "-s",
+            "v3",
+            "-m",
+            "v3",
+        ],
+    );
+    e.ok(&work, &["push", "origin", "v3"]);
+    assert!(e.bare_ref("LibOrg/awesome-lib", "refs/tags/v3").is_some());
+
+    // and a second signed one, pushed alone, when the first is already upstream: this is the
+    // shape a release is, and where a thin pack could have deltified against the first
+    e.commit_file(&work, "next.txt", b"next\n");
+    e.ok(
+        &work,
+        &[
+            "-c",
+            "gpg.format=ssh",
+            "-c",
+            &key_arg,
+            "tag",
+            "-s",
+            "v4",
+            "-m",
+            "v4",
+        ],
+    );
+    e.ok(&work, &["push", "origin", "v4"]);
+    assert!(e.bare_ref("LibOrg/awesome-lib", "refs/tags/v4").is_some());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

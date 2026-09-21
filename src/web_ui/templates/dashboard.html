@@ -1268,6 +1268,7 @@
                                 <span class="domain-stat">${tr('relay.repo.direct_push')} <strong>${escapeHtml(r.push.join(', ') || '-')}</strong></span>
                                 <span class="domain-stat">${tr('relay.repo.tags')} <strong>${escapeHtml((r.tags || []).join(', ') || tr('relay.deny'))}</strong></span>
                                 <span class="domain-stat">${tr('relay.repo.delete')} <strong>${r.delete ? tr('yes') : tr('no')}</strong></span>
+                                <span class="domain-stat">${tr('relay.repo.signed_tags')} <strong>${r.signed_tags === false ? tr('no') : tr('yes')}</strong></span>
                                 <span class="domain-stat">${tr('relay.repo.permissions')} <strong>${escapeHtml((r.permissions || []).join(' ') || '(none)')}</strong></span>
                             </div>
                         </div>
