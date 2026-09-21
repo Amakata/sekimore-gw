@@ -49,3 +49,27 @@ jobs:
           grep -qE '^=+ .*[0-9]+ failed' /tmp/pytest.out && { echo "::error::pytest reported failures"; exit 1; }
           grep -qE '^=+ .*[0-9]+ passed' /tmp/pytest.out || { echo "::error::pytest printed no summary"; exit 1; }
           exit 0
+
+  # The Python half of what `cargo audit` does for the relay (#75). Most of the gateway is Python,
+  # and until this job the only audit on a pull request covered the smaller half; the alerts for
+  # the rest sat on the Security tab, read by whoever happened to look.
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: pip-audit
+        # The same two commands as `mise run ci:py-audit`; mise itself is not installed here because
+        # its [tools] would pull a Rust toolchain into a job that needs none
+        run: |
+          uv export --no-dev --no-emit-project --quiet -o /tmp/requirements.txt
+          uv run --with pip-audit pip-audit --strict --disable-pip -r /tmp/requirements.txt
