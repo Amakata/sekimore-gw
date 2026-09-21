@@ -403,3 +403,30 @@ def describe_supply_chain_pins():
             f"no workflow triggered by pull_request runs `{tool}`, so {lockfile} has no audit "
             f"before a change lands"
         )
+
+    @pytest.mark.parametrize("path", DOCKERFILES, ids=lambda p: p.name)
+    def it_installs_the_dependencies_without_the_project(path):
+        # The dependency layer is the second-largest in the image and changes only when a
+        # dependency does — unless the project itself is installed into it. `uv pip install .`
+        # writes sekimore_gw-<version>.dist-info, so that layer moved by a few bytes every release
+        # with no dependency changed, and every deployment re-pulled it (#97). Dependencies come
+        # from the lock, exported without the project; the project is installed last, --no-deps.
+        body = path.read_text(encoding="utf-8")
+        if "uv pip install" not in body:
+            pytest.skip("no Python install in this Dockerfile")
+        assert "uv export --frozen --no-dev --no-emit-project" in body, (
+            f"{path.name}: dependencies are installed from `uv export --no-emit-project`, not "
+            "from `uv pip install .`, so the layer holds no trace of the project's version"
+        )
+        project_installs = [
+            line.strip()
+            for line in body.splitlines()
+            if not line.lstrip().startswith("#")
+            and "uv pip install" in line
+            and line.rstrip(" \\").endswith(" .")
+            and "--no-deps" not in line
+        ]
+        assert project_installs == [], (
+            f"{path.name}: `uv pip install .` without --no-deps installs the project into the "
+            f"dependency layer: {project_installs}"
+        )
