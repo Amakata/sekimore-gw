@@ -1,11 +1,11 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 # ---- sekimore-relay (Rust) ----
 # Build natively on the runner's CPU (BUILDPLATFORM) and cross-compile a static musl binary for
 # TARGETARCH with cargo-zigbuild, because building arm64 under QEMU takes over 40 minutes.
 # Being static musl, it does not depend on the glibc generation and works as-is when COPY --from'd
 # into the devcontainer base image.
-FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.20.1 AS relay-builder
+FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.20.1@sha256:af1bc2b869c5d76c1300f7a4685c2f1793d068e6e895c9f5c399b517b31a731e AS relay-builder
 ARG TARGETARCH
 WORKDIR /build
 # Install the toolchain version from rust-toolchain.toml first (a layer source changes do not invalidate)
@@ -35,7 +35,7 @@ RUN T="$(cat /tmp/t)" \
     && install -m 0755 "target/$T/release/sekimore-relay" /sekimore-relay
 
 # ---- gateway ----
-FROM python:3.13-slim
+FROM python:3.13-slim@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0
 
 # System package installation
 # openssh-client: ssh / ssh-add / ssh-keyscan / ssh-keygen, used when the relay reaches out to the upstream git
