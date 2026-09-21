@@ -70,6 +70,12 @@ run = 'bash "$SGW" gw-tty sekimore-relay unlock'
 description = "Forget the secret store's key (the GitHub API stops until the next unlock; since 0.2.19 the cached token goes with it)"
 run = 'bash "$SGW" gw sekimore-relay lock'
 
+["gw:proxy-credential"]
+description = "The upstream proxy's credential, in the store instead of a file dev can read: mise run gw:proxy-credential -- set|clear"
+# raw + gw-tty: `set` reads the username and password from the terminal, never as arguments
+raw = true
+run = 'bash "$SGW" gw-tty sekimore-relay proxy-credential'
+
 ["gw:store-status"]
 description = "Whether the secret store is unlocked, locked, or not initialised yet"
 run = 'bash "$SGW" gw sekimore-relay store-status'

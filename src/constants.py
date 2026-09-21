@@ -36,3 +36,8 @@ DNS_CACHE_REFRESH_INTERVAL = int(os.getenv("SEKIMORE_DNS_CACHE_REFRESH", "30"))
 # 0.2.13: where the reload window's state lives. On the gateway's own volume, which the dev
 # container does not mount — the point of the window is that the agent cannot reopen it.
 RELOAD_STATE_PATH = os.getenv("SEKIMORE_RELOAD_STATE", "/data/reload-window.json")
+
+# 0.2.22: the relay's control socket. Only the relay holds the secret store's key, so reading a
+# secret from Python means asking over this. Same volume as the rest of the relay's state, which
+# the dev container does not mount; the path matches `Paths::control_sock` in relay/src/config.rs.
+CONTROL_SOCK_PATH = os.getenv("SEKIMORE_CONTROL_SOCK", "/data/relay/control.sock")
