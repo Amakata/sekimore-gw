@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.24 (2026-09-21)
+
+### Enhancement
+
+- no change to the relay; 0.2.23 and 0.2.24 are the same binary. The release takes back the 10 MB the last one added (#116)
+
 ## 0.2.23 (2026-09-21)
 
 ### Enhancement

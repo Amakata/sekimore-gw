@@ -13,6 +13,12 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.24 (2026-09-21)
+
+### Fix
+
+- compiled the bytecode in the layer that installed it. 0.2.23 recompiled the whole tree from the last layer, putting a second copy of every dependency's `.pyc` in it — that layer went 294,752 → 10,668,514 bytes (#116)
+
 ## 0.2.23 (2026-09-21)
 
 ### Enhancement
