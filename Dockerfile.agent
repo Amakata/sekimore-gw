@@ -24,7 +24,15 @@ RUN set -eu \
         curl=8.14.1-2+deb13u5 \
         openssh-client=1:10.0p1-7+deb13u4 \
         git=1:2.47.3-0+deb13u1 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    # Same as the gateway image: these record that a build happened and nothing reads them, but
+    # they give the layer a new digest every time (#97). machine-id empty rather than absent —
+    # dbus and systemd read an empty one as "generate at first boot" and a missing one as broken.
+    && : > /etc/machine-id \
+    && : > /var/lib/dbus/machine-id \
+    && rm -f /var/log/alternatives.log /var/log/dpkg.log \
+             /var/log/apt/history.log /var/log/apt/term.log \
+             /var/cache/ldconfig/aux-cache
 
 # Set working directory
 WORKDIR /

@@ -75,7 +75,20 @@ RUN set -eu \
         ulogd2=2.0.8-3 \
         docker.io=26.1.5+dfsg1-9+deb13u1 \
         openssh-client=1:10.0p1-7+deb13u4 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    # Everything below records *that a build happened*, not anything the gateway reads. Left in,
+    # they are the whole reason an unchanged 160 MB layer gets a new digest every release and
+    # every deployment re-pulls it (#97). Measured: these were the only files whose contents
+    # differed between 0.2.21 and 0.2.22 — metadata was already identical, so BuildKit's
+    # timestamp normalisation had done its half.
+    #
+    # machine-id must be *empty*, not absent: systemd and dbus treat an empty one as
+    # "first boot, generate at runtime", while a missing one is an error.
+    && : > /etc/machine-id \
+    && : > /var/lib/dbus/machine-id \
+    && rm -f /var/log/alternatives.log /var/log/dpkg.log \
+             /var/log/apt/history.log /var/log/apt/term.log \
+             /var/cache/ldconfig/aux-cache
 
 # Working directory
 WORKDIR /app
@@ -108,7 +121,15 @@ COPY agent-setup.sh /usr/local/share/sekimore/agent-setup.sh
 # the operator's terminal. The task set is the same in both, and a test holds them to that.
 COPY share/gateway.mise.en.toml /usr/local/share/sekimore/gateway.mise.en.toml
 COPY share/gateway.mise.ja.toml /usr/local/share/sekimore/gateway.mise.ja.toml
-RUN uv pip install --system --no-deps .
+RUN uv pip install --system --no-deps . \
+    # A .pyc carries the source file's mtime in its header, so every build writes a different
+    # byte there and the whole site-packages layer changes. BuildKit normalises the mtimes *on*
+    # files; it cannot reach a number written *inside* one. Recompiling with an unchecked hash
+    # replaces that field with the source's hash, which does not move between builds.
+    #
+    # Both installs above are covered: this runs after them and rewrites every __pycache__.
+    && find /usr/local/lib/python3.13 -name '__pycache__' -type d -prune -exec rm -rf {} + \
+    && python -m compileall -q --invalidation-mode unchecked-hash /usr/local/lib/python3.13
 
 # sekimore-relay binary (starts only when config.yml has a git-relay handler)
 COPY --from=relay-builder /sekimore-relay /usr/local/bin/sekimore-relay

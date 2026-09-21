@@ -75,6 +75,17 @@ _SNAPSHOT_STAMP = re.compile(r"(?:ARG\s+DEBIAN_SNAPSHOT=|/debian/)(\d{8}T\d{6}Z)
 # How long the image may go without a security update before CI says so. Short enough that a
 # forgotten pin is caught in the same quarter, long enough not to fire on every release.
 MAX_SNAPSHOT_AGE_DAYS = 90
+# Written by `apt-get install` and read by nothing. Each one differed between 0.2.21 and
+# 0.2.22 and nothing else in the 160 MB layer did.
+BUILD_RESIDUE = [
+    "/etc/machine-id",
+    "/var/lib/dbus/machine-id",
+    "/var/log/alternatives.log",
+    "/var/log/dpkg.log",
+    "/var/log/apt/history.log",
+    "/var/log/apt/term.log",
+    "/var/cache/ldconfig/aux-cache",
+]
 # `\` line continuations mean one `apt-get install` spans many lines; a package is a bare token on
 # one of them. `-y`, `--no-install-recommends` and the `&&` that ends the run are not packages.
 _APT_INSTALL = re.compile(r"apt-get\s+install\b")
@@ -314,3 +325,34 @@ def describe_supply_chain_pins():
                 f"the updater to read. Expected one of {patterns}. A manifest that moved leaves "
                 "the entry configured and silently reading nothing."
             )
+
+    @pytest.mark.parametrize("path", DOCKERFILES, ids=lambda p: p.name)
+    def it_clears_what_records_that_a_build_happened(path):
+        # An unchanged layer that gets a new digest makes every deployment re-pull it. Measured
+        # between 0.2.21 and 0.2.22: the 160 MB apt layer differed by 114 bytes, and these seven
+        # files were the whole of it — logs of the install, and ids generated per build. None is
+        # read by the gateway. BuildKit's timestamp normalisation cannot help: the difference is
+        # the files' contents, not their mtimes (#97).
+        body = path.read_text(encoding="utf-8")
+        if "apt-get install" not in body:
+            pytest.skip(f"{path.name} installs no Debian packages")
+        missing = [f for f in BUILD_RESIDUE if f not in body]
+        assert missing == [], (
+            f"{path.name}: these are written by the install and read by nothing, so leaving them "
+            f"gives the layer a new digest every build: {missing}. Empty the machine-ids "
+            "(absent is an error for dbus and systemd; empty means 'generate at first boot') "
+            "and remove the rest."
+        )
+
+    @pytest.mark.parametrize("path", DOCKERFILES, ids=lambda p: p.name)
+    def it_recompiles_the_pyc_files_without_a_timestamp(path):
+        # A .pyc carries the source's mtime inside its header, so every build writes a different
+        # byte and the whole site-packages layer moves. `unchecked-hash` puts the source's hash
+        # there instead. Only meaningful where Python packages are installed.
+        body = path.read_text(encoding="utf-8")
+        if "pip install" not in body:
+            pytest.skip(f"{path.name} installs no Python packages")
+        assert "--invalidation-mode unchecked-hash" in body, (
+            f"{path.name}: `python -m compileall -q --invalidation-mode unchecked-hash` after the "
+            "installs, or every release re-pulls site-packages for a timestamp nothing reads."
+        )
