@@ -23,8 +23,14 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-EN = ROOT / "relay" / "CHANGELOG.md"
-JA = ROOT / "relay" / "CHANGELOG.ja.md"
+# Two changelogs, two languages each. The relay's carried the whole project until 0.2.18; the
+# gateway's own starts there. Both are held to the same shape, so a new one cannot quietly be
+# written to a different one.
+PAIRS = [
+    ("gateway", ROOT / "CHANGELOG.md", ROOT / "CHANGELOG.ja.md"),
+    ("relay", ROOT / "relay" / "CHANGELOG.md", ROOT / "relay" / "CHANGELOG.ja.md"),
+]
+FILES = [(f"{name}/{p.name}", p) for name, en, ja in PAIRS for p in (en, ja)]
 
 # A bullet longer than this is a paragraph wearing a bullet's clothes. Entries sit between 60 and
 # 210; the cap leaves room for one that genuinely needs a clause about scope.
@@ -94,7 +100,7 @@ def _heading_lines(path: Path) -> list[str]:
 
 
 def describe_changelog_style():
-    @pytest.mark.parametrize("path", [EN, JA], ids=["en", "ja"])
+    @pytest.mark.parametrize("path", [p for _, p in FILES], ids=[n for n, _ in FILES])
     def it_keeps_bullets_short_enough_to_scan(path):
         long_ones = [
             (rel, len(b), b[:80])
@@ -107,7 +113,7 @@ def describe_changelog_style():
             f"commit or the pull request. Split or shorten these (limit {MAX_BULLET}): {long_ones}"
         )
 
-    @pytest.mark.parametrize("path", [EN, JA], ids=["en", "ja"])
+    @pytest.mark.parametrize("path", [p for _, p in FILES], ids=[n for n, _ in FILES])
     def it_names_the_pull_request_that_changed_it(path):
         # The number is how a reader gets from "what" to "why" without the entry carrying the why.
         missing = [
@@ -121,7 +127,7 @@ def describe_changelog_style():
             f"Missing: {missing}"
         )
 
-    @pytest.mark.parametrize("path", [EN, JA], ids=["en", "ja"])
+    @pytest.mark.parametrize("path", [p for _, p in FILES], ids=[n for n, _ in FILES])
     def it_files_every_entry_under_a_category(path):
         orphans = _orphan_bullets(path)
         assert orphans == [], (
@@ -129,7 +135,7 @@ def describe_changelog_style():
             f"release heading: {orphans}"
         )
 
-    @pytest.mark.parametrize("path", [EN, JA], ids=["en", "ja"])
+    @pytest.mark.parametrize("path", [p for _, p in FILES], ids=[n for n, _ in FILES])
     def it_orders_the_categories_heaviest_first(path):
         rank = {name: i for i, name in enumerate(CATEGORIES)}
         wrong = {
@@ -143,12 +149,13 @@ def describe_changelog_style():
             f"{path.name}: categories are {CATEGORIES}, heaviest first, at most one of each: {wrong}"
         )
 
-    def it_files_an_entry_under_the_same_category_in_both_languages():
-        en, ja = _categories(EN), _categories(JA)
-        uneven = {rel: (en[rel], ja.get(rel)) for rel in en if en[rel] != ja.get(rel)}
-        assert uneven == {}, f"the two changelogs categorise differently (en, ja): {uneven}"
+    @pytest.mark.parametrize("en,ja", [(e, j) for _, e, j in PAIRS], ids=[n for n, _, _ in PAIRS])
+    def it_files_an_entry_under_the_same_category_in_both_languages(en, ja):
+        a, b = _categories(en), _categories(ja)
+        uneven = {rel: (a[rel], b.get(rel)) for rel in a if a[rel] != b.get(rel)}
+        assert uneven == {}, f"{en.name} and {ja.name} categorise differently (en, ja): {uneven}"
 
-    @pytest.mark.parametrize("path", [EN, JA], ids=["en", "ja"])
+    @pytest.mark.parametrize("path", [p for _, p in FILES], ids=[n for n, _ in FILES])
     def it_keeps_a_release_to_a_readable_number_of_entries(path):
         crowded = {
             rel: len(bullets)
@@ -157,7 +164,7 @@ def describe_changelog_style():
         }
         assert crowded == {}, f"{path.name}: too many entries in one release: {crowded}"
 
-    @pytest.mark.parametrize("path", [EN, JA], ids=["en", "ja"])
+    @pytest.mark.parametrize("path", [p for _, p in FILES], ids=[n for n, _ in FILES])
     def it_heads_a_release_with_a_version_and_a_date_only(path):
         # `## 0.2.8 (2026-09-17)` — a heading that also summarises the release duplicates the
         # entries below it and goes stale on its own.
@@ -168,28 +175,32 @@ def describe_changelog_style():
         ]
         assert bad == [], f"{path.name}: heading should be `## X.Y.Z (YYYY-MM-DD)`: {bad}"
 
-    def it_describes_the_same_releases_in_both_languages():
-        en, ja = _releases(EN), _releases(JA)
-        assert list(en) == list(ja), (
-            "the two changelogs have drifted apart: "
-            f"en-only {sorted(set(en) - set(ja))}, ja-only {sorted(set(ja) - set(en))}"
+    @pytest.mark.parametrize("en,ja", [(e, j) for _, e, j in PAIRS], ids=[n for n, _, _ in PAIRS])
+    def it_describes_the_same_releases_in_both_languages(en, ja):
+        a, b = _releases(en), _releases(ja)
+        assert list(a) == list(b), (
+            f"{en.name} and {ja.name} have drifted apart: "
+            f"en-only {sorted(set(a) - set(b))}, ja-only {sorted(set(b) - set(a))}"
         )
         # Not a translation check — just that neither side quietly lost an entry
-        uneven = {rel: (len(en[rel]), len(ja[rel])) for rel in en if len(en[rel]) != len(ja[rel])}
-        assert uneven == {}, f"different number of entries (en, ja): {uneven}"
+        uneven = {rel: (len(a[rel]), len(b[rel])) for rel in a if len(a[rel]) != len(b[rel])}
+        assert uneven == {}, f"{en.name}: different number of entries (en, ja): {uneven}"
 
-    def it_leads_with_the_newest_release():
+    @pytest.mark.parametrize("path", [p for _, p in FILES], ids=[n for n, _ in FILES])
+    def it_leads_with_the_newest_release(path):
         versions = [
             tuple(int(n) for n in v.split("."))
-            for v in _releases(EN)
+            for v in _releases(path)
             if re.fullmatch(r"\d+\.\d+\.\d+", v)
         ]
         assert versions == sorted(versions, reverse=True), (
-            f"releases should be newest first: {versions}"
+            f"{path.name}: releases should be newest first: {versions}"
         )
 
-    @pytest.mark.parametrize("path", [EN, JA], ids=["en", "ja"])
+    @pytest.mark.parametrize("path", [p for _, p in FILES], ids=[n for n, _ in FILES])
     def it_matches_the_version_the_code_declares(path):
+        # One image carries the gateway and the relay, so one version number covers both and both
+        # changelogs lead with it.
         cargo = (ROOT / "relay" / "Cargo.toml").read_text(encoding="utf-8")
         version = re.search(r'^version = "([^"]+)"', cargo, re.M).group(1)
         newest = next(iter(_releases(path)))
@@ -197,3 +208,8 @@ def describe_changelog_style():
             f"{path.name} leads with {newest} but relay/Cargo.toml says {version}; "
             "the release entry and the version bump belong in the same change"
         )
+
+    def it_has_both_changelogs_to_check():
+        # A rename would otherwise turn every test above green by having nothing to read
+        missing = [p for _, p in FILES if not p.exists()]
+        assert missing == [], f"changelog missing: {missing}"
