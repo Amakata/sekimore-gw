@@ -103,7 +103,10 @@ COPY pyproject.toml .
 COPY README.md .
 RUN mkdir -p src/sekimore_placeholder \
     && touch src/sekimore_placeholder/__init__.py \
-    && uv pip install --system . \
+    # --no-cache: uv keeps every downloaded wheel under /root/.cache/uv, and it lands in the
+    # layer. Measured on the published image: 1,195 files, 44 MB, in an image that never installs
+    # anything again. `pip install --no-cache-dir uv` above already does this for pip.
+    && uv pip install --system --no-cache . \
     && rm -rf src \
     # In this layer, not a later one. A .pyc carries the source's mtime inside its header, so
     # every build writes a different byte and the layer moves (#97); `unchecked-hash` puts the
@@ -126,7 +129,7 @@ COPY agent-setup.sh /usr/local/share/sekimore/agent-setup.sh
 # the operator's terminal. The task set is the same in both, and a test holds them to that.
 COPY share/gateway.mise.en.toml /usr/local/share/sekimore/gateway.mise.en.toml
 COPY share/gateway.mise.ja.toml /usr/local/share/sekimore/gateway.mise.ja.toml
-RUN uv pip install --system --no-deps . \
+RUN uv pip install --system --no-cache --no-deps . \
     # Only what this install added. The dependencies were compiled in their own layer above, and
     # redoing them here would put a second copy of every .pyc in this one.
     && find /usr/local/lib/python3.13/site-packages -maxdepth 1 -name 'sekimore*' \
