@@ -13,6 +13,13 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.23 (2026-09-21)
+
+### Enhancement
+
+- cleared the seven files apt writes to record that a build happened — two machine-ids, four logs and a cache — which were the whole of the 114-byte difference in a 160 MB layer (#114)
+- recompiled the `.pyc` files with `unchecked-hash`, so the source mtime in their headers stops giving site-packages a new digest every build (#114)
+
 ## 0.2.22 (2026-09-21)
 
 ### Security
