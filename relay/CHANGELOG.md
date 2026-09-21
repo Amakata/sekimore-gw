@@ -6,6 +6,14 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.28 (2026-09-21)
+
+### Enhancement
+
+- added `security alerts [--state]` / `security view --number N` (`security:read`) over the Dependabot alerts API, one line per alert: severity, ecosystem/package, manifest, advisory, first fixed version (#133)
+- added `security dismiss --number N --reason … [--comment …]` / `security reopen` under their own key `security:dismiss`: hiding a vulnerability is not reading one. The reason is required and goes into the audit as `security_alert_dismissed` (#133)
+- asked for the `security_events` OAuth scope in the device flow; a token issued before 0.2.28 lacks it and GitHub answers 403 until `gw:login` is run again (#133)
+
 ## 0.2.27 (2026-09-21)
 
 ### Security

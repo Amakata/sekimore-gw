@@ -5,6 +5,14 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.28（2026-09-21）
+
+### Enhancement
+
+- Dependabot alerts API の上に `security alerts [--state]` / `security view --number N`（`security:read`）を足した。1 件 1 行で重大度、エコシステム/パッケージ、マニフェスト、アドバイザリ、最初の修正版 (#133)
+- `security dismiss --number N --reason … [--comment …]` / `security reopen` を別キー `security:dismiss` で足した。脆弱性を見えなくするのは読むのとは別の権限。理由は必須で、監査に `security_alert_dismissed` として残る (#133)
+- device flow で `security_events` scope を要求するようにした。0.2.28 より前に発行したトークンには無く、`gw:login` をやり直すまで GitHub は 403 を返す (#133)
+
 ## 0.2.27（2026-09-21）
 
 ### Security
