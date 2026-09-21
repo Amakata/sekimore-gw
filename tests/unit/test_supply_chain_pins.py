@@ -345,16 +345,22 @@ def describe_supply_chain_pins():
         )
 
     @pytest.mark.parametrize("path", DOCKERFILES, ids=lambda p: p.name)
-    def it_recompiles_the_pyc_files_without_a_timestamp(path):
-        # A .pyc carries the source's mtime inside its header, so every build writes a different
-        # byte and the whole site-packages layer moves. `unchecked-hash` puts the source's hash
-        # there instead. Only meaningful where Python packages are installed.
+    def it_ships_no_bytecode_and_writes_none(path):
+        # A .pyc carries its source's mtime inside the header, so any layer holding one gets a new
+        # digest every build (#97). Precompiling with a hash worked but was a mechanism to keep
+        # right; no bytecode at all is a problem that does not exist. Two halves: nothing compiles
+        # during the build, and nothing writes at runtime — a .pyc written on first import would
+        # carry a timestamp again, into the container's writable layer.
         body = path.read_text(encoding="utf-8")
         if "pip install" not in body:
             pytest.skip(f"{path.name} installs no Python packages")
-        assert "--invalidation-mode unchecked-hash" in body, (
-            f"{path.name}: `python -m compileall -q --invalidation-mode unchecked-hash` after the "
-            "installs, or every release re-pulls site-packages for a timestamp nothing reads."
+        assert "PYTHONDONTWRITEBYTECODE=1" in body, (
+            f"{path.name}: `ENV PYTHONDONTWRITEBYTECODE=1`, or the first import writes a "
+            "timestamped .pyc into the running container"
+        )
+        assert "compileall" not in body, (
+            f"{path.name}: nothing should compile bytecode into the image; it is the layer "
+            "digest's only source of non-determinism left"
         )
 
     @pytest.mark.parametrize("path", DOCKERFILES, ids=lambda p: p.name)
