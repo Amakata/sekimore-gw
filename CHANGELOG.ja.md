@@ -12,6 +12,21 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.27（2026-09-21）
+
+### Security
+
+- 署名付き tag オブジェクトでないタグの push を拒否した。軽量タグ、署名なし、push に含まれないもの。見るのは署名の有無で正しさではない。`signed_tags: false` で案件・上流・repo 単位に外せる (#128)
+
+### Fix
+
+- `uv.lock` に対する `pip-audit` を PR ごとに走らせた。`ci:py-audit` は一度も動いておらず workflow にも無く、`cargo audit` だけがリポジトリ全体の顔になっていた (#123)
+
+### Enhancement
+
+- Dependabot で RustCrypto の crate をグループにした。次の世代はビルドできない 2 本組ではなく 1 本の PR で来る (#125)
+- Dependabot の版上げを取り込んだ。actions/checkout 7、upload/download-artifact、setup-python 7 (#112)、cargo-zigbuild 0.23.4 (#106)、russh 0.63.3、clap 4.6.7 (#107)、getrandom 0.4 (#110)、base64 0.23 (#111)
+
 ## 0.2.26（2026-09-21）
 
 ### Enhancement

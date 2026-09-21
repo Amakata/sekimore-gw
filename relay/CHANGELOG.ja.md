@@ -5,6 +5,19 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.27（2026-09-21）
+
+### Security
+
+- 署名を持つ注釈付き tag オブジェクトでないタグの push を拒否した。pack を流しながら読み、末尾の checksum を渡さないので上流は何も unpack せず ng を返す (#128)
+- 軽量タグ、`tag.gpgsign=false` のタグ、push にオブジェクトが無いタグはすべて拒否。`signed_tags`（既定 true）を案件 / 上流 / repo で外せる。監査は `push_denied_tag_not_signed` (#128)
+
+### Enhancement
+
+- RustCrypto 0.11 世代に移った。sha2 0.11、hmac 0.13、aes-gcm 0.11、argon2 0.6。russh の 0.11 と並んで抱えていた 0.10 系のツリーが消えた (#129)
+- rusqlite 0.40 (#127)、getrandom 0.4 (#110)、base64 0.23 (#111)、russh 0.63.3 と clap 4.6.7 を取り込んだ (#107)
+- `check` と Web UI の Relay タブに repo ごとの `signed_tags` を出した (#128)
+
 ## 0.2.26（2026-09-21）
 
 ### Enhancement
