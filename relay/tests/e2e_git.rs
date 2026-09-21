@@ -161,11 +161,14 @@ async fn setup(grants: &[&str]) -> E2e {
         api_base.as_str().trim_end_matches("/api/v3").to_string() + "/api"
     ))
     .unwrap();
-    let store = Arc::new(UpstreamTokenStore::new(
+    let store = Arc::new(UpstreamTokenStore::in_memory(
+        "upstream.test",
         &dir.path().join("upstream_token"),
-        Duration::from_secs(60),
     ));
-    store.save("upstream.test", "gho_test", "repo").unwrap();
+    store
+        .save("upstream.test", "gho_test", "repo")
+        .await
+        .unwrap();
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
     let gh = Arc::new(GitHub::new(api_base, graphql, http, store, audit.clone()));
 
@@ -565,11 +568,14 @@ async fn setup_multi(grants: &[&str]) -> (E2e, SocketAddr, PathBuf) {
         api_base.as_str().trim_end_matches("/api/v3").to_string() + "/api"
     ))
     .unwrap();
-    let store = Arc::new(UpstreamTokenStore::new(
+    let store = Arc::new(UpstreamTokenStore::in_memory(
+        "upstream.test",
         &dir.path().join("upstream_token"),
-        Duration::from_secs(60),
     ));
-    store.save("upstream.test", "gho_test", "repo").unwrap();
+    store
+        .save("upstream.test", "gho_test", "repo")
+        .await
+        .unwrap();
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
     let gh = Arc::new(GitHub::new(api_base, graphql, http, store, audit.clone()));
 

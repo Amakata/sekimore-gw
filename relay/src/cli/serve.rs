@@ -21,6 +21,7 @@ use crate::config::{HttpsMode, Resolved, Upstream};
 use crate::git::agent_check::{auth_sock_from_env, preflight_agent};
 use crate::git::upstream_ssh::OpenSshUpstream;
 use crate::git::{GitContext, UpstreamGit};
+use crate::github::upstream_token::SecretSource;
 use crate::github::GitHub;
 use crate::passthrough::{Passthrough, SniTarget};
 use crate::ssh::authorized_keys::AuthorizedKeys;
@@ -29,6 +30,64 @@ use crate::store;
 use crate::tokens::TokenStore;
 
 pub const MAX_AUTHORIZED_KEYS: usize = 64;
+
+/// Open the secret store and unlock it if the deployment said to. Returns where the rest of the
+/// process should read secrets from, and the store itself when there is one to serve.
+///
+/// This runs before the upstream loop because the upstream token lives in the store now (0.2.18):
+/// the loop needs something to read it through, and `serve` is the one process that holds the key.
+/// The control socket is started *after* the loop instead — it has to be able to tell the token
+/// caches to drop what they hold when someone locks the store, and those caches do not exist yet.
+fn open_secret_store(
+    r: &Resolved,
+) -> (
+    SecretSource,
+    Option<Arc<tokio::sync::Mutex<store::SecretStore>>>,
+) {
+    // The store starts locked. The control socket is what a person unlocks it through, and it
+    // lives beside the state rather than on the agent-facing API — an agent able to ask the relay
+    // to unlock itself would make the passphrase pointless.
+    let mut store = match store::SecretStore::open(&r.paths.secrets) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("secret store unavailable ({e}); no secret can be read");
+            return (SecretSource::Unavailable(e.to_string()), None);
+        }
+    };
+    // 0.2.17: unlock without a person, when the deployment asked for that. The passphrase comes
+    // from outside the worktree either way — the agent can write `.devcontainer/.env`, so anything
+    // reachable from there would be its own passphrase.
+    match store_passphrase(&r.relay.store.unlock) {
+        Ok(None) => {}
+        Ok(Some(pass)) => {
+            let outcome = match store.is_initialised() {
+                // Not `unwrap_or(false)`: a database that cannot be read would then be treated as
+                // a new store, and the error the operator needs to see would be replaced by
+                // "already initialised" from the attempt to create one.
+                Err(e) => Err(e),
+                Ok(true) => store.unlock(&pass),
+                Ok(false) => store.initialise(
+                    &pass,
+                    store::crypto::Kdf::Argon2id,
+                    store::crypto::KdfParams::default(),
+                ),
+            };
+            match outcome {
+                // Loud on purpose: a passphrase that lives in a file or an environment is a
+                // development convenience, and a deployment that ends up with one should find it
+                // in the log rather than in a review a year later.
+                Ok(()) => log::warn!(
+                    "secret store unlocked from configuration — the passphrase is at rest; \
+                     relay.store.unlock: prompt is what a deployment wants"
+                ),
+                Err(e) => log::error!("secret store stays locked: {e}"),
+            }
+        }
+        Err(e) => log::error!("secret store stays locked: {e}"),
+    }
+    let store = Arc::new(tokio::sync::Mutex::new(store));
+    (SecretSource::InProcess(store.clone()), Some(store))
+}
 
 pub async fn serve(path: &Path) -> anyhow::Result<()> {
     let r = resolve(path)?;
@@ -62,24 +121,39 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         log::warn!("authorized_keys is empty; agents must bootstrap (POST /bootstrap) or the operator must `add-key`");
     }
 
+    // The secret store before the loop: the upstream token lives in it (0.2.18), so each upstream
+    // needs somewhere to read it from.
+    let (secrets, secret_store) = open_secret_store(&r);
+    let mut token_caches: Vec<Arc<crate::github::upstream_token::UpstreamTokenStore>> = Vec::new();
+
     // Per upstream: GitHub client, upstream git, SSH listener. The russh config, keys and session limit are shared
     let ssh_config = Arc::new(server_config(host_key, r.relay.limits.session_timeout));
     let sessions = Arc::new(Semaphore::new(r.relay.limits.max_sessions.max(1)));
     let mut githubs: HashMap<String, Arc<GitHub>> = HashMap::new();
     let mut ssh_servers = Vec::new();
     for up in &r.upstreams {
-        let (github, upstream_tokens, _http) = build_github_for(&r, up, audit.clone())?;
-        if upstream_tokens.load()?.is_none() {
-            log::warn!(
-                "[{}] no upstream API token in {}; PR/API operations will fail until `sekimore-relay login{}`",
+        let (github, upstream_tokens, _http) =
+            build_github_for(&r, up, audit.clone(), secrets.clone())?;
+        token_caches.push(upstream_tokens.clone());
+        // A locked store is not "no token" — it is a token nobody can read yet, and the answer is
+        // the passphrase rather than a login. Say which, because they send the operator to
+        // different commands.
+        let which_upstream = if up.is_default {
+            String::new()
+        } else {
+            format!(" --upstream {}", up.domain)
+        };
+        match upstream_tokens.load().await {
+            Ok(Some(_)) => {}
+            Ok(None) => log::warn!(
+                "[{}] no upstream API token; PR/API operations will fail until `sekimore-relay login{}`",
                 up.domain,
-                up.upstream_token.display(),
-                if up.is_default {
-                    String::new()
-                } else {
-                    format!(" --upstream {}", up.domain)
-                }
-            );
+                which_upstream
+            ),
+            Err(e) => log::warn!(
+                "[{}] the upstream API token cannot be read yet: {e}",
+                up.domain
+            ),
         }
         let upstream: Arc<dyn UpstreamGit> = build_upstream(&r, up);
         if let Err(e) = upstream.preflight().await {
@@ -176,52 +250,22 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         git_domains: git_domains(&r),
         project_boards,
     });
-    // 0.2.15: the secret store starts locked. Nothing needs it yet, so a store that is never
-    // unlocked changes nothing today; the control socket is what a person unlocks it through, and
-    // it lives beside the state rather than on the agent-facing API — an agent able to ask the
-    // relay to unlock itself would make the passphrase pointless.
-    match store::SecretStore::open(&r.paths.secrets) {
-        Ok(mut store) => {
-            // 0.2.17: unlock without a person, when the deployment asked for that. The passphrase
-            // comes from outside the worktree either way — the agent can write `.devcontainer/.env`,
-            // so anything reachable from there would be its own passphrase.
-            match store_passphrase(&r.relay.store.unlock) {
-                Ok(None) => {}
-                Ok(Some(pass)) => {
-                    let outcome = match store.is_initialised() {
-                        // Not `unwrap_or(false)`: a database that cannot be read would then be
-                        // treated as a new store, and the error the operator needs to see would be
-                        // replaced by "already initialised" from the attempt to create one.
-                        Err(e) => Err(e),
-                        Ok(true) => store.unlock(&pass),
-                        Ok(false) => store.initialise(
-                            &pass,
-                            store::crypto::Kdf::Argon2id,
-                            store::crypto::KdfParams::default(),
-                        ),
-                    };
-                    match outcome {
-                        // Loud on purpose: a passphrase that lives in a file or an environment is
-                        // a development convenience, and a deployment that ends up with one should
-                        // find it in the log rather than in a review a year later.
-                        Ok(()) => log::warn!(
-                            "secret store unlocked from configuration — the passphrase is at rest; \
-                             relay.store.unlock: prompt is what a deployment wants"
-                        ),
-                        Err(e) => log::error!("secret store stays locked: {e}"),
-                    }
-                }
-                Err(e) => log::error!("secret store stays locked: {e}"),
+    // The control socket last, now that the token caches exist. `lock` has to reach them: a key
+    // dropped from the store while a decrypted token sits in a cache is a lock that leaves that
+    // token usable for the rest of the cache TTL — two hours by default.
+    if let Some(store) = secret_store {
+        let sock = r.paths.control_sock.clone();
+        let caches = token_caches;
+        let on_lock: store::control::OnLock = Arc::new(move || {
+            for c in &caches {
+                c.forget();
             }
-            let store = Arc::new(tokio::sync::Mutex::new(store));
-            let sock = r.paths.control_sock.clone();
-            tokio::spawn(async move {
-                if let Err(e) = store::control::serve(sock, store).await {
-                    log::error!("control socket: {e}");
-                }
-            });
-        }
-        Err(e) => log::error!("secret store unavailable ({e}); it stays locked"),
+        });
+        tokio::spawn(async move {
+            if let Err(e) = store::control::serve(sock, store, on_lock).await {
+                log::error!("control socket: {e}");
+            }
+        });
     }
 
     let api_listener = TcpListener::bind(r.relay.api_listen)

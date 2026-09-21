@@ -97,7 +97,7 @@ docker compose exec sekimore-gw sekimore-relay login   # Dev Containers 構成�
 #   Code: XXXX-XXXX          ← ブラウザで承認
 ```
 
-- トークンは `/data/relay/upstream_token`（0600）に保存されます。上流の SSH ホスト鍵も同時に known_hosts に入ります。
+- トークンは秘密ストアに封じて保存されます（0.2.18）。ログインの前に `mise run gw:unlock` で解錠しておく必要があります。以前の版が残した `/data/relay/upstream_token` は、最初に読んだときにストアへ移して削除します。上流の SSH ホスト鍵も同時に known_hosts に入ります。
 - 上流が複数あるときは `--upstream <domain>` で上流ごとに実行します（`logout` / `whoami` も同じ）。
 - `sekimore-relay whoami` で、関所がどの GitHub identity として動くかを確認できます。
 

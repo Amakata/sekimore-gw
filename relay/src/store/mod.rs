@@ -120,6 +120,13 @@ impl SecretStore {
         Ok(SecretStore { db, dek: None })
     }
 
+    /// The rows as they really are, for a test that has to assert on the stored bytes rather than
+    /// on what `get` hands back. Nothing outside a test should read a record any other way.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn db_for_test(&self) -> &Connection {
+        &self.db
+    }
+
     fn meta(&self, key: &str) -> Result<Option<String>, StoreError> {
         Ok(self
             .db

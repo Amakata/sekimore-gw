@@ -98,7 +98,7 @@ docker compose exec sekimore-gw sekimore-relay login   # with Dev Containers: mi
 #   Code: XXXX-XXXX          ← approve it in the browser
 ```
 
-- The token is stored in `/data/relay/upstream_token` (0600). The upstream's SSH host keys are added to known_hosts at the same time.
+- The token is sealed into the secret store (0.2.18), so the gateway has to be unlocked (`mise run gw:unlock`) before a login can keep one. A `/data/relay/upstream_token` left by an older version is moved in and deleted the first time the token is read. The upstream's SSH host keys are added to known_hosts at the same time.
 - With more than one upstream, run it per upstream with `--upstream <domain>` (same for `logout` and `whoami`).
 - `sekimore-relay whoami` shows which GitHub identity the relay acts as.
 

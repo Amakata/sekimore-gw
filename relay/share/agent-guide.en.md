@@ -104,9 +104,10 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `denied: token expired` | the project token expired | it renews itself; if it keeps failing ask a human to re-run agent-setup |
 | `head X is not allowed` | the PR's head is outside `sekimore/*`, or names a fork | push the branch through the relay first, then open the PR from it |
 | `known_hosts … has no entry for X` | the gateway has no host key for the upstream | **not something you can fix**: it is done on the host running docker, `mise run gw:login`. Relay the whole message |
-| `no upstream token in …` | the operator has not logged the gateway in | same — `mise run gw:login` on the host |
+| `no upstream token for …` | the operator has not logged the gateway in | same — `mise run gw:login` on the host |
+| `the secret store is locked …` | the gateway holds the token but nobody has unlocked it | same — `mise run gw:unlock` on the host. A login would not help |
 
-The last two are about the gateway's own credentials, which live outside this container.
+The last three are about the gateway's own credentials, which live outside this container.
 Commands beginning `sekimore-relay` are the operator's and run inside the gateway; running
 one here fails against a config file this container does not have, and the error it gives
 points somewhere else entirely. Pass the message on rather than acting on it.

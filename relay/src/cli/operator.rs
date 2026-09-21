@@ -16,7 +16,7 @@ use crate::git::agent_check::{auth_sock_from_env, preflight_agent};
 use crate::git::upstream_ssh::OpenSshUpstream;
 use crate::github::device_flow::DeviceFlow;
 use crate::github::http::{build_client, HttpOptions};
-use crate::github::upstream_token::UpstreamTokenStore;
+use crate::github::upstream_token::{SecretSource, UpstreamTokenStore};
 use crate::github::GitHub;
 use crate::i18n::{t, tf};
 use crate::policy::all_permission_keys;
@@ -81,11 +81,19 @@ pub fn open_audit(r: &Resolved) -> anyhow::Result<Arc<Audit>> {
     Ok(Arc::new(Audit::new(Some(&r.paths.audit), false)?))
 }
 
+/// Where this process reaches the secret store. `serve` holds it and passes its own; every other
+/// subcommand is a separate `docker compose exec` with no passphrase, so it asks the running relay
+/// over the control socket.
+pub fn secret_source_via_socket(r: &Resolved) -> SecretSource {
+    SecretSource::ControlSocket(r.paths.control_sock.clone())
+}
+
 /// GitHub client for one upstream (api_base / graphql_base / upstream_token are that upstream's. 0.2.0).
 pub fn build_github_for(
     r: &Resolved,
     up: &Upstream,
     audit: Arc<Audit>,
+    secrets: SecretSource,
 ) -> anyhow::Result<(Arc<GitHub>, Arc<UpstreamTokenStore>, reqwest::Client)> {
     let http = build_client(&HttpOptions {
         ca_file: r.relay.ca_file.as_deref(),
@@ -96,7 +104,9 @@ pub fn build_github_for(
         ensure_dir_0700(dir).with_context(|| format!("upstream state dir {}", dir.display()))?;
     }
     let store = Arc::new(UpstreamTokenStore::new(
+        &up.host,
         &up.upstream_token,
+        secrets,
         r.relay.upstream_token_cache_ttl,
     ));
     let gh = Arc::new(GitHub::new(
@@ -130,7 +140,14 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let r = resolve(path)?;
     let up = pick_upstream(&r, upstream)?.clone();
     let audit = open_audit(&r)?;
-    let (gh, store, http) = build_github_for(&r, &up, audit.clone())?;
+    let (gh, store, http) = build_github_for(&r, &up, audit.clone(), secret_source_via_socket(&r))?;
+    // Before the device flow, not after: it walks a person through authorising on github.com, and
+    // discovering at the end that there is nowhere to put the result throws that away and leaves
+    // an authorisation granted for a token nobody kept.
+    store
+        .writable()
+        .await
+        .context("the upstream token cannot be stored, so there is no point starting a login")?;
     if r.upstreams.len() > 1 {
         let mark = if up.is_default {
             t("op.login.default_mark")
@@ -181,7 +198,7 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
                 up.host
             )),
         })?;
-    store.save(&up.host, &token, &scope)?;
+    store.save(&up.host, &token, &scope).await?;
     println!(
         "{}",
         tf(
@@ -380,12 +397,17 @@ pub fn keyscan(path: &Path, host: &str, port: u16, upstream: Option<&str>) -> an
     Ok(())
 }
 
-pub fn logout(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
+pub async fn logout(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let r = resolve(path)?;
     let up = pick_upstream(&r, upstream)?;
     let audit = open_audit(&r)?;
-    let store = UpstreamTokenStore::new(&up.upstream_token, r.relay.upstream_token_cache_ttl);
-    if store.delete()? {
+    let store = UpstreamTokenStore::new(
+        &up.host,
+        &up.upstream_token,
+        secret_source_via_socket(&r),
+        r.relay.upstream_token_cache_ttl,
+    );
+    if store.delete().await? {
         println!(
             "{}",
             tf(
@@ -408,7 +430,7 @@ pub async fn whoami(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let r = resolve(path)?;
     let up = pick_upstream(&r, upstream)?;
     let audit = open_audit(&r)?;
-    let (gh, _, _) = build_github_for(&r, up, audit)?;
+    let (gh, _, _) = build_github_for(&r, up, audit, secret_source_via_socket(&r))?;
     let login = gh.whoami().await?;
     println!(
         "{}",
@@ -661,13 +683,18 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 tf("op.check.known_hosts_error", &[("error", &e.to_string())])
             ),
         }
-        let store = UpstreamTokenStore::new(&u.upstream_token, r.relay.upstream_token_cache_ttl);
+        let store = UpstreamTokenStore::new(
+            &u.host,
+            &u.upstream_token,
+            secret_source_via_socket(&r),
+            r.relay.upstream_token_cache_ttl,
+        );
         let login_hint = if u.is_default {
             "sekimore-relay login".to_string()
         } else {
             format!("sekimore-relay login --upstream {}", u.domain)
         };
-        match store.load() {
+        match store.load().await {
             Ok(Some(tok)) => println!(
                 "{}",
                 tf(

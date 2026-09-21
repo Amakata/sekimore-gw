@@ -492,12 +492,17 @@ pub async fn start_api_with_boards(
     .unwrap();
     let audit_path = dir.path().join("audit.jsonl");
     let audit = Arc::new(Audit::new(Some(&audit_path), false).unwrap());
-    let store = Arc::new(UpstreamTokenStore::new(
+    // The token lives in the secret store (0.2.18). An unlocked in-memory one is the fixture's
+    // equivalent of a gateway somebody has unlocked.
+    let store = Arc::new(UpstreamTokenStore::in_memory(
+        "upstream.test",
         &dir.path().join("upstream_token"),
-        Duration::from_secs(60),
     ));
     if upstream_token {
-        store.save("upstream.test", "gho_test", "repo").unwrap();
+        store
+            .save("upstream.test", "gho_test", "repo")
+            .await
+            .unwrap();
     }
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
     let gh = Arc::new(GitHub::new(api_base, graphql, http, store, audit.clone()));
