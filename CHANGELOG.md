@@ -13,6 +13,13 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.21 (2026-09-21)
+
+### Enhancement
+
+- dropped the release build cache: exporting it took 3m38s, longer than the 2m16s of build it could save, and #97 showed nothing read it (#101)
+- normalised the layer timestamps to a fixed epoch, so a layer rebuilt to the same bytes keeps its digest and a release stops re-pulling 160 MB of identical content (#101)
+
 ## 0.2.20 (2026-09-21)
 
 ### Enhancement
