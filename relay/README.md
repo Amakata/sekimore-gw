@@ -185,6 +185,7 @@ Keys are exact FQDN matches. Listing `github` more than once gives you more than
 | `https` | `passthrough` | What to do with 443. `reject` drops the connection immediately |
 | `https_max_upload_bytes` | `1048576` | Default upload cap for the 443 passthrough, in bytes. `-1` means unlimited. A connection that exceeds it is cut and audited as `https_upload_capped` |
 | `state_dir` | `/data/relay` | Where state files live |
+| `store.unlock` | `prompt` | How the secret store is unlocked. `prompt` means a person runs `mise run gw:unlock` after every restart and the passphrase is nowhere at rest. `file` (`path:`) and `env` (`var:`) read it instead — **for developing this project**, where the gateway is recreated many times an hour; they put the passphrase at rest and the relay says so in the log at start-up. Never set `env` through `.devcontainer/.env`: the agent can write that file |
 | `token_ttl` | `12h` | How long a project token lives |
 | `bootstrap` | `auto` | Whether `POST /bootstrap` is allowed. With `manual`, the operator registers keys |
 | `ssh_options` | `[]` | `-o` options shared by all upstreams |
