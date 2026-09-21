@@ -605,6 +605,7 @@ pub async fn start_api_full(
             Some(d) => sekimore_relay::api::ProjectBoards::new(d),
             None => sekimore_relay::api::ProjectBoards::already_resolved(project_boards),
         },
+        signing: None,
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

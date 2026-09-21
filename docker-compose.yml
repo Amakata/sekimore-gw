@@ -43,6 +43,10 @@ services:
       # With the relay: mount the operator's ssh-agent socket. Docker Desktop (Mac) forwards the host
       # agent to /run/host-services/ssh-auth.sock. On a Vagrant VM, expose the socket at a fixed path. docs: relay/README.md
       # - ${SEKIMORE_AGENT_SOCK:-/run/host-services/ssh-auth.sock}:/ssh-agent/agent.sock:ro
+      # With relay.signing_key (0.2.29, #59): the volume the filtered signing socket lives on.
+      # The gateway creates the socket here; the agent container mounts the same volume and points
+      # SSH_AUTH_SOCK at it. SSH_AUTH_SOCK is a path, so it has to be a shared filesystem.
+      # - sekimore-signing:/run/sekimore
     env_file:
       - .env
     environment:
@@ -84,6 +88,10 @@ services:
     volumes:
       # Mount agent setup script
       - ./agent-setup.sh:/agent-setup.sh:ro
+      # With relay.signing_key (0.2.29, #59): the other half of the signing socket's volume.
+      # Read-write on purpose — connect(2) on a unix socket needs write permission on the socket,
+      # and the socket itself is 0600 and owned by the agent's uid (relay.signing_key.socket_uid).
+      # - sekimore-signing:/run/sekimore
     command: ["bash", "-c", "/agent-setup.sh && sleep infinity"]
     depends_on:
       sekimore-gw:
@@ -92,4 +100,7 @@ services:
 
 volumes:
   gateway-data:
+    driver: local
+  # Only used when relay.signing_key is configured; see the commented mounts above
+  sekimore-signing:
     driver: local

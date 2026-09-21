@@ -212,5 +212,10 @@
   "op.check.token_missing": "  上流トークン:    無し — `{hint}` を実行",
   "op.check.token_error": "  上流トークン:    エラー — {error}",
   "op.check.keys": "  authorized_keys: {n} 鍵 ({path})",
-  "op.check.tokens": "  案件トークン:    有効 {active} / 全 {total}"
+  "op.check.tokens": "  案件トークン:    有効 {active} / 全 {total}",
+  "op.check.signing": "署名鍵:",
+  "op.check.signing_on": "{fingerprint} (namespace {namespace}, socket {socket}, uid {uid})",
+  "op.check.signing_off": "なし — dev が自分で生成する (relay.signing_key)",
+  "op.check.signing_key_ok": "  署名鍵:          ホストの agent にある ({key})",
+  "op.check.signing_key_missing": "  署名鍵:          ホストの agent に無い — ホストで {fingerprint} を ssh-add する。コミットは署名されない"
 }

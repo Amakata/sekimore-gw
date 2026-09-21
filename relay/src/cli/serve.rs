@@ -19,6 +19,7 @@ use crate::api::{self, ApiContext, ProjectBoards};
 use crate::audit::Actor;
 use crate::config::{HttpsMode, Resolved, Upstream};
 use crate::git::agent_check::{auth_sock_from_env, preflight_agent};
+use crate::git::agent_proxy::SigningAgent;
 use crate::git::upstream_ssh::OpenSshUpstream;
 use crate::git::{GitContext, UpstreamGit};
 use crate::github::upstream_token::SecretSource;
@@ -121,6 +122,11 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         log::warn!("authorized_keys is empty; agents must bootstrap (POST /bootstrap) or the operator must `add-key`");
     }
 
+    // #59: the filtered signing agent. Started before the upstream loop so that `/bootstrap` can
+    // report the socket from the first request, and kept out of the loop because the key belongs
+    // to the person, not to an upstream.
+    let signing = start_signing_agent(&r, sock.as_deref(), audit.clone()).await;
+
     // The secret store before the loop: the upstream token lives in it (0.2.18), so each upstream
     // needs somewhere to read it from.
     let (secrets, secret_store) = open_secret_store(&r);
@@ -219,6 +225,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         upstream: r.upstream.clone(),
         git_domains: git_domains(&r),
         project_boards: ProjectBoards::new(r.relay.project.boards.clone()),
+        signing: signing.clone(),
     });
     // The control socket last, now that the token caches exist. `lock` has to reach them: a key
     // dropped from the store while a decrypted token sits in a cache is a lock that leaves that
@@ -320,6 +327,74 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     }
     audit.log("serve_stopped", Actor::System, &[]);
     Ok(())
+}
+
+/// Bind and start the filtered signing agent, or say why there is none.
+///
+/// Every failure here is a warning rather than a refusal to start. The relay's job is git and the
+/// API; a dev container that cannot sign still works, and it is told so through `/bootstrap` so
+/// that `agent-setup.sh` can turn `commit.gpgsign` off instead of leaving every commit failing.
+/// The key being absent from the host agent is the one case that is *not* decided here: the
+/// operator may `ssh-add` it after the gateway is up, so the socket is served either way and
+/// `/bootstrap` asks the agent again each time.
+async fn start_signing_agent(
+    r: &Resolved,
+    host_agent: Option<&Path>,
+    audit: Arc<crate::audit::Audit>,
+) -> Option<Arc<SigningAgent>> {
+    let cfg = r.relay.signing_key.as_ref()?;
+    let Some(host_agent) = host_agent else {
+        log::warn!(
+            "relay.signing_key is configured but SSH_AUTH_SOCK is not set in the gateway; \
+             no signing socket is offered and the dev container falls back to a key of its own"
+        );
+        return None;
+    };
+    let agent = Arc::new(SigningAgent::new(
+        cfg,
+        host_agent.to_path_buf(),
+        audit.clone(),
+    ));
+    let listener = match agent.bind() {
+        Ok(l) => l,
+        Err(e) => {
+            log::warn!(
+                "cannot create the signing socket {}: {e}; mount a volume there that the dev \
+                 container also mounts",
+                cfg.socket.display()
+            );
+            return None;
+        }
+    };
+    match agent.identity().await {
+        Some(id) => log::info!(
+            "signing key {} is in the host agent ({})",
+            id.fingerprint,
+            id.public_key
+        ),
+        None => log::warn!(
+            "the host ssh-agent does not hold {}; commits will not be signed until someone runs \
+             `ssh-add` for it on the host (the socket is served, and answers with no identities \
+             until then)",
+            cfg.fingerprint
+        ),
+    }
+    audit.log(
+        "signing_agent_started",
+        Actor::System,
+        &[
+            ("socket", &cfg.socket.display().to_string()),
+            ("fingerprint", &cfg.fingerprint),
+            ("namespace", &cfg.namespace),
+        ],
+    );
+    let running = agent.clone();
+    tokio::spawn(async move {
+        if let Err(e) = running.run(listener).await {
+            log::error!("signing agent: {e}");
+        }
+    });
+    Some(agent)
 }
 
 /// Every git domain to report in the `/bootstrap` response (the first is the default upstream).

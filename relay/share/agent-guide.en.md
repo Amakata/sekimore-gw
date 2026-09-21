@@ -20,6 +20,7 @@ Start with `sekimore whoami` to see your project, your permissions and the repos
 - A tag that already exists upstream cannot be moved. Cut a new version instead of pointing a released name at different code; moving one needs the same authority as deleting it.
 - A force push inside your own `sekimore/*` namespace is not blocked by the relay. Branch protection upstream is what refuses one where it matters. Do not rewrite a branch someone else may be working from.
 - Commits are signed automatically with the AI signing key. Do not change the signing configuration.
+- That key may be held by the gateway rather than by this container, and reached through a socket that signs git signatures and nothing else. Either way `git commit` needs nothing from you. If signing fails, say so; do not turn `commit.gpgsign` off.
 - The HTTPS URL of a repository (`https://github.com/…`) cannot be used for push or clone. Use the SSH URL.
 
 ## Pull requests, CI and issues (the `sekimore` command)

@@ -8,7 +8,11 @@ set -ex
 # postStartCommand runs on every start, so every write is idempotent (create if absent, replace instead of append, atomic env file).
 #
 #   - disposable auth key  <home>/.ssh/sekimore/id_ed25519       (only valid against the relay)
-#   - AI signing key       <home>/.ssh/sekimore/signing_ed25519  (register the public key with GitHub as a signing key)
+#   - signing key          the gateway's filtered ssh-agent when it offers one (0.2.29, #59): the
+#                          public half lands in <home>/.ssh/sekimore/signing.pub and SSH_AUTH_SOCK
+#                          points at the socket. The private half never enters this container.
+#                          Without it, the old behaviour: <home>/.ssh/sekimore/signing_ed25519,
+#                          generated here — disposable, and therefore unable to stay registered
 #   - project token        SEKIMORE_TOKEN in /etc/sekimore-agent/env (from POST /bootstrap; reused while still valid)
 #   - known_hosts          the relay's host key registered under <git_domain>
 #   - ~/.ssh/config        Host <git_domain> pointing at the disposable key (a marked block, replaced in place)
@@ -22,7 +26,8 @@ set -ex
 #   SEKIMORE_BOOTSTRAP       auto (default) | manual — manual registers no key and fetches no token; the operator does it
 #   SEKIMORE_GIT_DOMAIN      the domain pointed at the relay (default: from the /bootstrap response, else github.com)
 #   SEKIMORE_RELAY_API_PORT / SEKIMORE_RELAY_SSH_PORT  (default 8420 / 22)
-#   SEKIMORE_SIGNING_KEY_COMMENT  comment on the signing key (the title shown in GitHub). Default: "sekimore-agent-signing: <SEKIMORE_PROJECT> / <git user.name> <user.email>"
+#   SEKIMORE_SIGNING_KEY_COMMENT  comment on the *generated* signing key (the title shown in GitHub). Default: "sekimore-agent-signing: <SEKIMORE_PROJECT> / <git user.name> <user.email>"
+#                            Unused when the gateway offers a signing key: that one is the operator's, named on the host
 #   SEKIMORE_PROJECT         the project name used above (passed from compose; omitted when unset)
 # ---------------------------------------------------------------------------
 # Prepare the signing key. $1 = key directory, $2 = comment. Generated when absent; an old default comment is updated (the fingerprint does not change).
@@ -172,18 +177,18 @@ sekimore_relay_setup() {
   if [ ! -f "$keydir/id_ed25519" ]; then
     ssh-keygen -q -t ed25519 -N '' -C "sekimore-agent@$(hostname)" -f "$keydir/id_ed25519"
   fi
-  # The signing key comment becomes the title in GitHub, so it says whose AI key this is and for which project
-  # (sekimore_signing_key_comment). An existing key still on the old default "sekimore-agent-signing@<hostname>" is updated to carry the name (the key is unchanged)
-  sekimore_ensure_signing_key "$keydir" "$(sekimore_signing_key_comment "$home")"
   chown -R "$own" "$keydir"
-  chmod 600 "$keydir/id_ed25519" "$keydir/signing_ed25519"
-  chmod 644 "$keydir/id_ed25519.pub" "$keydir/signing_ed25519.pub"
+  chmod 600 "$keydir/id_ed25519"
+  chmod 644 "$keydir/id_ed25519.pub"
+  # The signing key is decided after /bootstrap answers: the gateway may hold one, and generating
+  # one here first would make an unregistered key on every start (#59).
 
   # ---- project token (kept out of the trace) ----
   local xtrace=0
   case $- in *x*) xtrace=1 ;; esac
   set +x
   local token="" token_expires="" repo="" git_domain="" git_domains="" resp=""
+  local sig_sock="" sig_fp=""
   if [ -r "$env_file" ]; then
     token=$(sed -n 's/^SEKIMORE_TOKEN=//p' "$env_file" | head -1)
     token_expires=$(sed -n 's/^SEKIMORE_TOKEN_EXPIRES=//p' "$env_file" | head -1)
@@ -191,6 +196,10 @@ sekimore_relay_setup() {
     git_domain=$(sed -n 's/^SEKIMORE_GIT_DOMAIN=//p' "$env_file" | head -1)
     # 0.2.0: several upstreams ("domain:port,domain:port", the first is the default). Stored so a re-run that skips bootstrap can still rebuild the Host blocks.
     git_domains=$(sed -n 's/^SEKIMORE_GIT_DOMAINS=//p' "$env_file" | head -1)
+    # 0.2.29 (#59): so a run that keeps its token, and therefore never calls /bootstrap, still
+    # knows where the gateway's signing socket is
+    sig_sock=$(sed -n 's/^SEKIMORE_SIGNING_SOCK=//p' "$env_file" | head -1)
+    sig_fp=$(sed -n 's/^SEKIMORE_SIGNING_KEY=//p' "$env_file" | head -1)
   fi
   if [ -n "$token" ] && curl -fsS -m 5 -o /dev/null -X POST -H "Authorization: Bearer $token" \
        -H 'Content-Type: application/json' -d '{}' "$endpoint/whoami" 2>/dev/null; then
@@ -220,6 +229,14 @@ sekimore_relay_setup() {
                if [ -n "$dd" ]; then printf '%s:%s,' "$dd" "${pp:-22}"; fi
              done)
         if [ -n "$gd" ]; then git_domains=${gd%,}; fi
+        # 0.2.29 (#59): "signing":{"socket":"…","fingerprint":"SHA256:…","namespace":"git","public_key":"…"}
+        # Its presence is how this script detects that the gateway offers a signing key. Assigned
+        # unconditionally, so a gateway that stopped offering one clears the cached value instead
+        # of leaving dev pointed at a socket that is no longer served.
+        local sb
+        sb=$(printf '%s' "$resp" | grep -o '"signing":{[^}]*}') || sb=""
+        sig_sock=$(printf '%s' "$sb" | grep -o '"socket":"[^"]*"' | cut -d'"' -f4)
+        sig_fp=$(printf '%s' "$sb" | grep -o '"fingerprint":"[^"]*"' | cut -d'"' -f4)
       else
         echo "[agent] relay: WARNING: bootstrap did not return a token: $(printf '%s' "$resp" | head -c 300)"
         echo "[agent] relay:   the operator can register the key and issue a token on the gateway:"
@@ -237,6 +254,41 @@ sekimore_relay_setup() {
     *) git_domains="$git_domain:$ssh_port,$git_domains" ;;
   esac
 
+  # ---- the signing key (#59) ----
+  # The gateway offers a filtered ssh-agent when relay.signing_key is configured: it answers for
+  # one fingerprint and signs nothing that is not a git signature, so handing dev the socket hands
+  # it no authentication path and no private key. The socket's presence is confirmed before
+  # anything is pointed at it, because a missing shared volume is the likely misconfiguration.
+  local signing_pub="" signing_mode=none listed=""
+  if [ -n "$sig_sock" ] && [ -S "$sig_sock" ]; then
+    # The exit status is what decides, not the output: an empty agent prints "The agent has no
+    # identities." on stdout and exits 1, and taking that as a key is how this first went wrong
+    if listed=$(SSH_AUTH_SOCK="$sig_sock" ssh-add -L 2>/dev/null) && [ -n "$listed" ]; then
+      signing_pub=$(printf '%s\n' "$listed" | head -1)
+      signing_mode=gateway
+      # Only the public half. The private one stays in the operator's agent, on the host
+      printf '%s\n' "$signing_pub" > "$keydir/signing.pub"
+      chmod 644 "$keydir/signing.pub"
+      chown "$own" "$keydir/signing.pub"
+    else
+      echo "[agent] relay: WARNING: the gateway's signing socket holds no key${sig_fp:+ ($sig_fp)}."
+      echo "[agent] relay:   The operator has to ssh-add it on the host. Commits will NOT be signed."
+    fi
+  elif [ -n "$sig_sock" ]; then
+    echo "[agent] relay: WARNING: the gateway named a signing socket ($sig_sock) that is not in this container."
+    echo "[agent] relay:   Mount the shared volume into the dev service (docker-compose.relay.yml). Commits will NOT be signed."
+  else
+    # No gateway key: generate one here, as before. It lives and dies with this volume, so it
+    # cannot stay registered with the forge — which is exactly #59. The comment becomes the title
+    # in GitHub; an existing key still on the old default is updated to carry the name.
+    sekimore_ensure_signing_key "$keydir" "$(sekimore_signing_key_comment "$home")"
+    chmod 600 "$keydir/signing_ed25519"
+    chmod 644 "$keydir/signing_ed25519.pub"
+    chown "$own" "$keydir/signing_ed25519" "$keydir/signing_ed25519.pub"
+    signing_pub=$(cat "$keydir/signing_ed25519.pub")
+    signing_mode=generated
+  fi
+
   # The env file (atomic, 0600, owned by the target user)
   local tmp="$env_file.tmp.$$"
   {
@@ -250,6 +302,16 @@ sekimore_relay_setup() {
     # The next two let the `sekimore` wrapper renew by itself (it re-runs bootstrap once the token expires)
     if [ -n "$token_expires" ]; then echo "SEKIMORE_TOKEN_EXPIRES=$token_expires"; fi
     echo "SEKIMORE_AGENT_KEY=$keydir/id_ed25519.pub"
+    if [ -n "$sig_sock" ]; then
+      echo "SEKIMORE_SIGNING_SOCK=$sig_sock"
+      if [ -n "$sig_fp" ]; then echo "SEKIMORE_SIGNING_KEY=$sig_fp"; fi
+    fi
+    if [ "$signing_mode" = gateway ]; then
+      # git signs through the gateway's filtered agent. Exporting it is not an authentication
+      # path: the socket refuses everything that is not an SSHSIG blob in namespace git, and the
+      # ~/.ssh/config block below keeps IdentitiesOnly yes for the relay's hosts anyway.
+      echo "SSH_AUTH_SOCK=$sig_sock"
+    fi
   } > "$tmp"
   chmod 600 "$tmp"
   chown "$own" "$tmp"
@@ -321,16 +383,27 @@ sekimore_relay_setup() {
   chown "$own" "$home/.config/git"
   local signers="$home/.config/git/allowed_signers"
   HOME=$home git config --global gpg.format ssh
-  HOME=$home git config --global user.signingkey "$keydir/signing_ed25519.pub"
-  HOME=$home git config --global commit.gpgsign true
-  HOME=$home git config --global tag.gpgsign true
   HOME=$home git config --global gpg.ssh.allowedSignersFile "$signers"
-  local sigpub principal
-  sigpub=$(cut -d' ' -f1,2 "$keydir/signing_ed25519.pub")
-  principal=${GIT_COMMITTER_EMAIL:-${GIT_AUTHOR_EMAIL:-*}}
   touch "$signers"
-  if ! grep -qF "$sigpub" "$signers"; then
-    echo "$principal namespaces=\"git\" $sigpub" >> "$signers"
+  if [ -n "$signing_pub" ]; then
+    if [ "$signing_mode" = gateway ]; then
+      HOME=$home git config --global user.signingkey "$keydir/signing.pub"
+    else
+      HOME=$home git config --global user.signingkey "$keydir/signing_ed25519.pub"
+    fi
+    HOME=$home git config --global commit.gpgsign true
+    HOME=$home git config --global tag.gpgsign true
+    local sigpub principal
+    sigpub=$(printf '%s' "$signing_pub" | cut -d' ' -f1,2)
+    principal=${GIT_COMMITTER_EMAIL:-${GIT_AUTHOR_EMAIL:-*}}
+    if ! grep -qF "$sigpub" "$signers"; then
+      echo "$principal namespaces=\"git\" $sigpub" >> "$signers"
+    fi
+  else
+    # No key to sign with. Turning signing off is the honest outcome: leaving it on would make
+    # every commit fail, and signing with a key nobody registered is what #59 is about.
+    HOME=$home git config --global commit.gpgsign false
+    HOME=$home git config --global tag.gpgsign false
   fi
   chown "$own" "$signers"
   if [ -f "$home/.gitconfig" ]; then chown "$own" "$home/.gitconfig"; fi
@@ -339,9 +412,23 @@ sekimore_relay_setup() {
   sekimore_agent_instructions "$home" "$own" || echo "[agent] relay: WARNING: could not write agent instructions"
 
   echo "[agent] relay: ready — git via $git_domains → $gw, API $endpoint, env $env_file $token_note"
-  echo "[agent] relay: commits are signed with $keydir/signing_ed25519.pub"
-  echo "[agent] relay: register that public key on GitHub as a *Signing Key* (Settings → SSH and GPG keys → New SSH key → Key type: Signing Key):"
-  cat "$keydir/signing_ed25519.pub"
+  case $signing_mode in
+    gateway)
+      # Nothing for anyone to register: the key is the operator's and was registered once.
+      echo "[agent] relay: commits are signed through the gateway's filtered agent ($sig_sock)"
+      echo "[agent] relay:   $signing_pub"
+      ;;
+    generated)
+      echo "[agent] relay: commits are signed with $keydir/signing_ed25519.pub"
+      echo "[agent] relay: register that public key on GitHub as a *Signing Key* (Settings → SSH and GPG keys → New SSH key → Key type: Signing Key):"
+      cat "$keydir/signing_ed25519.pub"
+      echo "[agent] relay: NOTE: this key is generated in this container and dies with its volume, so it has to be"
+      echo "[agent] relay:   registered again every time. relay.signing_key on the gateway replaces it with one key per person (#59)."
+      ;;
+    *)
+      echo "[agent] relay: commits are NOT signed (commit.gpgsign false); see the warning above"
+      ;;
+  esac
   return 0
 }
 

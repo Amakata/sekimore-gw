@@ -551,6 +551,29 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             String::new()
         }
     );
+    // 0.2.29 (#59): the signing key dev commits with, if the gateway offers one
+    match &r.relay.signing_key {
+        Some(sk) => {
+            println!(
+                "{}{}",
+                pad_label(&t("op.check.signing"), 14),
+                tf(
+                    "op.check.signing_on",
+                    &[
+                        ("fingerprint", &sk.fingerprint),
+                        ("namespace", &sk.namespace),
+                        ("socket", &sk.socket.display().to_string()),
+                        ("uid", &sk.socket_uid.to_string()),
+                    ]
+                )
+            );
+        }
+        None => println!(
+            "{}{}",
+            pad_label(&t("op.check.signing"), 14),
+            t("op.check.signing_off")
+        ),
+    }
     // 0.1.9: tags, deletion and permissions are the project default plus the repo's overrides. The effective per-repo values are listed under repos below
     if let Some(px) = &r.proxy {
         println!("{}{}", pad_label(&t("op.check.proxy"), 14), px.url);
@@ -655,6 +678,26 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             )
         ),
         Err(e) => println!("{}", tf("op.check.agent_bad", &[("error", &e.to_string())])),
+    }
+    // Whether the configured signing key is actually in that agent. The fingerprint alone says
+    // nothing: the observation in #59 was a key that nobody noticed had gone
+    if let Some(sk) = &r.relay.signing_key {
+        let audit = Arc::new(crate::audit::Audit::disabled());
+        let agent =
+            crate::git::agent_proxy::SigningAgent::new(sk, sock.clone().unwrap_or_default(), audit);
+        match agent.identity().await {
+            Some(id) => println!(
+                "{}",
+                tf("op.check.signing_key_ok", &[("key", &id.public_key)])
+            ),
+            None => println!(
+                "{}",
+                tf(
+                    "op.check.signing_key_missing",
+                    &[("fingerprint", &sk.fingerprint)]
+                )
+            ),
+        }
     }
     for u in &r.upstreams {
         if multi {
