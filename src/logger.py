@@ -2,12 +2,12 @@
 
 import logging
 import sys
-from enum import Enum
+from enum import StrEnum
 
 import structlog
 
 
-class ComponentType(str, Enum):
+class ComponentType(StrEnum):
     """Component type."""
 
     DNS = "DNS"
