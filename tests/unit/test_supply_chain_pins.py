@@ -11,6 +11,7 @@ A pin without one is a number nobody can update.
 """
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,40 @@ _DIGEST = re.compile(r"@sha256:[0-9a-f]{64}(?:\s|$)")
 _FROM = re.compile(r"^FROM\s+(?:--\S+\s+)*(\S+)")
 _SYNTAX = re.compile(r"^#\s*syntax=(\S+)")
 _COMPOSE_IMAGE = re.compile(r"^\s*image:\s*(\S+)")
+
+# Only the Dockerfiles install Debian packages; the compose files just name images.
+DOCKERFILES = [p for p in IMAGE_FILES if p.name.startswith("Dockerfile")]
+# The sources have to point at the snapshot archive — literally, or through the ARG that carries
+# the timestamp so bumping it is one line.
+_SNAPSHOT_URI = re.compile(r"https://snapshot\.debian\.org/archive/debian/(\S+)")
+# `ARG DEBIAN_SNAPSHOT=20260920T000000Z`, or the timestamp written straight into the URI.
+_SNAPSHOT_STAMP = re.compile(r"(?:ARG\s+DEBIAN_SNAPSHOT=|/debian/)(\d{8}T\d{6}Z)")
+# How long the image may go without a security update before CI says so. Short enough that a
+# forgotten pin is caught in the same quarter, long enough not to fire on every release.
+MAX_SNAPSHOT_AGE_DAYS = 90
+# `\` line continuations mean one `apt-get install` spans many lines; a package is a bare token on
+# one of them. `-y`, `--no-install-recommends` and the `&&` that ends the run are not packages.
+_APT_INSTALL = re.compile(r"apt-get\s+install\b")
+_APT_PACKAGE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9.+-]*(?:=\S+)?)\s*\\?\s*$")
+
+
+def _apt_packages(path: Path) -> list[tuple[int, str]]:
+    """Every package named by an `apt-get install`, with its line number."""
+    out: list[tuple[int, str]] = []
+    inside = False
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if _APT_INSTALL.search(line):
+            inside = True
+            continue
+        if not inside:
+            continue
+        # The run ends at the first line that is not a bare package: `&& rm -rf …`, or no `\`
+        m = _APT_PACKAGE.match(line)
+        if not m:
+            inside = line.rstrip().endswith("\\") and line.strip().startswith("-")
+            continue
+        out.append((n, m.group(1)))
+    return out
 
 
 def _uses_lines(path: Path) -> list[tuple[int, str]]:
@@ -105,3 +140,49 @@ def describe_supply_chain_pins():
             if re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", ref)
         ]
         assert bare == [], f"pinned, but with no `# <version>` comment saying what it is: {bare}"
+
+    @pytest.mark.parametrize("path", DOCKERFILES, ids=lambda p: p.name)
+    def it_pins_the_debian_archive_to_a_snapshot(path):
+        # Naming package versions is not enough on its own: their ~100 transitive dependencies
+        # still resolve against whatever Debian is serving today, and a named version is gone from
+        # the archive within weeks of being superseded. The snapshot is what makes both hold.
+        body = path.read_text(encoding="utf-8")
+        if "apt-get install" not in body:
+            pytest.skip(f"{path.name} installs no Debian packages")
+        assert _SNAPSHOT_URI.search(body), (
+            f"{path.name}: `apt-get` reads whatever Debian serves today, so the layer gets a new "
+            "digest on essentially every build. Point the sources at "
+            "`https://snapshot.debian.org/archive/debian/<YYYYMMDDTHHMMSSZ>`."
+        )
+
+    @pytest.mark.parametrize("path", DOCKERFILES, ids=lambda p: p.name)
+    def it_pins_every_apt_package_to_a_version(path):
+        # The snapshot already fixes what gets installed. These make a change *loud*: bumping the
+        # snapshot without noticing that squid moved is the failure this catches.
+        floating = [f"{path.name}:{n} {pkg}" for n, pkg in _apt_packages(path) if "=" not in pkg]
+        assert floating == [], (
+            f"{path.name}: name the version — `squid=6.13-2+deb13u3`. Read them out of the "
+            "snapshot itself, not out of a running container. Not pinned: " + str(floating)
+        )
+
+    @pytest.mark.parametrize("path", DOCKERFILES, ids=lambda p: p.name)
+    def it_does_not_let_the_snapshot_go_stale(path):
+        # A pinned archive means no security update reaches the image until someone moves the pin.
+        # That turns the bump from housekeeping into an obligation, so it is checked rather than
+        # remembered. Widen MAX_SNAPSHOT_AGE_DAYS if the cadence is deliberately slower.
+        body = path.read_text(encoding="utf-8")
+        m = _SNAPSHOT_URI.search(body)
+        if not m:
+            pytest.skip(f"{path.name} pins no Debian snapshot")
+        stamp = _SNAPSHOT_STAMP.search(body)
+        assert stamp, (
+            f"{path.name}: the snapshot URI is there but no timestamp is — write it as "
+            "`ARG DEBIAN_SNAPSHOT=YYYYMMDDTHHMMSSZ`, so bumping it is one line"
+        )
+        stamped = datetime.strptime(stamp.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+        age = (datetime.now(UTC) - stamped).days
+        assert age <= MAX_SNAPSHOT_AGE_DAYS, (
+            f"{path.name}: the Debian snapshot is {age} days old, and nothing has reached this "
+            f"image since. Bump DEBIAN_SNAPSHOT and re-read the package versions out of the new "
+            f"one (limit {MAX_SNAPSHOT_AGE_DAYS} days)."
+        )

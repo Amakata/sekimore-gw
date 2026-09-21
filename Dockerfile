@@ -37,18 +37,44 @@ RUN T="$(cat /tmp/t)" \
 # ---- gateway ----
 FROM python:3.13-slim@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0
 
+# The Debian archive as of one moment, so a rebuild of this commit installs what the last one did.
+#
+# The base image is pinned by digest, but everything installed on top of it was not: `apt-get
+# update` takes whatever Debian is serving that day. Two releases apart, this layer moved by 1,275
+# bytes and every consumer re-pulled 160 MB of identical content. Naming versions alone does not
+# fix it — the ~100 transitive dependencies would still float, and a named version disappears from
+# the archive within weeks of being superseded. The snapshot is what makes both hold.
+#
+# **Bumping this is how security updates arrive.** Nothing reaches this image between bumps. Do it
+# on a schedule, not when something breaks; `test_supply_chain_pins.py` fails once it is stale.
+ARG DEBIAN_SNAPSHOT=20260920T000000Z
+
 # System package installation
 # openssh-client: ssh / ssh-add / ssh-keyscan / ssh-keygen, used when the relay reaches out to the upstream git
-RUN apt-get update && apt-get install -y \
-    iptables \
-    ipset \
-    iproute2 \
-    dnsutils \
-    procps \
-    squid \
-    ulogd2 \
-    docker.io \
-    openssh-client \
+# bind9-dnsutils: what `dnsutils` resolved to — the latter is a virtual name trixie has no package for
+RUN set -eu \
+    # Fail here rather than inside apt if the base image ever stops shipping the keyring: the
+    # snapshot is still signature-verified, and a missing key must not degrade to trusting less.
+    && test -f /usr/share/keyrings/debian-archive-keyring.gpg \
+    && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list \
+    && printf '%s\n' \
+        'Types: deb' \
+        "URIs: https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}" \
+        'Suites: trixie' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        > /etc/apt/sources.list.d/snapshot.sources \
+    && apt-get update \
+    && apt-get install -y \
+        iptables=1.8.11-2 \
+        ipset=7.22-1+b1 \
+        iproute2=6.15.0-1 \
+        bind9-dnsutils=1:9.20.26-1~deb13u1 \
+        procps=2:4.0.4-9 \
+        squid=6.13-2+deb13u3 \
+        ulogd2=2.0.8-3 \
+        docker.io=26.1.5+dfsg1-9+deb13u1 \
+        openssh-client=1:10.0p1-7+deb13u4 \
     && rm -rf /var/lib/apt/lists/*
 
 # Working directory
