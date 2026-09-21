@@ -953,6 +953,78 @@ async fn send_passphrase(
     }
 }
 
+/// Write the store out as a sealed envelope.
+///
+/// Defaults to stdout, so the operator's own redirect decides where it lands and the file never
+/// has to be fetched back out of the container: `mise run gw:store-export > store.json`. `--out`
+/// is for writing it inside the gateway, and creates the file 0600 because the operator's umask
+/// is not something to rely on for this.
+///
+/// Sealed is not secret-free. The envelope is guarded by the passphrase alone — no machine, no
+/// keychain — which is the property that makes it portable and the reason to say so on stderr.
+pub async fn store_export(path: &Path, out: Option<&Path>) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    let sock = store_paths(path)?;
+    let (ok, message, data) = store::control::call_data(&sock, r#"{"op":"export"}"#).await?;
+    if !ok {
+        bail!("{message}");
+    }
+    let envelope = data.ok_or_else(|| anyhow!("the relay answered an export with no envelope"))?;
+    let mut bytes = serde_json::to_vec(&envelope)?;
+    bytes.push(b'\n');
+
+    match out {
+        Some(p) => {
+            atomic_write(p, &bytes, 0o600)?;
+            eprintln!("{message} to {}", p.display());
+        }
+        None => {
+            std::io::stdout().write_all(&bytes)?;
+            std::io::stdout().flush()?;
+            eprintln!("{message}");
+        }
+    }
+    eprintln!(
+        "The export is sealed, and the passphrase is the only thing guarding it. \
+         Keep it where that passphrase is not."
+    );
+    Ok(())
+}
+
+/// Replace an empty store with an envelope, read from stdin by default.
+///
+/// The envelope is not verified here and cannot be: verifying means having the key. The next
+/// `unlock` with the passphrase the export was taken under is what checks the MAC, so a spliced
+/// envelope fails there rather than quietly becoming the store.
+pub async fn store_import(path: &Path, file: Option<&Path>) -> anyhow::Result<()> {
+    use std::io::Read;
+
+    let sock = store_paths(path)?;
+    let text = match file {
+        Some(p) => std::fs::read_to_string(p)
+            .with_context(|| format!("cannot read the envelope at {}", p.display()))?,
+        None => {
+            let mut s = String::new();
+            std::io::stdin()
+                .read_to_string(&mut s)
+                .context("cannot read the envelope from stdin. Redirect a file into it, or --in")?;
+            s
+        }
+    };
+    let envelope: serde_json::Value =
+        serde_json::from_str(&text).context("the envelope is not JSON")?;
+
+    let body = serde_json::json!({ "op": "import", "envelope": envelope }).to_string();
+    let (ok, message) = store::control::call(&sock, &body).await?;
+    println!("{message}");
+    if ok {
+        Ok(())
+    } else {
+        bail!("import refused")
+    }
+}
+
 /// `lock` and `status`, which need no passphrase.
 pub async fn store_control(path: &Path, op: &str) -> anyhow::Result<()> {
     let paths = store_paths(path)?;

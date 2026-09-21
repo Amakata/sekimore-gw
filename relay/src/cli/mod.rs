@@ -60,6 +60,16 @@ pub enum Command {
     },
     #[command(about = t("cli.store_status"))]
     StoreStatus,
+    #[command(name = "store-export", about = t("cli.store_export"))]
+    StoreExport {
+        #[arg(long, help = t("cli.store_export.out"))]
+        out: Option<PathBuf>,
+    },
+    #[command(name = "store-import", about = t("cli.store_import"))]
+    StoreImport {
+        #[arg(long = "in", help = t("cli.store_import.file"))]
+        file: Option<PathBuf>,
+    },
     #[command(about = t("cli.token"))]
     Token {
         #[arg(long, help = t("cli.token.ttl"))]
@@ -135,6 +145,12 @@ pub async fn run(cli: Cli) -> i32 {
             .await
             .map(|_| 0),
         Command::StoreStatus => operator::store_control(&cli.config, "status")
+            .await
+            .map(|_| 0),
+        Command::StoreExport { out } => operator::store_export(&cli.config, out.as_deref())
+            .await
+            .map(|_| 0),
+        Command::StoreImport { file } => operator::store_import(&cli.config, file.as_deref())
             .await
             .map(|_| 0),
         Command::Token { ttl } => operator::token(&cli.config, ttl.as_deref()).map(|_| 0),

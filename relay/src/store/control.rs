@@ -18,7 +18,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
 use zeroize::Zeroize;
@@ -51,12 +51,43 @@ enum Request {
         kdf: Option<String>,
     },
     Lock,
+    /// The store as a portable envelope. No passphrase: everything in it is either ciphertext or
+    /// the parameters for deriving the key from one, which is what lets a backup be taken from a
+    /// locked store.
+    Export,
+    /// Replace an empty store with an envelope. Refused when the store holds records — an import
+    /// is a replacement, and there is no merge that could be right.
+    Import {
+        envelope: serde_json::Value,
+    },
 }
 
 #[derive(serde::Serialize)]
 struct Response {
     ok: bool,
     message: String,
+    /// Structured payload, for the requests that have one to return. `export` puts the envelope
+    /// here rather than in `message`, so the caller writes bytes it parsed rather than a string
+    /// it has to parse back out of a human-readable field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<serde_json::Value>,
+}
+
+impl Response {
+    fn ok(message: impl Into<String>) -> Self {
+        Response {
+            ok: true,
+            message: message.into(),
+            data: None,
+        }
+    }
+    fn err(message: impl Into<String>) -> Self {
+        Response {
+            ok: false,
+            message: message.into(),
+            data: None,
+        }
+    }
 }
 
 /// Serve the control socket until the process ends.
@@ -83,16 +114,22 @@ pub async fn serve(path: PathBuf, store: Arc<Mutex<SecretStore>>) -> io::Result<
     }
 }
 
+/// A request is one line, and `import` is the only one that is not tiny. An envelope holds one
+/// base64 blob per record, so this is room for a store far larger than the relay's own handful
+/// while still bounding what one connection can make the gateway allocate.
+const MAX_REQUEST: u64 = 8 * 1024 * 1024;
+
 async fn handle(stream: UnixStream, store: Arc<Mutex<SecretStore>>) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader.read_line(&mut line).await?;
-    let response = match serde_json::from_str::<Request>(&line) {
-        Ok(req) => apply(req, &store).await,
-        Err(e) => Response {
-            ok: false,
-            message: format!("bad request: {e}"),
-        },
+    let read = (&mut reader).take(MAX_REQUEST).read_line(&mut line).await?;
+    let response = if read as u64 == MAX_REQUEST {
+        Response::err(format!("request is longer than {MAX_REQUEST} bytes"))
+    } else {
+        match serde_json::from_str::<Request>(&line) {
+            Ok(req) => apply(req, &store).await,
+            Err(e) => Response::err(format!("bad request: {e}")),
+        }
     };
     // Whatever was read holds the passphrase. `clear` only sets the length to zero and leaves the
     // bytes in the allocation, which is what this line used to do. `BufReader`'s own buffer still
@@ -109,10 +146,7 @@ async fn handle(stream: UnixStream, store: Arc<Mutex<SecretStore>>) -> io::Resul
 fn parse_kdf(name: Option<&str>) -> Result<super::crypto::Kdf, Response> {
     match name.map(super::crypto::Kdf::parse).transpose() {
         Ok(k) => Ok(k.unwrap_or(super::crypto::Kdf::Argon2id)),
-        Err(e) => Err(Response {
-            ok: false,
-            message: e.to_string(),
-        }),
+        Err(e) => Err(Response::err(e.to_string())),
     }
 }
 
@@ -127,20 +161,14 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>) -> Response {
             } else {
                 "not initialised"
             };
-            Response {
-                ok: true,
-                message: state.to_string(),
-            }
+            Response::ok(state.to_string())
         }
         Request::Unlock { passphrase } => {
             let secret = Secret::new(passphrase.into_bytes());
             match store.unlock(&secret) {
                 Ok(()) => {
                     log::info!("secret store unlocked");
-                    Response {
-                        ok: true,
-                        message: "unlocked".into(),
-                    }
+                    Response::ok("unlocked")
                 }
                 // `Locked` here is the AEAD tag failing to open the wrapped DEK, which is what a
                 // wrong passphrase looks like. Its own Display is written for a consumer that
@@ -148,14 +176,8 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>) -> Response {
                 // command whose prompt they are standing at. Nothing is disclosed by saying so:
                 // they just typed it, and `Tampered` keeps its own message so a spliced store is
                 // never reported as a typo.
-                Err(StoreError::Locked) => Response {
-                    ok: false,
-                    message: "that passphrase did not open the store".into(),
-                },
-                Err(e) => Response {
-                    ok: false,
-                    message: e.to_string(),
-                },
+                Err(StoreError::Locked) => Response::err("that passphrase did not open the store"),
+                Err(e) => Response::err(e.to_string()),
             }
         }
         Request::Init { passphrase, kdf } => {
@@ -167,15 +189,9 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>) -> Response {
             match store.initialise(&secret, kdf, super::crypto::KdfParams::default()) {
                 Ok(()) => {
                     log::info!("secret store initialised (kdf {})", kdf.as_str());
-                    Response {
-                        ok: true,
-                        message: "initialised and unlocked".into(),
-                    }
+                    Response::ok("initialised and unlocked")
                 }
-                Err(e) => Response {
-                    ok: false,
-                    message: e.to_string(),
-                },
+                Err(e) => Response::err(e.to_string()),
             }
         }
         Request::Passphrase { old, new, kdf } => {
@@ -188,39 +204,62 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>) -> Response {
             match store.change_passphrase(&old, &new, kdf, super::crypto::KdfParams::default()) {
                 Ok(()) => {
                     log::info!("secret store passphrase changed (kdf {})", kdf.as_str());
-                    Response {
-                        ok: true,
-                        message: format!("passphrase changed, kdf {}", kdf.as_str()),
-                    }
+                    Response::ok(format!("passphrase changed, kdf {}", kdf.as_str()))
                 }
                 // As in `Unlock`: the old passphrase is what failed to unwrap, and the store is
                 // left as it was. Saying "locked, ask a human to unlock" would be doubly wrong,
                 // since this works on a store that is already unlocked.
-                Err(StoreError::Locked) => Response {
-                    ok: false,
-                    message: "the old passphrase is not the one the store is wrapped under; \
-                              nothing was changed"
-                        .into(),
-                },
-                Err(e) => Response {
-                    ok: false,
-                    message: e.to_string(),
-                },
+                Err(StoreError::Locked) => Response::err(
+                    "the old passphrase is not the one the store is wrapped under; \
+                     nothing was changed",
+                ),
+                Err(e) => Response::err(e.to_string()),
             }
         }
         Request::Lock => {
             store.lock();
             log::info!("secret store locked");
-            Response {
-                ok: true,
-                message: "locked".into(),
-            }
+            Response::ok("locked")
         }
+        Request::Export => match store.export() {
+            Ok(envelope) => {
+                let n = envelope
+                    .get("records")
+                    .and_then(serde_json::Value::as_array)
+                    .map_or(0, Vec::len);
+                // Worth an audit line of its own: an export is the whole store leaving, and it
+                // needs no passphrase, so nothing else marks that it happened.
+                log::info!("secret store exported ({n} records)");
+                Response {
+                    ok: true,
+                    message: format!("exported {n} records"),
+                    data: Some(envelope),
+                }
+            }
+            Err(e) => Response::err(e.to_string()),
+        },
+        Request::Import { envelope } => match store.import(&envelope) {
+            Ok(()) => {
+                log::info!("secret store replaced by an import");
+                // `import` drops the DEK, so this is the state whatever the store was before.
+                Response::ok("imported; the store is locked, unlock it with the passphrase the export was taken under")
+            }
+            Err(e) => Response::err(e.to_string()),
+        },
     }
 }
 
 /// Send one request and return the reply. Used by the operator subcommands.
 pub async fn call(path: &Path, body: &str) -> anyhow::Result<(bool, String)> {
+    let (ok, message, _) = call_data(path, body).await?;
+    Ok((ok, message))
+}
+
+/// As `call`, and also the response's `data`. Only `export` returns one.
+pub async fn call_data(
+    path: &Path,
+    body: &str,
+) -> anyhow::Result<(bool, String, Option<serde_json::Value>)> {
     let mut stream = UnixStream::connect(path).await.map_err(|e| {
         anyhow::anyhow!(
             "cannot reach the relay's control socket at {} ({e}). Is the gateway running?",
@@ -232,13 +271,14 @@ pub async fn call(path: &Path, body: &str) -> anyhow::Result<(bool, String)> {
     stream.shutdown().await.ok();
     let mut reply = String::new();
     BufReader::new(stream).read_line(&mut reply).await?;
-    let v: serde_json::Value = serde_json::from_str(&reply)?;
+    let mut v: serde_json::Value = serde_json::from_str(&reply)?;
     Ok((
         v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false),
         v.get("message")
             .and_then(|m| m.as_str())
             .unwrap_or("")
             .to_string(),
+        v.get_mut("data").map(serde_json::Value::take),
     ))
 }
 
@@ -464,6 +504,95 @@ mod tests {
         assert!(ok, "{msg}");
         let (_, state) = call(&sock, r#"{"op":"status"}"#).await.unwrap();
         assert_eq!(state, "unlocked");
+    }
+
+    #[tokio::test]
+    async fn a_locked_store_can_still_be_exported() {
+        // The point of the envelope: a backup needs no key, so it can be taken from a store nobody
+        // has unlocked. `served(true)` locks it before serving.
+        let (sock, _d) = served(true).await;
+        let (ok, msg, data) = call_data(&sock, r#"{"op":"export"}"#).await.unwrap();
+        assert!(ok, "{msg}");
+        let env = data.expect("an export answers with the envelope");
+        assert_eq!(env["records"].as_array().unwrap().len(), 1);
+        assert!(env["wrapped_dek"].is_string() && env["salt"].is_string());
+        let (_, state) = call(&sock, r#"{"op":"status"}"#).await.unwrap();
+        assert_eq!(state, "locked", "exporting does not unlock");
+    }
+
+    #[tokio::test]
+    async fn an_export_imported_elsewhere_opens_with_the_same_passphrase() {
+        let (from, _d1) = served(true).await;
+        let (_, _, env) = call_data(&from, r#"{"op":"export"}"#).await.unwrap();
+
+        // An empty store on the other side, as a fresh gateway would have
+        let dir = tempfile::tempdir().unwrap();
+        let to = dir.path().join("control.sock");
+        let store = SecretStore::open(&dir.path().join("secrets.db")).unwrap();
+        let store = Arc::new(Mutex::new(store));
+        let s = to.clone();
+        tokio::spawn(async move { serve(s, store).await });
+        for _ in 0..50 {
+            if to.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let body = serde_json::json!({"op": "import", "envelope": env.unwrap()}).to_string();
+        let (ok, msg) = call(&to, &body).await.unwrap();
+        assert!(ok, "{msg}");
+        let (_, state) = call(&to, r#"{"op":"status"}"#).await.unwrap();
+        assert_eq!(state, "locked", "an import leaves the store locked");
+
+        let (ok, msg) = call(&to, r#"{"op":"unlock","passphrase":"correct horse"}"#)
+            .await
+            .unwrap();
+        assert!(
+            ok,
+            "the passphrase the export was taken under opens it: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn importing_over_a_store_that_holds_records_is_refused() {
+        // An import replaces; two stores that both hold `relay/upstream_token` do not hold the
+        // same one, so there is no merge that could be right. The destination here is the one
+        // `served` set up, which already has a record.
+        let (from, _d1) = served(true).await;
+        let (_, _, env) = call_data(&from, r#"{"op":"export"}"#).await.unwrap();
+        let (to, _d2) = served(true).await;
+
+        let body = serde_json::json!({"op": "import", "envelope": env.unwrap()}).to_string();
+        let (ok, msg) = call(&to, &body).await.unwrap();
+        assert!(!ok);
+        assert!(msg.contains("already holds records"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn an_envelope_that_is_not_one_is_refused() {
+        let (sock, _d) = served(false).await;
+        for bad in [
+            r#"{"op":"import","envelope":{}}"#,
+            r#"{"op":"import","envelope":{"format":"something-else"}}"#,
+        ] {
+            let (ok, msg) = call(&sock, bad).await.unwrap();
+            assert!(!ok, "{bad} was accepted: {msg}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_request_longer_than_the_cap_is_answered_not_dropped() {
+        // `import` is the first request that is not tiny, so the read is bounded. An over-long one
+        // has to come back as a refusal: a dropped connection reads as the gateway being down.
+        let (sock, _d) = served(false).await;
+        let huge = format!(
+            r#"{{"op":"import","envelope":{{"format":"{}"}}}}"#,
+            "x".repeat(MAX_REQUEST as usize)
+        );
+        let (ok, msg) = call(&sock, &huge).await.unwrap();
+        assert!(!ok);
+        assert!(msg.contains("longer than"), "{msg}");
     }
 
     #[tokio::test]
