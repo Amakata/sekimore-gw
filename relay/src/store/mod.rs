@@ -17,6 +17,7 @@ pub mod crypto;
 use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::{json, Value};
 
 use crypto::{Kdf, KdfParams, Secret};
 
@@ -24,6 +25,9 @@ use crypto::{Kdf, KdfParams, Secret};
 pub enum StoreError {
     /// No passphrase has been supplied yet, or the one supplied did not open the store
     Locked,
+    /// The set of records is not the one the manifest MAC was taken over: something was removed,
+    /// added or spliced in behind the relay
+    Tampered,
     Format(String),
     Crypto(String),
     Db(String),
@@ -35,6 +39,11 @@ impl std::fmt::Display for StoreError {
             StoreError::Locked => write!(
                 f,
                 "the secret store is locked. Ask a human to run: mise run gw:unlock"
+            ),
+            StoreError::Tampered => write!(
+                f,
+                "the secret store's records are not the set it was sealed with — a record was \
+                 removed, added or replaced outside the relay"
             ),
             StoreError::Format(m) => write!(f, "secret store format: {m}"),
             StoreError::Crypto(m) => write!(f, "secret store: {m}"),
@@ -84,6 +93,9 @@ CREATE TABLE IF NOT EXISTS records (
 /// The algorithm identifier written with every record, so a validated backend can replace the
 /// implementation without a format change.
 const ALG_AES_256_GCM: &str = "aes-256-gcm";
+
+/// Written into every export and checked on import, so a file that is not one fails by name.
+const EXPORT_FORMAT: &str = "sekimore-store-export/v1";
 
 /// An open store. Locked until `unlock` succeeds; every read and write before that fails with
 /// `StoreError::Locked`.
@@ -162,7 +174,7 @@ impl SecretStore {
         self.set_meta("wrapped_dek", &b64(&wrapped))?;
         self.set_meta("store_id", &b64(&crypto::new_salt()?))?;
         self.dek = Some(dek);
-        Ok(())
+        self.reseal_manifest()
     }
 
     /// Unwrap the DEK with the key the passphrase derives. A wrong passphrase fails the AEAD tag,
@@ -170,6 +182,10 @@ impl SecretStore {
     /// nothing useful to tell apart, and less to learn from guessing.
     pub fn unlock(&mut self, passphrase: &Secret) -> Result<(), StoreError> {
         self.dek = Some(self.unwrap_dek(passphrase)?);
+        if let Err(e) = self.verify_manifest() {
+            self.dek = None;
+            return Err(e);
+        }
         Ok(())
     }
 
@@ -284,7 +300,7 @@ impl SecretStore {
                 epoch = excluded.epoch, created_at = excluded.created_at",
             params![namespace, name, ALG_AES_256_GCM, nonce, ct, epoch, now()],
         )?;
-        Ok(())
+        self.reseal_manifest()
     }
 
     pub fn delete(&self, namespace: &str, name: &str) -> Result<bool, StoreError> {
@@ -293,7 +309,168 @@ impl SecretStore {
             "DELETE FROM records WHERE namespace = ?1 AND name = ?2",
             params![namespace, name],
         )?;
+        self.reseal_manifest()?;
         Ok(n > 0)
+    }
+
+    /// The store as a portable envelope, still sealed.
+    ///
+    /// **No unlock needed.** Everything here is either ciphertext or the parameters needed to
+    /// derive the key from a passphrase, so a backup can be taken from a locked store — and the
+    /// passphrase is then the only thing guarding it, which is worth saying out loud.
+    ///
+    /// This is what makes a passphrase-derived key worth the friction: the salt and the parameters
+    /// travel with the ciphertext, so moving to another machine is copying a file. A key bound to
+    /// one machine's keychain would have to be carried separately.
+    pub fn export(&self) -> Result<Value, StoreError> {
+        let mut records = Vec::new();
+        let mut stmt = self.db.prepare(
+            "SELECT namespace, name, alg, nonce, ciphertext, epoch, created_at FROM records
+             ORDER BY namespace, name",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(json!({
+                "namespace": r.get::<_, String>(0)?,
+                "name": r.get::<_, String>(1)?,
+                "alg": r.get::<_, String>(2)?,
+                "nonce": b64(&r.get::<_, Vec<u8>>(3)?),
+                "ciphertext": b64(&r.get::<_, Vec<u8>>(4)?),
+                "epoch": r.get::<_, i64>(5)?,
+                "created_at": r.get::<_, String>(6)?,
+            }))
+        })?;
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(json!({
+            "format": EXPORT_FORMAT,
+            "store_id": self.required("store_id")?,
+            "kdf": self.required("kdf")?,
+            "kdf_memory_kib": self.required_u32("kdf_memory_kib")?,
+            "kdf_iterations": self.required_u32("kdf_iterations")?,
+            "kdf_parallelism": self.required_u32("kdf_parallelism")?,
+            "salt": self.required("salt")?,
+            "wrap_nonce": self.required("wrap_nonce")?,
+            "wrapped_dek": self.required("wrapped_dek")?,
+            "manifest_mac": self.required("manifest_mac")?,
+            "records": records,
+        }))
+    }
+
+    /// Replace this store with an exported envelope.
+    ///
+    /// Refuses a store that already holds records, because an import is a replacement and there is
+    /// no merge that could be right: two stores that both have `relay/upstream_token` do not have
+    /// the same one.
+    ///
+    /// The envelope is not verified here — nothing here can verify it, since verifying means
+    /// having the key. `unlock` with the envelope's own passphrase is what checks the MAC, so a
+    /// spliced envelope fails there rather than silently becoming the store.
+    pub fn import(&mut self, env: &Value) -> Result<(), StoreError> {
+        let get = |k: &str| -> Result<String, StoreError> {
+            env.get(k)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| StoreError::Format(format!("export is missing {k}")))
+        };
+        let get_u32 = |k: &str| -> Result<u32, StoreError> {
+            env.get(k)
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok())
+                .ok_or_else(|| StoreError::Format(format!("export is missing {k}")))
+        };
+        if get("format")? != EXPORT_FORMAT {
+            return Err(StoreError::Format(format!("not a {EXPORT_FORMAT} export")));
+        }
+        let existing: i64 = self
+            .db
+            .query_row("SELECT count(*) FROM records", [], |r| r.get(0))?;
+        if existing > 0 {
+            return Err(StoreError::Format(
+                "this store already holds records; import replaces a store rather than merging into one".into(),
+            ));
+        }
+        let records = env
+            .get("records")
+            .and_then(Value::as_array)
+            .ok_or_else(|| StoreError::Format("export is missing records".into()))?;
+
+        let tx = self.db.unchecked_transaction()?;
+        for k in [
+            "store_id",
+            "kdf",
+            "salt",
+            "wrap_nonce",
+            "wrapped_dek",
+            "manifest_mac",
+        ] {
+            self.set_meta(k, &get(k)?)?;
+        }
+        for k in ["kdf_memory_kib", "kdf_iterations", "kdf_parallelism"] {
+            self.set_meta(k, &get_u32(k)?.to_string())?;
+        }
+        for rec in records {
+            let f = |k: &str| -> Result<String, StoreError> {
+                rec.get(k)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| StoreError::Format(format!("a record is missing {k}")))
+            };
+            self.db.execute(
+                "INSERT INTO records (namespace, name, alg, nonce, ciphertext, epoch, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    f("namespace")?,
+                    f("name")?,
+                    f("alg")?,
+                    unb64(&f("nonce")?)?,
+                    unb64(&f("ciphertext")?)?,
+                    rec.get("epoch")
+                        .and_then(Value::as_i64)
+                        .ok_or_else(|| StoreError::Format("a record is missing epoch".into()))?,
+                    f("created_at")?,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        self.dek = None;
+        Ok(())
+    }
+
+    /// Recompute the manifest MAC. Every write goes through here, so the MAC is current without
+    /// export needing the key — which is what lets a backup be taken while the store is locked.
+    fn reseal_manifest(&self) -> Result<(), StoreError> {
+        let dek = self.dek()?;
+        let store_id = self.required("store_id")?;
+        let mac = crypto::manifest_mac(
+            &crypto::manifest_key(dek),
+            &manifest_of(&self.list()?, &store_id),
+        );
+        self.set_meta("manifest_mac", &b64(&mac))
+    }
+
+    /// Whether the set of records is the one the MAC was taken over.
+    ///
+    /// Checked on unlock rather than only on import, so a record removed from the database behind
+    /// the relay's back is caught the next time it starts rather than whenever someone thinks to
+    /// verify a backup.
+    fn verify_manifest(&self) -> Result<(), StoreError> {
+        let Some(stored) = self.meta("manifest_mac")? else {
+            // A store written before the MAC existed. Seal it now rather than refuse it; there is
+            // nothing to compare against and refusing would strand it.
+            return self.reseal_manifest();
+        };
+        let dek = self.dek()?;
+        let store_id = self.required("store_id")?;
+        let expected = crypto::manifest_mac(
+            &crypto::manifest_key(dek),
+            &manifest_of(&self.list()?, &store_id),
+        );
+        if crypto::mac_eq(&unb64(&stored)?, &expected) {
+            Ok(())
+        } else {
+            Err(StoreError::Tampered)
+        }
     }
 
     /// Namespace, name, epoch and when it was written — the plaintext metadata, so the store can be
@@ -325,6 +502,20 @@ impl SecretStore {
 
 /// Associated data for the wrapped DEK. Fixed, because there is only ever one.
 const WRAP_AAD: &[u8] = b"sekimore-store/dek/v1";
+
+/// The list of records, as the MAC sees it.
+///
+/// Per-record AEAD authenticates a record's content and, through the AAD, which record it is. It
+/// says nothing about the *set*: dropping a record, or splicing one in from another store, leaves
+/// every remaining record verifying perfectly. This is what covers that, and `store_id` is in it so
+/// records cannot be moved between stores either.
+fn manifest_of(rows: &[(String, String, i64, String)], store_id: &str) -> String {
+    let mut out = format!("sekimore-store/manifest/v1\u{1f}{store_id}\n");
+    for (namespace, name, epoch, _) in rows {
+        out.push_str(&format!("{namespace}\u{1f}{name}\u{1f}{epoch}\n"));
+    }
+    out
+}
 
 /// Associated data for a record: its identity.
 ///
@@ -625,6 +816,131 @@ mod tests {
         s.lock();
         s.unlock(&pass("fips")).unwrap();
         assert_eq!(s.get("relay", "t").unwrap().unwrap().as_bytes(), b"v");
+    }
+
+    #[test]
+    fn an_export_round_trips_into_an_empty_store() {
+        let a = opened();
+        a.set("relay", "upstream_token", b"ghp_secret").unwrap();
+        a.set("proxy", "password", b"hunter2").unwrap();
+        let env = a.export().unwrap();
+
+        let mut b = SecretStore::open_in_memory().unwrap();
+        b.import(&env).unwrap();
+        assert!(!b.is_unlocked(), "an import does not carry the key with it");
+        b.unlock(&pass("correct horse")).unwrap();
+        assert_eq!(
+            b.get("relay", "upstream_token")
+                .unwrap()
+                .unwrap()
+                .as_bytes(),
+            b"ghp_secret"
+        );
+        assert_eq!(
+            b.get("proxy", "password").unwrap().unwrap().as_bytes(),
+            b"hunter2"
+        );
+    }
+
+    #[test]
+    fn export_needs_no_key() {
+        // The point of it: a backup can be taken from a locked store.
+        let mut a = opened();
+        a.set("relay", "t", b"v").unwrap();
+        a.lock();
+        let env = a.export().unwrap();
+        assert_eq!(env["records"].as_array().unwrap().len(), 1);
+        let ct = env["records"][0]["ciphertext"].as_str().unwrap();
+        assert!(!ct.contains("dg=="), "sanity: not the plaintext");
+    }
+
+    #[test]
+    fn an_export_carries_no_plaintext() {
+        let a = opened();
+        a.set("relay", "t", b"ghp_secret").unwrap();
+        let text = a.export().unwrap().to_string();
+        assert!(!text.contains("ghp_secret"), "the value is in the envelope");
+        assert!(
+            !text.contains("correct horse"),
+            "the passphrase is in the envelope"
+        );
+    }
+
+    #[test]
+    fn a_record_dropped_from_the_envelope_fails_at_unlock() {
+        // Per-record AEAD says nothing about the set: every remaining record still verifies. The
+        // manifest MAC is what notices.
+        let a = opened();
+        a.set("relay", "one", b"1").unwrap();
+        a.set("relay", "two", b"2").unwrap();
+        let mut env = a.export().unwrap();
+        env["records"].as_array_mut().unwrap().pop();
+
+        let mut b = SecretStore::open_in_memory().unwrap();
+        b.import(&env).unwrap();
+        assert!(matches!(
+            b.unlock(&pass("correct horse")),
+            Err(StoreError::Tampered)
+        ));
+        assert!(!b.is_unlocked(), "a tampered store does not stay open");
+    }
+
+    #[test]
+    fn a_record_deleted_behind_the_relay_fails_at_unlock() {
+        // Not only on import: the next start notices.
+        let mut a = opened();
+        a.set("relay", "one", b"1").unwrap();
+        a.set("relay", "two", b"2").unwrap();
+        a.db.execute("DELETE FROM records WHERE name = 'two'", [])
+            .unwrap();
+        a.lock();
+        assert!(matches!(
+            a.unlock(&pass("correct horse")),
+            Err(StoreError::Tampered)
+        ));
+    }
+
+    #[test]
+    fn importing_into_a_store_that_holds_records_is_refused() {
+        // There is no merge that could be right: two stores with relay/upstream_token do not have
+        // the same one.
+        let a = opened();
+        a.set("relay", "t", b"mine").unwrap();
+        let env = a.export().unwrap();
+        let mut b = opened();
+        b.set("relay", "t", b"theirs").unwrap();
+        assert!(b.import(&env).is_err());
+        assert_eq!(b.get("relay", "t").unwrap().unwrap().as_bytes(), b"theirs");
+    }
+
+    #[test]
+    fn a_file_that_is_not_an_export_is_refused_by_name() {
+        let mut b = SecretStore::open_in_memory().unwrap();
+        assert!(b.import(&json!({"format": "something-else"})).is_err());
+        assert!(b.import(&json!({})).is_err());
+    }
+
+    #[test]
+    fn a_rekeyed_export_opens_with_the_new_passphrase_only() {
+        let mut a = opened();
+        a.set("relay", "t", b"v").unwrap();
+        a.change_passphrase(
+            &pass("correct horse"),
+            &pass("moved"),
+            Kdf::Argon2id,
+            fast(),
+        )
+        .unwrap();
+        let env = a.export().unwrap();
+
+        let mut b = SecretStore::open_in_memory().unwrap();
+        b.import(&env).unwrap();
+        assert!(matches!(
+            b.unlock(&pass("correct horse")),
+            Err(StoreError::Locked)
+        ));
+        b.unlock(&pass("moved")).unwrap();
+        assert_eq!(b.get("relay", "t").unwrap().unwrap().as_bytes(), b"v");
     }
 
     #[test]
