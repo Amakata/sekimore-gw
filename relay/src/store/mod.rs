@@ -11,6 +11,7 @@
 //! The database is its own file, not the audit log's. `mise run gw:db-reset` exists to reset that
 //! one; secrets sharing it would be destroyed by routine log maintenance.
 
+pub mod control;
 pub mod crypto;
 
 use std::path::Path;
@@ -168,6 +169,13 @@ impl SecretStore {
     /// which is reported as `Locked` rather than as a distinguishable "wrong passphrase" — there is
     /// nothing useful to tell apart, and less to learn from guessing.
     pub fn unlock(&mut self, passphrase: &Secret) -> Result<(), StoreError> {
+        self.dek = Some(self.unwrap_dek(passphrase)?);
+        Ok(())
+    }
+
+    /// The DEK, given the passphrase the store was wrapped under. Shared by `unlock` and
+    /// `change_passphrase`, so the two cannot disagree about what a valid passphrase is.
+    fn unwrap_dek(&self, passphrase: &Secret) -> Result<Secret, StoreError> {
         let kdf = Kdf::parse(&self.required("kdf")?)?;
         let params_ = KdfParams {
             memory_kib: self.required_u32("kdf_memory_kib")?,
@@ -178,7 +186,37 @@ impl SecretStore {
         let nonce = unb64(&self.required("wrap_nonce")?)?;
         let wrapped = unb64(&self.required("wrapped_dek")?)?;
         let kek = crypto::derive_kek(kdf, params_, passphrase, &salt)?;
-        self.dek = Some(crypto::open(&kek, WRAP_AAD, &nonce, &wrapped)?);
+        crypto::open(&kek, WRAP_AAD, &nonce, &wrapped)
+    }
+
+    /// Change the passphrase: fresh salt, a key derived from the new one, the same DEK rewrapped.
+    ///
+    /// **One row changes.** The records are not re-encrypted, which is the reason the DEK exists
+    /// rather than deriving a record key from the passphrase directly.
+    ///
+    /// The old passphrase is required even when the store is already unlocked. The DEK is in
+    /// memory at that point, so it is not needed to do the work — but without it, anyone reaching
+    /// the control socket of an unlocked store could rewrap it under a passphrase of their own and
+    /// lock the owner out. Requiring it also means the change works while locked.
+    pub fn change_passphrase(
+        &mut self,
+        old: &Secret,
+        new: &Secret,
+        kdf: Kdf,
+        params_: KdfParams,
+    ) -> Result<(), StoreError> {
+        let dek = self.unwrap_dek(old)?;
+        let salt = crypto::new_salt()?;
+        let kek = crypto::derive_kek(kdf, params_, new, &salt)?;
+        let (nonce, wrapped) = crypto::seal(&kek, WRAP_AAD, dek.as_bytes())?;
+        self.set_meta("kdf", kdf.as_str())?;
+        self.set_meta("kdf_memory_kib", &params_.memory_kib.to_string())?;
+        self.set_meta("kdf_iterations", &params_.iterations.to_string())?;
+        self.set_meta("kdf_parallelism", &params_.parallelism.to_string())?;
+        self.set_meta("salt", &b64(&salt))?;
+        self.set_meta("wrap_nonce", &b64(&nonce))?;
+        self.set_meta("wrapped_dek", &b64(&wrapped))?;
+        self.dek = Some(dek);
         Ok(())
     }
 
@@ -491,6 +529,102 @@ mod tests {
             hex::encode(out),
             "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645"
         );
+    }
+
+    #[test]
+    fn the_passphrase_can_be_changed_without_touching_the_records() {
+        let mut s = opened();
+        s.set("relay", "t", b"v").unwrap();
+        let before: Vec<u8> =
+            s.db.query_row("SELECT ciphertext FROM records", [], |r| r.get(0))
+                .unwrap();
+
+        s.change_passphrase(
+            &pass("correct horse"),
+            &pass("new one"),
+            Kdf::Argon2id,
+            fast(),
+        )
+        .unwrap();
+
+        let after: Vec<u8> =
+            s.db.query_row("SELECT ciphertext FROM records", [], |r| r.get(0))
+                .unwrap();
+        assert_eq!(
+            before, after,
+            "the records were re-encrypted; only the DEK should be rewrapped"
+        );
+
+        s.lock();
+        s.unlock(&pass("new one")).unwrap();
+        assert_eq!(s.get("relay", "t").unwrap().unwrap().as_bytes(), b"v");
+    }
+
+    #[test]
+    fn the_old_passphrase_stops_working() {
+        let mut s = opened();
+        s.change_passphrase(
+            &pass("correct horse"),
+            &pass("new one"),
+            Kdf::Argon2id,
+            fast(),
+        )
+        .unwrap();
+        s.lock();
+        assert!(matches!(
+            s.unlock(&pass("correct horse")),
+            Err(StoreError::Locked)
+        ));
+    }
+
+    #[test]
+    fn a_wrong_old_passphrase_changes_nothing() {
+        // Otherwise anyone reaching an unlocked store could rewrap it under a passphrase of their
+        // own and lock the owner out.
+        let mut s = opened();
+        s.set("relay", "t", b"v").unwrap();
+        assert!(s
+            .change_passphrase(&pass("guess"), &pass("theirs"), Kdf::Argon2id, fast())
+            .is_err());
+        s.lock();
+        s.unlock(&pass("correct horse")).unwrap();
+        assert_eq!(s.get("relay", "t").unwrap().unwrap().as_bytes(), b"v");
+    }
+
+    #[test]
+    fn the_change_works_while_locked() {
+        // The old passphrase is what proves the right to change it, so the DEK need not already
+        // be in memory.
+        let mut s = opened();
+        s.set("relay", "t", b"v").unwrap();
+        s.lock();
+        s.change_passphrase(
+            &pass("correct horse"),
+            &pass("new one"),
+            Kdf::Argon2id,
+            fast(),
+        )
+        .unwrap();
+        assert!(s.is_unlocked(), "changing it leaves the store open");
+        assert_eq!(s.get("relay", "t").unwrap().unwrap().as_bytes(), b"v");
+    }
+
+    #[test]
+    fn the_kdf_can_be_switched_in_the_same_write() {
+        // How a deployment that needs FIPS migrates an existing store: no record is re-encrypted.
+        let mut s = opened();
+        s.set("relay", "t", b"v").unwrap();
+        s.change_passphrase(
+            &pass("correct horse"),
+            &pass("fips"),
+            Kdf::Pbkdf2Sha256,
+            fast(),
+        )
+        .unwrap();
+        assert_eq!(s.meta("kdf").unwrap().unwrap(), "pbkdf2-sha256");
+        s.lock();
+        s.unlock(&pass("fips")).unwrap();
+        assert_eq!(s.get("relay", "t").unwrap().unwrap().as_bytes(), b"v");
     }
 
     #[test]

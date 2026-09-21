@@ -1,6 +1,6 @@
 //! Operator-facing subcommands (run inside the gateway container).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -21,6 +21,7 @@ use crate::github::GitHub;
 use crate::i18n::{t, tf};
 use crate::policy::all_permission_keys;
 use crate::ssh::authorized_keys::{fingerprint, Added, AuthorizedKeys};
+use crate::store;
 use crate::tokens::TokenStore;
 
 pub const DEVICE_FLOW_SCOPES: &[&str] = &["repo", "project"];
@@ -877,6 +878,103 @@ pub fn bootstrap(path: &Path, action: BootstrapAction) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Unlock the secret store, setting the passphrase when there is not one yet.
+///
+/// 0.2.15: the passphrase is typed here and sent over the relay's control socket, which lives on a
+/// volume the dev container does not mount. It is never an argument or an environment variable —
+/// either would put it in `ps`, and an argument would put it in shell history too.
+pub async fn unlock(path: &Path) -> anyhow::Result<()> {
+    let paths = store_paths(path)?;
+    let (_, state) = store::control::call(&paths, r#"{"op":"status"}"#).await?;
+    match state.as_str() {
+        "unlocked" => {
+            println!("the secret store is already unlocked");
+            Ok(())
+        }
+        "not initialised" => {
+            eprintln!(
+                "No secret store yet. Choose a passphrase.\n\
+                 Nothing stored can be read without it, and there is no way to recover it — keep a\n\
+                 copy of it somewhere a person can reach, and take an export once there is\n\
+                 something in the store."
+            );
+            let first = store::control::prompt("New passphrase")?;
+            let again = store::control::prompt("Again")?;
+            if first.as_bytes() != again.as_bytes() {
+                anyhow::bail!("the two did not match");
+            }
+            send_passphrase(&paths, &first).await
+        }
+        _ => {
+            let pass = store::control::prompt("Passphrase")?;
+            send_passphrase(&paths, &pass).await
+        }
+    }
+}
+
+async fn send_passphrase(sock: &Path, pass: &store::crypto::Secret) -> anyhow::Result<()> {
+    let body = serde_json::json!({
+        "op": "unlock",
+        "passphrase": String::from_utf8_lossy(pass.as_bytes()),
+    })
+    .to_string();
+    let (ok, message) = store::control::call(sock, &body).await?;
+    if ok {
+        println!("{message}");
+        Ok(())
+    } else {
+        anyhow::bail!("{message}")
+    }
+}
+
+/// `lock` and `status`, which need no passphrase.
+pub async fn store_control(path: &Path, op: &str) -> anyhow::Result<()> {
+    let paths = store_paths(path)?;
+    let (ok, message) = store::control::call(&paths, &format!(r#"{{"op":"{op}"}}"#)).await?;
+    println!("{message}");
+    if ok {
+        Ok(())
+    } else {
+        anyhow::bail!("{message}")
+    }
+}
+
+fn store_paths(config: &Path) -> anyhow::Result<PathBuf> {
+    Ok(resolve(config)?.paths.control_sock)
+}
+
+/// Change the store's passphrase, and with it the KDF if asked.
+///
+/// The KDF parameters are stored beside the wrapped DEK, so switching between Argon2id and PBKDF2
+/// is the same one-row write. The records are not touched: their `alg` is a separate thing, and
+/// changing *that* would mean re-sealing every value.
+pub async fn change_passphrase(path: &Path, kdf: Option<&str>) -> anyhow::Result<()> {
+    let sock = store_paths(path)?;
+    let old = store::control::prompt("Current passphrase")?;
+    let new = store::control::prompt("New passphrase")?;
+    let again = store::control::prompt("Again")?;
+    if new.as_bytes() != again.as_bytes() {
+        anyhow::bail!("the two did not match");
+    }
+    if new.as_bytes() == old.as_bytes() {
+        anyhow::bail!("the new passphrase is the old one");
+    }
+    let body = serde_json::json!({
+        "op": "passphrase",
+        "old": String::from_utf8_lossy(old.as_bytes()),
+        "new": String::from_utf8_lossy(new.as_bytes()),
+        "kdf": kdf,
+    })
+    .to_string();
+    let (ok, message) = store::control::call(&sock, &body).await?;
+    println!("{message}");
+    if ok {
+        Ok(())
+    } else {
+        anyhow::bail!("{message}")
+    }
 }
 
 #[cfg(test)]

@@ -49,6 +49,17 @@ pub enum Command {
     },
     #[command(about = t("cli.check"))]
     Check,
+    #[command(about = t("cli.unlock"))]
+    Unlock,
+    #[command(about = t("cli.lock"))]
+    Lock,
+    #[command(about = t("cli.passphrase"))]
+    Passphrase {
+        #[arg(long, help = t("cli.passphrase.kdf"))]
+        kdf: Option<String>,
+    },
+    #[command(about = t("cli.store_status"))]
+    StoreStatus,
     #[command(about = t("cli.token"))]
     Token {
         #[arg(long, help = t("cli.token.ttl"))]
@@ -116,6 +127,16 @@ pub async fn run(cli: Cli) -> i32 {
             .await
             .map(|_| 0),
         Command::Check => operator::check(&cli.config).await.map(|_| 0),
+        Command::Unlock => operator::unlock(&cli.config).await.map(|_| 0),
+        Command::Lock => operator::store_control(&cli.config, "lock")
+            .await
+            .map(|_| 0),
+        Command::Passphrase { kdf } => operator::change_passphrase(&cli.config, kdf.as_deref())
+            .await
+            .map(|_| 0),
+        Command::StoreStatus => operator::store_control(&cli.config, "status")
+            .await
+            .map(|_| 0),
         Command::Token { ttl } => operator::token(&cli.config, ttl.as_deref()).map(|_| 0),
         Command::Tokens => operator::tokens(&cli.config).map(|_| 0),
         Command::Revoke { label } => operator::revoke(&cli.config, &label).map(|_| 0),
