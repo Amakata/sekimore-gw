@@ -6,12 +6,13 @@
 //!   A  forward the upstream advertisement to the client unchanged (recording ref → sha)
 //!   B  parse and rewrite only the client's command section (up to the flush, with a size cap) and send it upstream
 //!   B2 the push-options section is passed through unchanged
-//!   C  stream the pack data raw, without buffering — except for a tag push (#89), which is read on
-//!      the way through so that the tag object can be judged, with the trailer held back until it is
+//!   C  stream the pack data raw, without buffering — except when the pack itself has to answer a
+//!      policy question (a tag push, #89; a branch push under `signing: required`, #59), in which
+//!      case it is read on the way through and the trailer is held back until the verdict is in
 //!   D  map the upstream report-status back to the original ref names and send it to the client
 //!   E  on success, create a PR for each `refs/for`
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -28,7 +29,7 @@ use crate::pktline::{
     caps_contain, encode_commands, encode_into, parse_receive_pack, validate_ref_name, CommandLine,
     CommandSection, Frame, PktReader, RefUpdate,
 };
-use crate::policy::{Denied, GitAuthorized, Project};
+use crate::policy::{Denied, GitAuthorized, Project, SigningMode};
 
 /// The agent's branch namespace.
 pub const SEKIMORE_BRANCH_PREFIX: &str = "sekimore/";
@@ -61,6 +62,16 @@ pub struct TagCheck {
     pub sha: String,
 }
 
+/// A branch this push moves, to be judged once the pack has been read (#59). Only made when the
+/// repository's `signing` is `required`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitCheck {
+    /// The ref as the client wrote it, for the message
+    pub name: String,
+    /// The commit the ref will point at
+    pub sha: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushPlan {
     pub commands: Vec<OwnedCommand>,
@@ -70,6 +81,11 @@ pub struct PushPlan {
     pub prs: Vec<PrIntent>,
     /// Tags that must turn out to be signed tag objects. Empty unless the policy asks (`signed_tags`)
     pub tag_checks: Vec<TagCheck>,
+    /// 0.2.29 (#59): branches whose new commits must all be signed. Empty unless `signing: required`
+    pub commit_checks: Vec<CommitCheck>,
+    /// The shas the upstream advertised. A commit walk stops at one of these: it is history the
+    /// upstream already has, so this push did not bring it
+    pub adv_shas: HashSet<String>,
 }
 
 impl PushPlan {
@@ -130,6 +146,7 @@ pub fn plan_push(
     let mut rewrites: HashMap<String, String> = HashMap::new();
     let mut prs = Vec::new();
     let mut tag_checks = Vec::new();
+    let mut commit_checks = Vec::new();
     // Every upstream ref this plan will update, and the client ref it came from. Two updates
     // to one ref in a single section put the report-status rewriter into a state it cannot
     // represent — its map is one upstream ref to one client ref — so the ok/ng of one would
@@ -193,6 +210,12 @@ pub fn plan_push(
                 base: base.to_string(),
                 sha: u.new.to_string(),
             });
+            if policy.signing == SigningMode::Required {
+                commit_checks.push(CommitCheck {
+                    name: u.name.to_string(),
+                    sha: u.new.to_string(),
+                });
+            }
             commands.push(OwnedCommand::Update {
                 old,
                 new: u.new.to_string(),
@@ -211,6 +234,13 @@ pub fn plan_push(
                 });
             }
             claim(u.name, u.name)?;
+            // Whether the commits are signed is in the pack, not here; stage C answers it.
+            if !u.is_delete() && policy.signing == SigningMode::Required {
+                commit_checks.push(CommitCheck {
+                    name: u.name.to_string(),
+                    sha: u.new.to_string(),
+                });
+            }
             commands.push(OwnedCommand::Update {
                 old: u.old.to_string(),
                 new: u.new.to_string(),
@@ -265,7 +295,191 @@ pub fn plan_push(
         rewrites,
         prs,
         tag_checks,
+        commit_checks,
+        adv_shas: adv.values().cloned().collect(),
     })
+}
+
+/// The pack against everything this push has to be judged on: its tags (#89) and, under
+/// `signing: required`, the commits it brings (#59).
+///
+/// A pack this relay could not read refuses whatever was being asked of it: "cannot tell" fails
+/// closed, because the whole point is that nobody could tell before.
+pub async fn judge_pack(
+    scanned: Result<Objects, PackError>,
+    tags: &[TagCheck],
+    commits: &[CommitCheck],
+    adv_shas: &HashSet<String>,
+    upstream: &dyn UpstreamCommits,
+) -> Result<(), Denied> {
+    let objects = match scanned {
+        Ok(o) => o,
+        Err(e) => {
+            if let Some(c) = tags.first() {
+                return Err(Denied::TagNotSigned {
+                    name: c.name.clone(),
+                    reason: format!("the pack could not be read to find the tag object ({e})"),
+                });
+            }
+            // Nothing to judge means nothing to refuse. Stage C only reads the pack when there
+            // is a check, so this cannot happen — and a panic inside the relay is not the way to
+            // find out that it can.
+            let Some(c) = commits.first() else {
+                log::warn!("a pack was judged with no checks ({e})");
+                return Ok(());
+            };
+            return Err(Denied::CommitNotSigned {
+                name: c.name.clone(),
+                sha: c.sha.clone(),
+                reason: format!("could not be read out of the pack ({e})"),
+            });
+        }
+    };
+    judge_tags(&objects, tags)?;
+    judge_commits(&objects, commits, adv_shas, upstream).await
+}
+
+/// How `judge_commits` asks the upstream whether a commit is already there.
+///
+/// A trait rather than a closure so the tests can answer for a sha without an upstream, and so the
+/// only implementation that reaches the network is the one holding a `GitAuthorized`.
+#[async_trait::async_trait]
+pub trait UpstreamCommits: Sync {
+    /// `Ok(true)` when the upstream holds this commit. An `Err` is "cannot tell", and the caller
+    /// fails closed on it.
+    async fn has_commit(&self, sha: &str) -> Result<bool, String>;
+}
+
+/// The real one: the upstream's API, scoped by the authorization this push already passed.
+pub struct ApiUpstreamCommits<'a> {
+    pub github: Option<&'a crate::github::GitHub>,
+    pub auth: &'a GitAuthorized<'a>,
+}
+
+#[async_trait::async_trait]
+impl UpstreamCommits for ApiUpstreamCommits<'_> {
+    async fn has_commit(&self, sha: &str) -> Result<bool, String> {
+        let Some(gh) = self.github else {
+            return Err("this relay has no API client for the upstream".to_string());
+        };
+        gh.commit_exists(self.auth, sha)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// How many commits one push may make this relay ask the upstream about.
+///
+/// An honest push asks about one — where its branch left the history the upstream has — or a
+/// handful for a merge. The cap is what stops a pack built to make the relay spend calls.
+const MAX_UPSTREAM_LOOKUPS: usize = 32;
+
+/// Every commit this push adds, against `signing: required` (#59).
+///
+/// The walk starts at each updated ref's new sha and follows parents, and every commit it reaches
+/// inside the pack has to carry a signature. Where it leaves the pack it has to establish which
+/// of two things it is looking at, because from inside the pack they are identical:
+///
+///   - history the upstream already has, which this push did not bring and is not answerable for
+///   - a commit that *is* in this push, hidden behind a delta whose base lives upstream
+///
+/// The second is not something `git push` produces — `pack-objects` builds thin bases with
+/// `add_preferred_base`, which dereferences a commit to its tree, so an external base is a tree or
+/// a blob — but the client here is an AI agent and the pack is whatever it chose to send. A
+/// hand-built REF_DELTA against any commit the upstream has would otherwise carry an unsigned
+/// commit straight through, so the boundary is settled by asking the upstream, which is one or two
+/// calls per push however many blob deltas the pack holds.
+///
+/// A delta against a commit *in* this pack is the other way a commit can hide, and that one is
+/// counted exactly (`unresolved_commit_deltas`) and refused without asking anyone.
+async fn judge_commits(
+    objects: &Objects,
+    checks: &[CommitCheck],
+    adv_shas: &HashSet<String>,
+    upstream: &dyn UpstreamCommits,
+) -> Result<(), Denied> {
+    // Shared across the checks in one push: two branches off the same base ask once.
+    let mut known: HashMap<String, bool> = HashMap::new();
+    let mut lookups = 0usize;
+    for c in checks {
+        if objects.unresolved_commit_deltas > 0 {
+            return Err(Denied::CommitNotSigned {
+                name: c.name.clone(),
+                sha: c.sha.clone(),
+                reason: "arrived in a form this relay could not read — a commit delta against another commit in the same pack. `git push --no-thin` sends whole objects".to_string(),
+            });
+        }
+        // An advertised sha is a tip the upstream already has; there is no new history under it.
+        if adv_shas.contains(&c.sha) {
+            continue;
+        }
+        // Breadth-first from the tip, so the commit named in the denial is the one nearest it —
+        // the one the person is most likely looking at.
+        let mut queue: VecDeque<String> = VecDeque::from([c.sha.clone()]);
+        let mut seen: HashSet<String> = HashSet::from([c.sha.clone()]);
+        while let Some(sha) = queue.pop_front() {
+            match objects.by_sha.get(&sha) {
+                Some(Object::Commit { signed, parents }) => {
+                    if !signed {
+                        return Err(Denied::CommitNotSigned {
+                            name: c.name.clone(),
+                            sha: sha.clone(),
+                            reason: "carries no signature".to_string(),
+                        });
+                    }
+                    for p in parents {
+                        if adv_shas.contains(p) {
+                            continue;
+                        }
+                        if seen.insert(p.clone()) {
+                            queue.push_back(p.clone());
+                        }
+                    }
+                }
+                // The boundary. Not a commit this pack brought — or not one this pack *admits* to
+                // bringing.
+                _ => {
+                    if let Some(upstream_has) = known.get(&sha) {
+                        if *upstream_has {
+                            continue;
+                        }
+                    } else {
+                        if lookups >= MAX_UPSTREAM_LOOKUPS {
+                            return Err(Denied::CommitNotSigned {
+                                name: c.name.clone(),
+                                sha: sha.clone(),
+                                reason: format!(
+                                    "is one of more than {MAX_UPSTREAM_LOOKUPS} commits this push leaves unaccounted for, which is more than this relay will ask the upstream about. `git push --no-thin` sends whole objects"
+                                ),
+                            });
+                        }
+                        lookups += 1;
+                        let answer = upstream.has_commit(&sha).await.map_err(|e| {
+                            // Fail closed. The usual cause is the store being locked after a
+                            // restart, and the operator has to hear which command that is.
+                            Denied::CommitNotSigned {
+                                name: c.name.clone(),
+                                sha: sha.clone(),
+                                reason: format!(
+                                    "could not be looked up on the upstream ({e}); signing: required needs the upstream API, so the gateway has to be unlocked (`mise run gw:unlock`) and logged in"
+                                ),
+                            }
+                        })?;
+                        known.insert(sha.clone(), answer);
+                        if answer {
+                            continue;
+                        }
+                    }
+                    return Err(Denied::CommitNotSigned {
+                        name: c.name.clone(),
+                        sha: sha.clone(),
+                        reason: "is not on the upstream and did not arrive as a whole object, so this relay cannot see whether it is signed — a delta against an object the upstream already has. `git push --no-thin` sends whole objects".to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Each pushed tag against what the pack turned out to hold.
@@ -274,21 +488,15 @@ pub fn plan_push(
 /// a commit under the name (lightweight), a tag object without a signature, an object that is
 /// not in the pack at all — is refused, and so is a pack this relay could not read: the answer
 /// "cannot tell" fails closed, because the whole point is that nobody could tell before.
-pub fn judge_tags(scanned: Result<Objects, PackError>, checks: &[TagCheck]) -> Result<(), Denied> {
-    let objects = match scanned {
-        Ok(o) => o,
-        Err(e) => {
-            return Err(Denied::TagNotSigned {
-                name: checks[0].name.clone(),
-                reason: format!("the pack could not be read to find the tag object ({e})"),
-            })
-        }
-    };
+pub fn judge_tags(objects: &Objects, checks: &[TagCheck]) -> Result<(), Denied> {
     for c in checks {
         let reason = match objects.by_sha.get(&c.sha) {
             Some(Object::Tag { signed: true }) => continue,
             Some(Object::Tag { signed: false }) => {
                 "it is an annotated tag without a signature".to_string()
+            }
+            Some(Object::Commit { .. }) => {
+                "it is a lightweight tag — the name points straight at a commit".to_string()
             }
             Some(Object::Other(kind)) => {
                 format!("it is a lightweight tag — the name points straight at a {kind}")
@@ -312,8 +520,8 @@ pub fn judge_tags(scanned: Result<Objects, PackError>, checks: &[TagCheck]) -> R
     Ok(())
 }
 
-/// Stage C for a push with tags to judge: forward the pack while reading it, holding back its
-/// last `TRAILER_LEN` bytes until the verdict is in.
+/// Stage C for a push the pack itself has to answer for: forward it while reading it, holding
+/// back its last `TRAILER_LEN` bytes until the verdict is in.
 ///
 /// The trailer is the pack's checksum, and index-pack refuses a pack that ends without one, so
 /// dropping it is how a refusal takes effect after the rest has already gone upstream: nothing is
@@ -329,13 +537,17 @@ pub fn judge_tags(scanned: Result<Objects, PackError>, checks: &[TagCheck]) -> R
 /// refusal has to *close* the upstream's stdin — `AsyncWrite::shutdown` on a child's pipe is a
 /// no-op in tokio, and only dropping the handle sends the EOF that makes index-pack give up. On
 /// success the trailer follows and the handle is dropped at the client's EOF.
-async fn copy_judging_tags<R, W>(
+#[allow(clippy::too_many_arguments)]
+async fn copy_judging_pack<R, W>(
     leftover: &[u8],
     mut reader: R,
     writer: W,
     wd: &Watchdog,
     seen: &AtomicU64,
-    checks: &[TagCheck],
+    tags: &[TagCheck],
+    commits: &[CommitCheck],
+    adv_shas: &HashSet<String>,
+    upstream: &dyn UpstreamCommits,
 ) -> std::io::Result<(u64, Result<(), Denied>)>
 where
     R: AsyncRead + Unpin,
@@ -362,7 +574,14 @@ where
                         tail.drain(..forward);
                     }
                     if s.is_complete() {
-                        let v = judge_tags(scan.take().unwrap().finish(), checks);
+                        let v = judge_pack(
+                            scan.take().unwrap().finish(),
+                            tags,
+                            commits,
+                            adv_shas,
+                            upstream,
+                        )
+                        .await;
                         if v.is_ok() {
                             w.write_all(&tail).await?;
                             w.flush().await?;
@@ -398,7 +617,16 @@ where
     let verdict = match verdict {
         Some(v) => v,
         // EOF before the pack was whole: nothing to judge, and nothing the upstream can use
-        None => judge_tags(scan.take().unwrap().finish(), checks),
+        None => {
+            judge_pack(
+                scan.take().unwrap().finish(),
+                tags,
+                commits,
+                adv_shas,
+                upstream,
+            )
+            .await
+        }
     };
     if let Some(mut w) = writer.take() {
         w.flush().await?;
@@ -647,16 +875,25 @@ pub async fn relay_receive_pack(
     // Owned here rather than borrowed from `proc`, so stage C can drop it: on a child's pipe
     // `shutdown()` does nothing in tokio, and dropping the handle is the only way to send EOF
     let mut upstream_stdin = Some(proc.stdin);
+    // #59: what settles the boundary of the history this push brings. Built here because it
+    // borrows the same `auth` the push was allowed under.
+    let upstream_commits = ApiUpstreamCommits {
+        github: ctx.github.as_deref(),
+        auth,
+    };
     let pack_fut = async {
-        if !plan.tag_checks.is_empty() {
-            // #89: read the pack on the way through and hold the trailer until the tags are judged
-            let (n, verdict) = copy_judging_tags(
+        if !plan.tag_checks.is_empty() || !plan.commit_checks.is_empty() {
+            // #89 / #59: read the pack on the way through and hold the trailer until it is judged
+            let (n, verdict) = copy_judging_pack(
                 &leftover,
                 &mut io.stdin,
                 upstream_stdin.take().expect("taken once"),
                 &wd,
                 &sent,
                 &plan.tag_checks,
+                &plan.commit_checks,
+                &plan.adv_shas,
+                &upstream_commits,
             )
             .await?;
             return Ok::<(u64, Option<Denied>), std::io::Error>((n, verdict.err()));
@@ -711,7 +948,7 @@ pub async fn relay_receive_pack(
             }
         }
     };
-    let (bytes_in, bytes_out, note, tag_denied) = tokio::select! {
+    let (bytes_in, bytes_out, note, pack_denied) = tokio::select! {
         r = async { tokio::join!(pack_fut, resp_fut) } => {
             let (i, o) = r;
             let (bytes_in, denied) = i.unwrap_or((0, None));
@@ -743,7 +980,7 @@ pub async fn relay_receive_pack(
             note,
         };
     }
-    if let Some(d) = tag_denied {
+    if let Some(d) = pack_denied {
         // The upstream has already said ng (it got a pack without a trailer); this is the why.
         let msg = d.to_string();
         say(io, &msg).await;
@@ -757,7 +994,7 @@ pub async fn relay_receive_pack(
             status: 1,
             bytes_in,
             bytes_out,
-            note: Some("policy_tag".into()),
+            note: Some(format!("policy_{}", d.kind())),
         };
     }
     if status == 255 {
@@ -1144,16 +1381,158 @@ mod tests {
         assert_eq!(plan.commands.len(), 1);
     }
 
+    #[test]
+    fn a_branch_push_is_queued_for_judging_only_when_signing_is_required() {
+        use crate::policy::SigningMode;
+        let queued = |mode: SigningMode, line: String| {
+            let mut p = project();
+            for r in &mut p.repos {
+                r.signing = mode;
+            }
+            let auth = p
+                .authorize_git(GitVerb::ReceivePack, "LibOrg/awesome-lib.git")
+                .unwrap();
+            let data = section_of(&[line]);
+            let sec = parse_receive_pack(&data).unwrap();
+            plan_push(&p, &auth, &sec, &HashMap::new())
+                .unwrap()
+                .commit_checks
+        };
+        let branch = format!("{ZERO} {SHA} refs/heads/sekimore/x");
+        assert_eq!(
+            queued(SigningMode::Required, branch.clone()),
+            vec![CommitCheck {
+                name: "refs/heads/sekimore/x".into(),
+                sha: SHA.into()
+            }]
+        );
+        // refs/for goes to a branch too, so it is judged the same way
+        assert_eq!(
+            queued(SigningMode::Required, format!("{ZERO} {SHA} refs/for/main")).len(),
+            1
+        );
+        // The default asks nothing of the pack, which is what keeps stage C streaming
+        assert!(queued(SigningMode::Optional, branch.clone()).is_empty());
+        assert!(queued(SigningMode::Off, branch).is_empty());
+        // and a delete brings no commits
+        let adv = HashMap::from([("refs/heads/sekimore/x".to_string(), SHA.to_string())]);
+        let mut p = project();
+        for r in &mut p.repos {
+            r.signing = SigningMode::Required;
+            r.delete = true;
+        }
+        let auth = p
+            .authorize_git(GitVerb::ReceivePack, "LibOrg/awesome-lib.git")
+            .unwrap();
+        let data = section_of(&[format!("{SHA} {ZERO} refs/heads/sekimore/x")]);
+        let sec = parse_receive_pack(&data).unwrap();
+        assert!(plan_push(&p, &auth, &sec, &adv)
+            .unwrap()
+            .commit_checks
+            .is_empty());
+    }
+
     mod judging {
-        use super::super::judge_tags;
+        use super::super::{judge_pack, CommitCheck};
         use super::*;
-        use crate::git::pack::testutil::{pack, sha_of, tag_body, Entry, COMMIT};
+        use crate::git::pack::testutil::{commit_body, pack, sha_of, tag_body, Entry, COMMIT};
         use crate::git::pack::{PackError, PackScan};
 
         fn scan(bytes: &[u8]) -> Result<crate::git::pack::Objects, PackError> {
             let mut s = PackScan::new();
             s.feed(bytes);
             s.finish()
+        }
+        /// An upstream that holds exactly the shas it was given, and can be made to fail.
+        struct FakeUpstream {
+            has: HashSet<String>,
+            error: Option<String>,
+            asked: std::sync::Mutex<Vec<String>>,
+        }
+        impl FakeUpstream {
+            fn holding(shas: &[&str]) -> Self {
+                FakeUpstream {
+                    has: shas.iter().map(|s| s.to_string()).collect(),
+                    error: None,
+                    asked: std::sync::Mutex::new(Vec::new()),
+                }
+            }
+            fn broken() -> Self {
+                FakeUpstream {
+                    has: HashSet::new(),
+                    error: Some("the secret store is locked".into()),
+                    asked: std::sync::Mutex::new(Vec::new()),
+                }
+            }
+            fn asked(&self) -> Vec<String> {
+                self.asked.lock().unwrap().clone()
+            }
+        }
+        #[async_trait::async_trait]
+        impl super::super::UpstreamCommits for FakeUpstream {
+            async fn has_commit(&self, sha: &str) -> Result<bool, String> {
+                self.asked.lock().unwrap().push(sha.to_string());
+                match &self.error {
+                    Some(e) => Err(e.clone()),
+                    None => Ok(self.has.contains(sha)),
+                }
+            }
+        }
+
+        /// The tag half of `judge_pack`, which is what these cases are about.
+        fn judge_tags(
+            scanned: Result<crate::git::pack::Objects, PackError>,
+            checks: &[TagCheck],
+        ) -> Result<(), Denied> {
+            block_on(judge_pack(
+                scanned,
+                checks,
+                &[],
+                &HashSet::new(),
+                &FakeUpstream::holding(&[]),
+            ))
+        }
+        /// The commit half. The upstream holds nothing unless a case says otherwise, so a walk
+        /// that leaves the pack has to justify itself.
+        fn judge_commits(
+            scanned: Result<crate::git::pack::Objects, PackError>,
+            checks: &[CommitCheck],
+            adv: &[&str],
+        ) -> Result<(), Denied> {
+            judge_commits_with(scanned, checks, adv, &FakeUpstream::holding(&[]))
+        }
+        fn judge_commits_with(
+            scanned: Result<crate::git::pack::Objects, PackError>,
+            checks: &[CommitCheck],
+            adv: &[&str],
+            upstream: &dyn super::super::UpstreamCommits,
+        ) -> Result<(), Denied> {
+            let adv: HashSet<String> = adv.iter().map(|s| s.to_string()).collect();
+            block_on(judge_pack(scanned, &[], checks, &adv, upstream))
+        }
+        /// These cases are about the judgement, not about concurrency; a current-thread runtime
+        /// keeps them ordinary `#[test]`s.
+        fn block_on<F: std::future::Future>(f: F) -> F::Output {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(f)
+        }
+        fn branch(sha: &str) -> Vec<CommitCheck> {
+            vec![CommitCheck {
+                name: "refs/heads/sekimore/topic".into(),
+                sha: sha.into(),
+            }]
+        }
+        fn why_commit(r: Result<(), Denied>) -> (String, String) {
+            match r {
+                Err(Denied::CommitNotSigned { name, sha, reason }) => {
+                    assert_eq!(name, "refs/heads/sekimore/topic");
+                    (sha, reason)
+                }
+                other => panic!("expected CommitNotSigned, got {other:?}"),
+            }
         }
         fn check(sha: &str) -> Vec<TagCheck> {
             vec![TagCheck {
@@ -1220,6 +1599,233 @@ mod tests {
             let why = reason(judge_tags(Err(PackError::Truncated), &check(SHA)));
             assert!(why.contains("could not be read"), "{why}");
             assert!(why.contains("ended early"), "{why}");
+        }
+
+        // ---- #59: commits ----
+
+        #[test]
+        fn a_branch_of_signed_commits_passes() {
+            let a = commit_body(&[], true, "one");
+            let b = commit_body(&[&sha_of("commit", &a)], true, "two");
+            let p = pack(&[Entry::Whole(1, &a), Entry::Whole(1, &b)]);
+            assert_eq!(
+                judge_commits(scan(&p), &branch(&sha_of("commit", &b)), &[]),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn one_unsigned_commit_anywhere_in_the_new_history_refuses_the_push() {
+            // The tip is signed and the commit under it is not: checking only the tip would let
+            // this through, which is the shape a rebase-and-amend leaves behind.
+            let a = commit_body(&[], false, "unsigned");
+            let b = commit_body(&[&sha_of("commit", &a)], true, "signed tip");
+            let p = pack(&[Entry::Whole(1, &a), Entry::Whole(1, &b)]);
+            let (sha, why) =
+                why_commit(judge_commits(scan(&p), &branch(&sha_of("commit", &b)), &[]));
+            assert_eq!(sha, sha_of("commit", &a));
+            assert!(why.contains("no signature"), "{why}");
+        }
+
+        #[test]
+        fn history_the_upstream_already_has_is_not_this_pushs_to_answer_for() {
+            // The parent is not in the pack and the upstream confirms it holds it: an unsigned
+            // commit from before the policy was turned on must not block every later push. This
+            // is "branch off main~3" — the ordinary shape, and the one that must not be refused.
+            let old = commit_body(&[], false, "from before");
+            let old_sha = sha_of("commit", &old);
+            let new = commit_body(&[&old_sha], true, "new work");
+            let p = pack(&[Entry::Whole(1, &new)]);
+            let up = FakeUpstream::holding(&[&old_sha]);
+            assert_eq!(
+                judge_commits_with(scan(&p), &branch(&sha_of("commit", &new)), &[], &up),
+                Ok(())
+            );
+            assert_eq!(
+                up.asked(),
+                vec![old_sha.clone()],
+                "one call, at the boundary"
+            );
+
+            // and the same when it *is* in the pack but the advertisement names it — no call at
+            // all, because the advertisement already said so
+            let p = pack(&[Entry::Whole(1, &old), Entry::Whole(1, &new)]);
+            let up = FakeUpstream::holding(&[]);
+            assert_eq!(
+                judge_commits_with(scan(&p), &branch(&sha_of("commit", &new)), &[&old_sha], &up),
+                Ok(())
+            );
+            assert!(up.asked().is_empty(), "{:?}", up.asked());
+        }
+
+        #[test]
+        fn a_commit_hidden_behind_a_delta_on_an_upstream_base_does_not_pass_for_upstream_history() {
+            // The bypass. `git push` does not build this — `pack-objects` only ever offers trees
+            // and blobs as thin bases — but the client is an agent and the pack is whatever it
+            // sent. A REF_DELTA against any commit the upstream already has leaves the tip absent
+            // from `by_sha`, which is indistinguishable from "the upstream has it" unless someone
+            // asks. So the relay asks, and the upstream says no.
+            let unsigned = commit_body(&[], false, "not signed");
+            let tip = sha_of("commit", &unsigned);
+            let delta = crate::git::pack::testutil::insert_only_delta(b"base", &unsigned);
+            let p = pack(&[Entry::RefDelta {
+                base_sha: [7u8; 20],
+                delta: &delta,
+            }]);
+            let up = FakeUpstream::holding(&[]);
+            let (sha, why) = why_commit(judge_commits_with(scan(&p), &branch(&tip), &[], &up));
+            assert_eq!(sha, tip);
+            assert!(why.contains("not on the upstream"), "{why}");
+            assert!(why.contains("--no-thin"), "{why}");
+            assert_eq!(up.asked(), vec![tip.clone()]);
+
+            // The very same pack is accepted once the upstream confirms the sha is its own
+            // history — which is what makes the refusal above about the answer, not the shape
+            let up = FakeUpstream::holding(&[&tip]);
+            assert_eq!(
+                judge_commits_with(scan(&p), &branch(&tip), &[], &up),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn a_boundary_the_upstream_cannot_be_asked_about_fails_closed() {
+            // The store is locked after a restart, so the API cannot answer. "Cannot tell" is a
+            // refusal, and the message has to send the operator to the command that fixes it.
+            let old = commit_body(&[], true, "upstream history");
+            let new = commit_body(&[&sha_of("commit", &old)], true, "new work");
+            let p = pack(&[Entry::Whole(1, &new)]);
+            let (_, why) = why_commit(judge_commits_with(
+                scan(&p),
+                &branch(&sha_of("commit", &new)),
+                &[],
+                &FakeUpstream::broken(),
+            ));
+            assert!(why.contains("the secret store is locked"), "{why}");
+            assert!(why.contains("gw:unlock"), "{why}");
+        }
+
+        #[test]
+        fn a_push_cannot_make_the_relay_ask_the_upstream_without_end() {
+            // A pack whose commits all name parents that are nowhere. An honest push asks once.
+            let mut entries = Vec::new();
+            let bodies: Vec<Vec<u8>> = (0..40)
+                .map(|i| commit_body(&[&format!("{:040x}", i + 1)], true, "signed"))
+                .collect();
+            for b in &bodies {
+                entries.push(Entry::Whole(1, b));
+            }
+            // one ref per commit, so the walk reaches every one of those parents
+            let checks: Vec<CommitCheck> = bodies
+                .iter()
+                .enumerate()
+                .map(|(i, b)| CommitCheck {
+                    name: format!("refs/heads/sekimore/topic{i}"),
+                    sha: sha_of("commit", b),
+                })
+                .collect();
+            let up = FakeUpstream::holding(
+                &(0..40)
+                    .map(|i| format!("{:040x}", i + 1))
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>(),
+            );
+            let p = pack(&entries);
+            let e = judge_commits_with(scan(&p), &checks, &[], &up).unwrap_err();
+            assert!(e.to_string().contains("more than 32"), "{e}");
+            assert!(up.asked().len() <= 32, "{}", up.asked().len());
+        }
+
+        #[test]
+        fn a_merge_is_walked_down_both_sides() {
+            let base = commit_body(&[], true, "base");
+            let left = commit_body(&[&sha_of("commit", &base)], true, "left");
+            let right = commit_body(&[&sha_of("commit", &base)], false, "right, unsigned");
+            let merge = commit_body(
+                &[&sha_of("commit", &left), &sha_of("commit", &right)],
+                true,
+                "merge",
+            );
+            let p = pack(&[
+                Entry::Whole(1, &base),
+                Entry::Whole(1, &left),
+                Entry::Whole(1, &right),
+                Entry::Whole(1, &merge),
+            ]);
+            let (sha, _) = why_commit(judge_commits(
+                scan(&p),
+                &branch(&sha_of("commit", &merge)),
+                &[],
+            ));
+            assert_eq!(
+                sha,
+                sha_of("commit", &right),
+                "the second parent counts too"
+            );
+        }
+
+        #[test]
+        fn a_cycle_in_the_parents_does_not_hang_the_walk() {
+            // Not something git makes, but the walk reads shas out of a pack the client wrote.
+            let a = commit_body(&[], true, "a");
+            let sha_a = sha_of("commit", &a);
+            let b = commit_body(&[&sha_a], true, "b");
+            let a2 = commit_body(&[&sha_of("commit", &b)], true, "a");
+            let p = pack(&[Entry::Whole(1, &a2), Entry::Whole(1, &b)]);
+            assert_eq!(
+                judge_commits_with(
+                    scan(&p),
+                    &branch(&sha_of("commit", &a2)),
+                    &[],
+                    &FakeUpstream::holding(&[&sha_a])
+                ),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn a_commit_delta_against_a_commit_fails_closed() {
+            // Only tag bodies are kept whole, so a commit that arrived as a delta against another
+            // commit is a commit this scan cannot read — and an unreadable commit must not pass
+            // for a signed one.
+            let a = commit_body(&[], true, "one");
+            let delta = crate::git::pack::testutil::copy_then_insert_delta(&a, b"x");
+            let p = pack(&[
+                Entry::Whole(1, &a),
+                Entry::OfsDelta {
+                    back: 1,
+                    delta: &delta,
+                },
+            ]);
+            let (_, why) = why_commit(judge_commits(scan(&p), &branch(&sha_of("commit", &a)), &[]));
+            assert!(why.contains("--no-thin"), "{why}");
+        }
+
+        #[test]
+        fn an_unresolved_tree_or_blob_delta_is_not_a_commit_and_does_not_refuse() {
+            // Thin packs delta against the upstream's trees and blobs on every ordinary push.
+            // Treating those as "might be a commit" would refuse nearly everything.
+            let a = commit_body(&[], true, "one");
+            let delta = crate::git::pack::testutil::insert_only_delta(b"base", b"result");
+            let p = pack(&[
+                Entry::Whole(1, &a),
+                Entry::RefDelta {
+                    base_sha: [9u8; 20],
+                    delta: &delta,
+                },
+            ]);
+            assert_eq!(
+                judge_commits(scan(&p), &branch(&sha_of("commit", &a)), &[]),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn a_pack_that_cannot_be_read_refuses_the_branch_too() {
+            let (_, why) = why_commit(judge_commits(Err(PackError::Truncated), &branch(SHA), &[]));
+            assert!(why.contains("could not be read"), "{why}");
         }
 
         #[test]

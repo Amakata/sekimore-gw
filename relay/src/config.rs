@@ -18,7 +18,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use url::Url;
 
-use crate::policy::{Mode, Project, RepoPolicy, DEFAULT_PUSH_GLOBS};
+use crate::policy::{Mode, Project, RepoPolicy, SigningMode, DEFAULT_PUSH_GLOBS};
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/sekimore/config.yml";
 /// The GitHub CLI's public client id. The device flow needs no client secret.
@@ -259,6 +259,8 @@ pub struct RepoConfig {
     pub delete_merged_branch: Option<bool>,
     /// 0.2.27: whether a pushed tag must be an annotated tag object with a signature block. Defaults to the project's `signed_tags`
     pub signed_tags: Option<bool>,
+    /// 0.2.29 (#59): required | optional | off. Defaults to the project's `signing`
+    pub signing: Option<SigningMode>,
     /// Delta on the project defaults: allow adds, deny removes. A plain list means additional allows
     pub permissions: Option<PermissionSpec>,
 }
@@ -275,6 +277,7 @@ pub struct UpstreamPolicyConfig {
     pub delete: Option<bool>,
     pub delete_merged_branch: Option<bool>,
     pub signed_tags: Option<bool>,
+    pub signing: Option<SigningMode>,
     /// Repos on this upstream, written as `Org/Repo`. A host prefix is unnecessary, and if given it must match this upstream
     #[serde(default)]
     pub repos: Vec<RepoConfig>,
@@ -317,6 +320,13 @@ pub struct ProjectConfig {
     /// not validity; verifying it needs a trusted-signer list this file does not hold yet
     #[serde(default = "d_signed_tags")]
     pub signed_tags: bool,
+    /// 0.2.29 (#59): whether a push to a branch may carry an unsigned commit —
+    /// `required` | `optional` | `off`. **`optional` when unset**, unlike `signed_tags`: a tag
+    /// names a release and there are few of them, while turning this on refuses pushes an
+    /// existing project makes every day, and nothing about an existing project said it wanted
+    /// that. Presence of a signature is what is checked, not validity
+    #[serde(default)]
+    pub signing: SigningMode,
     /// 0.2.7: the Projects v2 boards this project may touch.
     ///
     /// A board is named the way it appears in its URL — `github.com/orgs/<org>/projects/<number>`
@@ -1026,6 +1036,7 @@ impl Loaded {
             let l_delete = layer.and_then(|l| l.delete);
             let l_dmb = layer.and_then(|l| l.delete_merged_branch);
             let l_signed = layer.and_then(|l| l.signed_tags);
+            let l_signing = layer.and_then(|l| l.signing);
             let mut rp = RepoPolicy::new(full_name, mode);
             rp.host = host;
             rp.bases = r.bases.clone();
@@ -1045,6 +1056,7 @@ impl Loaded {
                 .or(l_dmb)
                 .unwrap_or(pc.delete_merged_branch);
             rp.signed_tags = r.signed_tags.or(l_signed).unwrap_or(pc.signed_tags);
+            rp.signing = r.signing.or(l_signing).unwrap_or(pc.signing);
             // permissions: the upstream layer's delta, then the repo's; in both, allow adds and deny wins
             if let Some(p) = layer.and_then(|l| l.permissions.as_ref()) {
                 rp.allow.extend(p.allow().iter().cloned());
@@ -1781,6 +1793,68 @@ relay:
             .unwrap()
             .needs_relay()
             .is_err());
+    }
+
+    /// #59: `signing` defaults to optional and folds project → upstream → repo, like `delete`.
+    #[test]
+    fn signing_is_optional_by_default_and_folds_through_every_layer() {
+        let text = r#"
+domain_handlers:
+  github.com: { handler: git-relay }
+  ghe.example.com: { handler: git-relay, ssh_port: 2222 }
+relay:
+  project:
+    name: x
+    repos:
+      - { name: Org/App, mode: read-write }
+      - { name: Org/Strict, mode: read-write, signing: required }
+    upstreams:
+      ghe.example.com:
+        signing: required
+        repos:
+          - { name: Corp/Internal, mode: read-write }
+          - { name: Corp/Loose, mode: read-write, signing: off }
+"#;
+        let pr = p(text).unwrap().resolve().unwrap().project;
+        // Nothing said, so nothing changes for a project that already exists
+        assert_eq!(
+            pr.find_repo("Org/App").unwrap().signing,
+            SigningMode::Optional
+        );
+        assert_eq!(
+            pr.find_repo("Org/Strict").unwrap().signing,
+            SigningMode::Required
+        );
+        // the upstream layer is the default for its repos
+        assert_eq!(
+            pr.find_repo_on("ghe.example.com", "Corp/Internal")
+                .unwrap()
+                .signing,
+            SigningMode::Required
+        );
+        // and the repo wins over it
+        assert_eq!(
+            pr.find_repo_on("ghe.example.com", "Corp/Loose")
+                .unwrap()
+                .signing,
+            SigningMode::Off
+        );
+        // the project default moves everything that said nothing
+        let all = text.replace("    name: x\n", "    name: x\n    signing: required\n");
+        let pr = p(&all).unwrap().resolve().unwrap().project;
+        assert_eq!(
+            pr.find_repo("Org/App").unwrap().signing,
+            SigningMode::Required
+        );
+        assert_eq!(
+            pr.find_repo_on("ghe.example.com", "Corp/Loose")
+                .unwrap()
+                .signing,
+            SigningMode::Off
+        );
+        // a value that is not one of the three is a startup error, not a silent `optional`
+        let bad = text.replace("signing: required", "signing: yes");
+        assert!(p(&bad).is_err(), "`signing: yes` must not parse");
     }
 
     /// #89: signed tags are required unless a layer says otherwise, project → upstream → repo.

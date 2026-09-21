@@ -806,15 +806,57 @@ esac
         key.unlink()
         return sock, pub, pid
 
-    def _bootstrap_with_signing(socket: str, fingerprint="SHA256:opkeyfingerprint"):
+    def _bootstrap_with_signing(
+        socket: str, fingerprint="SHA256:opkeyfingerprint", mode="optional"
+    ):
         return (
             '{"ok":true,"fingerprint":"SHA256:x","added":true,"token":"' + token + '",'
             '"token_expires":"2026-01-01T00:00:00Z","project":"case-a",'
             '"repos":["LibOrg/awesome-lib"],"git_domain":"ghe.example.com",'
             '"upstream":"ghe.example.com",'
             '"signing":{"socket":"' + socket + '","fingerprint":"' + fingerprint + '",'
-            '"namespace":"git","public_key":"ssh-ed25519 AAAAFAKE operator signing key"}}'
+            '"namespace":"git","public_key":"ssh-ed25519 AAAAFAKE operator signing key",'
+            '"mode":"' + mode + '"}}'
         )
+
+    def it_writes_the_signing_section_into_the_guide_only_when_it_is_required(tmp_path):
+        """#59: an agent is told about the rule where the relay actually enforces it.
+
+        `optional` asks nothing of the agent, and a paragraph about a rule that does not apply is
+        how the paragraphs that do apply stop being read.
+        """
+        sock, _pub, pid = _signing_agent(tmp_path)
+        try:
+            for mode, expected in (("optional", False), ("required", True)):
+                run_dir = tmp_path / mode
+                run_dir.mkdir()
+                shim, _log = _shims(
+                    run_dir, bootstrap_json=_bootstrap_with_signing(str(sock), mode=mode)
+                )
+                proc, home = _run(run_dir, shim)
+                assert proc.returncode == 0, proc.stdout + proc.stderr
+                skill = (home / ".claude" / "skills" / "sekimore-relay" / "SKILL.md").read_text()
+                codex = (home / ".codex" / "AGENTS.md").read_text()
+                assert ("Signing is required here" in skill) is expected, mode
+                assert ("git commit -S --amend" in skill) is expected, mode
+                assert ("has to be signed" in codex) is expected, mode
+                assert f"SEKIMORE_SIGNING_MODE={mode}" in (run_dir / "etc" / "env").read_text()
+        finally:
+            subprocess.run(
+                ["ssh-agent", "-k"], env={**os.environ, "SSH_AGENT_PID": pid}, capture_output=True
+            )
+
+    def it_says_loudly_when_signing_is_required_and_there_is_no_key(tmp_path):
+        """The combination that refuses every push. It must not be something you find out later."""
+        shim, _log = _shims(
+            tmp_path,
+            bootstrap_json=_bootstrap_with_signing(str(tmp_path / "absent.sock"), mode="required"),
+        )
+        proc, home = _run(tmp_path, shim)
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 0, out
+        assert "signing: required and there is no key" in out
+        assert "gpgsign = false" in (home / ".gitconfig").read_text()
 
     def it_signs_through_the_gateway_socket_and_generates_no_key_of_its_own(tmp_path):
         """#59: with a signing socket offered, nothing is generated here and nothing is registered.

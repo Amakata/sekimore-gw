@@ -21,6 +21,7 @@ Start with `sekimore whoami` to see your project, your permissions and the repos
 - A force push inside your own `sekimore/*` namespace is not blocked by the relay. Branch protection upstream is what refuses one where it matters. Do not rewrite a branch someone else may be working from.
 - Commits are signed automatically with the AI signing key. Do not change the signing configuration.
 - That key may be held by the gateway rather than by this container, and reached through a socket that signs git signatures and nothing else. Either way `git commit` needs nothing from you. If signing fails, say so; do not turn `commit.gpgsign` off.
+- Some projects **require** it: the relay reads the pack and refuses a branch push carrying an unsigned commit (`commit <sha> carries no signature`). `sekimore whoami` says so when it applies. Amend with `git commit -S --amend --no-edit` rather than turning signing off.
 - The HTTPS URL of a repository (`https://github.com/…`) cannot be used for push or clone. Use the SSH URL.
 
 ## Pull requests, CI and issues (the `sekimore` command)
@@ -108,6 +109,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `tag is not allowed for this repository` | tags are refused | ask a human to tag, or to allow tags |
 | `updating refs/tags/vX is not allowed` | the tag is already published upstream | cut a new version; moving a released tag needs the same authority as deleting one |
 | `pushing refs/tags/vX is not allowed: …` | the tag is not a signed tag object (lightweight, or made without a signature) | `git tag -s vX -m …` and push again; the dev container signs by default, so this means the tag was made around that setup |
+| `pushing refs/heads/… is not allowed: commit <sha> carries no signature` | the project is `signing: required` and a commit in this push has none | `git commit -S --amend --no-edit` for the tip, `git rebase --exec 'git commit -S --amend --no-edit' <base>` for more. Never `git config commit.gpgsign false` |
 | `denied: pr:merge is not allowed by policy` | permission missing | ask a human to merge |
 | `denied: token expired` | the project token expired | it renews itself; if it keeps failing ask a human to re-run agent-setup |
 | `head X is not allowed` | the PR's head is outside `sekimore/*`, or names a fork | push the branch through the relay first, then open the PR from it |

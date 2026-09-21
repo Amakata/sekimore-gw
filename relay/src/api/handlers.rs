@@ -12,6 +12,7 @@ use crate::audit::Actor;
 use crate::config::BootstrapMode;
 use crate::github::GitHub;
 use crate::github::SecurityAlert;
+use crate::policy::SigningMode;
 use crate::policy::{Action, Authorized, Resource};
 use crate::ssh::authorized_keys::Added;
 use crate::tokens::TokenRecord;
@@ -251,7 +252,7 @@ pub async fn dispatch(
     rec: &TokenRecord,
 ) -> Result<ApiResponse, ApiError> {
     match path {
-        "/whoami" => whoami(ctx, rec),
+        "/whoami" => whoami(ctx, rec).await,
         "/pr/create" => pr_create(ctx, req).await,
         "/pr/comment" => pr_comment(ctx, req).await,
         "/pr/review" => pr_review(ctx, req).await,
@@ -304,7 +305,7 @@ pub async fn dispatch(
 
 // ---- Permission checks ----
 
-fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiError> {
+async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiError> {
     let repos: Vec<String> = ctx
         .project
         .repos
@@ -312,8 +313,29 @@ fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiError> 
         .map(|r| format!("{} ({})", r.full_name, r.mode.as_str()))
         .collect();
     let perms = ctx.project.granted();
+    // #59: said only when it is required. `optional` asks nothing of the agent, and a line about
+    // a rule that does not apply is a line that gets ignored when it does.
+    let signing = match strictest_signing(&ctx.project) {
+        SigningMode::Required => {
+            // "ok" has to mean the key is actually in the host agent. #59 was a signing key
+            // that had silently gone, and a line that says ok without looking would be the same
+            // mistake in a new place.
+            let key = match &ctx.signing {
+                Some(a) => match a.identity().await {
+                    Some(_) => format!("{} ok", a.fingerprint()),
+                    None => format!(
+                        "{} is NOT in the gateway's agent — ask the operator to ssh-add it on the host; commits will not sign",
+                        a.fingerprint()
+                    ),
+                },
+                None => "no signing key is offered by the gateway — ask the operator; commits will not sign".to_string(),
+            };
+            format!("\nsigning: required — {key}")
+        }
+        _ => String::new(),
+    };
     let msg = format!(
-        "project={} token={} expires={}\npermissions: {}\nrepos:\n  {}",
+        "project={} token={} expires={}\npermissions: {}{signing}\nrepos:\n  {}",
         rec.project,
         rec.label,
         humantime::format_rfc3339_seconds(rec.expires_at),
@@ -1588,7 +1610,31 @@ async fn signing_block(ctx: &ApiContext) -> Option<SigningBlock> {
         fingerprint: id.fingerprint,
         namespace: id.namespace,
         public_key: id.public_key,
+        mode: strictest_signing(&ctx.project).as_str().to_string(),
     })
+}
+
+/// The strictest `signing` any repository in the project asks for.
+///
+/// One answer for the whole container, because `agent-setup.sh` writes one git configuration and
+/// one guide. Taking the strictest means an agent is never told less than some repository it can
+/// push to demands.
+fn strictest_signing(project: &crate::policy::Project) -> SigningMode {
+    if project
+        .repos
+        .iter()
+        .any(|r| r.signing == SigningMode::Required)
+    {
+        SigningMode::Required
+    } else if project
+        .repos
+        .iter()
+        .any(|r| r.signing == SigningMode::Optional)
+    {
+        SigningMode::Optional
+    } else {
+        SigningMode::Off
+    }
 }
 
 #[allow(dead_code)]

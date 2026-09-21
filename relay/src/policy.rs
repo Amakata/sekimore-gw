@@ -252,6 +252,36 @@ impl Mode {
 /// Branch globs that direct pushes are allowed to by default: the agent's own namespace.
 pub const DEFAULT_PUSH_GLOBS: &[&str] = &["sekimore/*"];
 
+/// 0.2.29 (#59): what this project asks of commit signatures.
+///
+/// `optional` is the default because turning the check on changes what an existing project may
+/// push, and nothing about an existing project said it wanted that. `required` is for a project
+/// whose history is meant to be verifiable throughout — and the enforcement has to live in the
+/// relay rather than in the guide, because an agent handed a commit that will not sign runs
+/// `git config commit.gpgsign false` and carries on, helpfully. The relay's copy of the policy is
+/// the only part of this the dev container cannot edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SigningMode {
+    /// Every new commit in a push to a branch has to carry a signature
+    Required,
+    /// Signing is set up and expected, and nothing is refused for its absence
+    #[default]
+    Optional,
+    /// The relay says nothing about signing
+    Off,
+}
+
+impl SigningMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SigningMode::Required => "required",
+            SigningMode::Optional => "optional",
+            SigningMode::Off => "off",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RepoPolicy {
     pub full_name: String,
@@ -276,6 +306,10 @@ pub struct RepoPolicy {
     /// are both refused. On by default: every tag this project has ever published is signed,
     /// and the one that was not is how #89 was found
     pub signed_tags: bool,
+    /// 0.2.29 (#59): whether a push to a branch may carry an unsigned commit. Presence of a
+    /// signature, not validity — the same standard as `signed_tags`, and for the same reason:
+    /// whose keys count is not something this configuration knows yet
+    pub signing: SigningMode,
     /// Delta on top of the project defaults: permissions to add, and permissions to remove (a deny wins at any layer)
     pub allow: Vec<String>,
     pub deny: Vec<String>,
@@ -293,6 +327,7 @@ impl RepoPolicy {
             delete: false,
             delete_merged_branch: false,
             signed_tags: true,
+            signing: SigningMode::default(),
             allow: Vec::new(),
             deny: Vec::new(),
         }
@@ -436,6 +471,14 @@ pub enum Denied {
         name: String,
         reason: String,
     },
+    /// 0.2.29 (#59): a push to a branch carries a commit with no signature, under
+    /// `signing: required`. Like `TagNotSigned`, decided from the pack after the bytes started
+    /// flowing
+    CommitNotSigned {
+        name: String,
+        sha: String,
+        reason: String,
+    },
     /// Not a valid ref name
     InvalidRef {
         name: String,
@@ -482,6 +525,13 @@ impl fmt::Display for Denied {
                     "pushing {name} is not allowed: {reason}. A tag goes up as a signed tag object (`git tag -s`); to accept others, set signed_tags: false under relay.project (or per repo)"
                 )
             }
+            Denied::CommitNotSigned { name, sha, reason } => {
+                write!(
+                    f,
+                    "pushing {name} is not allowed: commit {} {reason}. This project is signing: required, so every commit it receives has to carry one — sign it with `git commit -S --amend` (or rebase with `-S`) and push again; to accept unsigned commits, set signing: optional under relay.project (or per repo)",
+                    crate::git::receive_pack::short_sha(sha)
+                )
+            }
             Denied::InvalidRef { name, reason } => write!(f, "invalid ref {name:?}: {reason}"),
         }
     }
@@ -503,6 +553,7 @@ impl Denied {
             Denied::DeleteNotAllowed { .. } => "delete_not_allowed",
             Denied::TagUpdateNotAllowed { .. } => "tag_update_not_allowed",
             Denied::TagNotSigned { .. } => "tag_not_signed",
+            Denied::CommitNotSigned { .. } => "commit_not_signed",
             Denied::InvalidRef { .. } => "invalid_ref",
         }
     }

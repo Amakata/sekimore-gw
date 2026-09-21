@@ -21,6 +21,7 @@
 - 自分の `sekimore/*` の中での force push は関所では止めません。必要な場所では上流のブランチ保護が拒否します。他の人が作業しているかもしれないブランチを書き換えないでください。
 - コミットは AI 専用鍵で自動署名されます。署名の設定を変えないでください。
 - その鍵はこのコンテナではなくゲートウェイ側にあることがあります（git 署名だけを通す socket 経由）。どちらでも `git commit` はそのまま動きます。署名に失敗したら、そう報告してください。`commit.gpgsign` を false にしないでください。
+- 案件によっては署名が**必須**です。関所が pack を読み、署名の無いコミットを含む branch への push を拒否します（`commit <sha> carries no signature`）。該当するときは `sekimore whoami` に出ます。署名を切るのではなく `git commit -S --amend --no-edit` で付け直してください。
 - リポジトリの HTTPS URL（`https://github.com/…`）での push / clone は使えません。SSH の URL を使ってください。
 
 ## PR / CI / Issue（`sekimore` コマンド）
@@ -108,6 +109,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `tag is not allowed for this repository` | タグの push は不可 | 人間にタグを頼む、または許可の追加を頼む |
 | `updating refs/tags/vX is not allowed` | そのタグは既に公開済み | 新しい版を切る。公開済みタグを動かすにはタグ削除と同じ権限が要る |
 | `pushing refs/tags/vX is not allowed: …` | 署名付き tag オブジェクトでない（軽量タグ、または署名なし） | `git tag -s vX -m …` で打ち直して push。dev コンテナは既定で署名するので、それを回り込んで作ったタグということ |
+| `pushing refs/heads/… is not allowed: commit <sha> carries no signature` | 案件が `signing: required` で、push に署名の無いコミットがある | 先端は `git commit -S --amend --no-edit`、複数なら `git rebase --exec 'git commit -S --amend --no-edit' <base>`。`git config commit.gpgsign false` は絶対にしない |
 | `denied: pr:merge is not allowed by policy` | 権限が無い | 人間にマージを頼む |
 | `denied: token expired` | トークン期限切れ | 自動更新される。続くなら人間に agent-setup の再実行を頼む |
 | `head X is not allowed` | PR の head が `sekimore/*` の外、または fork を指している | 先に関所経由でブランチを push し、それを head にする |

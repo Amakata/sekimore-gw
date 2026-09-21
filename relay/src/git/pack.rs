@@ -10,9 +10,15 @@
 //!
 //! So this module walks the pack: every object's header, every object's zlib stream (inflated
 //! and thrown away, because the header carries no compressed length and the stream is the only
-//! way to find the next object), and the *contents* of tag objects, which are small. What comes
-//! out is a map from sha to "a tag, signed or not" or "some other kind of object" — enough to
-//! judge each `refs/tags/*` command against.
+//! way to find the next object), the *contents* of tag objects, which are small, and — since
+//! 0.2.29 (#59) — the *header block* of each commit, the bytes up to its first blank line. What
+//! comes out is a map from sha to "a tag, signed or not", "a commit, signed or not, and its
+//! parents", or "some other kind of object" — enough to judge each `refs/tags/*` command and each
+//! branch push against.
+//!
+//! A commit's header block is where `gpgsig` / `gpgsig-sha256` live, and stopping at the blank
+//! line is what keeps this bounded: a commit with a 100 KB message costs a few hundred bytes here,
+//! where keeping whole commits would cost the message.
 //!
 //! What it deliberately does not do: verify a signature. That needs to know whose keys count, a
 //! decision the configuration does not yet hold. Presence is what this checks, and presence is
@@ -33,6 +39,11 @@ use sha1::{Digest, Sha1};
 /// A tag object bigger than this is not kept. Real ones are a few hundred bytes; a signature adds
 /// a few hundred more. The cap exists so the pack cannot make this scan hold arbitrary memory.
 const MAX_TAG_BYTES: usize = 1024 * 1024;
+
+/// How much of a commit's header block is kept. The scan stops at the first blank line anyway;
+/// this is the guard for a commit that has no blank line at all, or an absurd one. A commit whose
+/// header does not fit reads as unsigned, which refuses the push — the direction to fail in.
+const MAX_COMMIT_HEADER: usize = 64 * 1024;
 
 /// git's object types as the pack header encodes them.
 const OBJ_COMMIT: u8 = 1;
@@ -73,7 +84,10 @@ impl fmt::Display for PackError {
 pub enum Object {
     /// An annotated tag; `signed` is whether its body carries a signature block
     Tag { signed: bool },
-    /// A commit, tree or blob — what a lightweight tag points at
+    /// 0.2.29 (#59): a commit, with whether its header block carries `gpgsig` / `gpgsig-sha256`
+    /// and the shas it names as parents (which is how a push's new history is walked)
+    Commit { signed: bool, parents: Vec<String> },
+    /// A tree or blob — what a lightweight tag can also point at
     Other(&'static str),
     /// A tag object over `MAX_TAG_BYTES`, whose body this scan did not keep
     OversizedTag,
@@ -85,6 +99,12 @@ pub struct Objects {
     pub by_sha: HashMap<String, Object>,
     /// Deltas whose base was not a tag in this pack. Not an error; they are not tags.
     pub unresolved_deltas: usize,
+    /// 0.2.29 (#59): of those, the ones whose base *was* a commit in this pack, so the delta's
+    /// result is a commit this scan could not read. Counted apart because it is the only kind of
+    /// unresolved delta that can hide a commit from the signing check — a thin pack's external
+    /// bases are trees and blobs (`pack-objects` builds them with `add_preferred_base`, which
+    /// dereferences a commit to its tree), so an unresolved delta on an absent base is not one
+    pub unresolved_commit_deltas: usize,
 }
 
 enum State {
@@ -100,13 +120,26 @@ enum State {
         base: DeltaBase,
         z: Box<Decompress>,
         out: Vec<u8>,
-        /// The object is bigger than the cap or of no interest; inflate to skip, hash only
-        discard: bool,
+        /// How much of this object's bytes to hold on to
+        keep: Keep,
         hasher: Option<Sha1>,
     },
     /// All objects read; only the trailer remains
     Trailer,
     Done,
+}
+
+/// What is worth holding of one object's inflated bytes. Everything else is inflated and dropped,
+/// because the pack header carries no compressed length and the stream is the only way to find
+/// the next object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Keep {
+    /// Nothing: a tree, a blob, or something over its cap
+    Nothing,
+    /// The whole body (a tag, or a delta to apply)
+    Whole,
+    /// A commit's header block: bytes up to the first blank line, at most `MAX_COMMIT_HEADER`
+    CommitHeader,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +164,9 @@ pub struct PackScan {
     /// Decoded tag objects by pack offset (for OFS_DELTA) and by sha (for REF_DELTA)
     tags_by_offset: HashMap<u64, Vec<u8>>,
     tags_by_sha: HashMap<[u8; 20], Vec<u8>>,
+    /// 0.2.29 (#59): the resolved type of the object at each offset, so a delta chain's result
+    /// type is known even where its bytes are not
+    resolved_type: HashMap<u64, u8>,
     objects: Objects,
     /// Recorded rather than returned from `feed`: the caller is in the middle of forwarding bytes
     /// and has nothing useful to do with an error until the end
@@ -153,6 +189,7 @@ impl PackScan {
             state: State::Header,
             tags_by_offset: HashMap::new(),
             tags_by_sha: HashMap::new(),
+            resolved_type: HashMap::new(),
             objects: Objects::default(),
             error: None,
         }
@@ -222,8 +259,15 @@ impl PackScan {
                         return Ok(());
                     };
                     self.drain(used);
-                    let interesting = matches!(kind, OBJ_TAG | OBJ_OFS_DELTA | OBJ_REF_DELTA)
-                        && size <= MAX_TAG_BYTES;
+                    let keep = match kind {
+                        OBJ_TAG | OBJ_OFS_DELTA | OBJ_REF_DELTA if size <= MAX_TAG_BYTES => {
+                            Keep::Whole
+                        }
+                        // #59: only the header block, whatever the commit's total size — that is
+                        // where a signature lives, and a long message must not cost memory
+                        OBJ_COMMIT => Keep::CommitHeader,
+                        _ => Keep::Nothing,
+                    };
                     // Only whole objects get a sha: a delta's sha is its result's, which is
                     // known only once applied.
                     let hasher = match kind {
@@ -241,7 +285,7 @@ impl PackScan {
                         base,
                         z: Box::new(Decompress::new(true)),
                         out: Vec::new(),
-                        discard: !interesting,
+                        keep,
                         hasher,
                     };
                 }
@@ -257,7 +301,7 @@ impl PackScan {
                         base,
                         mut z,
                         mut out,
-                        discard,
+                        mut keep,
                         mut hasher,
                     } = std::mem::replace(&mut self.state, State::Done)
                     else {
@@ -276,8 +320,22 @@ impl PackScan {
                     if let Some(h) = hasher.as_mut() {
                         h.update(&scratch[..produced]);
                     }
-                    if !discard {
-                        out.extend_from_slice(&scratch[..produced]);
+                    match keep {
+                        Keep::Nothing => {}
+                        Keep::Whole => out.extend_from_slice(&scratch[..produced]),
+                        Keep::CommitHeader => {
+                            let before = out.len();
+                            let room = MAX_COMMIT_HEADER.saturating_sub(before);
+                            out.extend_from_slice(&scratch[..produced.min(room)]);
+                            // The blank line can straddle two chunks, so rescan from one byte
+                            // before what was just added
+                            let from = before.saturating_sub(1);
+                            if out.len() >= MAX_COMMIT_HEADER
+                                || out[from..].windows(2).any(|w| w == b"\n\n")
+                            {
+                                keep = Keep::Nothing;
+                            }
+                        }
                     }
                     self.drain(used);
                     if status == Status::StreamEnd {
@@ -288,7 +346,7 @@ impl PackScan {
                             )));
                         }
                         let sha = hasher.take().map(|h| h.finalize());
-                        self.finish_object(kind, offset, base, out, discard, sha.as_deref());
+                        self.finish_object(kind, offset, base, out, keep, sha.as_deref());
                         self.remaining_objects -= 1;
                         self.state = if self.remaining_objects == 0 {
                             State::Trailer
@@ -305,7 +363,7 @@ impl PackScan {
                         base,
                         z,
                         out,
-                        discard,
+                        keep,
                         hasher,
                     };
                     if stalled {
@@ -347,22 +405,25 @@ impl PackScan {
         }
     }
 
-    /// One object fully inflated. `body` is empty for objects that were skipped (`discarded`).
+    /// One object fully inflated. `body` holds what `keep` asked for: the whole object, a
+    /// commit's header block, or nothing.
     fn finish_object(
         &mut self,
         kind: u8,
         offset: u64,
         base: DeltaBase,
         body: Vec<u8>,
-        discarded: bool,
+        keep: Keep,
         sha: Option<&[u8]>,
     ) {
         match kind {
             OBJ_TAG => {
                 let sha: [u8; 20] = sha.unwrap().try_into().unwrap();
-                if discarded {
-                    // Over the cap: the body was not kept, so nothing can be said about a
-                    // signature — and an empty body must not read as "unsigned"
+                self.resolved_type.insert(offset, OBJ_TAG);
+                // A tag is kept whole or not at all, so `Nothing` here means it was over the cap:
+                // nothing can be said about a signature, and an empty body must not read as
+                // "unsigned"
+                if keep == Keep::Nothing {
                     self.objects
                         .by_sha
                         .insert(hex::encode(sha), Object::OversizedTag);
@@ -370,16 +431,47 @@ impl PackScan {
                     self.record_tag(offset, sha, body);
                 }
             }
-            OBJ_COMMIT | OBJ_TREE | OBJ_BLOB => {
+            OBJ_COMMIT => {
+                self.resolved_type.insert(offset, OBJ_COMMIT);
+                self.objects.by_sha.insert(
+                    hex::encode(sha.unwrap()),
+                    Object::Commit {
+                        signed: commit_is_signed(&body),
+                        parents: commit_parents(&body),
+                    },
+                );
+            }
+            OBJ_TREE | OBJ_BLOB => {
+                self.resolved_type.insert(offset, kind);
                 self.objects
                     .by_sha
                     .insert(hex::encode(sha.unwrap()), Object::Other(type_name(kind)));
             }
             OBJ_OFS_DELTA | OBJ_REF_DELTA => {
+                let base_at = match base {
+                    DeltaBase::Offset(back) => offset.checked_sub(back),
+                    _ => None,
+                };
+                // A delta's result has its base's type. Knowing it is what tells an unresolved
+                // delta that could be hiding a commit from one that is a tree or a blob.
+                let base_type = match base {
+                    DeltaBase::Offset(_) => {
+                        base_at.and_then(|at| self.resolved_type.get(&at).copied())
+                    }
+                    DeltaBase::Ref(sha) => match self.objects.by_sha.get(&hex::encode(sha)) {
+                        Some(Object::Commit { .. }) => Some(OBJ_COMMIT),
+                        Some(Object::Tag { .. }) | Some(Object::OversizedTag) => Some(OBJ_TAG),
+                        Some(Object::Other("tree")) => Some(OBJ_TREE),
+                        Some(Object::Other(_)) => Some(OBJ_BLOB),
+                        None => None,
+                    },
+                    DeltaBase::None => None,
+                };
+                if let Some(t) = base_type {
+                    self.resolved_type.insert(offset, t);
+                }
                 let base_body = match base {
-                    DeltaBase::Offset(back) => offset
-                        .checked_sub(back)
-                        .and_then(|at| self.tags_by_offset.get(&at)),
+                    DeltaBase::Offset(_) => base_at.and_then(|at| self.tags_by_offset.get(&at)),
                     DeltaBase::Ref(sha) => self.tags_by_sha.get(&sha),
                     DeltaBase::None => None,
                 };
@@ -391,7 +483,15 @@ impl PackScan {
                         let sha: [u8; 20] = h.finalize().into();
                         self.record_tag(offset, sha, result);
                     }
-                    _ => self.objects.unresolved_deltas += 1,
+                    _ => {
+                        self.objects.unresolved_deltas += 1;
+                        // Only a commit-based one can hide a commit from the signing check. Only
+                        // tag bodies are kept whole, so a commit delta is never applied and this
+                        // is how the check learns to fail closed.
+                        if base_type == Some(OBJ_COMMIT) {
+                            self.objects.unresolved_commit_deltas += 1;
+                        }
+                    }
                 }
             }
             _ => {}
@@ -399,6 +499,7 @@ impl PackScan {
     }
 
     fn record_tag(&mut self, offset: u64, sha: [u8; 20], body: Vec<u8>) {
+        self.resolved_type.insert(offset, OBJ_TAG);
         let signed = tag_is_signed(&body);
         self.objects
             .by_sha
@@ -539,6 +640,43 @@ fn apply_delta(base: &[u8], delta: &[u8]) -> Option<Vec<u8>> {
     (out.len() == result_size).then_some(out)
 }
 
+/// The header block of a commit: everything before the first blank line.
+///
+/// `body` is what the scan kept, which already stops at the blank line — but it may hold the
+/// bytes that followed in the same chunk, and a caller with a whole commit in hand should get the
+/// same answer. So the cut is made here too.
+fn commit_header(body: &[u8]) -> &[u8] {
+    match body.windows(2).position(|w| w == b"\n\n") {
+        Some(at) => &body[..at + 1],
+        None => body,
+    }
+}
+
+/// Whether a commit's header block carries a signature (#59).
+///
+/// Presence, not validity — the same standard as `tag_is_signed`, and for the same reason. git
+/// writes the signature as a `gpgsig` header (`gpgsig-sha256` in a sha256 repository) whose
+/// continuation lines are indented by one space, so only a line *starting* a header counts: a
+/// `gpgsig` inside the message, or inside another header's continuation, is text.
+///
+/// A header block this scan had to truncate reads as unsigned, which refuses the push. That is
+/// the direction to fail in.
+pub fn commit_is_signed(body: &[u8]) -> bool {
+    commit_header(body)
+        .split(|&b| b == b'\n')
+        .any(|l| l.starts_with(b"gpgsig ") || l.starts_with(b"gpgsig-sha256 "))
+}
+
+/// The shas a commit names as parents, in order (#59). Used to walk the history a push adds.
+pub fn commit_parents(body: &[u8]) -> Vec<String> {
+    commit_header(body)
+        .split(|&b| b == b'\n')
+        .filter_map(|l| l.strip_prefix(b"parent "))
+        .filter(|sha| sha.len() == 40 && sha.iter().all(|c| c.is_ascii_hexdigit()))
+        .map(|sha| String::from_utf8_lossy(sha).to_ascii_lowercase())
+        .collect()
+}
+
 /// Whether a tag object's body carries a signature block after its message.
 ///
 /// Presence, not validity. The three openers are the ones git itself recognises
@@ -566,7 +704,7 @@ pub fn tag_is_signed(body: &[u8]) -> bool {
     false
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-hooks"))]
 pub mod testutil {
     //! Building packs for tests. Also used by receive_pack's tests.
     use super::*;
@@ -711,6 +849,22 @@ pub mod testutil {
 
     pub const COMMIT: &[u8] = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A <a@x> 0 +0000\ncommitter A <a@x> 0 +0000\n\nfirst\n";
 
+    /// A commit body, optionally signed, with whatever parents and message are wanted (#59).
+    pub fn commit_body(parents: &[&str], signed: bool, message: &str) -> Vec<u8> {
+        let mut b = String::from("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n");
+        for p in parents {
+            b.push_str(&format!("parent {p}\n"));
+        }
+        b.push_str("author A <a@x> 0 +0000\ncommitter A <a@x> 0 +0000\n");
+        if signed {
+            // git's shape: the header value starts on the `gpgsig` line and continues on lines
+            // indented by one space
+            b.push_str("gpgsig -----BEGIN SSH SIGNATURE-----\n U1NIU0lHAAAAAQ==\n -----END SSH SIGNATURE-----\n");
+        }
+        b.push_str(&format!("\n{message}\n"));
+        b.into_bytes()
+    }
+
     pub fn tag_body(name: &str, target: &str, signed: bool) -> Vec<u8> {
         let mut b =
             format!("object {target}\ntype commit\ntag {name}\ntagger A <a@x> 0 +0000\n\n{name}\n");
@@ -753,7 +907,10 @@ mod tests {
             );
             assert_eq!(
                 o.by_sha.get(&commit_sha),
-                Some(&Object::Other("commit")),
+                Some(&Object::Commit {
+                    signed: false,
+                    parents: vec![]
+                }),
                 "chunk {chunk}"
             );
         }
@@ -953,6 +1110,121 @@ mod tests {
         let p = pack(&entries);
         let o = scan(&p, 64 * 1024).unwrap();
         assert_eq!(o.by_sha.len(), 5000);
+    }
+
+    // ---- #59: commit header blocks ----
+
+    #[test]
+    fn a_commits_signature_and_parents_survive_every_chunking() {
+        // The blank line that ends the header block, and the `gpgsig` inside it, both straddle
+        // chunk boundaries at some size; the scan has to give the same answer at all of them.
+        let p1 = sha_of("commit", &commit_body(&[], true, "one"));
+        let p2 = sha_of("commit", &commit_body(&[], true, "two"));
+        let signed = commit_body(&[&p1, &p2], true, "a merge");
+        let plain = commit_body(&[&p1], false, "no signature here");
+        let p = pack(&[
+            Entry::Whole(OBJ_COMMIT, &signed),
+            Entry::Whole(OBJ_COMMIT, &plain),
+        ]);
+        for chunk in [1, 3, 7, 64, 4096, 1 << 20] {
+            let o = scan(&p, chunk).unwrap_or_else(|e| panic!("chunk {chunk}: {e}"));
+            assert_eq!(
+                o.by_sha.get(&sha_of("commit", &signed)),
+                Some(&Object::Commit {
+                    signed: true,
+                    parents: vec![p1.clone(), p2.clone()]
+                }),
+                "chunk {chunk}"
+            );
+            assert_eq!(
+                o.by_sha.get(&sha_of("commit", &plain)),
+                Some(&Object::Commit {
+                    signed: false,
+                    parents: vec![p1.clone()]
+                }),
+                "chunk {chunk}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hundred_kilobyte_commit_message_costs_nothing_and_still_reads_as_signed() {
+        // The reason the scan stops at the blank line. The message is far over the header cap;
+        // keeping whole commits would hold all of it, and the signature is in the first 500 bytes
+        // either way.
+        let message = "x".repeat(100 * 1024);
+        let body = commit_body(&[], true, &message);
+        assert!(body.len() > 100 * 1024);
+        let p = pack(&[Entry::Whole(OBJ_COMMIT, &body)]);
+        let o = scan(&p, 8192).unwrap();
+        assert_eq!(
+            o.by_sha.get(&sha_of("commit", &body)),
+            Some(&Object::Commit {
+                signed: true,
+                parents: vec![]
+            })
+        );
+    }
+
+    #[test]
+    fn a_header_block_over_the_cap_reads_as_unsigned_rather_than_as_signed() {
+        // No blank line at all, and nothing that starts a `gpgsig` header. The scan gives up at
+        // MAX_COMMIT_HEADER, and "cannot tell" has to come out as unsigned, which refuses.
+        let body = format!(
+            "tree {}\n{}",
+            "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+            "a".repeat(MAX_COMMIT_HEADER * 2)
+        )
+        .into_bytes();
+        let p = pack(&[Entry::Whole(OBJ_COMMIT, &body)]);
+        let o = scan(&p, 4096).unwrap();
+        assert_eq!(
+            o.by_sha.get(&sha_of("commit", &body)),
+            Some(&Object::Commit {
+                signed: false,
+                parents: vec![]
+            })
+        );
+    }
+
+    #[test]
+    fn only_a_header_line_counts_as_a_signature() {
+        // `gpgsig` in the message, and `gpgsig` on a continuation line of another header, are
+        // both text. Reading either as a signature would let an unsigned commit through a
+        // `signing: required` project by writing a commit message.
+        for message in [
+            "gpgsig -----BEGIN SSH SIGNATURE-----",
+            "look:\ngpgsig -----BEGIN SSH SIGNATURE-----\n",
+        ] {
+            assert!(
+                !commit_is_signed(&commit_body(&[], false, message)),
+                "{message:?}"
+            );
+        }
+        let continued = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nmergetag object 0000\n gpgsig not a header\n\nmsg\n";
+        assert!(!commit_is_signed(continued));
+        // and the real thing, in both spellings
+        assert!(commit_is_signed(&commit_body(&[], true, "msg")));
+        let sha256 = b"tree x\ngpgsig-sha256 -----BEGIN PGP SIGNATURE-----\n\nmsg\n";
+        assert!(commit_is_signed(sha256));
+    }
+
+    #[test]
+    fn a_parent_line_has_to_look_like_a_sha() {
+        // The pack is written by the client; a header line is whatever it put there.
+        let body = b"tree x\nparent not-a-sha\nparent 0123456789abcdef0123456789abcdef01234567\nparent 0123456789ABCDEF0123456789abcdef01234567\n\nm\n";
+        assert_eq!(
+            commit_parents(body),
+            vec![
+                "0123456789abcdef0123456789abcdef01234567".to_string(),
+                "0123456789abcdef0123456789abcdef01234567".to_string()
+            ]
+        );
+        // a `parent` after the blank line is message text
+        assert_eq!(
+            commit_parents(b"tree x\n\nparent 0123456789abcdef0123456789abcdef01234567\n"),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

@@ -63,6 +63,9 @@ class RelayRepo(BaseModel):
     delete: bool = False
     # 0.2.27 (#89): a pushed tag has to be an annotated tag object with a signature block
     signed_tags: bool = True
+    # 0.2.29 (#59): required | optional | off — whether a push to a branch may carry an
+    # unsigned commit
+    signing: str = "optional"
     # effective = (project allow | repo allow) - (project deny | repo deny)
     permissions: list[str] = []
     # 0.2.0: upstream domain (the host in `host/Org/Repo`; default upstream if omitted)
@@ -340,6 +343,7 @@ def build_config(config: dict) -> RelayConfigResponse:
         default_tags = ["*"]
     default_delete = bool(project.get("delete", False)) or bool(relay.get("allow_delete", False))
     default_signed_tags = bool(project.get("signed_tags", True))
+    default_signing = str(project.get("signing") or "optional")
     # 0.2.1: the upstream layer project.upstreams.<domain> (permission deltas, the
     # push / tags / delete defaults, and repos). Keys may be either a domain or an
     # upstream host name, so normalize them to domains.
@@ -387,6 +391,7 @@ def build_config(config: dict) -> RelayConfigResponse:
         signed_v = (
             r.get("signed_tags") if r.get("signed_tags") is not None else layer.get("signed_tags")
         )
+        signing_v = r.get("signing") if r.get("signing") is not None else layer.get("signing")
         repos.append(
             RelayRepo(
                 name=name,
@@ -397,6 +402,7 @@ def build_config(config: dict) -> RelayConfigResponse:
                 tags=[str(t) for t in tags_v] if tags_v is not None else default_tags,
                 delete=bool(delete_v) if delete_v is not None else default_delete,
                 signed_tags=bool(signed_v) if signed_v is not None else default_signed_tags,
+                signing=str(signing_v) if signing_v is not None else default_signing,
                 permissions=effective,
             )
         )
