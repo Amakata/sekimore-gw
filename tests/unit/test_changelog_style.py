@@ -111,7 +111,10 @@ def describe_changelog_style():
     def it_names_the_pull_request_that_changed_it(path):
         # The number is how a reader gets from "what" to "why" without the entry carrying the why.
         missing = [
-            (rel, b) for rel, bullets in _releases(path).items() for b in bullets if not _REF.search(b)
+            (rel, b)
+            for rel, bullets in _releases(path).items()
+            for b in bullets
+            if not _REF.search(b)
         ]
         assert missing == [], (
             f"{path.name}: every entry ends with the pull request that changed it, as ` (#77)`. "
