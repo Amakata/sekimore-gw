@@ -1052,6 +1052,65 @@ pub async fn store_import(path: &Path, file: Option<&Path>) -> anyhow::Result<()
     }
 }
 
+/// The namespace and name the upstream proxy credential is filed under. The Python gateway reads
+/// the same pair when it generates Squid's config, so changing either is a breaking change across
+/// two languages.
+pub const PROXY_NAMESPACE: &str = "proxy";
+pub const PROXY_NAME: &str = "upstream";
+
+/// Put the corporate proxy's credential in the store.
+///
+/// #53: the two documented places for it — `.devcontainer/.env` and `config.yml` — are both in
+/// the worktree, so the agent could read them. The store is on a volume dev does not mount and
+/// the value is sealed, so a copied volume does not yield it either.
+///
+/// Typed, not passed as an argument: an argument reaches `ps` and the shell history.
+pub async fn proxy_credential_set(path: &Path) -> anyhow::Result<()> {
+    let sock = store_paths(path)?;
+    eprintln!(
+        "The upstream proxy's credential. It is stored sealed, so the gateway has to be\n\
+         unlocked (mise run gw:unlock) before Squid can use it — until then Squid runs\n\
+         without upstream authentication."
+    );
+    let user = store::control::prompt("Proxy username")?;
+    let pass = store::control::prompt("Proxy password")?;
+    let value = serde_json::json!({
+        "username": String::from_utf8_lossy(user.as_bytes()),
+        "password": String::from_utf8_lossy(pass.as_bytes()),
+    })
+    .to_string();
+    let body = serde_json::json!({
+        "op": "set", "namespace": PROXY_NAMESPACE, "name": PROXY_NAME, "value": value
+    })
+    .to_string();
+    let (ok, message) = store::control::call(&sock, &body).await?;
+    println!("{message}");
+    if !ok {
+        bail!("the credential was not stored");
+    }
+    println!(
+        "Squid picks it up when the store is unlocked. If it is unlocked already, \
+         `mise run gw:restart` applies it now."
+    );
+    Ok(())
+}
+
+/// Remove it. For a deployment that no longer sits behind a proxy, or one moving the value.
+pub async fn proxy_credential_clear(path: &Path) -> anyhow::Result<()> {
+    let sock = store_paths(path)?;
+    let body = serde_json::json!({
+        "op": "delete", "namespace": PROXY_NAMESPACE, "name": PROXY_NAME
+    })
+    .to_string();
+    let (ok, message) = store::control::call(&sock, &body).await?;
+    println!("{message}");
+    if ok {
+        Ok(())
+    } else {
+        bail!("nothing was removed")
+    }
+}
+
 /// `lock` and `status`, which need no passphrase.
 pub async fn store_control(path: &Path, op: &str) -> anyhow::Result<()> {
     let paths = store_paths(path)?;

@@ -84,8 +84,22 @@ proxy:
   # ⚠️  For security, it is recommended to use environment variables instead of writing credentials in config.yml
   # Environment variables: SEKIMORE_UPSTREAM_PROXY_USERNAME, SEKIMORE_UPSTREAM_PROXY_PASSWORD
   # If environment variables are set, the following values will be overridden
-  upstream_proxy_username: null           # Upstream proxy username (env var recommended)
-  upstream_proxy_password: null           # Upstream proxy password (env var recommended)
+  # 0.2.22: the credential belongs in the secret store, not here and not in the environment.
+  #   docker compose exec sekimore-gw sekimore-relay proxy-credential set
+  # Written here it is readable from the dev container, because config.yml is in the worktree.
+  # The environment is not the answer either: `.devcontainer/.env` is the dev service's own
+  # env_file, so anything in it becomes a variable in the agent's own process. Only the host
+  # shell and the gateway's own env_file are out of the agent's reach, and the gateway cannot
+  # tell those from `.env`. Recommending "env var" without that distinction was the mistake.
+  #
+  # Both are still read, because removing them strands a deployment behind a corporate proxy,
+  # and because the store cannot bootstrap itself where the proxy is what makes the network
+  # reachable — `proxy-credential set` needs the gateway already running.
+  #
+  # The store is sealed, so Squid gets the credential only once someone runs
+  # `mise run gw:unlock`. Until then it runs without upstream authentication.
+  upstream_proxy_username: null           # prefer `sekimore-relay proxy-credential set`
+  upstream_proxy_password: null           # readable from dev if set here
 
 # Network Configuration
 # Web UI language (0.2.4+). auto = follow the browser's Accept-Language; a choice made in the

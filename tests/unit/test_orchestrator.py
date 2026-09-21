@@ -1962,3 +1962,110 @@ def describe_auto_reload_runs_on_the_main_loop():
 
         assert not orch.reload_config.called
         assert any("main loop" in str(c.args) for c in mock_err.call_args_list)
+
+
+def describe_the_upstream_proxy_credential():
+    """#53: it lives in the secret store, which the relay owns and which starts locked.
+
+    Three states the gateway has to come up in regardless: no relay at all, a relay whose store
+    is locked, and a store with the credential in it. The first is what I broke while writing
+    this — an unreachable socket raised out of the constructor and took every orchestrator test
+    with it, and a deployment whose `config.yml` declares no git-relay handler would have failed
+    to start the same way.
+    """
+
+    def _orch(tmp_path):
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+proxy:
+  enabled: true
+  upstream_proxy: proxy.example:8080
+  upstream_proxy_username: configured
+  upstream_proxy_password: from-config-yml
+network:
+  lan_subnets: []
+database_path: /tmp/test.db
+""")
+        with patch("subprocess.run") as m:
+            m.return_value = Mock(returncode=0, stdout="", stderr="")
+            return SecurityGatewayOrchestrator(config_path=config_file)
+
+    def it_starts_without_a_relay_at_all(tmp_path):
+        # `config.yml` need not declare a git-relay handler, and then there is no socket to ask.
+        # Raising out of the constructor here is what broke every other test in this file.
+        from src.secret_store import SecretStoreError
+
+        def boom(*_a, **_k):
+            raise SecretStoreError("cannot reach the relay's control socket at /nope")
+
+        with patch("src.orchestrator.get_secret", side_effect=boom):
+            orch = _orch(tmp_path)
+        assert orch._upstream_proxy_credential() == ("configured", "from-config-yml", False)
+        assert orch._proxy_credential_pending is False, (
+            "no git-relay handler means no store will ever appear; polling for one is waste"
+        )
+
+    def it_comes_back_later_when_a_relay_is_configured_but_not_up_yet(tmp_path):
+        # entrypoint.sh starts the relay and this process together, so at construction the
+        # control socket may simply not be bound yet. That is indistinguishable from "no relay
+        # at all" by the error alone — the config is what says which, and getting it wrong means
+        # the stored credential never reaches Squid however long anyone waits.
+        from src.secret_store import SecretStoreError
+
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+domain_handlers:
+  github.com:
+    handler: github
+proxy:
+  enabled: true
+  upstream_proxy: proxy.example:8080
+network:
+  lan_subnets: []
+database_path: /tmp/test.db
+relay:
+  project:
+    name: t
+    repos:
+      - name: Org/Repo
+        mode: read-write
+""")
+
+        def boom(*_a, **_k):
+            raise SecretStoreError("cannot reach the relay's control socket at /nope")
+
+        with patch("subprocess.run") as m:
+            m.return_value = Mock(returncode=0, stdout="", stderr="")
+            with patch("src.orchestrator.get_secret", side_effect=boom):
+                orch = SecurityGatewayOrchestrator(config_path=config_file)
+        assert orch._proxy_credential_pending is True
+
+    def it_falls_back_while_the_store_is_locked_and_asks_to_be_revisited(tmp_path):
+        from src.secret_store import Locked
+
+        with patch("src.orchestrator.get_secret", return_value=Locked()):
+            orch = _orch(tmp_path)
+            assert orch._upstream_proxy_credential() == ("configured", "from-config-yml", False)
+        assert orch._proxy_credential_pending is True, (
+            "a locked store has to be revisited after unlock, or the stored credential never "
+            "reaches Squid without restarting the gateway"
+        )
+
+    def it_prefers_the_stored_credential_over_the_configured_one(tmp_path):
+        # The whole point: config.yml is readable from dev, the store is not.
+        stored = '{"username": "stored", "password": "sekret"}'
+        with patch("src.orchestrator.get_secret", return_value=stored):
+            orch = _orch(tmp_path)
+            assert orch._upstream_proxy_credential() == ("stored", "sekret", True)
+
+    def it_keeps_going_when_the_stored_value_is_the_wrong_shape(tmp_path):
+        # Better than crashing the gateway: say so, and fall back to what config.yml has.
+        with patch("src.orchestrator.get_secret", return_value="not json"):
+            orch = _orch(tmp_path)
+            with patch("src.orchestrator.log_error") as mock_err:
+                assert orch._upstream_proxy_credential() == ("configured", "from-config-yml", False)
+        assert mock_err.called

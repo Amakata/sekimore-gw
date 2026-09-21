@@ -68,6 +68,12 @@ run = 'bash "$SGW" gw-tty sekimore-relay unlock'
 description = "秘密ストアの鍵を忘れる (次の解錠まで GitHub API も止まる。0.2.19 からトークンのキャッシュも同時に落ちる)"
 run = 'bash "$SGW" gw sekimore-relay lock'
 
+["gw:proxy-credential"]
+description = "上流プロキシの資格情報を、dev から読めるファイルではなくストアに置く: mise run gw:proxy-credential -- set|clear"
+# raw + gw-tty: set はユーザ名とパスワードを端末から読む。引数にはしない
+raw = true
+run = 'bash "$SGW" gw-tty sekimore-relay proxy-credential'
+
 ["gw:store-status"]
 description = "秘密ストアが解錠済みか、施錠中か、未初期化かを表示する"
 run = 'bash "$SGW" gw sekimore-relay store-status'

@@ -30,6 +30,12 @@ logger = get_logger(ComponentType.SYSTEM)
 CODE_NOT_FOUND = "not_found"
 CODE_LOCKED = "locked"
 
+# Where the upstream proxy credential is filed. The relay writes it under the same pair
+# (`PROXY_NAMESPACE` / `PROXY_NAME` in relay/src/cli/operator.rs), so changing either here is a
+# breaking change across two languages.
+PROXY_NAMESPACE = "proxy"
+PROXY_NAME = "upstream"
+
 # One reply is one line of JSON. A secret is small; this is only here so a socket that never
 # terminates a line cannot hang the gateway's start-up.
 _MAX_REPLY = 1024 * 1024

@@ -60,6 +60,11 @@ pub enum Command {
     },
     #[command(about = t("cli.store_status"))]
     StoreStatus,
+    #[command(name = "proxy-credential", about = t("cli.proxy_credential"))]
+    ProxyCredential {
+        #[command(subcommand)]
+        action: ProxyCredentialAction,
+    },
     #[command(name = "store-export", about = t("cli.store_export"))]
     StoreExport {
         #[arg(long, help = t("cli.store_export.out"))]
@@ -115,6 +120,14 @@ pub enum Command {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum ProxyCredentialAction {
+    #[command(about = t("cli.proxy_credential.set"))]
+    Set,
+    #[command(about = t("cli.proxy_credential.clear"))]
+    Clear,
+}
+
+#[derive(Subcommand, Debug)]
 pub enum BootstrapAction {
     #[command(about = t("cli.bootstrap.disable"))]
     Disable,
@@ -147,6 +160,14 @@ pub async fn run(cli: Cli) -> i32 {
         Command::StoreStatus => operator::store_control(&cli.config, "status")
             .await
             .map(|_| 0),
+        Command::ProxyCredential { action } => match action {
+            ProxyCredentialAction::Set => {
+                operator::proxy_credential_set(&cli.config).await.map(|_| 0)
+            }
+            ProxyCredentialAction::Clear => operator::proxy_credential_clear(&cli.config)
+                .await
+                .map(|_| 0),
+        },
         Command::StoreExport { out } => operator::store_export(&cli.config, out.as_deref())
             .await
             .map(|_| 0),
