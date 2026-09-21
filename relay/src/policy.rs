@@ -252,7 +252,8 @@ pub struct RepoPolicy {
     pub push: Vec<String>,
     /// Tag globs that pushes are allowed to, matched against the name with `refs/tags/` stripped. Empty = denied
     pub tags: Vec<String>,
-    /// Whether deleting branches and tags is allowed
+    /// Whether deleting branches and tags is allowed, and with it moving a tag that already
+    /// exists upstream: delete-and-recreate and a forced update leave the same result
     pub delete: bool,
     /// 0.2.9: delete the head branch once `pr merge` succeeds. Only the branch just merged, which
     /// is why it is not the same authority as `delete`
@@ -405,6 +406,11 @@ pub enum Denied {
     DeleteNotAllowed {
         name: String,
     },
+    /// Moving a tag that the upstream already advertises. Denied by default, under the same
+    /// authority as deleting one: delete-and-recreate and a forced update leave the same result
+    TagUpdateNotAllowed {
+        name: String,
+    },
     /// Not a valid ref name
     InvalidRef {
         name: String,
@@ -439,6 +445,12 @@ impl fmt::Display for Denied {
                     "deleting {name} is not allowed (relay.allow_delete is false)"
                 )
             }
+            Denied::TagUpdateNotAllowed { name } => {
+                write!(
+                    f,
+                    "updating {name} is not allowed: the tag already exists upstream, and moving it makes a name people already have point at different code; cut a new version instead of moving a published one (deleting and recreating it is the same act, so both need repos[].delete / relay.project.delete)"
+                )
+            }
             Denied::InvalidRef { name, reason } => write!(f, "invalid ref {name:?}: {reason}"),
         }
     }
@@ -458,6 +470,7 @@ impl Denied {
             Denied::UnsupportedCommand { .. } => "unsupported_command",
             Denied::RefNotAllowed { .. } => "ref_not_allowed",
             Denied::DeleteNotAllowed { .. } => "delete_not_allowed",
+            Denied::TagUpdateNotAllowed { .. } => "tag_update_not_allowed",
             Denied::InvalidRef { .. } => "invalid_ref",
         }
     }

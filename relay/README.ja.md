@@ -200,7 +200,7 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 | `permissions` | `[]` | 案件の既定権限。`[…]` か `{allow, deny}` |
 | `push` | `["sekimore/*"]` | 直接 push を許すブランチ glob |
 | `tags` | `[]` | push を許すタグ glob。空は拒否 |
-| `delete` | `false` | ブランチとタグの削除 |
+| `delete` | `false` | ブランチとタグの削除、および既に upstream にあるタグを動かすこと。削除して作り直すのと強制更新は同じ結果なので、権限も同じ。まだ無いタグを作るだけなら `tags` で足りる |
 | `delete_merged_branch` | `false` | `pr merge --delete-branch` がマージしたブランチを消してよいか。そのブランチだけなので `delete` とは別の権限。forge 側で自動削除している場合は不要 |
 | `boards` | `[]` | この案件が触れてよい Projects v2 のボード。URL のとおりに書く: `github.com/orgs/acme/projects/3` なら `{ org: acme, number: 3 }`、`{ user: someone, number: 1 }` も可。空なら Projects の操作を全て拒否 |
 | `repos` | `[]` | リポジトリ。`Org/Repo` は既定上流、`host/Org/Repo` で上流を明示 |

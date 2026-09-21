@@ -215,6 +215,17 @@ pub fn plan_push(
                     reason: "tag is not allowed for this repository (relay.project.tags / repos[].tags globs; default deny)",
                 });
             }
+            // A tag the upstream already advertises is one people may already have. Moving it
+            // leaves exactly what deleting and recreating it leaves — that name now points at
+            // different code — so it needs the same authority, and without `delete` the push is
+            // refused. Creating a tag that is not there yet is untouched: the release flow is
+            // exactly that. The advertisement is what decides, not the client's `old` value,
+            // which a force push is free to fill in from whatever it last saw.
+            if !u.is_delete() && !policy.delete && adv.contains_key(u.name) {
+                return Err(Denied::TagUpdateNotAllowed {
+                    name: u.name.to_string(),
+                });
+            }
             claim(u.name, u.name)?;
             commands.push(OwnedCommand::Update {
                 old: u.old.to_string(),
@@ -1061,6 +1072,41 @@ mod tests {
             plan(&[format!("{ZERO} {SHA} refs/notes/x")], &HashMap::new()),
             Err(Denied::RefNotAllowed { .. })
         ));
+    }
+
+    /// #89: deleting `refs/tags/v0.2.18` was refused and `git push --force origin v0.2.18`
+    /// went through, which leaves the same result — a tag people already have naming
+    /// different code. A tag the upstream already advertises may not be moved.
+    #[test]
+    fn a_tag_that_already_exists_upstream_cannot_be_moved() {
+        let adv = HashMap::from([("refs/tags/v1".to_string(), SHA.to_string())]);
+        let err =
+            plan_opts(&[format!("{SHA} {SHA2} refs/tags/v1")], &adv, false, true).unwrap_err();
+        assert!(matches!(err, Denied::TagUpdateNotAllowed { .. }), "{err}");
+        assert!(err.to_string().contains("cut a new version"), "{err}");
+        // The advertisement decides, not the `old` the client sent: a force push may name
+        // whatever it last saw, zeros included.
+        let err =
+            plan_opts(&[format!("{ZERO} {SHA2} refs/tags/v1")], &adv, false, true).unwrap_err();
+        assert!(matches!(err, Denied::TagUpdateNotAllowed { .. }), "{err}");
+    }
+
+    #[test]
+    fn creating_a_tag_that_is_not_upstream_yet_is_still_allowed() {
+        // Every release cuts a new tag, so only moving a published one is refused.
+        let adv = HashMap::from([
+            ("refs/heads/main".to_string(), SHA.to_string()),
+            ("refs/tags/v1".to_string(), SHA.to_string()),
+        ]);
+        let pl = plan_opts(&[format!("{ZERO} {SHA2} refs/tags/v2")], &adv, false, true).unwrap();
+        assert_eq!(pl.commands.len(), 1);
+        // With `delete` the repository may already delete the tag and push it again, so the
+        // same authority lets it move one.
+        let pl = plan_opts(&[format!("{SHA} {SHA2} refs/tags/v1")], &adv, true, true).unwrap();
+        assert_eq!(pl.commands.len(), 1);
+        // A branch in the agent's own namespace is not a published name; force-pushing one stays allowed.
+        let adv = HashMap::from([("refs/heads/sekimore/topic".to_string(), SHA.to_string())]);
+        assert!(plan(&[format!("{SHA} {SHA2} refs/heads/sekimore/topic")], &adv).is_ok());
     }
 
     #[test]
