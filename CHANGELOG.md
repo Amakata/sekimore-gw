@@ -13,6 +13,14 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.20 (2026-09-21)
+
+### Enhancement
+
+- shipped the gateway's own `gw:*` mise tasks in the image, so a project includes them instead of copying them into its `mise.toml` (#95)
+- added `gw:revoke`, which was reachable only as `mise run gw -- revoke --label …` (#95)
+- checked in CI that every operator subcommand has a task, that both languages carry the same set, and that no task needs an `sgw.sh` primitive that does not exist (#95)
+
 ## 0.2.19 (2026-09-21)
 
 ### Security
