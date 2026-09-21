@@ -12,6 +12,21 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.22（2026-09-21）
+
+### Security
+
+- 上流プロキシの資格情報を秘密ストアから読み、解錠後に Squid の設定を作り直すようにした。それまでは上流認証なしで動く (#105)
+- `config.sample.yml` を訂正した。資格情報に環境変数を勧めていたが、ホストのシェルと `.devcontainer/.env` を区別していなかった。後者はエージェント自身の env_file (#105)
+
+### Fix
+
+- Dependabot の PR を `preview` の対象から外した。`permissions:` に何を書いても `GITHUB_TOKEN` が read-only なので、依存更新の PR が毎回「誰にも直せない赤」になる (#104)
+
+### Enhancement
+
+- Dependabot を actions / cargo / uv / docker / docker-compose に設定した。0.2.18 と 0.2.19 で入れた pin に、ようやく読み手ができた (#104)
+
 ## 0.2.21（2026-09-21）
 
 ### Enhancement

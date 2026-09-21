@@ -13,6 +13,21 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.22 (2026-09-21)
+
+### Security
+
+- read the upstream proxy credential from the secret store, and redo Squid's config once the store is unlocked; until then it runs without upstream authentication (#105)
+- corrected `config.sample.yml`, which recommended the environment for the credential without distinguishing the host shell from `.devcontainer/.env` — the latter is the agent's own env_file (#105)
+
+### Fix
+
+- excluded Dependabot's pull requests from `preview`: its `GITHUB_TOKEN` is read-only whatever `permissions:` says, so every one of them would have carried a red check nobody could fix (#104)
+
+### Enhancement
+
+- configured Dependabot for actions, cargo, uv, docker and docker-compose, so the pins added in 0.2.18 and 0.2.19 finally have a reader (#104)
+
 ## 0.2.21 (2026-09-21)
 
 ### Enhancement

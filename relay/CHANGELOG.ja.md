@@ -5,6 +5,12 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.22（2026-09-21）
+
+### Security
+
+- `proxy-credential set` / `clear` を追加した。企業プロキシの資格情報が、エージェントから読める `config.yml` や `.devcontainer/.env` ではなく秘密ストアに入る (#105)
+
 ## 0.2.21（2026-09-21）
 
 ### Fix
