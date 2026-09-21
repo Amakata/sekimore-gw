@@ -25,7 +25,7 @@ serde_json = "1.0"
 serde_yaml_ng = "0.10"
 humantime = "2.2"
 humantime-serde = "1.1"
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 getrandom = "0.4"
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -37,10 +37,10 @@ libc = "0.2"
 async-trait = "0.1"
 # 0.2.15: the secret store. All pure Rust — the musl build and the CI check that neither
 # aws-lc-rs nor openssl-sys is in the tree both depend on that.
-aes-gcm = "0.10"
-argon2 = "0.5"
+aes-gcm = "0.11"
+argon2 = "0.6"
 zeroize = { version = "1.8", features = ["derive"] }
-hmac = "0.12"
+hmac = "0.13"
 rusqlite = { version = "0.32", features = ["bundled"] }
 # 0.2.27: reading a pushed tag object out of the pack (#89). Both pure Rust; flate2 was already in
 # the tree through russh, sha1 through russh as well

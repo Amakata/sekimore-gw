@@ -11,7 +11,7 @@
 //! can replace them without a format change.
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::{Aes256Gcm, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -129,13 +129,14 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, out: &mut [u8]) 
 
     let mut block = 1u32;
     for chunk in out.chunks_mut(32) {
-        let mut mac = <H as Mac>::new_from_slice(password).expect("hmac takes any key length");
+        let mut mac = <H as KeyInit>::new_from_slice(password).expect("hmac takes any key length");
         mac.update(salt);
         mac.update(&block.to_be_bytes());
         let mut u = mac.finalize().into_bytes();
         let mut acc = u;
         for _ in 1..iterations.max(1) {
-            let mut mac = <H as Mac>::new_from_slice(password).expect("hmac takes any key length");
+            let mut mac =
+                <H as KeyInit>::new_from_slice(password).expect("hmac takes any key length");
             mac.update(&u);
             u = mac.finalize().into_bytes();
             for (a, b) in acc.iter_mut().zip(u.iter()) {
@@ -154,12 +155,12 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, out: &mut [u8]) 
 /// The nonce is random and 96 bits. SP 800-38D allows that below 2^32 uses of one key; this store
 /// holds on the order of ten secrets, so the bound is not reachable and there is no counter to keep.
 pub fn seal(key: &Secret, aad: &[u8], plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), StoreError> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_bytes()));
+    let cipher = cipher_for(key)?;
     let mut nonce = vec![0u8; NONCE_LEN];
     getrandom::fill(&mut nonce).map_err(|e| StoreError::Crypto(format!("random: {e}")))?;
     let ct = cipher
         .encrypt(
-            Nonce::from_slice(&nonce),
+            &nonce_of(&nonce)?,
             Payload {
                 msg: plaintext,
                 aad,
@@ -175,11 +176,24 @@ pub fn open(key: &Secret, aad: &[u8], nonce: &[u8], ct: &[u8]) -> Result<Secret,
     if nonce.len() != NONCE_LEN {
         return Err(StoreError::Format("nonce is the wrong length".into()));
     }
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.as_bytes()));
+    let cipher = cipher_for(key)?;
     let pt = cipher
-        .decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad })
+        .decrypt(&nonce_of(nonce)?, Payload { msg: ct, aad })
         .map_err(|_| StoreError::Locked)?;
     Ok(Secret::new(pt))
+}
+
+/// AES-256-GCM under `key`. A key of the wrong length is a bug upstream of here (every key is
+/// `KEY_LEN` by construction), reported rather than panicked on.
+fn cipher_for(key: &Secret) -> Result<Aes256Gcm, StoreError> {
+    Aes256Gcm::new_from_slice(key.as_bytes())
+        .map_err(|_| StoreError::Crypto("key is the wrong length".into()))
+}
+
+fn nonce_of(
+    bytes: &[u8],
+) -> Result<Nonce<<Aes256Gcm as aes_gcm::AeadCore>::NonceSize>, StoreError> {
+    Nonce::try_from(bytes).map_err(|_| StoreError::Format("nonce is the wrong length".into()))
 }
 
 /// A fresh 256-bit data-encryption key.
@@ -205,8 +219,8 @@ pub fn pbkdf2_for_test(password: &[u8], salt: &[u8], iterations: u32, out: &mut 
 pub fn manifest_key(dek: &Secret) -> Secret {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
-    let mut mac =
-        <Hmac<Sha256> as Mac>::new_from_slice(dek.as_bytes()).expect("hmac takes any key length");
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(dek.as_bytes())
+        .expect("hmac takes any key length");
     mac.update(b"sekimore-store/manifest/v1");
     Secret::new(mac.finalize().into_bytes().to_vec())
 }
@@ -215,8 +229,8 @@ pub fn manifest_key(dek: &Secret) -> Secret {
 pub fn manifest_mac(key: &Secret, manifest: &str) -> Vec<u8> {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
-    let mut mac =
-        <Hmac<Sha256> as Mac>::new_from_slice(key.as_bytes()).expect("hmac takes any key length");
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key.as_bytes())
+        .expect("hmac takes any key length");
     mac.update(manifest.as_bytes());
     mac.finalize().into_bytes().to_vec()
 }
