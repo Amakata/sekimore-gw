@@ -12,6 +12,12 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.26（2026-09-21）
+
+### Enhancement
+
+- Python のバイトコードを一切持たず `PYTHONDONTWRITEBYTECODE=1` にした。`.pyc` はソースの mtime を含むので、それを持つレイヤはビルド毎にダイジェストが変わっていた。起動時に一度 360ms ほどかかる。#114 と、それが足した 3.5MB を取り消す (#121)
+
 ## 0.2.25（2026-09-21）
 
 ### Enhancement

@@ -13,6 +13,12 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.26 (2026-09-21)
+
+### Enhancement
+
+- shipped no Python bytecode and set `PYTHONDONTWRITEBYTECODE=1`: a `.pyc` carries its source's mtime, so a layer holding one changed digest every build. Costs ~360 ms once per start; undoes #114 and the 3.5 MB it added (#121)
+
 ## 0.2.25 (2026-09-21)
 
 ### Enhancement
