@@ -51,6 +51,22 @@ COMPOSE_FILES = [p for p in IMAGE_FILES if "compose" in p.name]
 # The updater the pins are written for. Its ecosystems are checked against what is pinned here,
 # not against a list, so a newly pinned thing cannot be left without one.
 DEPENDABOT = ROOT / ".github" / "dependabot.yml"
+# What each ecosystem actually reads, as globs under its `directory`. A directory that exists is
+# not enough on its own: move relay/Cargo.toml one level down and `/relay` is still there while
+# the cargo updater reads nothing, silently, which is the shape of the bug this whole file is
+# about. One match is enough — Dependabot needs the manifest, and a lockfile beside it is
+# optional.
+ECOSYSTEM_MANIFESTS = {
+    "github-actions": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
+    "cargo": ["Cargo.toml"],
+    "uv": ["pyproject.toml"],
+    "docker": ["[Dd]ockerfile*", "[Cc]ontainerfile*"],
+    "docker-compose": ["*compose*.yml", "*compose*.yaml"],
+}
+# The set the two derived checks below should be finding. Not the rule — the rule is read off the
+# tree — but the tripwire under it: an empty parametrize reports as skipped rather than failed, so
+# a detector that goes blind would otherwise look exactly like a repository with nothing to fix.
+PINNED_ECOSYSTEMS = {"cargo", "docker", "docker-compose", "github-actions", "uv"}
 # The sources have to point at the snapshot archive — literally, or through the ARG that carries
 # the timestamp so bumping it is one line.
 _SNAPSHOT_URI = re.compile(r"https://snapshot\.debian\.org/archive/debian/(\S+)")
@@ -105,16 +121,25 @@ def _image_refs(path: Path) -> list[tuple[int, str]]:
     return out
 
 
-def _dependabot_updates() -> dict[str, dict]:
-    """Every `package-ecosystem` in the Dependabot config, mapped to its update block.
+def _dependabot_updates() -> list[dict]:
+    """Every `updates:` entry in the Dependabot config, in file order.
+
+    A list, not a dict keyed by ecosystem: one ecosystem may legitimately appear more than once,
+    for the same manifest kind in unrelated directories, and keying would keep only the last of
+    them. The blind spot would sit exactly where the drift shows up.
 
     Empty when the file is absent, so the test that says so fails with that sentence rather than
-    the module erroring at collection.
+    the module erroring at collection. `.get` for the same reason: a malformed entry has to reach
+    an assertion, not raise while pytest is still building the parameter list.
     """
     if not DEPENDABOT.exists():
-        return {}
+        return []
     config = yaml.safe_load(DEPENDABOT.read_text(encoding="utf-8")) or {}
-    return {u["package-ecosystem"]: u for u in config.get("updates", [])}
+    return [u for u in config.get("updates", []) if isinstance(u, dict)]
+
+
+def _configured_ecosystems() -> list[str]:
+    return [u.get("package-ecosystem", "") for u in _dependabot_updates()]
 
 
 def _ecosystems_with_pins() -> dict[str, str]:
@@ -240,22 +265,52 @@ def describe_supply_chain_pins():
         assert config.get("version") == 2, "Dependabot requires `version: 2`"
         assert _dependabot_updates(), "the config has no `updates:` entries"
 
+    def it_still_finds_the_pins_it_reads_the_ecosystems_from():
+        # The two checks below are parametrized over what the tree says is pinned. An empty
+        # parameter list reports as skipped, not failed, so a derivation that quietly stops
+        # finding anything would read as a clean run. Same reason as it_has_workflows_to_check.
+        assert set(_ecosystems_with_pins()) == PINNED_ECOSYSTEMS, (
+            "the set of pinned ecosystems read off the tree changed. If that is deliberate, move "
+            "PINNED_ECOSYSTEMS and .github/dependabot.yml with it, in the same commit. Found: "
+            f"{sorted(_ecosystems_with_pins())}"
+        )
+
     @pytest.mark.parametrize("ecosystem", sorted(_ecosystems_with_pins()), ids=lambda e: e)
     def it_has_an_updater_for_every_pinned_ecosystem(ecosystem):
         # A pin added to a new ecosystem is the failure this catches: nothing about adding a
         # compose file or a lockfile makes anyone remember this config exists.
-        configured = _dependabot_updates()
+        configured = _configured_ecosystems()
         assert ecosystem in configured, (
             f"pinned here: {_ecosystems_with_pins()[ecosystem]}. Nothing reads it — there is no "
             f"`package-ecosystem: {ecosystem}` in .github/dependabot.yml, so those pins are "
             f"frozen rather than maintained. Configured: {sorted(configured) or 'nothing'}"
         )
 
-    @pytest.mark.parametrize("ecosystem", sorted(_dependabot_updates()), ids=lambda e: e)
-    def it_points_each_updater_at_a_directory_that_exists(ecosystem):
-        # Dependabot reports a bad `directory` on its own page, which nobody here is watching.
-        # A moved manifest would otherwise leave the entry silently reading nothing.
-        block = _dependabot_updates()[ecosystem]
-        directories = block.get("directories") or [block.get("directory", "/")]
-        missing = [d for d in directories if not (ROOT / d.lstrip("/")).is_dir()]
-        assert missing == [], f"{ecosystem}: no such directory in the repository: {missing}"
+    @pytest.mark.parametrize(
+        "entry",
+        list(enumerate(_dependabot_updates())),
+        ids=lambda e: f"{e[0]}-{e[1].get('package-ecosystem') or 'unnamed'}",
+    )
+    def it_points_each_updater_at_the_files_it_reads(entry):
+        # Dependabot reports a directory it found nothing in on its own page, which nobody here
+        # is watching. Every entry is checked, not one per ecosystem: the same ecosystem may be
+        # listed twice for two directories, and the broken one is as likely to be either.
+        index, block = entry
+        ecosystem = block.get("package-ecosystem")
+        assert ecosystem, f"updates[{index}] has no `package-ecosystem`"
+        patterns = ECOSYSTEM_MANIFESTS.get(ecosystem)
+        assert patterns, (
+            f"updates[{index}]: `{ecosystem}` is configured but ECOSYSTEM_MANIFESTS does not say "
+            "what it reads, so nothing here can tell whether it reads anything. Add it."
+        )
+        for directory in block.get("directories") or [block.get("directory", "/")]:
+            if "*" in directory:
+                # A glob directory (`/apps/*`) is Dependabot's to expand, not this test's.
+                continue
+            root = ROOT / directory.lstrip("/")
+            assert root.is_dir(), f"{ecosystem}: no such directory in the repository: {directory}"
+            assert [p for pattern in patterns for p in root.glob(pattern)], (
+                f"{ecosystem} at {directory}: the directory is there and has nothing in it for "
+                f"the updater to read. Expected one of {patterns}. A manifest that moved leaves "
+                "the entry configured and silently reading nothing."
+            )

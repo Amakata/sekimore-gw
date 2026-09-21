@@ -18,9 +18,10 @@
 #     the snapshot is more than 90 days old — that test is the whole of the guard.
 #   - the `# syntax=docker/dockerfile:1.7@sha256:…` frontend directive. The Docker parser matches
 #     `FROM` lines and Kubernetes-shaped YAML, and nothing else.
-#   - the Rust toolchain. `1.89.0` is written in relay/rust-toolchain.toml, as `rust-version` in
-#     relay/Cargo.toml, as `rust = "1.89.0"` in mise.toml, and as the ref of
-#     dtolnay/rust-toolchain below. One version in four places; a single-file bump desyncs them.
+#   - the Rust toolchain. Dependabot does have a `rust-toolchain` ecosystem, and it is left out
+#     on purpose rather than for want of one: `1.89.0` is written in relay/rust-toolchain.toml,
+#     as `rust-version` in relay/Cargo.toml, as `rust = "1.89.0"` in mise.toml, and as the ref of
+#     dtolnay/rust-toolchain below. It would move one of the four and desync the other three.
 
 version: 2
 
