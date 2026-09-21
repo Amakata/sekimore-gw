@@ -1,14 +1,29 @@
 FROM python:3.11-slim@sha256:da047cb8f9d1d98e5c070f5300ba9f7274e33b8fc0e5be5ed88740aed1b95ba9
 
+# The same pinned Debian snapshot as the gateway image — see the comment there for why naming
+# versions alone is not enough. Bump both together.
+ARG DEBIAN_SNAPSHOT=20260920T000000Z
+
 # Install network utilities required by agent-setup.sh
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        iproute2 \
-        iputils-ping \
-        dnsutils \
-        curl \
-        openssh-client \
-        git \
+# bind9-dnsutils: what `dnsutils` resolved to — the latter is a virtual name trixie has no package for
+RUN set -eu \
+    && test -f /usr/share/keyrings/debian-archive-keyring.gpg \
+    && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list \
+    && printf '%s\n' \
+        'Types: deb' \
+        "URIs: https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}" \
+        'Suites: trixie' \
+        'Components: main' \
+        'Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg' \
+        > /etc/apt/sources.list.d/snapshot.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        iproute2=6.15.0-1 \
+        iputils-ping=3:20240905-3 \
+        bind9-dnsutils=1:9.20.26-1~deb13u1 \
+        curl=8.14.1-2+deb13u5 \
+        openssh-client=1:10.0p1-7+deb13u4 \
+        git=1:2.47.3-0+deb13u1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
