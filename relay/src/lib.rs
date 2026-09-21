@@ -15,4 +15,5 @@ pub mod passthrough;
 pub mod pktline;
 pub mod policy;
 pub mod ssh;
+pub mod store;
 pub mod tokens;
