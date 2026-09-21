@@ -8,6 +8,11 @@ a floating tag is not an error anywhere. These tests are the check.
 The trailing `# v1.2.3` comment is not decoration. It is the only place the human-readable version
 survives once the ref is a digest, and it is what Dependabot reads to know what to bump the pin to.
 A pin without one is a number nobody can update.
+
+Which is the other half, and checked here too: a pin is only maintained while something reads it.
+From #87 until #103 the comments and the digests had no consumer at all, because
+`.github/dependabot.yml` did not exist. Pinning a new ecosystem and forgetting to configure it is
+the same failure in slow motion, so the config is held to what this repository actually pins.
 """
 
 import re
@@ -15,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
@@ -41,6 +47,10 @@ _COMPOSE_IMAGE = re.compile(r"^\s*image:\s*(\S+)")
 
 # Only the Dockerfiles install Debian packages; the compose files just name images.
 DOCKERFILES = [p for p in IMAGE_FILES if p.name.startswith("Dockerfile")]
+COMPOSE_FILES = [p for p in IMAGE_FILES if "compose" in p.name]
+# The updater the pins are written for. Its ecosystems are checked against what is pinned here,
+# not against a list, so a newly pinned thing cannot be left without one.
+DEPENDABOT = ROOT / ".github" / "dependabot.yml"
 # The sources have to point at the snapshot archive — literally, or through the ARG that carries
 # the timestamp so bumping it is one line.
 _SNAPSHOT_URI = re.compile(r"https://snapshot\.debian\.org/archive/debian/(\S+)")
@@ -93,6 +103,38 @@ def _image_refs(path: Path) -> list[tuple[int, str]]:
                 out.append((n, m.group(1)))
                 break
     return out
+
+
+def _dependabot_updates() -> dict[str, dict]:
+    """Every `package-ecosystem` in the Dependabot config, mapped to its update block.
+
+    Empty when the file is absent, so the test that says so fails with that sentence rather than
+    the module erroring at collection.
+    """
+    if not DEPENDABOT.exists():
+        return {}
+    config = yaml.safe_load(DEPENDABOT.read_text(encoding="utf-8")) or {}
+    return {u["package-ecosystem"]: u for u in config.get("updates", [])}
+
+
+def _ecosystems_with_pins() -> dict[str, str]:
+    """Which Dependabot ecosystem each pinned thing needs, read off the tree rather than listed.
+
+    A hard-coded list drifts the same way the config does. This asks the files instead: a workflow
+    with a `uses:`, a Dockerfile with a `FROM`, a compose file with an `image:`, a lockfile.
+    """
+    required: dict[str, str] = {}
+    if any(_uses_lines(p) for p in WORKFLOWS):
+        required["github-actions"] = "the `uses:` shas in .github/workflows/"
+    if any(_image_refs(p) for p in DOCKERFILES):
+        required["docker"] = "the FROM digests in the Dockerfiles"
+    if any(_image_refs(p) for p in COMPOSE_FILES):
+        required["docker-compose"] = "the image digests in the compose files"
+    if (ROOT / "relay" / "Cargo.lock").exists():
+        required["cargo"] = "relay/Cargo.lock"
+    if (ROOT / "uv.lock").exists():
+        required["uv"] = "pyproject.toml and uv.lock"
+    return required
 
 
 def describe_supply_chain_pins():
@@ -186,3 +228,34 @@ def describe_supply_chain_pins():
             f"image since. Bump DEBIAN_SNAPSHOT and re-read the package versions out of the new "
             f"one (limit {MAX_SNAPSHOT_AGE_DAYS} days)."
         )
+
+    def it_configures_dependabot_at_all():
+        # Every pin above is written so that a machine can move it. From #87 until #103 none did.
+        assert DEPENDABOT.exists(), (
+            "the pins carry version comments and digests so that Dependabot can bump them, and "
+            "without .github/dependabot.yml nothing reads either — they are frozen, not "
+            "maintained (#103)"
+        )
+        config = yaml.safe_load(DEPENDABOT.read_text(encoding="utf-8"))
+        assert config.get("version") == 2, "Dependabot requires `version: 2`"
+        assert _dependabot_updates(), "the config has no `updates:` entries"
+
+    @pytest.mark.parametrize("ecosystem", sorted(_ecosystems_with_pins()), ids=lambda e: e)
+    def it_has_an_updater_for_every_pinned_ecosystem(ecosystem):
+        # A pin added to a new ecosystem is the failure this catches: nothing about adding a
+        # compose file or a lockfile makes anyone remember this config exists.
+        configured = _dependabot_updates()
+        assert ecosystem in configured, (
+            f"pinned here: {_ecosystems_with_pins()[ecosystem]}. Nothing reads it — there is no "
+            f"`package-ecosystem: {ecosystem}` in .github/dependabot.yml, so those pins are "
+            f"frozen rather than maintained. Configured: {sorted(configured) or 'nothing'}"
+        )
+
+    @pytest.mark.parametrize("ecosystem", sorted(_dependabot_updates()), ids=lambda e: e)
+    def it_points_each_updater_at_a_directory_that_exists(ecosystem):
+        # Dependabot reports a bad `directory` on its own page, which nobody here is watching.
+        # A moved manifest would otherwise leave the entry silently reading nothing.
+        block = _dependabot_updates()[ecosystem]
+        directories = block.get("directories") or [block.get("directory", "/")]
+        missing = [d for d in directories if not (ROOT / d.lstrip("/")).is_dir()]
+        assert missing == [], f"{ecosystem}: no such directory in the repository: {missing}"
