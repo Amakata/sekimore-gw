@@ -25,6 +25,7 @@ use crate::github::GitHub;
 use crate::passthrough::{Passthrough, SniTarget};
 use crate::ssh::authorized_keys::AuthorizedKeys;
 use crate::ssh::{load_or_create_host_key, server_config, SshServer};
+use crate::store;
 use crate::tokens::TokenStore;
 
 pub const MAX_AUTHORIZED_KEYS: usize = 64;
@@ -175,6 +176,23 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         git_domains: git_domains(&r),
         project_boards,
     });
+    // 0.2.15: the secret store starts locked. Nothing needs it yet, so a store that is never
+    // unlocked changes nothing today; the control socket is what a person unlocks it through, and
+    // it lives beside the state rather than on the agent-facing API — an agent able to ask the
+    // relay to unlock itself would make the passphrase pointless.
+    match store::SecretStore::open(&r.paths.secrets) {
+        Ok(store) => {
+            let store = Arc::new(tokio::sync::Mutex::new(store));
+            let sock = r.paths.control_sock.clone();
+            tokio::spawn(async move {
+                if let Err(e) = store::control::serve(sock, store).await {
+                    log::error!("control socket: {e}");
+                }
+            });
+        }
+        Err(e) => log::error!("secret store unavailable ({e}); it stays locked"),
+    }
+
     let api_listener = TcpListener::bind(r.relay.api_listen)
         .await
         .with_context(|| format!("bind api {}", r.relay.api_listen))?;

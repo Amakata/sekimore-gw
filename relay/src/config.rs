@@ -1115,6 +1115,11 @@ pub struct Paths {
     pub upstream_token: PathBuf,
     pub audit: PathBuf,
     pub bootstrap_disabled: PathBuf,
+    /// 0.2.15: the secret store, and the socket a person unlocks it through. Both live here
+    /// because the dev container does not mount this volume — the agent must not be able to
+    /// reach the unlock channel any more than it can reach the key
+    pub secrets: PathBuf,
+    pub control_sock: PathBuf,
 }
 
 impl Paths {
@@ -1128,6 +1133,8 @@ impl Paths {
             upstream_token: dir.join("upstream_token"),
             audit: dir.join("audit.jsonl"),
             bootstrap_disabled: dir.join("bootstrap.disabled"),
+            secrets: dir.join("secrets.db"),
+            control_sock: dir.join("control.sock"),
         }
     }
 }
