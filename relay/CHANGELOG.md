@@ -2,6 +2,11 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.16 (2026-09-21)
+
+- `mise run gw:unlock` could not set a passphrase on a store that had none: it asked twice, then sent `unlock`, which unwraps a key using parameters not yet written. The control socket had no `init`
+- The message when stdin is not a terminal said to run it on one, which is unhelpful to someone sitting at a terminal. It now says not to pipe it
+
 ## 0.2.15 (2026-09-21)
 
 - `project list` / `fields` / `add-item` / `update-item` take `--board 2`, the number `config.yml` and the URL already use. `--project-id` still works, and a project with one board can leave both out
