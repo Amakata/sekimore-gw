@@ -12,6 +12,13 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.23（2026-09-21）
+
+### Enhancement
+
+- apt が「ビルドした事実」を記録する7ファイル（machine-id 2つ、ログ4つ、キャッシュ1つ）を消した。160MB の層の 114 バイト差はこれが全部だった (#114)
+- `.pyc` を `unchecked-hash` で作り直すようにした。ヘッダのソース mtime が、毎ビルド site-packages に新しい digest を与えていた (#114)
+
 ## 0.2.22（2026-09-21）
 
 ### Security
