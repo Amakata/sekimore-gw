@@ -37,6 +37,13 @@ RUN T="$(cat /tmp/t)" \
 # ---- gateway ----
 FROM python:3.13-slim@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0
 
+# No bytecode in this image, and none written at runtime. A .pyc carries its source's mtime inside
+# the header, so a layer holding one gets a new digest every build and every deployment re-pulls
+# it (#97). Precompiling with a hash instead worked, but is a mechanism to keep right; having no
+# .pyc at all is a problem that does not exist. The cost is compiling on first import — measured
+# at ~360 ms for the whole gateway, once per start, for a process that runs for weeks.
+ENV PYTHONDONTWRITEBYTECODE=1
+
 # The Debian archive as of one moment, so a rebuild of this commit installs what the last one did.
 #
 # The base image is pinned by digest, but everything installed on top of it was not: `apt-get
@@ -94,7 +101,7 @@ RUN set -eu \
 WORKDIR /app
 
 # Install uv
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir --no-compile uv
 
 # Dependencies first, from the manifest alone. The source arrives after, so editing it does not
 # rebuild site-packages — the same shape the relay-builder stage above uses for cargo. A stand-in
@@ -103,16 +110,13 @@ COPY pyproject.toml .
 COPY README.md .
 RUN mkdir -p src/sekimore_placeholder \
     && touch src/sekimore_placeholder/__init__.py \
-    # --no-cache: uv keeps every downloaded wheel under /root/.cache/uv, and it lands in the
-    # layer. Measured on the published image: 1,195 files, 44 MB, in an image that never installs
-    # anything again. `pip install --no-cache-dir uv` above already does this for pip.
+    # --no-cache keeps /root/.cache/uv out of the image. It is size-neutral — uv hardlinks from
+    # the cache into site-packages, so the bytes were never duplicated — but a cache directory in
+    # an image that never installs again is clutter, and one less thing to explain in a layer diff.
     && uv pip install --system --no-cache . \
     && rm -rf src \
-    # In this layer, not a later one. A .pyc carries the source's mtime inside its header, so
-    # every build writes a different byte and the layer moves (#97); `unchecked-hash` puts the
-    # source's hash there instead. Recompiling the whole tree from the *last* layer instead would
-    # copy every dependency's bytecode into it — 10 MB, measured, on top of the copy already here.
-    && python -m compileall -q --invalidation-mode unchecked-hash /usr/local/lib/python3.13
+    # uv does not compile bytecode today; this holds if that default ever changes
+    && find /usr/local/lib/python3.13/site-packages -name '__pycache__' -type d -prune -exec rm -rf {} +
 
 # The project itself, and everything that changes with it
 COPY src/ ./src/
@@ -130,11 +134,7 @@ COPY agent-setup.sh /usr/local/share/sekimore/agent-setup.sh
 COPY share/gateway.mise.en.toml /usr/local/share/sekimore/gateway.mise.en.toml
 COPY share/gateway.mise.ja.toml /usr/local/share/sekimore/gateway.mise.ja.toml
 RUN uv pip install --system --no-cache --no-deps . \
-    # Only what this install added. The dependencies were compiled in their own layer above, and
-    # redoing them here would put a second copy of every .pyc in this one.
-    && find /usr/local/lib/python3.13/site-packages -maxdepth 1 -name 'sekimore*' \
-        -exec python -m compileall -q --invalidation-mode unchecked-hash {} + \
-    && python -m compileall -q --invalidation-mode unchecked-hash /app/src
+    && find /usr/local/lib/python3.13/site-packages /app/src -name '__pycache__' -type d -prune -exec rm -rf {} +
 
 # sekimore-relay binary (starts only when config.yml has a git-relay handler)
 COPY --from=relay-builder /sekimore-relay /usr/local/bin/sekimore-relay
