@@ -1,0 +1,154 @@
+# ゲートウェイの操作者向けインタフェースを mise タスクにしたもの。sekimore-gw のイメージに同梱して
+# あるので、プロジェクトは各自でコピーするのではなく include して使う。コピーは取り残される:
+# サンプルのプロジェクトは 4 リリースのあいだ `gw:unlock` を欠いたままだった。上流 API トークンが
+# 秘密ストアに入った 0.2.19 からは、これが欠けているとゲートウェイを使えない。
+#
+# イメージ内の場所: /usr/local/share/sekimore/gateway.mise.ja.toml (agent-setup.sh の隣。relay の
+# バイナリと同じタグなので、タスクと、そのタスクが呼ぶコマンドは必ず同じリリースのもの)。
+# 英語版は gateway.mise.en.toml。違うのは `mise tasks` が表示する説明文だけで、タスクは同一。
+#
+#   docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.ja.toml > .devcontainer/gateway.mise.toml
+#
+# プロジェクト側の mise.toml:
+#
+#   [task_config]
+#   includes = [".devcontainer/gateway.mise.toml"]
+#
+#   [env]
+#   SGW = "{{config_root}}/.devcontainer/scripts/sgw.sh"
+#
+# プロジェクトが用意するものは 2 つ:
+#
+# 1. `SGW` — プロジェクトの `sgw.sh` へのパス。ここのタスクはすべて sgw.sh を通るが、SGW を設定する
+#    のはプロジェクト側。未設定だと `bash: : No such file or directory` で落ちる。
+# 2. ここで使う `sgw.sh` のサブコマンド: `gw` / `gw-tty` / `id` / `recreate`。これ以外は使わない。
+#    sgw.sh はコンテナを見つける役なのでイメージから配れない唯一のファイルで、増やすとその分だけ
+#    各利用者が手で直すことになる。
+#
+#    確認すべきは `gw-tty`。後から足したものなので、公開済みのサンプルには入っていない。端末から
+#    パスフレーズを読むコマンド (`gw:unlock` / `gw:passphrase`) のための、常に `docker exec -it` を
+#    付ける経路。通常の `gw` は stdout も見て `-t` を決めるが、タスクランナーが出力を加工すると
+#    stdout がパイプになり、プロンプトに端末が無くなる。
+#
+# 形式の注意: `task_config.includes` に列挙するファイルでは、タスク名はトップレベルのテーブルとして
+# 書く。`[tasks."gw:unlock"]` と書くと mise が `unknown field` でファイルごと拒否する。
+
+["gw"]
+description = "gateway で sekimore-relay <args> を実行 (例: mise run gw -- revoke --label skm_xxxxxxxx)"
+run = 'bash "$SGW" gw sekimore-relay'
+
+["gw:login"]
+description = "GitHub に device flow でログイン (上流トークンと known_hosts を /data/relay に保存。初回のみ)"
+run = 'bash "$SGW" gw sekimore-relay login'
+
+["gw:logout"]
+description = "上流トークンを削除"
+run = 'bash "$SGW" gw sekimore-relay logout'
+
+["gw:whoami"]
+description = "gateway がどの GitHub identity として動くか"
+run = 'bash "$SGW" gw sekimore-relay whoami'
+
+["gw:check"]
+description = "relay の設定と状態 (ssh-agent / known_hosts / 上流トークン / 登録鍵 / トークン数)"
+run = 'bash "$SGW" gw sekimore-relay check'
+
+# ---- 秘密ストア (0.2.15) ----
+# パスフレーズはプロンプトでのみ受け取る。引数や環境変数にすると ps に出るため。そのための gw-tty。
+#
+# 0.2.19 から上流 API トークンがここに入る。施錠中は関所が GitHub API を使えない
+# (git の push/pull は SSH なので通る)。ゲートウェイを作り直したら必ず解錠する。
+
+["gw:unlock"]
+description = "秘密ストアを解錠する (ゲートウェイ再作成のたびに必須。初回はパスフレーズの設定。解錠しないと GitHub API が通らない)"
+raw = true
+run = 'bash "$SGW" gw-tty sekimore-relay unlock'
+
+["gw:lock"]
+description = "秘密ストアの鍵を忘れる (次の解錠まで GitHub API も止まる。0.2.19 からトークンのキャッシュも同時に落ちる)"
+run = 'bash "$SGW" gw sekimore-relay lock'
+
+["gw:store-status"]
+description = "秘密ストアが解錠済みか、施錠中か、未初期化かを表示する"
+run = 'bash "$SGW" gw sekimore-relay store-status'
+
+["gw:passphrase"]
+description = "秘密ストアのパスフレーズを変更する (--kdf pbkdf2-sha256 で KDF も切り替えられる)"
+raw = true
+run = 'bash "$SGW" gw-tty sekimore-relay passphrase'
+
+# export は施錠中でも取れる (鍵が要らない)。封じてあるが、守っているのはパスフレーズだけ。
+# raw: JSON を標準出力にそのまま流す。タスクランナーが出力に接頭辞を付けると壊れる
+["gw:store-export"]
+description = "秘密ストアを封じたまま書き出す: mise run gw:store-export > store.json"
+raw = true
+run = 'bash "$SGW" gw sekimore-relay store-export'
+
+["gw:store-import"]
+description = "空の秘密ストアを envelope で置き換える: mise run gw:store-import < store.json"
+raw = true
+run = 'bash "$SGW" gw sekimore-relay store-import'
+
+# ---- 案件トークン ----
+["gw:tokens"]
+description = "発行済み案件トークンの一覧 (ラベル / 期限 / 使用回数 / 状態)"
+run = 'bash "$SGW" gw sekimore-relay tokens'
+
+["gw:revoke"]
+description = "トークンを 1 つ失効: mise run gw:revoke -- --label skm_xxxxxxxx"
+run = 'bash "$SGW" gw sekimore-relay revoke'
+
+["gw:revoke-project"]
+description = "案件の全トークンを失効 (案件終了時)"
+run = 'bash "$SGW" gw sekimore-relay revoke-project'
+
+["gw:bootstrap"]
+description = "自動登録の kill-switch: mise run gw:bootstrap -- disable|enable"
+run = 'bash "$SGW" gw sekimore-relay bootstrap'
+
+# ---- ログ DB ----
+["gw:db-stats"]
+description = "gateway のログ DB (DNS / firewall / proxy) の件数・期間・サイズ・索引 (gw 0.2.3〜)"
+run = 'bash "$SGW" gw python -m src.maint db-stats'
+
+["gw:db-prune"]
+description = "N 日より古いログを削除 (記録は既定で残すので明示的に): mise run gw:db-prune -- --before-days 90 --yes [--vacuum]"
+run = 'bash "$SGW" gw python -m src.maint db-prune'
+
+["gw:db-reset"]
+description = "ログ DB を空にして VACUUM (relay の監査は別ファイル): mise run gw:db-reset -- --yes"
+run = 'bash "$SGW" gw python -m src.maint db-reset'
+
+# ---- config.yml の反映の窓 ----
+["gw:reload-status"]
+description = "config.yml の保存が反映される状態か (gw 0.2.13〜)。AI に作業を渡す前に確認する"
+run = 'bash "$SGW" gw python -m src.maint reload-status'
+
+["gw:reload-follow"]
+description = "反映の窓を開ける (既定 30m): mise run gw:reload-follow -- 1h。config.yml を詰めている間だけ"
+run = 'bash "$SGW" gw python -m src.maint reload-follow'
+
+["gw:reload-freeze"]
+description = "反映の窓を今すぐ閉じる。config.yml は dev から書けるので、AI に渡す前にこれを打つ"
+run = 'bash "$SGW" gw python -m src.maint reload-freeze'
+
+# ---- ログと起動・停止 ----
+["gw:audit"]
+description = "relay の監査ログを追う (全ての拒否と操作。Ctrl-C で終了)"
+run = 'bash "$SGW" gw tail -n 50 -f /data/relay/audit.jsonl'
+
+["gw:logs"]
+description = "gateway のコンテナログを追う"
+run = 'docker logs -f --tail 100 "$(bash "$SGW" id sekimore-gw)"'
+
+["gw:restart"]
+description = "gateway を再起動 (config.yml の domain_handlers / relay を変えたあと。dev は動いたまま)"
+run = 'docker restart "$(bash "$SGW" id sekimore-gw)"'
+
+["gw:recreate"]
+description = "gateway を最新イメージで pull して作り直す (compose の image タグを上げたあと。docker restart では入れ替わらない)"
+run = 'bash "$SGW" recreate'
+
+["gw:shell"]
+description = "gateway のシェル (root)"
+run = 'bash "$SGW" gw bash'

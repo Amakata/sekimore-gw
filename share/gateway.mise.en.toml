@@ -3,10 +3,11 @@
 # the sample project went four releases without `gw:unlock`, and from 0.2.19 that makes the
 # gateway unusable, because the upstream API token lives in the secret store.
 #
-# In the image: /usr/local/share/sekimore/gateway.mise.toml (next to agent-setup.sh, same tag as
-# the relay binary, so the tasks always match the gateway they drive).
+# In the image: /usr/local/share/sekimore/gateway.mise.en.toml (next to agent-setup.sh, same tag
+# as the relay binary, so the tasks always match the gateway they drive). The Japanese one is
+# gateway.mise.ja.toml; the only difference is what `mise tasks` prints — the tasks are identical.
 #
-#   docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.toml > .devcontainer/gateway.mise.toml
+#   docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.en.toml > .devcontainer/gateway.mise.toml
 #
 # and in the project's own mise.toml:
 #

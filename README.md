@@ -105,14 +105,17 @@ The agent will automatically discover the gateway and route all traffic through 
 
 ### Operator tasks (mise)
 
-The `gw:*` tasks an operator drives the gateway with are shipped in the image, at
-`/usr/local/share/sekimore/gateway.mise.toml`. A project includes that file rather than keeping a
-copy of the tasks, which falls behind the relay:
+The `gw:*` tasks an operator drives the gateway with are shipped in the image, in two languages:
+`/usr/local/share/sekimore/gateway.mise.en.toml` and `gateway.mise.ja.toml`. A project includes
+one of them rather than keeping a copy of the tasks, which falls behind the relay:
 
 ```bash
-docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.toml \
+docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.en.toml \
   > .devcontainer/gateway.mise.toml
 ```
+
+The choice of language only decides what `mise tasks` prints; the task names and the commands
+they run are identical in both, and a test holds them to that.
 
 ```toml
 # the project's mise.toml

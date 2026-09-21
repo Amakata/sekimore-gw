@@ -105,14 +105,17 @@ ai-agent:
 
 ### 操作者向けの mise タスク
 
-ホストからゲートウェイを操作する `gw:*` タスクはイメージに同梱しています
-（`/usr/local/share/sekimore/gateway.mise.toml`）。各プロジェクトはこれを取り込んで使ってください。
-タスクをコピーすると、関所の更新から取り残されます:
+ホストからゲートウェイを操作する `gw:*` タスクはイメージに同梱しています。日本語版
+`/usr/local/share/sekimore/gateway.mise.ja.toml` と英語版 `gateway.mise.en.toml` の 2 つがあります。
+各プロジェクトはどちらかを取り込んで使ってください。タスクをコピーすると、関所の更新から取り残されます:
 
 ```bash
-docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.toml \
+docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.ja.toml \
   > .devcontainer/gateway.mise.toml
 ```
+
+言語の違いは `mise tasks` に出る説明文だけです。タスク名と実行するコマンドは両者で同一で、
+テストがそれを保証しています。
 
 ```toml
 # プロジェクト側の mise.toml
