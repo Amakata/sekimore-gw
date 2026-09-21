@@ -6,6 +6,26 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.18 (2026-09-21)
+
+### Security
+
+- pinned every action to a commit and every base image to a digest, with the version kept as a comment (#87)
+- bounded the control socket read at 8 MiB; `import` is the first request that is not tiny (#86)
+- stopped `prompt` leaving the passphrase in a freed buffer, and zeroed the request line rather than clearing it (#84)
+
+### Fix
+
+- answered a mistyped passphrase with what failed, not with the `mise run gw:unlock` the reader is already running (#84)
+- switched `prompt` to `TCSAFLUSH`, so a character typed before the prompt no longer joins the passphrase (#84)
+- said "nothing was changed" when `passphrase` is given the wrong old one (#84)
+
+### Enhancement
+
+- added `store-export` / `store-import` to the CLI and the control socket; 0.2.17 shipped the store's `export` / `import` with no way to run them (#86)
+- rewrote all 25 releases of this changelog as one line each, under Security / Fix / Enhancement, ending with the pull request (#85)
+- added `test_supply_chain_pins.py`, so a floating tag added later is an error rather than nothing (#87)
+
 ## 0.2.17 (2026-09-21)
 
 ### Security
