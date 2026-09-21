@@ -6,15 +6,17 @@
 //!   A  forward the upstream advertisement to the client unchanged (recording ref → sha)
 //!   B  parse and rewrite only the client's command section (up to the flush, with a size cap) and send it upstream
 //!   B2 the push-options section is passed through unchanged
-//!   C  stream the pack data raw, without buffering
+//!   C  stream the pack data raw, without buffering — except for a tag push (#89), which is read on
+//!      the way through so that the tag object can be judged, with the trailer held back until it is
 //!   D  map the upstream report-status back to the original ref names and send it to the client
 //!   E  on success, create a PR for each `refs/for`
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::pack::{Object, Objects, PackError, PackScan, TRAILER_LEN};
 use super::response::{RefStatus, ResponseRewriter};
 use super::{
     copy_touch, copy_touch_counted, exit_code_of, GitContext, GitIo, RelayOutcome, UpstreamProcess,
@@ -51,6 +53,14 @@ pub struct PrIntent {
     pub sha: String,
 }
 
+/// A tag this push creates, to be judged once the pack has been read (#89).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagCheck {
+    pub name: String,
+    /// The sha the tag will point at: a tag object if annotated, a commit if lightweight
+    pub sha: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushPlan {
     pub commands: Vec<OwnedCommand>,
@@ -58,6 +68,8 @@ pub struct PushPlan {
     /// upstream ref → client ref
     pub rewrites: HashMap<String, String>,
     pub prs: Vec<PrIntent>,
+    /// Tags that must turn out to be signed tag objects. Empty unless the policy asks (`signed_tags`)
+    pub tag_checks: Vec<TagCheck>,
 }
 
 impl PushPlan {
@@ -117,6 +129,7 @@ pub fn plan_push(
     let mut commands = Vec::new();
     let mut rewrites: HashMap<String, String> = HashMap::new();
     let mut prs = Vec::new();
+    let mut tag_checks = Vec::new();
     // Every upstream ref this plan will update, and the client ref it came from. Two updates
     // to one ref in a single section put the report-status rewriter into a state it cannot
     // represent — its map is one upstream ref to one client ref — so the ok/ng of one would
@@ -227,6 +240,13 @@ pub fn plan_push(
                 });
             }
             claim(u.name, u.name)?;
+            // Whether it is a signed tag object is in the pack, not here; stage C answers it.
+            if !u.is_delete() && policy.signed_tags {
+                tag_checks.push(TagCheck {
+                    name: u.name.to_string(),
+                    sha: u.new.to_string(),
+                });
+            }
             commands.push(OwnedCommand::Update {
                 old: u.old.to_string(),
                 new: u.new.to_string(),
@@ -244,7 +264,147 @@ pub fn plan_push(
         caps: section.caps.map(|c| c.to_vec()),
         rewrites,
         prs,
+        tag_checks,
     })
+}
+
+/// Each pushed tag against what the pack turned out to hold.
+///
+/// Every check has to find its sha as a tag object with a signature block. Anything else —
+/// a commit under the name (lightweight), a tag object without a signature, an object that is
+/// not in the pack at all — is refused, and so is a pack this relay could not read: the answer
+/// "cannot tell" fails closed, because the whole point is that nobody could tell before.
+pub fn judge_tags(scanned: Result<Objects, PackError>, checks: &[TagCheck]) -> Result<(), Denied> {
+    let objects = match scanned {
+        Ok(o) => o,
+        Err(e) => {
+            return Err(Denied::TagNotSigned {
+                name: checks[0].name.clone(),
+                reason: format!("the pack could not be read to find the tag object ({e})"),
+            })
+        }
+    };
+    for c in checks {
+        let reason = match objects.by_sha.get(&c.sha) {
+            Some(Object::Tag { signed: true }) => continue,
+            Some(Object::Tag { signed: false }) => {
+                "it is an annotated tag without a signature".to_string()
+            }
+            Some(Object::Other(kind)) => {
+                format!("it is a lightweight tag — the name points straight at a {kind}")
+            }
+            Some(Object::OversizedTag) => {
+                "its tag object is over 1 MiB, more than this relay reads to find a signature"
+                    .to_string()
+            }
+            None if objects.unresolved_deltas > 0 => {
+                "its object is not in this push as a whole object; either it is a lightweight tag on a commit the upstream already has, or it arrived as a delta this relay could not resolve (`git push --no-thin` sends whole objects)".to_string()
+            }
+            None => {
+                "its object is not in this push — a lightweight tag on a commit the upstream already has, or a tag object it already has".to_string()
+            }
+        };
+        return Err(Denied::TagNotSigned {
+            name: c.name.clone(),
+            reason,
+        });
+    }
+    Ok(())
+}
+
+/// Stage C for a push with tags to judge: forward the pack while reading it, holding back its
+/// last `TRAILER_LEN` bytes until the verdict is in.
+///
+/// The trailer is the pack's checksum, and index-pack refuses a pack that ends without one, so
+/// dropping it is how a refusal takes effect after the rest has already gone upstream: nothing is
+/// unpacked, no ref moves, and the upstream's own report-status says ng for every one of them.
+/// `leftover` is whatever the command-section reader had already pulled off the socket.
+///
+/// The verdict is given the moment the scan says the pack is complete, not at the client's EOF:
+/// git holds its side open until it has read the report-status, and the upstream will not write
+/// one until it has the trailer — waiting for EOF here would wait forever (and did, as an idle
+/// timeout, in the first version of this).
+///
+/// Returns the bytes taken from the client and the verdict. `writer` is taken by value because a
+/// refusal has to *close* the upstream's stdin — `AsyncWrite::shutdown` on a child's pipe is a
+/// no-op in tokio, and only dropping the handle sends the EOF that makes index-pack give up. On
+/// success the trailer follows and the handle is dropped at the client's EOF.
+async fn copy_judging_tags<R, W>(
+    leftover: &[u8],
+    mut reader: R,
+    writer: W,
+    wd: &Watchdog,
+    seen: &AtomicU64,
+    checks: &[TagCheck],
+) -> std::io::Result<(u64, Result<(), Denied>)>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut writer = Some(writer);
+    let mut scan = Some(PackScan::new());
+    let mut verdict: Option<Result<(), Denied>> = None;
+    // The last TRAILER_LEN bytes seen so far; everything before them has been forwarded
+    let mut tail: Vec<u8> = Vec::with_capacity(TRAILER_LEN + 64 * 1024);
+    let mut total = 0u64;
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut chunk: &[u8] = leftover;
+    loop {
+        if !chunk.is_empty() {
+            match (&mut scan, &verdict) {
+                (Some(s), _) => {
+                    let w = writer.as_mut().expect("open until judged");
+                    s.feed(chunk);
+                    tail.extend_from_slice(chunk);
+                    if tail.len() > TRAILER_LEN {
+                        let forward = tail.len() - TRAILER_LEN;
+                        w.write_all(&tail[..forward]).await?;
+                        tail.drain(..forward);
+                    }
+                    if s.is_complete() {
+                        let v = judge_tags(scan.take().unwrap().finish(), checks);
+                        if v.is_ok() {
+                            w.write_all(&tail).await?;
+                            w.flush().await?;
+                        } else {
+                            // No trailer, then EOF: the upstream fails to unpack and reports ng
+                            // for every ref itself
+                            w.flush().await?;
+                            writer = None;
+                        }
+                        tail.clear();
+                        verdict = Some(v);
+                    }
+                }
+                // Anything after a complete pack is not something git sends; pass it on as the
+                // plain path would, or swallow it once the upstream has been closed
+                (None, Some(Ok(()))) => {
+                    if let Some(w) = writer.as_mut() {
+                        w.write_all(chunk).await?;
+                    }
+                }
+                (None, _) => {}
+            }
+            total += chunk.len() as u64;
+            seen.store(total, Ordering::Relaxed);
+            wd.touch();
+        }
+        let n = reader.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        chunk = &buf[..n];
+    }
+    let verdict = match verdict {
+        Some(v) => v,
+        // EOF before the pack was whole: nothing to judge, and nothing the upstream can use
+        None => judge_tags(scan.take().unwrap().finish(), checks),
+    };
+    if let Some(mut w) = writer.take() {
+        w.flush().await?;
+    }
+    // dropping `writer` (already None on a refusal) is what closes the upstream's stdin
+    Ok((total, verdict))
 }
 
 async fn say(io: &mut GitIo<'_>, msg: &str) {
@@ -484,10 +644,27 @@ pub async fn relay_receive_pack(
     // it, and the byte count is the exfiltration record. Losing it would make going quiet
     // mid-upload a way to erase what was sent.
     let sent = AtomicU64::new(0);
+    // Owned here rather than borrowed from `proc`, so stage C can drop it: on a child's pipe
+    // `shutdown()` does nothing in tokio, and dropping the handle is the only way to send EOF
+    let mut upstream_stdin = Some(proc.stdin);
     let pack_fut = async {
+        if !plan.tag_checks.is_empty() {
+            // #89: read the pack on the way through and hold the trailer until the tags are judged
+            let (n, verdict) = copy_judging_tags(
+                &leftover,
+                &mut io.stdin,
+                upstream_stdin.take().expect("taken once"),
+                &wd,
+                &sent,
+                &plan.tag_checks,
+            )
+            .await?;
+            return Ok::<(u64, Option<Denied>), std::io::Error>((n, verdict.err()));
+        }
+        let stdin = upstream_stdin.as_mut().expect("taken once");
         let mut total = 0u64;
         if !leftover.is_empty() {
-            proc.stdin.write_all(&leftover).await?;
+            stdin.write_all(&leftover).await?;
             total += leftover.len() as u64;
             sent.store(total, Ordering::Relaxed);
             wd.touch();
@@ -496,18 +673,19 @@ pub async fn relay_receive_pack(
             let base = total;
             let streamed = AtomicU64::new(0);
             let r = async {
-                let n =
-                    copy_touch_counted(&mut io.stdin, &mut proc.stdin, &wd, true, &streamed).await;
+                let n = copy_touch_counted(&mut io.stdin, &mut *stdin, &wd, true, &streamed).await;
                 sent.store(base + streamed.load(Ordering::Relaxed), Ordering::Relaxed);
                 n
             }
             .await;
             total += r?;
         } else {
-            proc.stdin.shutdown().await?;
+            stdin.flush().await?;
         }
+        // Closes the pipe: the EOF the upstream reads once the client has sent everything
+        upstream_stdin.take();
         sent.store(total, Ordering::Relaxed);
-        Ok::<u64, std::io::Error>(total)
+        Ok((total, None))
     };
     let stdout = &mut io.stdout;
     let resp_fut = async {
@@ -533,15 +711,16 @@ pub async fn relay_receive_pack(
             }
         }
     };
-    let (bytes_in, bytes_out, note) = tokio::select! {
+    let (bytes_in, bytes_out, note, tag_denied) = tokio::select! {
         r = async { tokio::join!(pack_fut, resp_fut) } => {
             let (i, o) = r;
-            (i.unwrap_or(0), o.unwrap_or(0), None)
+            let (bytes_in, denied) = i.unwrap_or((0, None));
+            (bytes_in, o.unwrap_or(0), None, denied)
         }
         _ = wd.expired() => {
             let _ = proc.child.start_kill();
             // What did reach upstream before it went quiet, not zero.
-            (sent.load(Ordering::Relaxed), 0, Some("idle_timeout".to_string()))
+            (sent.load(Ordering::Relaxed), 0, Some("idle_timeout".to_string()), None)
         }
     };
 
@@ -562,6 +741,23 @@ pub async fn relay_receive_pack(
             bytes_in,
             bytes_out,
             note,
+        };
+    }
+    if let Some(d) = tag_denied {
+        // The upstream has already said ng (it got a pack without a trailer); this is the why.
+        let msg = d.to_string();
+        say(io, &msg).await;
+        ctx.audit.deny(
+            &format!("push_denied_{}", d.kind()),
+            Actor::Agent,
+            &msg,
+            &[("repo", auth.repo()), ("project", auth.project())],
+        );
+        return RelayOutcome {
+            status: 1,
+            bytes_in,
+            bytes_out,
+            note: Some("policy_tag".into()),
         };
     }
     if status == 255 {
@@ -899,6 +1095,165 @@ mod tests {
         .expect("distinct refs");
         assert_eq!(plan.commands.len(), 3);
         assert_eq!(plan.prs.len(), 2);
+    }
+
+    /// #89: a tag creation is remembered for stage C to judge, unless the policy says not to.
+    #[test]
+    fn a_tag_creation_is_queued_for_judging_and_a_delete_is_not() {
+        let pl = plan_opts(
+            &[format!("{ZERO} {SHA} refs/tags/v1")],
+            &HashMap::new(),
+            false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            pl.tag_checks,
+            vec![TagCheck {
+                name: "refs/tags/v1".into(),
+                sha: SHA.into()
+            }]
+        );
+        // a delete has no object to judge
+        let adv = HashMap::from([("refs/tags/v1".to_string(), SHA.to_string())]);
+        let pl = plan_opts(&[format!("{SHA} {ZERO} refs/tags/v1")], &adv, true, true).unwrap();
+        assert!(pl.tag_checks.is_empty());
+        // a branch push never is
+        let pl = plan(
+            &[format!("{ZERO} {SHA} refs/heads/sekimore/x")],
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(pl.tag_checks.is_empty());
+    }
+
+    #[test]
+    fn signed_tags_off_asks_nothing_of_the_pack() {
+        let mut p = project();
+        for r in &mut p.repos {
+            r.tags = vec!["v*".to_string()];
+            r.signed_tags = false;
+        }
+        let auth = p
+            .authorize_git(GitVerb::ReceivePack, "LibOrg/awesome-lib.git")
+            .unwrap();
+        let data = section_of(&[format!("{ZERO} {SHA} refs/tags/v1")]);
+        let sec = parse_receive_pack(&data).unwrap();
+        let plan = plan_push(&p, &auth, &sec, &HashMap::new()).unwrap();
+        assert!(plan.tag_checks.is_empty());
+        assert_eq!(plan.commands.len(), 1);
+    }
+
+    mod judging {
+        use super::super::judge_tags;
+        use super::*;
+        use crate::git::pack::testutil::{pack, sha_of, tag_body, Entry, COMMIT};
+        use crate::git::pack::{PackError, PackScan};
+
+        fn scan(bytes: &[u8]) -> Result<crate::git::pack::Objects, PackError> {
+            let mut s = PackScan::new();
+            s.feed(bytes);
+            s.finish()
+        }
+        fn check(sha: &str) -> Vec<TagCheck> {
+            vec![TagCheck {
+                name: "refs/tags/v1".into(),
+                sha: sha.into(),
+            }]
+        }
+        fn reason(r: Result<(), Denied>) -> String {
+            match r {
+                Err(Denied::TagNotSigned { name, reason }) => {
+                    assert_eq!(name, "refs/tags/v1");
+                    reason
+                }
+                other => panic!("expected TagNotSigned, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_signed_tag_object_passes() {
+            let tag = tag_body("v1", &sha_of("commit", COMMIT), true);
+            let p = pack(&[Entry::Whole(1, COMMIT), Entry::Whole(4, &tag)]);
+            assert_eq!(judge_tags(scan(&p), &check(&sha_of("tag", &tag))), Ok(()));
+        }
+
+        #[test]
+        fn an_unsigned_annotated_tag_is_named_as_such() {
+            let tag = tag_body("v1", &sha_of("commit", COMMIT), false);
+            let p = pack(&[Entry::Whole(4, &tag)]);
+            let why = reason(judge_tags(scan(&p), &check(&sha_of("tag", &tag))));
+            assert!(why.contains("without a signature"), "{why}");
+        }
+
+        #[test]
+        fn a_lightweight_tag_is_named_as_such() {
+            // The name points at the commit itself, which is in the pack
+            let p = pack(&[Entry::Whole(1, COMMIT)]);
+            let why = reason(judge_tags(scan(&p), &check(&sha_of("commit", COMMIT))));
+            assert!(why.contains("lightweight"), "{why}");
+            assert!(why.contains("commit"), "{why}");
+        }
+
+        #[test]
+        fn a_tag_whose_object_is_not_in_the_pack_is_refused_not_assumed() {
+            // The common lightweight case: the commit is already upstream, so the pack is empty
+            let p = pack(&[]);
+            let why = reason(judge_tags(scan(&p), &check(&sha_of("commit", COMMIT))));
+            assert!(why.contains("not in this push"), "{why}");
+            assert!(!why.contains("--no-thin"), "no delta was involved: {why}");
+        }
+
+        #[test]
+        fn an_unresolved_delta_earns_the_no_thin_hint() {
+            let delta = crate::git::pack::testutil::insert_only_delta(b"base", b"result");
+            let p = pack(&[Entry::RefDelta {
+                base_sha: [9u8; 20],
+                delta: &delta,
+            }]);
+            let why = reason(judge_tags(scan(&p), &check(&sha_of("tag", b"whatever"))));
+            assert!(why.contains("--no-thin"), "{why}");
+        }
+
+        #[test]
+        fn a_pack_that_cannot_be_read_fails_closed() {
+            let why = reason(judge_tags(Err(PackError::Truncated), &check(SHA)));
+            assert!(why.contains("could not be read"), "{why}");
+            assert!(why.contains("ended early"), "{why}");
+        }
+
+        #[test]
+        fn every_tag_in_the_push_has_to_pass() {
+            let target = sha_of("commit", COMMIT);
+            let good = tag_body("v1", &target, true);
+            let bad = tag_body("v2", &target, false);
+            let p = pack(&[Entry::Whole(4, &good), Entry::Whole(4, &bad)]);
+            let checks = vec![
+                TagCheck {
+                    name: "refs/tags/v1".into(),
+                    sha: sha_of("tag", &good),
+                },
+                TagCheck {
+                    name: "refs/tags/v2".into(),
+                    sha: sha_of("tag", &bad),
+                },
+            ];
+            match judge_tags(scan(&p), &checks) {
+                Err(Denied::TagNotSigned { name, .. }) => assert_eq!(name, "refs/tags/v2"),
+                other => panic!("{other:?}"),
+            }
+        }
+
+        #[test]
+        fn the_message_tells_the_operator_both_ways_out() {
+            let why = Denied::TagNotSigned {
+                name: "refs/tags/v1".into(),
+                reason: "x".into(),
+            }
+            .to_string();
+            assert!(why.contains("git tag -s"), "{why}");
+            assert!(why.contains("signed_tags: false"), "{why}");
+        }
     }
 
     /// 0.1.9: tags and deletes are governed by the repo's policy (project.tags / repos[].tags, delete)

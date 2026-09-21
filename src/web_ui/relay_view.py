@@ -61,6 +61,8 @@ class RelayRepo(BaseModel):
     push: list[str] = []
     tags: list[str] = []  # tag globs allowed for push (empty = denied)
     delete: bool = False
+    # 0.2.27 (#89): a pushed tag has to be an annotated tag object with a signature block
+    signed_tags: bool = True
     # effective = (project allow | repo allow) - (project deny | repo deny)
     permissions: list[str] = []
     # 0.2.0: upstream domain (the host in `host/Org/Repo`; default upstream if omitted)
@@ -337,6 +339,7 @@ def build_config(config: dict) -> RelayConfigResponse:
     if not default_tags and bool(relay.get("allow_tags", False)):
         default_tags = ["*"]
     default_delete = bool(project.get("delete", False)) or bool(relay.get("allow_delete", False))
+    default_signed_tags = bool(project.get("signed_tags", True))
     # 0.2.1: the upstream layer project.upstreams.<domain> (permission deltas, the
     # push / tags / delete defaults, and repos). Keys may be either a domain or an
     # upstream host name, so normalize them to domains.
@@ -381,6 +384,9 @@ def build_config(config: dict) -> RelayConfigResponse:
         push_v = r.get("push") if r.get("push") is not None else l_push
         tags_v = r.get("tags") if r.get("tags") is not None else l_tags
         delete_v = r.get("delete") if r.get("delete") is not None else l_delete
+        signed_v = (
+            r.get("signed_tags") if r.get("signed_tags") is not None else layer.get("signed_tags")
+        )
         repos.append(
             RelayRepo(
                 name=name,
@@ -390,6 +396,7 @@ def build_config(config: dict) -> RelayConfigResponse:
                 push=[str(p) for p in push_v] if push_v is not None else default_push,
                 tags=[str(t) for t in tags_v] if tags_v is not None else default_tags,
                 delete=bool(delete_v) if delete_v is not None else default_delete,
+                signed_tags=bool(signed_v) if signed_v is not None else default_signed_tags,
                 permissions=effective,
             )
         )

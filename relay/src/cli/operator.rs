@@ -590,6 +590,9 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             if let Some(v) = up.delete {
                 parts.push(format!("delete={v}"));
             }
+            if let Some(v) = up.signed_tags {
+                parts.push(format!("signed_tags={v}"));
+            }
             println!(
                 "  {:<40} {} ({} repo(s))",
                 name,
@@ -610,13 +613,14 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             rp.full_name.clone()
         };
         println!(
-            "  {:<40} {:<11} bases={:?} push={:?} tags={:?} delete={}",
+            "  {:<40} {:<11} bases={:?} push={:?} tags={:?} delete={} signed_tags={}",
             shown,
             rp.mode.as_str(),
             rp.bases,
             rp.push,
             rp.tags,
-            rp.delete
+            rp.delete,
+            rp.signed_tags
         );
         let eff = r.project.effective_keys(rp);
         if eff != granted || !rp.allow.is_empty() || !rp.deny.is_empty() {

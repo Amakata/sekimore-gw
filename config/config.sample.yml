@@ -164,4 +164,8 @@ database_path: "/data/security_gateway.db"
 #     delete_merged_branch: false               # 0.2.9+ whether `pr merge --delete-branch` may remove the branch it
 #                                               # just merged. Only that branch, so it is not the same authority as
 #                                               # `delete` above. Leave it off where the forge already does this
-#     # repos[] takes mode / bases / push / tags / delete / permissions ({allow, deny}, a diff against the project defaults; deny wins)
+#     signed_tags: true                         # 0.2.27+ a pushed tag has to be an annotated tag object carrying a
+#                                               # signature (`git tag -s`, any format). Lightweight and unsigned tags
+#                                               # are refused. Presence is checked, not whose key it is. Override with
+#                                               # repos[].signed_tags
+#     # repos[] takes mode / bases / push / tags / delete / signed_tags / permissions ({allow, deny}, a diff against the project defaults; deny wins)

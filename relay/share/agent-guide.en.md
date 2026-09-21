@@ -102,6 +102,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `base branch X is not allowed` | no PR against that base | use an allowed base, see `sekimore whoami` |
 | `tag is not allowed for this repository` | tags are refused | ask a human to tag, or to allow tags |
 | `updating refs/tags/vX is not allowed` | the tag is already published upstream | cut a new version; moving a released tag needs the same authority as deleting one |
+| `pushing refs/tags/vX is not allowed: …` | the tag is not a signed tag object (lightweight, or made without a signature) | `git tag -s vX -m …` and push again; the dev container signs by default, so this means the tag was made around that setup |
 | `denied: pr:merge is not allowed by policy` | permission missing | ask a human to merge |
 | `denied: token expired` | the project token expired | it renews itself; if it keeps failing ask a human to re-run agent-setup |
 | `head X is not allowed` | the PR's head is outside `sekimore/*`, or names a fork | push the branch through the relay first, then open the PR from it |

@@ -102,6 +102,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `base branch X is not allowed` | その base への PR は不可 | 許可された base（`sekimore whoami`）を使う |
 | `tag is not allowed for this repository` | タグの push は不可 | 人間にタグを頼む、または許可の追加を頼む |
 | `updating refs/tags/vX is not allowed` | そのタグは既に公開済み | 新しい版を切る。公開済みタグを動かすにはタグ削除と同じ権限が要る |
+| `pushing refs/tags/vX is not allowed: …` | 署名付き tag オブジェクトでない（軽量タグ、または署名なし） | `git tag -s vX -m …` で打ち直して push。dev コンテナは既定で署名するので、それを回り込んで作ったタグということ |
 | `denied: pr:merge is not allowed by policy` | 権限が無い | 人間にマージを頼む |
 | `denied: token expired` | トークン期限切れ | 自動更新される。続くなら人間に agent-setup の再実行を頼む |
 | `head X is not allowed` | PR の head が `sekimore/*` の外、または fork を指している | 先に関所経由でブランチを push し、それを head にする |

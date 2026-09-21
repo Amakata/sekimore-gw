@@ -257,6 +257,8 @@ pub struct RepoConfig {
     /// 0.2.9: delete the head branch after a merge through `pr merge`. Defaults to the project's
     /// `delete_merged_branch`. Unrelated to `delete` above, which is about git-level ref deletion
     pub delete_merged_branch: Option<bool>,
+    /// 0.2.27: whether a pushed tag must be an annotated tag object with a signature block. Defaults to the project's `signed_tags`
+    pub signed_tags: Option<bool>,
     /// Delta on the project defaults: allow adds, deny removes. A plain list means additional allows
     pub permissions: Option<PermissionSpec>,
 }
@@ -272,6 +274,7 @@ pub struct UpstreamPolicyConfig {
     pub tags: Option<Vec<String>>,
     pub delete: Option<bool>,
     pub delete_merged_branch: Option<bool>,
+    pub signed_tags: Option<bool>,
     /// Repos on this upstream, written as `Org/Repo`. A host prefix is unnecessary, and if given it must match this upstream
     #[serde(default)]
     pub repos: Vec<RepoConfig>,
@@ -307,6 +310,13 @@ pub struct ProjectConfig {
     /// `delete` allows deleting any ref the push policy admits
     #[serde(default)]
     pub delete_merged_branch: bool,
+    /// 0.2.27 (#89): a pushed tag has to be an annotated tag object carrying a signature block —
+    /// `git tag -s`, in whichever format. A lightweight tag or one made with `tag.gpgsign=false`
+    /// is refused. **True when unset**: a tag names a release, and the relay had let an unsigned
+    /// one through under a name every other tag signs. The signature is checked for presence,
+    /// not validity; verifying it needs a trusted-signer list this file does not hold yet
+    #[serde(default = "d_signed_tags")]
+    pub signed_tags: bool,
     /// 0.2.7: the Projects v2 boards this project may touch.
     ///
     /// A board is named the way it appears in its URL — `github.com/orgs/<org>/projects/<number>`
@@ -456,6 +466,9 @@ pub struct RelayConfig {
     pub upstream_local_roots: BTreeMap<String, PathBuf>,
 }
 
+fn d_signed_tags() -> bool {
+    true
+}
 fn d_ssh_listen() -> SocketAddr {
     "0.0.0.0:22".parse().unwrap()
 }
@@ -891,6 +904,7 @@ impl Loaded {
             let l_tags = layer.and_then(|l| l.tags.clone());
             let l_delete = layer.and_then(|l| l.delete);
             let l_dmb = layer.and_then(|l| l.delete_merged_branch);
+            let l_signed = layer.and_then(|l| l.signed_tags);
             let mut rp = RepoPolicy::new(full_name, mode);
             rp.host = host;
             rp.bases = r.bases.clone();
@@ -909,6 +923,7 @@ impl Loaded {
                 .delete_merged_branch
                 .or(l_dmb)
                 .unwrap_or(pc.delete_merged_branch);
+            rp.signed_tags = r.signed_tags.or(l_signed).unwrap_or(pc.signed_tags);
             // permissions: the upstream layer's delta, then the repo's; in both, allow adds and deny wins
             if let Some(p) = layer.and_then(|l| l.permissions.as_ref()) {
                 rp.allow.extend(p.allow().iter().cloned());
@@ -1552,6 +1567,60 @@ relay:
             p(bad).unwrap().resolve(),
             Err(ConfigError::Invalid(_))
         ));
+    }
+
+    /// #89: signed tags are required unless a layer says otherwise, project → upstream → repo.
+    #[test]
+    fn signed_tags_is_on_by_default_and_folds_like_delete() {
+        let text = r#"
+domain_handlers:
+  github.com: { handler: git-relay }
+  ghe.example.com: { handler: git-relay, ssh_port: 2222 }
+relay:
+  project:
+    name: case-s
+    permissions: [pr:read]
+    tags: ["v*"]
+    upstreams:
+      ghe.example.com:
+        signed_tags: false
+        repos:
+          - { name: Corp/Loose, mode: read-write }
+          - { name: Corp/Strict, mode: read-write, signed_tags: true }
+    repos:
+      - { name: Org/App, mode: read-write }
+      - { name: Org/Legacy, mode: read-write, signed_tags: false }
+"#;
+        let pr = p(text).unwrap().resolve().unwrap().project;
+        assert!(pr.find_repo("Org/App").unwrap().signed_tags, "the default");
+        assert!(
+            !pr.find_repo("Org/Legacy").unwrap().signed_tags,
+            "repo override"
+        );
+        assert!(
+            !pr.find_repo("ghe.example.com/Corp/Loose")
+                .unwrap()
+                .signed_tags,
+            "upstream layer default"
+        );
+        assert!(
+            pr.find_repo("ghe.example.com/Corp/Strict")
+                .unwrap()
+                .signed_tags,
+            "repo wins over its upstream layer"
+        );
+        // and the project default can be turned off for everyone
+        let off = text.replace(
+            "    tags: [\"v*\"]\n",
+            "    tags: [\"v*\"]\n    signed_tags: false\n",
+        );
+        let pr = p(&off).unwrap().resolve().unwrap().project;
+        assert!(!pr.find_repo("Org/App").unwrap().signed_tags);
+        assert!(
+            pr.find_repo("ghe.example.com/Corp/Strict")
+                .unwrap()
+                .signed_tags
+        );
     }
 
     #[test]
