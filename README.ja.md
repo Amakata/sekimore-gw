@@ -355,4 +355,9 @@ Apache License 2.0 - 詳細は [LICENSE](LICENSE) を参照してください。
 
 ## バージョン
 
-0.2.11。関所側の変更履歴は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあります。
+1つのイメージに gateway と関所が入り、版番号は共通です。
+
+- [CHANGELOG.ja.md](CHANGELOG.ja.md) — gateway 側（DNS、ファイアウォール、Squid、Web UI、ビルド）
+- [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) — 関所側
+
+どちらも先頭が現在の版です。

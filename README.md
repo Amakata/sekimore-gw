@@ -369,4 +369,9 @@ Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 
 ## Version
 
-0.2.11. The relay has its own changelog in [relay/CHANGELOG.md](relay/CHANGELOG.md).
+One image carries the gateway and the relay, under one version number.
+
+- [CHANGELOG.md](CHANGELOG.md) — the gateway: DNS, the firewall, Squid, the Web UI, the build
+- [relay/CHANGELOG.md](relay/CHANGELOG.md) — the relay
+
+Both lead with the current version.
