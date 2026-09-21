@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.25 (2026-09-21)
+
+### Enhancement
+
+- no change to the relay; 0.2.24 and 0.2.25 are the same binary. The release drops 44 MB of uv's download cache from the image (#118)
+
 ## 0.2.24 (2026-09-21)
 
 ### Enhancement
