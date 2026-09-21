@@ -905,18 +905,42 @@ pub async fn unlock(path: &Path) -> anyhow::Result<()> {
             if first.as_bytes() != again.as_bytes() {
                 anyhow::bail!("the two did not match");
             }
-            send_passphrase(&paths, &first).await
+            send_passphrase(&paths, PassphraseFor::NewStore, &first).await
         }
         _ => {
             let pass = store::control::prompt("Passphrase")?;
-            send_passphrase(&paths, &pass).await
+            send_passphrase(&paths, PassphraseFor::ExistingStore, &pass).await
         }
     }
 }
 
-async fn send_passphrase(sock: &Path, pass: &store::crypto::Secret) -> anyhow::Result<()> {
+/// Which of the two a passphrase is being sent for.
+///
+/// A store with no passphrase yet has nothing to unwrap, so `unlock` fails on parameters that do
+/// not exist — which is what 0.2.15 did. An enum rather than a string because sending the wrong one
+/// *was* the bug, and the caller cannot be covered by a test: it reads from a terminal.
+#[derive(Clone, Copy)]
+enum PassphraseFor {
+    NewStore,
+    ExistingStore,
+}
+
+impl PassphraseFor {
+    fn op(self) -> &'static str {
+        match self {
+            PassphraseFor::NewStore => "init",
+            PassphraseFor::ExistingStore => "unlock",
+        }
+    }
+}
+
+async fn send_passphrase(
+    sock: &Path,
+    which: PassphraseFor,
+    pass: &store::crypto::Secret,
+) -> anyhow::Result<()> {
     let body = serde_json::json!({
-        "op": "unlock",
+        "op": which.op(),
         "passphrase": String::from_utf8_lossy(pass.as_bytes()),
     })
     .to_string();

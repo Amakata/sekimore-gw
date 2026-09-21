@@ -33,6 +33,14 @@ enum Request {
     Unlock {
         passphrase: String,
     },
+    /// Set the passphrase on a store that does not have one yet. Separate from `Unlock` because
+    /// there is nothing to unwrap: 0.2.15 asked for a passphrase on a new store and then tried to
+    /// unlock with it, which fails on the missing parameters rather than creating them.
+    Init {
+        passphrase: String,
+        #[serde(default)]
+        kdf: Option<String>,
+    },
     /// Rewrap the DEK under a new passphrase, optionally under a different KDF. The old one is
     /// required even when the store is unlocked: see `SecretStore::change_passphrase`.
     Passphrase {
@@ -92,6 +100,18 @@ async fn handle(stream: UnixStream, store: Arc<Mutex<SecretStore>>) -> io::Resul
     reader.into_inner().write_all(&out).await
 }
 
+/// The requested KDF, or Argon2id. The error arrives as the response itself, since an unknown
+/// name is something the caller asked for rather than a fault.
+fn parse_kdf(name: Option<&str>) -> Result<super::crypto::Kdf, Response> {
+    match name.map(super::crypto::Kdf::parse).transpose() {
+        Ok(k) => Ok(k.unwrap_or(super::crypto::Kdf::Argon2id)),
+        Err(e) => Err(Response {
+            ok: false,
+            message: e.to_string(),
+        }),
+    }
+}
+
 async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>) -> Response {
     let mut store = store.lock().await;
     match req {
@@ -126,15 +146,30 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>) -> Response {
                 },
             }
         }
-        Request::Passphrase { old, new, kdf } => {
-            let kdf = match kdf.as_deref().map(super::crypto::Kdf::parse).transpose() {
-                Ok(k) => k.unwrap_or(super::crypto::Kdf::Argon2id),
-                Err(e) => {
-                    return Response {
-                        ok: false,
-                        message: e.to_string(),
+        Request::Init { passphrase, kdf } => {
+            let kdf = match parse_kdf(kdf.as_deref()) {
+                Ok(k) => k,
+                Err(e) => return e,
+            };
+            let secret = Secret::new(passphrase.into_bytes());
+            match store.initialise(&secret, kdf, super::crypto::KdfParams::default()) {
+                Ok(()) => {
+                    log::info!("secret store initialised (kdf {})", kdf.as_str());
+                    Response {
+                        ok: true,
+                        message: "initialised and unlocked".into(),
                     }
                 }
+                Err(e) => Response {
+                    ok: false,
+                    message: e.to_string(),
+                },
+            }
+        }
+        Request::Passphrase { old, new, kdf } => {
+            let kdf = match parse_kdf(kdf.as_deref()) {
+                Ok(k) => k,
+                Err(e) => return e,
             };
             let old = Secret::new(old.into_bytes());
             let new = Secret::new(new.into_bytes());
@@ -195,7 +230,10 @@ pub fn prompt(label: &str) -> anyhow::Result<Secret> {
 
     let tty = unsafe { libc::isatty(libc::STDIN_FILENO) } == 1;
     if !tty {
-        anyhow::bail!("a passphrase has to be typed; run this on a terminal");
+        anyhow::bail!(
+            "a passphrase has to be typed, and stdin is not a terminal. \
+             Run this without piping it, through `mise run gw:unlock`"
+        );
     }
     eprint!("{label}: ");
     io::stderr().flush()?;
@@ -295,6 +333,62 @@ mod tests {
         assert!(ok);
         let (_, state) = call(&sock, r#"{"op":"status"}"#).await.unwrap();
         assert_eq!(state, "unlocked");
+    }
+
+    #[tokio::test]
+    async fn a_new_store_is_initialised_through_the_socket() {
+        // 0.2.15 shipped without this: `unlock` prompted for a new passphrase on a store that had
+        // none and then sent `unlock`, which fails on parameters that do not exist yet. The tests
+        // reached an uninitialised store only through `status`, so nothing noticed.
+        let (sock, _d) = served(false).await;
+        let (ok, msg) = call(&sock, r#"{"op":"init","passphrase":"correct horse"}"#)
+            .await
+            .unwrap();
+        assert!(ok, "{msg}");
+        let (_, state) = call(&sock, r#"{"op":"status"}"#).await.unwrap();
+        assert_eq!(state, "unlocked");
+    }
+
+    #[tokio::test]
+    async fn unlocking_a_store_that_has_no_passphrase_yet_says_so() {
+        // The 0.2.15 failure, kept as a test: the message named the missing parameter rather than
+        // the situation, which is what sent me looking in the wrong place.
+        let (sock, _d) = served(false).await;
+        let (ok, _) = call(&sock, r#"{"op":"unlock","passphrase":"x"}"#)
+            .await
+            .unwrap();
+        assert!(!ok);
+    }
+
+    #[tokio::test]
+    async fn initialising_an_initialised_store_is_refused() {
+        // Otherwise a second init would replace the DEK and strand everything already stored.
+        let (sock, _d) = served(true).await;
+        let (ok, _) = call(&sock, r#"{"op":"init","passphrase":"another"}"#)
+            .await
+            .unwrap();
+        assert!(!ok);
+        let (ok, _) = call(&sock, r#"{"op":"unlock","passphrase":"correct horse"}"#)
+            .await
+            .unwrap();
+        assert!(ok, "the original passphrase still opens it");
+    }
+
+    #[tokio::test]
+    async fn init_takes_the_kdf_it_is_given() {
+        let (sock, _d) = served(false).await;
+        let (ok, msg) = call(
+            &sock,
+            r#"{"op":"init","passphrase":"pw","kdf":"pbkdf2-sha256"}"#,
+        )
+        .await
+        .unwrap();
+        assert!(ok, "{msg}");
+        let (ok, msg) = call(&sock, r#"{"op":"init","passphrase":"pw","kdf":"rot13"}"#)
+            .await
+            .unwrap();
+        assert!(!ok);
+        assert!(msg.contains("rot13"), "{msg}");
     }
 
     #[tokio::test]
