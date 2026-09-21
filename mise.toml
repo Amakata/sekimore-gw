@@ -39,6 +39,12 @@ uv run ruff format --check src/ tests/
 uv run mypy src/
 """
 
+[tasks."ci:py-audit"]
+description = "Python の依存に既知の脆弱性がないか (cargo audit の Python 側)"
+# cargo audit は relay/Cargo.lock しか見ない。gateway の大半は Python なので、
+# PR ごとに走る検査が小さい半分しか覆っていなかった (#75)。
+run = "uv run --with pip-audit pip-audit --strict --disable-pip -r <(uv export --no-hashes --no-dev)"
+
 [tasks."ci:py-test"]
 description = "pytest (~35s, the slowest task)"
 run = 'uv run pytest -m "not e2e"'

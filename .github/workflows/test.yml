@@ -36,10 +36,16 @@ jobs:
         # use for. Coverage options come from addopts in pyproject.toml.
         run: |
           rc=0
-          timeout --signal=KILL 300 uv run pytest -m "not e2e" -v -p no:cacheprovider || rc=$?
-          # 137 is the KILL above: the report was already printed, so treat it as the run's result
+          timeout --signal=KILL 300 uv run pytest -m "not e2e" -v -p no:cacheprovider \
+            | tee /tmp/pytest.out || rc=${PIPESTATUS[0]}
+          # pytest hangs after printing its report here, so the kill is expected and its exit code
+          # says nothing. What the run means is in the report — and treating 137 as success alone
+          # made a red suite green: a failing test rode through releases behind this.
           if [ "$rc" = 137 ]; then
             echo "::warning::pytest did not exit after reporting; killed after 300s"
-            exit 0
+          elif [ "$rc" != 0 ]; then
+            exit "$rc"
           fi
-          exit "$rc"
+          grep -qE '^=+ .*[0-9]+ failed' /tmp/pytest.out && { echo "::error::pytest reported failures"; exit 1; }
+          grep -qE '^=+ .*[0-9]+ passed' /tmp/pytest.out || { echo "::error::pytest printed no summary"; exit 1; }
+          exit 0
