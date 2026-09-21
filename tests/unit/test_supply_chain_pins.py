@@ -356,3 +356,22 @@ def describe_supply_chain_pins():
             f"{path.name}: `python -m compileall -q --invalidation-mode unchecked-hash` after the "
             "installs, or every release re-pulls site-packages for a timestamp nothing reads."
         )
+
+    @pytest.mark.parametrize("path", DOCKERFILES, ids=lambda p: p.name)
+    def it_does_not_ship_the_package_managers_cache(path):
+        # uv keeps every wheel it downloaded under /root/.cache/uv and it ends up in the layer.
+        # Measured on the published 0.2.24 image: 1,195 files, 44 MB, in an image that never
+        # installs anything again. It had been there since uv was adopted.
+        body = path.read_text(encoding="utf-8")
+        uncached = [
+            line.strip()
+            for line in body.splitlines()
+            # A comment mentioning the command is not the command
+            if not line.lstrip().startswith("#")
+            and "uv pip install" in line
+            and "--no-cache" not in line
+        ]
+        assert uncached == [], (
+            f"{path.name}: `uv pip install --no-cache`, or the wheels it downloaded ship with "
+            f"the image: {uncached}"
+        )
