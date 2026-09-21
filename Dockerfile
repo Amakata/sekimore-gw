@@ -57,9 +57,17 @@ WORKDIR /app
 # Install uv
 RUN pip install --no-cache-dir uv
 
-# Copy project configuration and source code
+# Dependencies first, from the manifest alone. The source arrives after, so editing it does not
+# rebuild site-packages — the same shape the relay-builder stage above uses for cargo. A stand-in
+# package is enough for `uv pip install .` to resolve and install everything but the project.
 COPY pyproject.toml .
 COPY README.md .
+RUN mkdir -p src/sekimore_placeholder \
+    && touch src/sekimore_placeholder/__init__.py \
+    && uv pip install --system . \
+    && rm -rf src
+
+# The project itself, and everything that changes with it
 COPY src/ ./src/
 COPY config/ulogd.conf /etc/ulogd.conf
 COPY entrypoint.sh /app/entrypoint.sh
@@ -67,9 +75,7 @@ COPY scripts/start-relay.sh /app/scripts/start-relay.sh
 # agent-setup.sh is shipped in the image so that sgw-devcontainer-base can COPY --from it
 # (same tag as the relay binary => the two always match)
 COPY agent-setup.sh /usr/local/share/sekimore/agent-setup.sh
-
-# Install dependencies using uv
-RUN uv pip install --system .
+RUN uv pip install --system --no-deps .
 
 # sekimore-relay binary (starts only when config.yml has a git-relay handler)
 COPY --from=relay-builder /sekimore-relay /usr/local/bin/sekimore-relay
