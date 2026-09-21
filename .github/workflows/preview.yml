@@ -73,10 +73,10 @@ jobs:
           provenance: false
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_LC }}:${{ env.PREVIEW_TAG }}
-          # 公式版のキャッシュは読むが書かない。preview が公式版のキャッシュを汚さないようにする
-          cache-from: |
-            type=gha,scope=preview-arm64
-            type=gha,scope=arm64
+          # preview 自身のキャッシュだけ。公式版 (docker-publish.yml) は書き出しに 3m38s かかって
+          # いたのをやめたので、読む先が無くなった (#97)。こちらは PR を連続で押すときに効くうえ、
+          # main への push でも動くのでキャッシュが ref スコープで孤立しない
+          cache-from: type=gha,scope=preview-arm64
           cache-to: type=gha,mode=max,scope=preview-arm64
 
       # docker-publish.yml の smoke test と同じ内容。ランナーが arm64 なので --platform は要らない
