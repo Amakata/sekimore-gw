@@ -386,6 +386,52 @@ async fn the_proxy_signs_for_git_and_for_nothing_else() {
     );
 }
 
+/// A symlink left where the socket goes is unlinked, not followed.
+///
+/// The socket's directory is on a volume the dev container mounts, and dev has sudo — so root
+/// there can drop a symlink at the path. `bind` has to clear it without touching what it names.
+/// (The narrower race, a swap *between* bind and the chmod, is covered by the unit test of
+/// `set_socket_mode_0600`; it cannot be staged deterministically from out here.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_symlink_at_the_socket_path_is_not_followed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let run = dir.path().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    // Something the gateway owns and dev must not be able to touch through the socket path
+    let victim = dir.path().join("gateway-file");
+    std::fs::write(&victim, b"gateway state").unwrap();
+    std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let sock = run.join("signing-agent.sock");
+    std::os::unix::fs::symlink(&victim, &sock).unwrap();
+
+    let cfg = SigningKeyConfig {
+        source: SigningKeySource::Agent,
+        fingerprint: "SHA256:jKUukqk9WD+ycgT05yemhOEOxL4M5i+0l4Ibm7ZMqnw".to_string(),
+        namespace: "git".to_string(),
+        timeout: Duration::from_secs(15),
+        socket: sock.clone(),
+        socket_uid: own_uid(dir.path()),
+    };
+    let agent = SigningAgent::new(&cfg, dir.path().join("none"), Arc::new(Audit::disabled()));
+    let _listener = agent.bind().unwrap();
+
+    // The symlink was unlinked, not followed: the target still exists, with the mode and the
+    // content it had.
+    let md = std::fs::symlink_metadata(&victim).unwrap();
+    assert_eq!(
+        md.permissions().mode() & 0o777,
+        0o644,
+        "the target was chmodded"
+    );
+    assert!(md.file_type().is_file());
+    assert_eq!(std::fs::read(&victim).unwrap(), b"gateway state");
+    // and what is at the socket path is a socket, 0600, not a symlink
+    let md = std::fs::symlink_metadata(&sock).unwrap();
+    assert!(!md.file_type().is_symlink());
+    assert_eq!(md.permissions().mode() & 0o777, 0o600);
+}
+
 /// The socket is created where the configuration says, owner-only, and a stale one is replaced.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_socket_is_owner_only_and_replaces_a_stale_one() {

@@ -29,8 +29,8 @@
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -206,7 +206,15 @@ pub struct SigningAgent {
     upstream: PathBuf,
     timeout: Duration,
     audit: Arc<Audit>,
+    /// When the "the host agent does not hold the key" refusal was last audited. `agent-setup.sh`
+    /// and `relay:verify` both list identities on every container start, and an agent may list
+    /// them whenever it likes, so recording every one of those would bury the audit in a line
+    /// that says the same thing each time. The log still gets them all
+    last_missing_audit: Mutex<Option<Instant>>,
 }
+
+/// How often the missing-key refusal is worth an audit line.
+const MISSING_KEY_AUDIT_EVERY: Duration = Duration::from_secs(60);
 
 impl SigningAgent {
     pub fn new(cfg: &SigningKeyConfig, upstream: PathBuf, audit: Arc<Audit>) -> Self {
@@ -220,6 +228,7 @@ impl SigningAgent {
             upstream,
             timeout: cfg.timeout,
             audit,
+            last_missing_audit: Mutex::new(None),
         }
     }
 
@@ -236,6 +245,15 @@ impl SigningAgent {
     /// 0600 rather than 0666: the volume this sits on is shared, and only the dev container's user
     /// has any business opening it. It is the second lock — the filter is the first, and the one
     /// that matters, since the dev container has sudo.
+    ///
+    /// **Nothing here changes a file that a path lookup found.** The directory is on a shared
+    /// volume and root in the dev container can write it, so a plain `chmod` by path after `bind`
+    /// is a race it can win: unlink the socket, drop a symlink in its place, and the gateway
+    /// changes the mode of a file of dev's choosing. So the mode is set through a descriptor
+    /// opened `O_NOFOLLOW` and checked to be the socket (`set_socket_mode_0600`), and the owner
+    /// through `lchown`, which does not follow a symlink either. `remove_file` unlinks a symlink
+    /// rather than its target, and `bind` fails on an existing entry rather than writing through
+    /// one.
     pub fn bind(&self) -> io::Result<UnixListener> {
         if let Some(dir) = self.socket.parent() {
             // Only a directory this created gets a mode: `socket:` is an operator-written path,
@@ -248,13 +266,17 @@ impl SigningAgent {
                 std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755))?;
             }
         }
-        // A socket left behind by a previous run is a file, not a listener; bind would fail on it
-        if self.socket.exists() {
+        // Anything at the path, a dangling symlink included, has to go: `bind` fails on an
+        // existing entry. `symlink_metadata` rather than `exists`, which follows and so reports
+        // false for a dangling one; `remove_file` unlinks the symlink itself, never its target.
+        if std::fs::symlink_metadata(&self.socket).is_ok() {
             std::fs::remove_file(&self.socket)?;
         }
         let listener = UnixListener::bind(&self.socket)?;
-        std::fs::set_permissions(&self.socket, std::fs::Permissions::from_mode(0o600))?;
-        chown_uid(&self.socket, self.socket_uid)?;
+        set_socket_mode_0600(&self.socket)?;
+        // Not `chown`: the entry this is about may have been replaced by a symlink, and following
+        // it is the whole bug. `lchown` on a symlink changes the symlink, never its target.
+        std::os::unix::fs::lchown(&self.socket, Some(self.socket_uid), None)?;
         Ok(listener)
     }
 
@@ -355,12 +377,17 @@ impl SigningAgent {
                 // An empty list rather than FAILURE: the socket is working, the key simply is not
                 // loaded on the host. `ssh-add -l` then says so, and git prints a signing error
                 // that names the key instead of "communication with agent failed".
-                self.audit.deny(
-                    "signing_agent_refused",
-                    Actor::Agent,
-                    "the host ssh-agent does not hold the configured signing key (ssh-add it on the host)",
-                    &[("fingerprint", &self.filter.fingerprint)],
-                );
+                let why = "the host ssh-agent does not hold the configured signing key (ssh-add it on the host)";
+                if self.missing_key_audit_due() {
+                    self.audit.deny(
+                        "signing_agent_refused",
+                        Actor::Agent,
+                        why,
+                        &[("fingerprint", &self.filter.fingerprint)],
+                    );
+                } else {
+                    log::debug!("signing agent: {why}");
+                }
                 let mut out = vec![SSH_AGENT_IDENTITIES_ANSWER];
                 out.extend_from_slice(&0u32.to_be_bytes());
                 out
@@ -368,6 +395,22 @@ impl SigningAgent {
             Err(e) => {
                 log::warn!("signing agent: cannot list the host agent's identities: {e}");
                 vec![SSH_AGENT_FAILURE]
+            }
+        }
+    }
+
+    /// Whether the missing-key refusal has gone unrecorded for long enough to say again.
+    fn missing_key_audit_due(&self) -> bool {
+        let mut last = self
+            .last_missing_audit
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        match *last {
+            Some(t) if now.duration_since(t) < MISSING_KEY_AUDIT_EVERY => false,
+            _ => {
+                *last = Some(now);
+                true
             }
         }
     }
@@ -432,17 +475,55 @@ impl SigningAgent {
     }
 }
 
-fn chown_uid(path: &Path, uid: u32) -> io::Result<()> {
+/// Set the socket to 0600 without letting a path lookup pick the file.
+///
+/// `umask` would set the mode at creation, but it is process-wide: raising it around `bind` makes
+/// every other file and directory the process happens to create in those microseconds come out
+/// with no group or other bits, and a directory created without its execute bit is a gateway that
+/// does not work. (Which is not hypothetical — it broke a sibling test's temporary directory the
+/// first time this was written that way.)
+///
+/// `fchmod` on the listener would be the obvious answer and silently does nothing on Linux: it
+/// returns success and leaves the filesystem entry alone. So: open the entry `O_PATH | O_NOFOLLOW`
+/// — which refuses to traverse a symlink and opens nothing — confirm through that descriptor that
+/// it really is a socket, and chmod the descriptor by way of `/proc/self/fd`. A symlink dev
+/// planted instead gets `EOPNOTSUPP` rather than having its target changed.
+fn set_socket_mode_0600(path: &Path) -> io::Result<()> {
     use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::ffi::OsStrExt;
+
     let c = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::other("the socket path contains a NUL"))?;
-    // SAFETY: `c` is a valid NUL-terminated path for the duration of the call; -1 leaves the gid
-    let rc = unsafe { libc::chown(c.as_ptr(), uid, u32::MAX) };
-    if rc != 0 {
+    // SAFETY: `c` is a valid NUL-terminated path for the length of the call
+    let raw = unsafe {
+        libc::open(
+            c.as_ptr(),
+            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if raw < 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(())
+    // SAFETY: `raw` is a fresh descriptor nothing else owns
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    // SAFETY: zeroed `stat` is a valid target, and `fd` is open for the length of the call
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut st) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if st.st_mode & libc::S_IFMT != libc::S_IFSOCK {
+        // Something replaced the socket between `bind` and here. Whatever it is, it is not ours
+        // to chmod.
+        return Err(io::Error::other(format!(
+            "{} is not the socket that was just bound; refusing to change its mode",
+            path.display()
+        )));
+    }
+    std::fs::set_permissions(
+        format!("/proc/self/fd/{}", fd.as_raw_fd()),
+        std::fs::Permissions::from_mode(0o600),
+    )
 }
 
 // ---- framing ----
@@ -718,6 +799,67 @@ mod tests {
         assert_eq!(fingerprint(&blob), want);
         assert!(!want.ends_with('='), "the SHA256 form is unpadded: {want}");
         assert_eq!(want.len(), "SHA256:".len() + 43);
+    }
+
+    #[test]
+    fn the_mode_is_never_set_through_a_symlink_or_onto_something_that_is_not_the_socket() {
+        // The window this closes: between `bind` and the chmod, root in the dev container — which
+        // can write the shared volume — unlinks the socket and puts a symlink in its place. A
+        // chmod by path would then change the mode of a file of dev's choosing, inside the
+        // gateway. Both of these fail against a plain `set_permissions(path, 0600)`.
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("gateway-file");
+        std::fs::write(&victim, b"gateway state").unwrap();
+        std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let link = dir.path().join("swapped.sock");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        let e = set_socket_mode_0600(&link).expect_err("a symlink must not be chmodded through");
+        assert_eq!(
+            std::fs::metadata(&victim).unwrap().permissions().mode() & 0o777,
+            0o644,
+            "the symlink's target was chmodded ({e})"
+        );
+
+        // and an ordinary file at the path — the same swap without the indirection — is refused
+        // by the check that it is still a socket
+        let plain = dir.path().join("plain");
+        std::fs::write(&plain, b"x").unwrap();
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let e = set_socket_mode_0600(&plain).expect_err("only a socket may be chmodded");
+        assert!(e.to_string().contains("not the socket"), "{e}");
+        assert_eq!(
+            std::fs::metadata(&plain).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+
+    #[test]
+    fn the_missing_key_audit_is_rate_limited() {
+        // `agent-setup.sh` and `relay:verify` list identities on every container start, and an
+        // agent may list them whenever it likes. One line a minute, not one per listing.
+        let cfg = crate::config::SigningKeyConfig {
+            source: crate::config::SigningKeySource::Agent,
+            fingerprint: "SHA256:jKUukqk9WD+ycgT05yemhOEOxL4M5i+0l4Ibm7ZMqnw".into(),
+            namespace: "git".into(),
+            timeout: Duration::from_secs(1),
+            socket: PathBuf::from("/nonexistent/x.sock"),
+            socket_uid: 0,
+        };
+        let a = SigningAgent::new(
+            &cfg,
+            PathBuf::from("/nonexistent/up.sock"),
+            Arc::new(Audit::disabled()),
+        );
+        assert!(
+            a.missing_key_audit_due(),
+            "the first one is always recorded"
+        );
+        assert!(!a.missing_key_audit_due());
+        assert!(!a.missing_key_audit_due());
+        // …and it is due again once the interval has passed
+        *a.last_missing_audit.lock().unwrap() =
+            Some(Instant::now() - MISSING_KEY_AUDIT_EVERY - Duration::from_secs(1));
+        assert!(a.missing_key_audit_due());
     }
 
     #[test]

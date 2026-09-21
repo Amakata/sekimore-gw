@@ -148,6 +148,10 @@ anywhere, the relay's own sshd included, even if the same key is registered as a
 The operator's other keys may sit in the same agent and stay invisible, by fingerprint. Refusals
 are audited as `signing_agent_refused` and successful signatures as `signing_agent_signed`.
 
+The socket is created 0600 and owned by `socket_uid`, both set through a descriptor rather than
+by path: the volume is shared and the dev container has sudo, so a `chmod` that re-resolved the
+path could be pointed at a gateway file.
+
 Dev needs no sekimore-specific command — plain `git commit`. `agent-setup.sh` writes the public
 half to `~/.ssh/sekimore/signing.pub`, points `user.signingkey` at it and puts `SSH_AUTH_SOCK` in
 `/etc/sekimore-agent/env`.

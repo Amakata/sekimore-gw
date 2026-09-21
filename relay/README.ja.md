@@ -147,6 +147,10 @@ session id で始まる別の構造で、`SSHSIG` の 6 バイトで始まるこ
 同じである。依頼者の他の鍵は同じ agent にあっても fingerprint で隠れる。拒否は
 `signing_agent_refused`、成功した署名は `signing_agent_signed` として監査に残る。
 
+socket は 0600 で `socket_uid` の所有だが、どちらもパスではなく descriptor 経由で設定する。
+volume は共有で dev には sudo があるので、パスを引き直す `chmod` は gateway 側のファイルに
+向け直せてしまうため。
+
 dev 側に sekimore 専用のコマンドは要らない。素の `git commit` でよい。`agent-setup.sh` が公開鍵を
 `~/.ssh/sekimore/signing.pub` に書き、`user.signingkey` をそこに向け、`SSH_AUTH_SOCK` を
 `/etc/sekimore-agent/env` に書く。
