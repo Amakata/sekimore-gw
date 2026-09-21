@@ -130,9 +130,9 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Login { upstream } => operator::login(&cli.config, upstream.as_deref())
             .await
             .map(|_| 0),
-        Command::Logout { upstream } => {
-            operator::logout(&cli.config, upstream.as_deref()).map(|_| 0)
-        }
+        Command::Logout { upstream } => operator::logout(&cli.config, upstream.as_deref())
+            .await
+            .map(|_| 0),
         Command::Whoami { upstream } => operator::whoami(&cli.config, upstream.as_deref())
             .await
             .map(|_| 0),

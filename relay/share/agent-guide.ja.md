@@ -106,9 +106,10 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `denied: token expired` | トークン期限切れ | 自動更新される。続くなら人間に agent-setup の再実行を頼む |
 | `head X is not allowed` | PR の head が `sekimore/*` の外、または fork を指している | 先に関所経由でブランチを push し、それを head にする |
 | `known_hosts … has no entry for X` | 関所に上流のホスト鍵が無い | **自分では直せない**。docker を動かしているホストで `mise run gw:login`。メッセージをそのまま伝える |
-| `no upstream token in …` | 操作者が関所にログインしていない | 同じく、ホストで `mise run gw:login` |
+| `no upstream token for …` | 操作者が関所にログインしていない | 同じく、ホストで `mise run gw:login` |
+| `the secret store is locked …` | トークンはあるが誰も解錠していない | 同じく、ホストで `mise run gw:unlock`。ログインでは解決しない |
 
-最後の 2 つは関所自身の資格情報の話で、このコンテナの外にある。`sekimore-relay` で始まる
+最後の 3 つは関所自身の資格情報の話で、このコンテナの外にある。`sekimore-relay` で始まる
 コマンドは操作者のもので、関所の中で動く。ここで実行すると、このコンテナには存在しない設定
 ファイルを読んで失敗し、まったく別の原因を指すエラーが返る。実行せずにメッセージを伝えること。
 

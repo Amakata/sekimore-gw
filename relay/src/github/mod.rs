@@ -1542,7 +1542,7 @@ query($project:ID!,$first:Int!,$fields:Int!){
         path: &str,
         payload: Option<Value>,
     ) -> Result<T, GhError> {
-        let token = self.tokens.token()?;
+        let token = self.tokens.token().await?;
         let m = reqwest::Method::from_bytes(method.as_bytes())
             .map_err(|e| GhError::Parse(e.to_string()))?;
         let mut req = self
@@ -1560,7 +1560,7 @@ query($project:ID!,$first:Int!,$fields:Int!){
 
     /// Endpoints that return plain text (Actions job logs and the like). reqwest follows the redirects.
     async fn rest_text(&self, method: &str, path: &str) -> Result<String, GhError> {
-        let token = self.tokens.token()?;
+        let token = self.tokens.token().await?;
         let m = reqwest::Method::from_bytes(method.as_bytes())
             .map_err(|e| GhError::Parse(e.to_string()))?;
         let req = self
@@ -1594,7 +1594,7 @@ query($project:ID!,$first:Int!,$fields:Int!){
     }
 
     async fn graphql(&self, query: &str, variables: Value) -> Result<Value, GhError> {
-        let token = self.tokens.token()?;
+        let token = self.tokens.token().await?;
         let req = self
             .http
             .post(self.graphql_base.clone())
@@ -2092,9 +2092,9 @@ mod tests {
 
     fn gh() -> GitHub {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(UpstreamTokenStore::new(
+        let store = Arc::new(UpstreamTokenStore::in_memory(
+            "upstream.invalid",
             &dir.path().join("t"),
-            std::time::Duration::from_secs(60),
         ));
         std::mem::forget(dir);
         GitHub::new(

@@ -60,7 +60,34 @@ enum Request {
     Import {
         envelope: serde_json::Value,
     },
+    /// Read one secret. The relay holds the key only while unlocked, and only the process serving
+    /// this socket holds it at all — so `sekimore-relay login` and the Python gateway reach a
+    /// secret by asking here rather than by opening the database and needing the passphrase of
+    /// their own. That is the whole reason these three exist.
+    Get {
+        namespace: String,
+        name: String,
+    },
+    Set {
+        namespace: String,
+        name: String,
+        value: String,
+    },
+    Delete {
+        namespace: String,
+        name: String,
+    },
+    /// Namespace, name, epoch and when it was written — no values. Readable while locked, which is
+    /// what makes it useful for working out whether a secret is there at all.
+    List,
 }
+
+/// A failure the caller has to act on differently, said in a way that does not involve reading
+/// the message. "There is no token" sends the operator to `login`; "the store is sealed" sends
+/// them to `gw:unlock`. Matching on prose to tell those apart breaks the first time the prose is
+/// improved.
+pub const CODE_NOT_FOUND: &str = "not_found";
+pub const CODE_LOCKED: &str = "locked";
 
 #[derive(serde::Serialize)]
 struct Response {
@@ -71,6 +98,8 @@ struct Response {
     /// it has to parse back out of a human-readable field.
     #[serde(skip_serializing_if = "Option::is_none")]
     data: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
 }
 
 impl Response {
@@ -79,6 +108,7 @@ impl Response {
             ok: true,
             message: message.into(),
             data: None,
+            code: None,
         }
     }
     fn err(message: impl Into<String>) -> Self {
@@ -86,6 +116,26 @@ impl Response {
             ok: false,
             message: message.into(),
             data: None,
+            code: None,
+        }
+    }
+    fn coded(message: impl Into<String>, code: &'static str) -> Self {
+        Response {
+            code: Some(code),
+            ..Response::err(message)
+        }
+    }
+
+    /// A store error on a secret operation, with `Locked` singled out — it is the one a caller
+    /// routinely has to tell apart, and the one whose own Display is written for a different
+    /// reader (see the `Unlock` arm).
+    fn from_store_error(e: StoreError) -> Self {
+        match e {
+            StoreError::Locked => Response::coded(
+                "the secret store is locked; ask a human to run: mise run gw:unlock",
+                CODE_LOCKED,
+            ),
+            other => Response::err(other.to_string()),
         }
     }
 }
@@ -94,7 +144,18 @@ impl Response {
 ///
 /// The socket is replaced on start-up: a stale one from a killed process would otherwise make bind
 /// fail and leave the store unreachable for good.
-pub async fn serve(path: PathBuf, store: Arc<Mutex<SecretStore>>) -> io::Result<()> {
+/// Run when the key is dropped — `lock`, and `import`, which replaces the store and drops it too.
+///
+/// Whatever caches a decrypted secret has to be told, or a `lock` leaves that secret usable for
+/// however long the cache holds it. The upstream token's cache is two hours by default, which is
+/// a long time for a lock that has been reported as done.
+pub type OnLock = Arc<dyn Fn() + Send + Sync>;
+
+pub async fn serve(
+    path: PathBuf,
+    store: Arc<Mutex<SecretStore>>,
+    on_lock: OnLock,
+) -> io::Result<()> {
     if path.exists() {
         std::fs::remove_file(&path)?;
     }
@@ -106,8 +167,9 @@ pub async fn serve(path: PathBuf, store: Arc<Mutex<SecretStore>>) -> io::Result<
     loop {
         let (stream, _) = listener.accept().await?;
         let store = store.clone();
+        let on_lock = on_lock.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle(stream, store).await {
+            if let Err(e) = handle(stream, store, on_lock).await {
                 log::warn!("control connection: {e}");
             }
         });
@@ -119,7 +181,11 @@ pub async fn serve(path: PathBuf, store: Arc<Mutex<SecretStore>>) -> io::Result<
 /// while still bounding what one connection can make the gateway allocate.
 const MAX_REQUEST: u64 = 8 * 1024 * 1024;
 
-async fn handle(stream: UnixStream, store: Arc<Mutex<SecretStore>>) -> io::Result<()> {
+async fn handle(
+    stream: UnixStream,
+    store: Arc<Mutex<SecretStore>>,
+    on_lock: OnLock,
+) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     let read = (&mut reader).take(MAX_REQUEST).read_line(&mut line).await?;
@@ -127,7 +193,7 @@ async fn handle(stream: UnixStream, store: Arc<Mutex<SecretStore>>) -> io::Resul
         Response::err(format!("request is longer than {MAX_REQUEST} bytes"))
     } else {
         match serde_json::from_str::<Request>(&line) {
-            Ok(req) => apply(req, &store).await,
+            Ok(req) => apply(req, &store, &on_lock).await,
             Err(e) => Response::err(format!("bad request: {e}")),
         }
     };
@@ -150,7 +216,7 @@ fn parse_kdf(name: Option<&str>) -> Result<super::crypto::Kdf, Response> {
     }
 }
 
-async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>) -> Response {
+async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>, on_lock: &OnLock) -> Response {
     let mut store = store.lock().await;
     match req {
         Request::Status => {
@@ -218,6 +284,7 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>) -> Response {
         }
         Request::Lock => {
             store.lock();
+            on_lock();
             log::info!("secret store locked");
             Response::ok("locked")
         }
@@ -231,22 +298,99 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>) -> Response {
                 // needs no passphrase, so nothing else marks that it happened.
                 log::info!("secret store exported ({n} records)");
                 Response {
-                    ok: true,
-                    message: format!("exported {n} records"),
                     data: Some(envelope),
+                    ..Response::ok(format!("exported {n} records"))
                 }
             }
             Err(e) => Response::err(e.to_string()),
         },
         Request::Import { envelope } => match store.import(&envelope) {
             Ok(()) => {
+                // `import` drops the DEK as well, so anything holding a decrypted secret from the
+                // store that was just replaced is holding one from a store that no longer exists.
+                on_lock();
                 log::info!("secret store replaced by an import");
                 // `import` drops the DEK, so this is the state whatever the store was before.
                 Response::ok("imported; the store is locked, unlock it with the passphrase the export was taken under")
             }
             Err(e) => Response::err(e.to_string()),
         },
+        // The three below never log a value, and the audit records that a secret was read, not
+        // which bytes came back.
+        Request::Get { namespace, name } => match store.get(&namespace, &name) {
+            Ok(Some(secret)) => match String::from_utf8(secret.as_bytes().to_vec()) {
+                Ok(value) => Response {
+                    data: Some(serde_json::Value::String(value)),
+                    ..Response::ok(format!("{namespace}/{name}"))
+                },
+                // Everything written through this socket arrives as a JSON string, so a value that
+                // is not UTF-8 got there another way. Saying so beats a lossy conversion that
+                // hands back a token with a replacement character in it.
+                Err(_) => Response::err(format!("{namespace}/{name} is not UTF-8")),
+            },
+            Ok(None) => Response::coded(format!("no secret {namespace}/{name}"), CODE_NOT_FOUND),
+            Err(e) => Response::from_store_error(e),
+        },
+        Request::Set {
+            namespace,
+            name,
+            value,
+        } => {
+            let secret = Secret::new(value.into_bytes());
+            match store.set(&namespace, &name, secret.as_bytes()) {
+                Ok(()) => {
+                    log::info!("secret {namespace}/{name} written");
+                    Response::ok(format!("wrote {namespace}/{name}"))
+                }
+                Err(e) => Response::from_store_error(e),
+            }
+        }
+        Request::Delete { namespace, name } => match store.delete(&namespace, &name) {
+            Ok(true) => {
+                log::info!("secret {namespace}/{name} deleted");
+                Response::ok(format!("deleted {namespace}/{name}"))
+            }
+            Ok(false) => Response::coded(format!("no secret {namespace}/{name}"), CODE_NOT_FOUND),
+            Err(e) => Response::from_store_error(e),
+        },
+        Request::List => match store.list() {
+            Ok(rows) => {
+                let items: Vec<_> = rows
+                    .into_iter()
+                    .map(|(namespace, name, epoch, created_at)| {
+                        serde_json::json!({
+                            "namespace": namespace,
+                            "name": name,
+                            "epoch": epoch,
+                            "created_at": created_at,
+                        })
+                    })
+                    .collect();
+                let n = items.len();
+                Response {
+                    data: Some(serde_json::Value::Array(items)),
+                    ..Response::ok(format!("{n} secrets"))
+                }
+            }
+            Err(e) => Response::err(e.to_string()),
+        },
     }
+}
+
+/// One request, one reply line.
+async fn exchange(path: &Path, body: &str) -> anyhow::Result<String> {
+    let mut stream = UnixStream::connect(path).await.map_err(|e| {
+        anyhow::anyhow!(
+            "cannot reach the relay's control socket at {} ({e}). Is the gateway running?",
+            path.display()
+        )
+    })?;
+    stream.write_all(body.as_bytes()).await?;
+    stream.write_all(b"\n").await?;
+    stream.shutdown().await.ok();
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply).await?;
+    Ok(reply)
 }
 
 /// Send one request and return the reply. Used by the operator subcommands.
@@ -260,18 +404,27 @@ pub async fn call_data(
     path: &Path,
     body: &str,
 ) -> anyhow::Result<(bool, String, Option<serde_json::Value>)> {
-    let mut stream = UnixStream::connect(path).await.map_err(|e| {
-        anyhow::anyhow!(
-            "cannot reach the relay's control socket at {} ({e}). Is the gateway running?",
-            path.display()
-        )
-    })?;
-    stream.write_all(body.as_bytes()).await?;
-    stream.write_all(b"\n").await?;
-    stream.shutdown().await.ok();
-    let mut reply = String::new();
-    BufReader::new(stream).read_line(&mut reply).await?;
-    let mut v: serde_json::Value = serde_json::from_str(&reply)?;
+    let reply = exchange(path, body).await?;
+    let (ok, message, data, _) = parse_reply(&reply)?;
+    Ok((ok, message, data))
+}
+
+/// As `call_data`, and also the failure `code` — `not_found` / `locked` — for a caller that has to
+/// act differently on them. Reading the message to tell those apart would break the first time the
+/// message is reworded.
+pub async fn call_coded(
+    path: &Path,
+    body: &str,
+) -> anyhow::Result<(bool, String, Option<serde_json::Value>, Option<String>)> {
+    let reply = exchange(path, body).await?;
+    parse_reply(&reply)
+}
+
+#[allow(clippy::type_complexity)]
+fn parse_reply(
+    reply: &str,
+) -> anyhow::Result<(bool, String, Option<serde_json::Value>, Option<String>)> {
+    let mut v: serde_json::Value = serde_json::from_str(reply)?;
     Ok((
         v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false),
         v.get("message")
@@ -279,6 +432,7 @@ pub async fn call_data(
             .unwrap_or("")
             .to_string(),
         v.get_mut("data").map(serde_json::Value::take),
+        v.get("code").and_then(|c| c.as_str()).map(str::to_string),
     ))
 }
 
@@ -366,7 +520,7 @@ mod tests {
         }
         let store = Arc::new(Mutex::new(store));
         let s = sock.clone();
-        tokio::spawn(async move { serve(s, store).await });
+        tokio::spawn(async move { serve(s, store, Arc::new(|| {})).await });
         for _ in 0..50 {
             if sock.exists() {
                 break;
@@ -448,7 +602,7 @@ mod tests {
 
         let store = Arc::new(Mutex::new(store));
         let s = sock.clone();
-        tokio::spawn(async move { serve(s, store).await });
+        tokio::spawn(async move { serve(s, store, Arc::new(|| {})).await });
         for _ in 0..50 {
             if sock.exists() {
                 break;
@@ -507,6 +661,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_secret_goes_in_and_comes_back_out() {
+        let (sock, _d) = served(true).await;
+        call(&sock, r#"{"op":"unlock","passphrase":"correct horse"}"#)
+            .await
+            .unwrap();
+
+        let (ok, msg) = call(
+            &sock,
+            r#"{"op":"set","namespace":"upstream","name":"github.com","value":"gho_x"}"#,
+        )
+        .await
+        .unwrap();
+        assert!(ok, "{msg}");
+
+        let (ok, _, data) = call_data(
+            &sock,
+            r#"{"op":"get","namespace":"upstream","name":"github.com"}"#,
+        )
+        .await
+        .unwrap();
+        assert!(ok);
+        assert_eq!(data.unwrap().as_str().unwrap(), "gho_x");
+
+        let (ok, _) = call(
+            &sock,
+            r#"{"op":"delete","namespace":"upstream","name":"github.com"}"#,
+        )
+        .await
+        .unwrap();
+        assert!(ok);
+        let (ok, msg) = call(
+            &sock,
+            r#"{"op":"get","namespace":"upstream","name":"github.com"}"#,
+        )
+        .await
+        .unwrap();
+        assert!(!ok);
+        assert!(msg.contains("no secret"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn a_locked_store_answers_a_get_with_the_lock_not_with_nothing() {
+        // The caller has to be able to tell "nobody logged in" from "nobody unlocked it": one
+        // needs a login, the other a passphrase. Answering both as absence sends the operator to
+        // the wrong command.
+        let (sock, _d) = served(true).await;
+        let (ok, msg) = call_data(&sock, r#"{"op":"get","namespace":"relay","name":"t"}"#)
+            .await
+            .map(|(ok, msg, _)| (ok, msg))
+            .unwrap();
+        assert!(!ok);
+        assert!(
+            !msg.contains("no secret"),
+            "a locked store must not read as an empty one: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_locked_store_refuses_to_be_written_to() {
+        let (sock, _d) = served(true).await;
+        let (ok, msg) = call(
+            &sock,
+            r#"{"op":"set","namespace":"upstream","name":"github.com","value":"gho_x"}"#,
+        )
+        .await
+        .unwrap();
+        assert!(!ok, "a locked store took a write: {msg}");
+    }
+
+    #[tokio::test]
+    async fn list_names_the_secrets_without_opening_them() {
+        // Readable while locked on purpose: it is how someone works out whether a secret is there
+        // at all, and it must never carry a value.
+        let (sock, _d) = served(true).await;
+        let (ok, msg, data) = call_data(&sock, r#"{"op":"list"}"#).await.unwrap();
+        assert!(ok, "{msg}");
+        let items = data.unwrap();
+        let rows = items.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["namespace"], "relay");
+        assert_eq!(rows[0]["name"], "t");
+        assert!(
+            !items.to_string().contains("\"value\""),
+            "list must not carry values: {items}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_locked_store_can_still_be_exported() {
         // The point of the envelope: a backup needs no key, so it can be taken from a store nobody
         // has unlocked. `served(true)` locks it before serving.
@@ -531,7 +773,7 @@ mod tests {
         let store = SecretStore::open(&dir.path().join("secrets.db")).unwrap();
         let store = Arc::new(Mutex::new(store));
         let s = to.clone();
-        tokio::spawn(async move { serve(s, store).await });
+        tokio::spawn(async move { serve(s, store, Arc::new(|| {})).await });
         for _ in 0..50 {
             if to.exists() {
                 break;
@@ -670,7 +912,7 @@ mod tests {
             SecretStore::open(&dir.path().join("secrets.db")).unwrap(),
         ));
         let s = sock.clone();
-        tokio::spawn(async move { serve(s, store).await });
+        tokio::spawn(async move { serve(s, store, Arc::new(|| {})).await });
         for _ in 0..50 {
             if call(&sock, r#"{"op":"status"}"#).await.is_ok() {
                 return;
