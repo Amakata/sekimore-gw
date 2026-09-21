@@ -114,6 +114,7 @@
   "agent.issue.labels": "ラベル（カンマ区切り）",
   "agent.issue.comment": "Issue にコメントする",
   "agent.issue.close": "Issue を閉じる",
+  "agent.issue.update": "issue のタイトルか本文を訂正する",
   "agent.issue.reopen": "閉じた Issue を再度開く",
   "agent.issue.label": "Issue にラベルを付ける",
   "agent.issue.unlabel": "Issue からラベルを外す",

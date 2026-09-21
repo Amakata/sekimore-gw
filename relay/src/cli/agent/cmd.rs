@@ -285,6 +285,14 @@ endpoints! {
             #[arg(long, help = t("agent.body"))]
             body: String,
         },
+        Update("/issue/update") = t("agent.issue.update") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long, help = t("agent.title"))]
+            title: Option<String>,
+            #[arg(long, help = t("agent.body"))]
+            body: Option<String>,
+        },
         Close("/issue/close") = t("agent.issue.close") => {
             #[arg(long, help = t("agent.number"))]
             number: u64,

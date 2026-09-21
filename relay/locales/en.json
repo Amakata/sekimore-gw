@@ -114,6 +114,7 @@
   "agent.issue.labels": "Labels, comma separated",
   "agent.issue.comment": "Comment on an issue",
   "agent.issue.close": "Close an issue",
+  "agent.issue.update": "Correct an issue's title or body",
   "agent.issue.reopen": "Reopen a closed issue",
   "agent.issue.label": "Add labels to an issue",
   "agent.issue.unlabel": "Remove labels from an issue",

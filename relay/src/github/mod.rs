@@ -1821,6 +1821,35 @@ impl GitHub {
         })
     }
 
+    /// Correct an issue's title or body.
+    ///
+    /// 0.2.15: an issue body is the change instruction the agent works from, so rewriting one is
+    /// changing what it was asked to do. `issue:update` is separate from `issue:create` for that
+    /// reason — a project can want issues opened without wanting what a person wrote rewritable.
+    pub async fn update_issue(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        title: Option<&str>,
+        body: Option<&str>,
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Issue, Action::Update)?;
+        let mut payload = serde_json::Map::new();
+        if let Some(t) = title {
+            payload.insert("title".into(), json!(t));
+        }
+        if let Some(b) = body {
+            payload.insert("body".into(), json!(b));
+        }
+        self.rest::<Value>(
+            "PATCH",
+            &format!("/repos/{}/issues/{number}", auth.repo()),
+            Some(Value::Object(payload)),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Whether `number` names a pull request rather than an issue.
     ///
     /// GitHub serves pull requests from the issues endpoints, so the number alone does not say

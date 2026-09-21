@@ -2312,3 +2312,91 @@ async fn commenting_on_a_pull_request_needs_pr_comment() {
     assert_eq!(code, 403);
     assert!(resp.error.unwrap_or_default().contains("pr:comment"));
 }
+
+// ---- 0.2.15: correcting an issue ----
+
+#[tokio::test]
+async fn updating_an_issue_needs_issue_update() {
+    // Not issue:create. An issue body is the change instruction, so a project can want issues
+    // opened without wanting what a person wrote rewritable.
+    let f = start_api(project_case_a(&["issue:create"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 47,
+        body: "corrected".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/update", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    assert!(resp.error.unwrap_or_default().contains("issue:update"));
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "nothing should reach upstream"
+    );
+}
+
+#[tokio::test]
+async fn updating_an_issue_sends_only_what_was_given() {
+    let f = start_api(project_case_a(&["issue:update"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 47,
+        body: "corrected".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/update", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    let patch = rec
+        .iter()
+        .find(|c| c.method == "PATCH")
+        .expect("the correction");
+    assert_eq!(patch.body["body"], "corrected");
+    // A title that was not given must not be sent: it would blank the existing one
+    assert!(patch.body.get("title").is_none(), "{:?}", patch.body);
+}
+
+#[tokio::test]
+async fn updating_a_pull_request_is_refused_and_names_pr_update() {
+    // #8 is a pull request. pr update already edits one; a second way in under a different
+    // permission is the shape #52 was about.
+    let f = start_api(project_case_a(&["issue:update"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 8,
+        title: "renamed".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/issue/update", Some(&f.token), &r).await;
+    assert_eq!(code, 400);
+    let msg = resp.error.unwrap_or_default();
+    assert!(
+        msg.contains("pr update"),
+        "should point at pr update: {msg}"
+    );
+    assert!(
+        !recorded(&f.recorder).iter().any(|c| c.method == "PATCH"),
+        "the pull request must not be touched"
+    );
+}
+
+#[tokio::test]
+async fn updating_needs_a_title_or_a_body() {
+    let f = start_api(project_case_a(&["issue:update"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 47,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/issue/update", Some(&f.token), &r).await;
+    assert_eq!(code, 400);
+}
+
+#[tokio::test]
+async fn updating_an_issue_outside_the_project_is_refused() {
+    let f = start_api(project_case_a(&["issue:update"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 47,
+        body: "corrected".into(),
+        ..req("Other/Secret")
+    };
+    let (code, _) = post(f.addr, "/issue/update", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    assert!(recorded(&f.recorder).is_empty());
+}
