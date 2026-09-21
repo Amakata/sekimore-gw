@@ -21,9 +21,10 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
+use zeroize::Zeroize;
 
 use super::crypto::Secret;
-use super::SecretStore;
+use super::{SecretStore, StoreError};
 
 /// One request, one line of JSON. Small enough that a framed protocol would be ceremony.
 #[derive(serde::Deserialize)]
@@ -93,8 +94,11 @@ async fn handle(stream: UnixStream, store: Arc<Mutex<SecretStore>>) -> io::Resul
             message: format!("bad request: {e}"),
         },
     };
-    // Whatever was read holds the passphrase; drop it rather than let the buffer live on
-    line.clear();
+    // Whatever was read holds the passphrase. `clear` only sets the length to zero and leaves the
+    // bytes in the allocation, which is what this line used to do. `BufReader`'s own buffer still
+    // holds a copy that nothing wipes — reaching it needs a reader of our own, and both are out of
+    // host root's way rather than out of its reach.
+    line.zeroize();
     let mut out = serde_json::to_vec(&response)?;
     out.push(b'\n');
     reader.into_inner().write_all(&out).await
@@ -138,8 +142,16 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>) -> Response {
                         message: "unlocked".into(),
                     }
                 }
-                // Never says whether the store was reachable and the passphrase wrong, or something
-                // else: there is nothing useful to tell apart, and less to learn from guessing
+                // `Locked` here is the AEAD tag failing to open the wrapped DEK, which is what a
+                // wrong passphrase looks like. Its own Display is written for a consumer that
+                // found the store locked and tells the reader to run `mise run gw:unlock` — the
+                // command whose prompt they are standing at. Nothing is disclosed by saying so:
+                // they just typed it, and `Tampered` keeps its own message so a spliced store is
+                // never reported as a typo.
+                Err(StoreError::Locked) => Response {
+                    ok: false,
+                    message: "that passphrase did not open the store".into(),
+                },
                 Err(e) => Response {
                     ok: false,
                     message: e.to_string(),
@@ -181,6 +193,15 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>) -> Response {
                         message: format!("passphrase changed, kdf {}", kdf.as_str()),
                     }
                 }
+                // As in `Unlock`: the old passphrase is what failed to unwrap, and the store is
+                // left as it was. Saying "locked, ask a human to unlock" would be doubly wrong,
+                // since this works on a store that is already unlocked.
+                Err(StoreError::Locked) => Response {
+                    ok: false,
+                    message: "the old passphrase is not the one the store is wrapped under; \
+                              nothing was changed"
+                        .into(),
+                },
                 Err(e) => Response {
                     ok: false,
                     message: e.to_string(),
@@ -244,21 +265,34 @@ pub fn prompt(label: &str) -> anyhow::Result<Secret> {
     }
     let restore = term;
     term.c_lflag &= !libc::ECHO;
-    unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &term) };
+    // TCSAFLUSH, not TCSANOW: it discards what is already in the input queue. Anything typed
+    // before the prompt rendered was echoed with ECHO still on, and with TCSANOW it would also be
+    // read as the start of the passphrase — so a correctly typed one fails for a reason that is
+    // not on the screen. `getpass(3)` flushes for the same reason. What was already echoed cannot
+    // be taken back; keeping it out of the passphrase is the part that is fixable.
+    unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &term) };
 
-    let mut line = String::new();
+    // Room for a passphrase up front: `read_line` growing from zero would leave the earlier,
+    // shorter copies in freed allocations that nothing wipes.
+    let mut line = String::with_capacity(256);
     let read = io::stdin().lock().read_line(&mut line);
 
     unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &restore) };
     eprintln!();
     read?;
 
-    let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
-    line.clear();
-    if trimmed.is_empty() {
+    // Into a Secret before anything else, so there is one wiped copy rather than two plain ones.
+    // `String::clear` only sets the length, and `trim_end_matches(..).to_string()` would allocate
+    // a second buffer that is freed with the passphrase still in it.
+    let mut bytes = std::mem::take(&mut line).into_bytes();
+    while matches!(bytes.last(), Some(b'\n' | b'\r')) {
+        bytes.pop();
+    }
+    let secret = Secret::new(bytes);
+    if secret.as_bytes().is_empty() {
         anyhow::bail!("an empty passphrase is not accepted");
     }
-    Ok(Secret::new(trimmed.into_bytes()))
+    Ok(secret)
 }
 
 #[cfg(test)]
@@ -333,6 +367,89 @@ mod tests {
         assert!(ok);
         let (_, state) = call(&sock, r#"{"op":"status"}"#).await.unwrap();
         assert_eq!(state, "unlocked");
+    }
+
+    #[tokio::test]
+    async fn a_wrong_passphrase_does_not_send_the_operator_back_to_the_prompt_they_are_at() {
+        // `StoreError::Locked`'s own text reads "the secret store is locked. Ask a human to run:
+        // mise run gw:unlock", which is what this used to answer — to the person standing at that
+        // very prompt, having just mistyped. Three of them in a row is what opened the issue.
+        let (sock, _d) = served(true).await;
+        let (ok, msg) = call(&sock, r#"{"op":"unlock","passphrase":"wrong"}"#)
+            .await
+            .unwrap();
+        assert!(!ok);
+        assert!(
+            !msg.contains("gw:unlock"),
+            "must not name the command being run: {msg}"
+        );
+        assert!(msg.contains("passphrase"), "must say what failed: {msg}");
+    }
+
+    #[tokio::test]
+    async fn a_tampered_store_is_not_reported_as_a_mistyped_passphrase() {
+        // The case just next to the one above: the passphrase is right, and the answer has to stay
+        // the one about the record set. Collapsing both into "wrong passphrase" would have an
+        // operator retyping while a spliced store goes unmentioned.
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("control.sock");
+        let mut store = SecretStore::open(&dir.path().join("secrets.db")).unwrap();
+        store
+            .initialise(
+                &Secret::new(b"correct horse".to_vec()),
+                Kdf::Argon2id,
+                fast(),
+            )
+            .unwrap();
+        store.set("relay", "t", b"v").unwrap();
+        // Straight at the table, so the manifest is not resealed over the smaller set
+        store.db.execute("DELETE FROM records", []).unwrap();
+        store.lock();
+
+        let store = Arc::new(Mutex::new(store));
+        let s = sock.clone();
+        tokio::spawn(async move { serve(s, store).await });
+        for _ in 0..50 {
+            if sock.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let (ok, msg) = call(&sock, r#"{"op":"unlock","passphrase":"correct horse"}"#)
+            .await
+            .unwrap();
+        assert!(!ok);
+        assert!(
+            msg.contains("sealed with"),
+            "the right passphrase on a tampered store still reports tampering: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wrong_old_passphrase_says_nothing_was_changed() {
+        // `change_passphrase` works on an unlocked store too, so "the store is locked, ask a human
+        // to unlock it" was wrong twice over here.
+        let (sock, _d) = served(true).await;
+        call(&sock, r#"{"op":"unlock","passphrase":"correct horse"}"#)
+            .await
+            .unwrap();
+        let (ok, msg) = call(
+            &sock,
+            r#"{"op":"passphrase","old":"wrong","new":"new one"}"#,
+        )
+        .await
+        .unwrap();
+        assert!(!ok);
+        assert!(!msg.contains("gw:unlock"), "{msg}");
+        assert!(msg.contains("old passphrase"), "{msg}");
+
+        // and the store is untouched: the original still opens it
+        call(&sock, r#"{"op":"lock"}"#).await.unwrap();
+        let (ok, _) = call(&sock, r#"{"op":"unlock","passphrase":"correct horse"}"#)
+            .await
+            .unwrap();
+        assert!(ok, "a refused change must not have rewrapped anything");
     }
 
     #[tokio::test]
