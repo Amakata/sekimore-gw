@@ -6,6 +6,14 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.21 (2026-09-21)
+
+### Fix
+
+- resolved the Projects v2 boards on the first request instead of at start-up; resolving needs the upstream token, which since 0.2.19 is behind a locked store, so every board stayed refused for the life of the process (#100)
+- stopped remembering a board that would not resolve, so unlocking fixes it without a restart (#100)
+- said that a declared board could not be resolved, rather than that none was configured — the old wording sent the operator to a file that already had it (#100)
+
 ## 0.2.20 (2026-09-21)
 
 ### Enhancement
