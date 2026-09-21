@@ -47,6 +47,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Makes a rebuild of this commit produce the same image as the last one: a layer's tar
+      # carries mtimes, so without this two builds of identical source differ. That is what #90
+      # was after.
+      #
+      # It is *not* what stops the 160 MB re-pull between releases (#97) — the epoch comes from
+      # the commit, so a different release normalises to a different value and a cold rebuild
+      # still moves the digest. The registry cache below is what stops that, by not rebuilding
+      # the layer at all.
+      - name: Timestamp the layers from the commit
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+
       - name: Build and push by digest (${{ matrix.arch }})
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -55,11 +66,15 @@ jobs:
           platforms: ${{ matrix.platform }}
           # Do not emit the unknown/unknown attestation (provenance) manifest (matches base)
           provenance: false
-          # Push only the digest, no manifest. Tagging happens all together in the merge job
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_LC }},push-by-digest=true,name-canonical=true,push=true
-          # Keeping a separate cache scope per architecture avoids polluting it
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          # Push only the digest, no manifest. Tagging happens all together in the merge job.
+          # rewrite-timestamp normalises the layer mtimes to SOURCE_DATE_EPOCH above
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_LC }},push-by-digest=true,name-canonical=true,push=true,rewrite-timestamp=true
+          # Registry cache, not type=gha: this workflow runs only on v*.*.* tags, and a GitHub
+          # Actions cache is scoped by ref — one written under refs/tags/v0.2.19 cannot be read
+          # from refs/tags/v0.2.20. Every release was writing a cache nobody would ever read and
+          # building from cold. A registry cache has no ref scoping
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_LC }}:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_LC }}:buildcache-${{ matrix.arch }},mode=max
 
       # Pass the digest as an artifact rather than through job outputs: every matrix instance writes to the
       # same outputs map, so a key one of them does not set can be overwritten with an empty string (losing a
