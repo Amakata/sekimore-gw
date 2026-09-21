@@ -181,7 +181,38 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     // it lives beside the state rather than on the agent-facing API — an agent able to ask the
     // relay to unlock itself would make the passphrase pointless.
     match store::SecretStore::open(&r.paths.secrets) {
-        Ok(store) => {
+        Ok(mut store) => {
+            // 0.2.17: unlock without a person, when the deployment asked for that. The passphrase
+            // comes from outside the worktree either way — the agent can write `.devcontainer/.env`,
+            // so anything reachable from there would be its own passphrase.
+            match store_passphrase(&r.relay.store.unlock) {
+                Ok(None) => {}
+                Ok(Some(pass)) => {
+                    let outcome = match store.is_initialised() {
+                        // Not `unwrap_or(false)`: a database that cannot be read would then be
+                        // treated as a new store, and the error the operator needs to see would be
+                        // replaced by "already initialised" from the attempt to create one.
+                        Err(e) => Err(e),
+                        Ok(true) => store.unlock(&pass),
+                        Ok(false) => store.initialise(
+                            &pass,
+                            store::crypto::Kdf::Argon2id,
+                            store::crypto::KdfParams::default(),
+                        ),
+                    };
+                    match outcome {
+                        // Loud on purpose: a passphrase that lives in a file or an environment is
+                        // a development convenience, and a deployment that ends up with one should
+                        // find it in the log rather than in a review a year later.
+                        Ok(()) => log::warn!(
+                            "secret store unlocked from configuration — the passphrase is at rest; \
+                             relay.store.unlock: prompt is what a deployment wants"
+                        ),
+                        Err(e) => log::error!("secret store stays locked: {e}"),
+                    }
+                }
+                Err(e) => log::error!("secret store stays locked: {e}"),
+            }
             let store = Arc::new(tokio::sync::Mutex::new(store));
             let sock = r.paths.control_sock.clone();
             tokio::spawn(async move {
@@ -316,4 +347,107 @@ fn build_upstream(r: &Resolved, up: &Upstream) -> Arc<dyn UpstreamGit> {
         )
         .with_options(up.ssh_options.clone()),
     )
+}
+
+/// Say so when the passphrase file is readable by anyone but its owner.
+///
+/// A warning rather than a refusal: the relay cannot tell a deliberately shared mount from a
+/// mistake, and refusing to start over a file mode would be a poor trade. Being unable to read the
+/// mode at all is not worth reporting — the read that follows will fail with something better.
+fn warn_if_readable_by_others(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(md) = std::fs::metadata(path) {
+        let mode = md.permissions().mode() & 0o077;
+        if mode != 0 {
+            log::warn!(
+                "the store passphrase at {} is readable by others (mode {:o}); chmod 600 it",
+                path.display(),
+                md.permissions().mode() & 0o777
+            );
+        }
+    }
+}
+
+/// The passphrase the configuration points at, or `None` when a person is meant to type it.
+///
+/// A missing file or an unset variable is an error rather than a silent fall back to locked: the
+/// deployment said where the passphrase is, so not finding it is worth saying out loud.
+fn store_passphrase(
+    unlock: &crate::config::StoreUnlock,
+) -> anyhow::Result<Option<store::crypto::Secret>> {
+    use crate::config::StoreUnlock;
+    let raw = match unlock {
+        StoreUnlock::Prompt => return Ok(None),
+        StoreUnlock::File { path } => {
+            warn_if_readable_by_others(path);
+            std::fs::read_to_string(path)
+                .with_context(|| format!("read the store passphrase from {}", path.display()))?
+        }
+        StoreUnlock::Env { var } => {
+            std::env::var(var).with_context(|| format!("read the store passphrase from ${var}"))?
+        }
+    };
+    // A file written with an editor ends in a newline; a passphrase does not.
+    let trimmed = raw.trim_end_matches(['\n', '\r']);
+    if trimmed.is_empty() {
+        anyhow::bail!("the configured store passphrase is empty");
+    }
+    Ok(Some(store::crypto::Secret::new(
+        trimmed.as_bytes().to_vec(),
+    )))
+}
+
+#[cfg(test)]
+mod store_unlock_tests {
+    use super::store_passphrase;
+    use crate::config::StoreUnlock;
+
+    #[test]
+    fn prompt_asks_for_nothing() {
+        assert!(store_passphrase(&StoreUnlock::Prompt).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_file_is_read_without_its_trailing_newline() {
+        // An editor adds one and a passphrase does not have one, so a file written by hand would
+        // otherwise derive a different key than the same passphrase typed at the prompt.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("pass");
+        std::fs::write(&p, "correct horse\n").unwrap();
+        let got = store_passphrase(&StoreUnlock::File { path: p })
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.as_bytes(), b"correct horse");
+    }
+
+    #[test]
+    fn a_missing_file_is_an_error_not_a_silent_lock() {
+        // The deployment said where the passphrase is. Not finding it is worth saying.
+        let dir = tempfile::tempdir().unwrap();
+        let err = store_passphrase(&StoreUnlock::File {
+            path: dir.path().join("absent"),
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("absent"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_file_is_refused() {
+        // Otherwise the store would be initialised under an empty passphrase, silently.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("pass");
+        std::fs::write(&p, "\n").unwrap();
+        assert!(store_passphrase(&StoreUnlock::File { path: p }).is_err());
+    }
+
+    #[test]
+    fn an_unset_variable_is_an_error() {
+        let err = store_passphrase(&StoreUnlock::Env {
+            var: "SEKIMORE_TEST_UNSET_PASSPHRASE".into(),
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("SEKIMORE_TEST_UNSET_PASSPHRASE"), "{err}");
+    }
 }

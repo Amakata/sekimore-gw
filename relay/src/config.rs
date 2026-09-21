@@ -361,6 +361,38 @@ impl BoardRef {
 }
 
 /// The `relay:` section. It is owned by the relay, so an unknown key is an error.
+/// How the secret store is unlocked when the relay starts.
+///
+/// `prompt` is the default and the one to use. The passphrase then exists in a person's head and
+/// in the gateway's memory, and nowhere else — which is the whole of what the store is for.
+///
+/// `file` and `env` exist for **developing this project**, where the gateway is recreated many
+/// times an hour and typing a passphrase each time stops being a safeguard and starts being
+/// something to work around. They put the passphrase at rest, which is the thing `prompt` avoids:
+/// whoever can read that file or that environment can open the store. **Not a deployment setting.**
+///
+/// `env` must not be set through `.devcontainer/.env`: that file is the dev service's `env_file`,
+/// so the agent can both read it and write it. The gateway has its own `env_file`
+/// (`SEKIMORE_SECRET_ENV`) that points outside the worktree, which is the place for it. Even then
+/// an environment variable shows up in `docker inspect`, which `file` does not.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase", tag = "unlock")]
+pub enum StoreUnlock {
+    /// A person runs `mise run gw:unlock`. Nothing at rest opens the store
+    #[default]
+    Prompt,
+    /// Read the passphrase from a file outside the worktree, 0600. For development only
+    File { path: PathBuf },
+    /// Read the passphrase from an environment variable. For development only
+    Env { var: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+pub struct StoreConfig {
+    #[serde(flatten, default)]
+    pub unlock: StoreUnlock,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RelayConfig {
@@ -381,6 +413,10 @@ pub struct RelayConfig {
     pub https_max_upload_bytes: i64,
     #[serde(default = "d_state_dir")]
     pub state_dir: PathBuf,
+    /// 0.2.17: how the secret store is unlocked at start-up. The default asks a person, which
+    /// means a restart needs one; the other two trade that for a secret at rest
+    #[serde(default)]
+    pub store: StoreConfig,
     /// The upstream host. Defaults to the git-relay domain
     pub upstream: Option<String>,
     #[serde(default = "d_upstream_ssh_port")]
