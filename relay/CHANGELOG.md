@@ -6,6 +6,24 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.19 (2026-09-21)
+
+### Security
+
+- sealed the upstream API token into the secret store; it was a 0600 file a copied volume or a backup carried in the clear (#92)
+- refused a push that moves a `refs/tags/*` ref the upstream already advertises, under the same `delete` authority that refuses removing one (#91)
+- told the token cache when the store is locked, so `lock` no longer leaves the decrypted token usable for the rest of its TTL (#92)
+
+### Fix
+
+- checked the store is writable before `login` starts a device flow, rather than discarding an authorisation a person already granted (#92)
+- stopped reporting a store that would not open as `Locked`, which sent the operator to a passphrase that cannot help (#92)
+
+### Enhancement
+
+- added `get` / `set` / `delete` / `list` to the control socket, with `not_found` and `locked` as codes rather than prose (#92)
+- moved a pre-0.2.18 `upstream_token` file into the store the first time it is read, and deleted it (#92)
+
 ## 0.2.18 (2026-09-21)
 
 ### Security

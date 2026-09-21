@@ -13,6 +13,17 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.19 (2026-09-21)
+
+### Security
+
+- pinned the Debian archive to a `snapshot.debian.org` timestamp and every package to a version; `apt-get update` took whatever Debian served that day (#93)
+- named `bind9-dnsutils` instead of `dnsutils`, which trixie has no package for — a virtual name has no version to pin (#93)
+
+### Enhancement
+
+- failed the build once the Debian snapshot is more than 90 days old, since no security update reaches the image between bumps (#93)
+
 ## 0.2.18 (2026-09-21)
 
 ### Security
