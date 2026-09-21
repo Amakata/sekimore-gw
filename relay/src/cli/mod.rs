@@ -50,7 +50,10 @@ pub enum Command {
     #[command(about = t("cli.check"))]
     Check,
     #[command(about = t("cli.unlock"))]
-    Unlock,
+    Unlock {
+        #[arg(long, help = t("cli.unlock.stdin"))]
+        stdin: bool,
+    },
     #[command(about = t("cli.lock"))]
     Lock,
     #[command(about = t("cli.passphrase"))]
@@ -150,7 +153,7 @@ pub async fn run(cli: Cli) -> i32 {
             .await
             .map(|_| 0),
         Command::Check => operator::check(&cli.config).await.map(|_| 0),
-        Command::Unlock => operator::unlock(&cli.config).await.map(|_| 0),
+        Command::Unlock { stdin } => operator::unlock(&cli.config, stdin).await.map(|_| 0),
         Command::Lock => operator::store_control(&cli.config, "lock")
             .await
             .map(|_| 0),

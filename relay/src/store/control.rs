@@ -489,6 +489,76 @@ pub fn prompt(label: &str) -> anyhow::Result<Secret> {
     Ok(secret)
 }
 
+/// The most a passphrase may be when it arrives on stdin. A pipe cannot be seen, so the wrong
+/// file redirected into `unlock --stdin` would otherwise be sent to the control socket whole.
+const MAX_STDIN_PASSPHRASE: usize = 1024;
+
+/// Whether a descriptor is a terminal. Split out from the refusal below so the decision can be
+/// tested against a real pipe and the message against both answers.
+fn is_terminal(fd: libc::c_int) -> bool {
+    unsafe { libc::isatty(fd) == 1 }
+}
+
+/// `--stdin` exists for a pipe, so a terminal is refused rather than read.
+///
+/// This is about the default being echo-off, not about access: `unlock --stdin < /dev/tty` still
+/// reaches the reader, and anyone who can run that could have piped the passphrase in anyway.
+/// What it does stop is someone reaching for `--stdin` by hand and typing a passphrase that the
+/// terminal then echoes onto the screen and into the scrollback.
+fn refuse_a_terminal(terminal: bool) -> anyhow::Result<()> {
+    if terminal {
+        anyhow::bail!(
+            "--stdin reads the passphrase from a pipe, and stdin is a terminal. \
+             Pipe it in, or run `mise run gw:unlock` to type it with echo off"
+        );
+    }
+    Ok(())
+}
+
+/// One line of passphrase from a reader. Exactly one trailing newline is removed and nothing else
+/// is trimmed.
+///
+/// Trimming would be the wrong kind of helpful: a passphrase may begin or end with a space, and a
+/// reader that dropped those would unlock the store from a keychain while the same characters
+/// typed at the prompt did not. Only the first line is read, so a file with more in it does not
+/// turn into a passphrase nobody chose.
+pub fn read_passphrase_line(reader: impl io::BufRead) -> anyhow::Result<Secret> {
+    use std::io::BufRead as _;
+
+    // Room up front, as in `prompt`: a String growing from zero leaves the shorter copies behind
+    // in freed allocations that nothing wipes.
+    let mut line = String::with_capacity(256);
+    // One byte past the cap, so a passphrase of exactly the cap is accepted and a longer one is
+    // reported rather than silently cut in half and sent as a passphrase that will not match.
+    let mut capped = reader.take(MAX_STDIN_PASSPHRASE as u64 + 1);
+    capped.read_line(&mut line).map_err(|e| {
+        anyhow::anyhow!("cannot read the passphrase from stdin ({e}). It has to be valid UTF-8")
+    })?;
+
+    // Into a Secret before it is looked at, so there is one wiped copy rather than two plain ones.
+    let mut bytes = std::mem::take(&mut line).into_bytes();
+    if bytes.last() == Some(&b'\n') {
+        bytes.pop();
+    }
+    let secret = Secret::new(bytes);
+    if secret.as_bytes().is_empty() {
+        anyhow::bail!("empty passphrase on stdin");
+    }
+    if secret.as_bytes().len() > MAX_STDIN_PASSPHRASE {
+        anyhow::bail!(
+            "the passphrase on stdin is longer than {MAX_STDIN_PASSPHRASE} bytes. \
+             Is that the right file?"
+        );
+    }
+    Ok(secret)
+}
+
+/// The passphrase for `unlock --stdin`: one line, from a pipe.
+pub fn passphrase_from_stdin() -> anyhow::Result<Secret> {
+    refuse_a_terminal(is_terminal(libc::STDIN_FILENO))?;
+    read_passphrase_line(io::stdin().lock())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,5 +998,86 @@ mod tests {
         let (ok, msg) = call(&sock, "not json").await.unwrap();
         assert!(!ok);
         assert!(msg.contains("bad request"), "{msg}");
+    }
+
+    /// `unlock --stdin` reads the passphrase; the operator never sees what it read. What it takes
+    /// off the end therefore has to be exactly one thing.
+    #[test]
+    fn a_piped_passphrase_loses_one_trailing_newline_and_nothing_else() {
+        let read = |input: &[u8]| read_passphrase_line(input).map(|s| s.as_bytes().to_vec());
+        assert_eq!(read(b"correct horse\n").unwrap(), b"correct horse");
+        // `printf '%s'` rather than `printf '%s\n'`: no newline to remove
+        assert_eq!(read(b"correct horse").unwrap(), b"correct horse");
+        // One line. A keychain entry with a second line in it must not become a passphrase that
+        // has the second line in it too.
+        assert_eq!(
+            read(b"correct horse\nand more\n").unwrap(),
+            b"correct horse"
+        );
+        // Spaces are characters. `trim()` here would unlock from the keychain a store that the
+        // same characters typed at the prompt do not open.
+        assert_eq!(read(b"  two  words  \n").unwrap(), b"  two  words  ");
+        assert_eq!(read(b"\ttabbed\t\n").unwrap(), b"\ttabbed\t");
+    }
+
+    #[test]
+    fn an_empty_line_is_not_a_passphrase() {
+        // A keychain lookup that found nothing pipes in nothing. Sending that as a passphrase
+        // would spend an unlock attempt and report "wrong passphrase" for a missing entry.
+        for input in [&b""[..], &b"\n"[..]] {
+            let err = read_passphrase_line(input).unwrap_err().to_string();
+            assert!(err.contains("empty passphrase"), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_file_redirected_in_by_mistake_is_refused_rather_than_sent() {
+        let long = vec![b'a'; MAX_STDIN_PASSPHRASE + 1];
+        let err = read_passphrase_line(&long[..]).unwrap_err().to_string();
+        assert!(err.contains("longer than"), "{err}");
+        // and the boundary itself is a passphrase, not an error
+        let edge = vec![b'a'; MAX_STDIN_PASSPHRASE];
+        assert_eq!(
+            read_passphrase_line(&edge[..]).unwrap().as_bytes().len(),
+            MAX_STDIN_PASSPHRASE
+        );
+    }
+
+    #[test]
+    fn a_terminal_on_stdin_is_refused_and_a_pipe_is_not() {
+        let err = refuse_a_terminal(true).unwrap_err().to_string();
+        assert!(err.contains("gw:unlock"), "say what to run instead: {err}");
+        assert!(refuse_a_terminal(false).is_ok());
+    }
+
+    #[test]
+    fn a_pipe_is_not_seen_as_a_terminal() {
+        // The other half of the refusal: `refuse_a_terminal` only decides what to do with the
+        // answer, and a wrong `isatty` would refuse every piped unlock.
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let piped = is_terminal(fds[0]);
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+        assert!(!piped);
+    }
+
+    #[tokio::test]
+    async fn a_passphrase_read_from_a_pipe_unlocks_a_store_that_was_set_up_by_typing() {
+        // The whole point of `--stdin`: `served(true)` initialises the store with the bytes
+        // `prompt` would have produced, and the pipe has to arrive at the same ones.
+        let (sock, _d) = served(true).await;
+        let pass = read_passphrase_line(&b"correct horse\n"[..]).unwrap();
+        let body = serde_json::json!({
+            "op": "unlock",
+            "passphrase": String::from_utf8_lossy(pass.as_bytes()),
+        })
+        .to_string();
+        let (ok, msg) = call(&sock, &body).await.unwrap();
+        assert!(ok, "{msg}");
+        let (_, state) = call(&sock, r#"{"op":"status"}"#).await.unwrap();
+        assert_eq!(state, "unlocked");
     }
 }

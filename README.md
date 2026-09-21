@@ -131,6 +131,13 @@ tasks use only its `gw`, `gw-tty`, `id` and `recreate` subcommands. `gw-tty` —
 unconditionally — is required by `gw:unlock` and `gw:passphrase`, which read a passphrase from the
 terminal.
 
+Since 0.2.29 the passphrase does not have to be typed after every recreate. `mise run
+gw:keychain-set` puts it in the host's own secret store — the macOS Keychain, a Secret Service, or
+a root-owned file under `/etc/sekimore` — and `gw:recreate` unlocks with it by itself
+(`SGW_NO_AUTO_UNLOCK=1` leaves the store locked). The gateway takes no part in it: the passphrase
+still arrives over the control socket, and nothing inside the container can go and look for it.
+`gw:unlock` is unchanged, and is still the way in when nothing is stored.
+
 ## Configuration
 
 ### Environment Variables (Optional)
