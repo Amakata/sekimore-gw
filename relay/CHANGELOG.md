@@ -2,6 +2,16 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+## 0.2.17 (2026-09-21)
+
+- The Python test job treated the kill from its own timeout as the run's result, so a suite with a failure in it — which also hangs — was reported green. The summary line decides it now. A test that had been failing since 0.2.15 rode through two releases behind this
+- `dashboard.html` did not offer `pr:label`, `pr:assign` or `issue:update`, so a permission added to the relay could not be picked in the Web UI
+- `pip-audit` runs on every pull request (`mise run ci:py-audit`). `cargo audit` reads `relay/Cargo.lock` alone, and 29 advisories across six Python packages were sitting in the lockfile
+- `export` / `import` for the secret store, still sealed: a backup can be taken while locked, and the envelope carries the salt and parameters so moving machines is copying a file
+- The set of records is MACed. Per-record AEAD covers a record's content and identity and says nothing about the set, so a record dropped or spliced in from another store went unnoticed. Checked at unlock, not only at import
+- `relay.store.unlock: file` / `env` unlock without a person, for developing this project. They put the passphrase at rest, which `prompt` avoids, so the relay says so in the log at start-up
+- `COPY src/` sat above `uv pip install`, so one edited line rebuilt site-packages and every consumer pulled it again
+
 ## 0.2.16 (2026-09-21)
 
 - `mise run gw:unlock` could not set a passphrase on a store that had none: it asked twice, then sent `unlock`, which unwraps a key using parameters not yet written. The control socket had no `init`
