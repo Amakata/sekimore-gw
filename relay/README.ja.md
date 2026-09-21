@@ -220,7 +220,7 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 
 - 実効権限 = (案件 allow ∪ 上流 allow ∪ repo allow) − (案件 deny ∪ 上流 deny ∪ repo deny)。deny はどの層に書いても勝ちます。
 - `push` / `tags` / `delete` は 案件 → 上流 → repo の順で上書きされます。glob は `*` と `?` が使えます。
-- 権限キーは 23 個: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:request_review` `pr:merge` `pr:close`、`issue:create` `issue:read` `issue:comment` `issue:close` `issue:label` `issue:assign`、`project:read` `project:add_item` `project:update_item`、`repo:read`、`ci:read` `ci:rerun`、`release:create` `release:read` `release:publish`、`search:read`。
+- 権限キーは 28 個: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:request_review` `pr:merge` `pr:close` `pr:label` `pr:assign`、`issue:create` `issue:read` `issue:comment` `issue:update` `issue:close` `issue:label` `issue:assign`、`project:read` `project:add_item` `project:update_item`、`repo:read`、`ci:read` `ci:rerun`、`release:create` `release:read` `release:publish`、`search:read`、`security:read` `security:dismiss`。設定が許しているものは `sekimore-relay check` が出す。
 - `pr:read` は状態・CI チェックに加えて本文とコメントも含む。`issue:read` は別にしてあるので、非公開のトラッカーを読ませずに bug を登録させられる。`search:read` は 1 つのリポジトリに宛てた操作ではないので独立した資源。
 - `pr:review` はレビューを出す権限、`pr:request_review` は誰かに依頼する権限。意見を記録することと人に通知することは別なので分けてある。
 - `ci:rerun` は workflow run の再実行と中止。`ci:read` には含めていない。再実行は Actions の時間を消費し、リポジトリの secret を持つ workflow のコードを実行するため。
