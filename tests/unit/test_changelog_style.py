@@ -3,6 +3,18 @@
 An entry is meant to say what changed, not to argue the case for it. Three releases in a row grew
 to 450-720 character bullets before anyone noticed, because nothing checked. These tests are the
 check: they enforce the shape the 0.1.x entries already had, and keep the two languages aligned.
+
+The shape, since 0.2.18:
+
+    ## 0.2.17 (2026-09-21)
+
+    ### Security
+
+    - sealed the set of records with a MAC, checked at unlock (#77)
+
+A release groups its bullets under `### Security`, `### Fix`, `### Enhancement` — heaviest first,
+each one optional — and every bullet ends with the pull request that changed it. The reader who
+wants the reasoning follows the number; the entry itself stays one scannable line.
 """
 
 import re
@@ -14,11 +26,15 @@ ROOT = Path(__file__).resolve().parents[2]
 EN = ROOT / "relay" / "CHANGELOG.md"
 JA = ROOT / "relay" / "CHANGELOG.ja.md"
 
-# A bullet longer than this is a paragraph wearing a bullet's clothes. The 0.1.x entries sit
-# between 60 and 180; the cap leaves room for one that genuinely needs a clause about scope.
-MAX_BULLET = 320
+# A bullet longer than this is a paragraph wearing a bullet's clothes. Entries sit between 60 and
+# 210; the cap leaves room for one that genuinely needs a clause about scope.
+MAX_BULLET = 250
 # A release with more bullets than this is usually several releases, or one entry split too fine.
 MAX_BULLETS_PER_RELEASE = 12
+# Heaviest first. A release uses the ones it needs and keeps them in this order.
+CATEGORIES = ["Security", "Fix", "Enhancement"]
+# `(#77)` at the end of the line. One pull request per entry; an entry spanning two is two entries.
+_REF = re.compile(r" \(#\d+\)$")
 
 
 def _releases(path: Path) -> dict[str, list[str]]:
@@ -32,6 +48,35 @@ def _releases(path: Path) -> dict[str, list[str]]:
             out[current] = []
         elif current and line.startswith("- "):
             out[current].append(line)
+    return out
+
+
+def _categories(path: Path) -> dict[str, list[str]]:
+    """Map each release heading to the `### ` categories under it, in file order."""
+    out: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        head = re.match(r"^## (\S+?)[ （(]", line)
+        if head:
+            current = head.group(1)
+            out[current] = []
+        elif current and line.startswith("### "):
+            out[current].append(line[4:].strip())
+    return out
+
+
+def _orphan_bullets(path: Path) -> list[str]:
+    """Bullets sitting under a release but not under any category of it."""
+    out: list[str] = []
+    in_release = False
+    in_category = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if re.match(r"^## (\S+?)[ （(]", line):
+            in_release, in_category = True, False
+        elif line.startswith("### "):
+            in_category = True
+        elif in_release and not in_category and line.startswith("- "):
+            out.append(line)
     return out
 
 
@@ -61,6 +106,47 @@ def describe_changelog_style():
             f"{path.name}: a changelog entry states what changed; the reasoning belongs in the "
             f"commit or the pull request. Split or shorten these (limit {MAX_BULLET}): {long_ones}"
         )
+
+    @pytest.mark.parametrize("path", [EN, JA], ids=["en", "ja"])
+    def it_names_the_pull_request_that_changed_it(path):
+        # The number is how a reader gets from "what" to "why" without the entry carrying the why.
+        missing = [
+            (rel, b)
+            for rel, bullets in _releases(path).items()
+            for b in bullets
+            if not _REF.search(b)
+        ]
+        assert missing == [], (
+            f"{path.name}: every entry ends with the pull request that changed it, as ` (#77)`. "
+            f"Missing: {missing}"
+        )
+
+    @pytest.mark.parametrize("path", [EN, JA], ids=["en", "ja"])
+    def it_files_every_entry_under_a_category(path):
+        orphans = _orphan_bullets(path)
+        assert orphans == [], (
+            f"{path.name}: an entry belongs under one of {CATEGORIES}, not directly under the "
+            f"release heading: {orphans}"
+        )
+
+    @pytest.mark.parametrize("path", [EN, JA], ids=["en", "ja"])
+    def it_orders_the_categories_heaviest_first(path):
+        rank = {name: i for i, name in enumerate(CATEGORIES)}
+        wrong = {
+            rel: cats
+            for rel, cats in _categories(path).items()
+            if [c for c in cats if c not in rank]
+            or [rank[c] for c in cats] != sorted(rank[c] for c in cats)
+            or len(cats) != len(set(cats))
+        }
+        assert wrong == {}, (
+            f"{path.name}: categories are {CATEGORIES}, heaviest first, at most one of each: {wrong}"
+        )
+
+    def it_files_an_entry_under_the_same_category_in_both_languages():
+        en, ja = _categories(EN), _categories(JA)
+        uneven = {rel: (en[rel], ja.get(rel)) for rel in en if en[rel] != ja.get(rel)}
+        assert uneven == {}, f"the two changelogs categorise differently (en, ja): {uneven}"
 
     @pytest.mark.parametrize("path", [EN, JA], ids=["en", "ja"])
     def it_keeps_a_release_to_a_readable_number_of_entries(path):

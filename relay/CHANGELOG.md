@@ -2,194 +2,292 @@
 
 *[日本語版](CHANGELOG.ja.md)*
 
+Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first —
+and say what changed, with the pull request that changed it. The reasoning is in
+the pull request.
+
 ## 0.2.17 (2026-09-21)
 
-- The Python test job treated the kill from its own timeout as the run's result, so a suite with a failure in it — which also hangs — was reported green. The summary line decides it now. A test that had been failing since 0.2.15 rode through two releases behind this
-- `dashboard.html` did not offer `pr:label`, `pr:assign` or `issue:update`, so a permission added to the relay could not be picked in the Web UI
-- `pip-audit` runs on every pull request (`mise run ci:py-audit`). `cargo audit` reads `relay/Cargo.lock` alone, and 29 advisories across six Python packages were sitting in the lockfile
-- `export` / `import` for the secret store, still sealed: a backup can be taken while locked, and the envelope carries the salt and parameters so moving machines is copying a file
-- The set of records is MACed. Per-record AEAD covers a record's content and identity and says nothing about the set, so a record dropped or spliced in from another store went unnoticed. Checked at unlock, not only at import
-- `relay.store.unlock: file` / `env` unlock without a person, for developing this project. They put the passphrase at rest, which `prompt` avoids, so the relay says so in the log at start-up
-- `COPY src/` sat above `uv pip install`, so one edited line rebuilt site-packages and every consumer pulled it again
+### Security
+
+- sealed the set of records with a MAC, checked at unlock, so a dropped or spliced-in record is noticed (#77)
+- added `pip-audit` to every pull request, and cleared 29 advisories across six Python packages (#80)
+
+### Fix
+
+- stopped the Python test job reading the kill from its own timeout as success; a test had been failing since 0.2.15 (#80)
+- added `pr:label`, `pr:assign` and `issue:update` to `dashboard.html` (#80)
+
+### Enhancement
+
+- added `export` / `import` for the secret store, sealed, so a backup can be taken while locked (#77)
+- added `relay.store.unlock: file` / `env` for unattended unlock; both put the passphrase at rest, and the relay says so at start-up (#78)
+- moved `COPY src/` below `uv pip install`, so one edited line no longer rebuilds site-packages (#79)
 
 ## 0.2.16 (2026-09-21)
 
-- `mise run gw:unlock` could not set a passphrase on a store that had none: it asked twice, then sent `unlock`, which unwraps a key using parameters not yet written. The control socket had no `init`
-- The message when stdin is not a terminal said to run it on one, which is unhelpful to someone sitting at a terminal. It now says not to pipe it
+### Fix
+
+- added `init` to the control socket, so `mise run gw:unlock` can set a passphrase on a store that has none (#73)
+- reworded the not-a-terminal message to say not to pipe it, rather than to use a terminal (#73)
 
 ## 0.2.15 (2026-09-21)
 
-- `project list` / `fields` / `add-item` / `update-item` take `--board 2`, the number `config.yml` and the URL already use. `--project-id` still works, and a project with one board can leave both out
-- `project list` carries each item's field values — single-select, text, number and date — so a field written with `update-item` can be read back
-- The `issue` writes require `pr:*` when the number names a pull request: GitHub serves pull requests from the issues endpoints, so `issue:close` reached one. `pr:label` and `pr:assign` are new
-- `issue update --number N [--title …] [--body …]`, under a new `issue:update` rather than `issue:create`
-- The config reload runs on the gateway's own event loop and the firewall's rule changes hold a lock. They could interleave, leaving the NFLOG rule ahead of the ACCEPTs or gone
-- A config whose `domain_handlers` relays a domain `allow_domains` does not cover is refused at start-up, naming it. `deny` and `splice` entries are not checked
-- A secret store: SQLite in its own file, AES-256-GCM per value, the record's identity as associated data. Nothing consumes it yet
-- `sekimore-relay unlock` / `lock` / `store-status` / `passphrase`, over a unix socket beside the relay's state rather than the agent-facing API. `mise run gw:unlock` and friends
-- A pull request and a push to `main` build `:pr-<n>` and `:main` for arm64, so a gateway change can be tried without spending a version number
+### Security
+
+- required `pr:*` for the `issue` writes when the number names a pull request; added `pr:label` and `pr:assign` (#67)
+
+### Fix
+
+- moved the config reload onto the gateway's event loop, so it no longer interleaves with the firewall's rule changes (#66)
+- refused at start-up a config whose `domain_handlers` relays a domain `allow_domains` does not cover (#65)
+
+### Enhancement
+
+- added a secret store: SQLite in its own file, AES-256-GCM per value, the record's identity as associated data (#70)
+- added `unlock` / `lock` / `store-status` / `passphrase` over a unix socket beside the relay's state (#71)
+- added `--board 2` to the `project` commands, the number `config.yml` and the URL already use (#64)
+- added each item's field values to `project list`, so a field written with `update-item` can be read back (#64)
+- added `issue update --number N [--title …] [--body …]`, under a new `issue:update` (#69)
+- added `:pr-<n>` and `:main` arm64 images, so a gateway change can be tried without spending a version (#63)
 
 ## 0.2.14 (2026-09-18)
 
-- A reload rebuilt the ipsets from `allow_domains` alone, so `allow_ips` and `block_ips` were dropped until the next restart. Addresses named directly in the config are the ones with no DNS name to fall back on
-- A reload flushed the existing state before generating the new Squid config, so a config that failed to generate left the gateway holding neither the old rules nor the new ones. The config is now built first, and one missing the relayed-domain denial is refused rather than written
-- `ProxyManager` is built once at start-up, so every key under `proxy` is fixed until a restart - `enabled` included. Turning the proxy on did nothing and the reload said nothing about it; the only clue was Squid being absent. The reload check now compares the proxy block too
-- `project add-item` takes a GraphQL node id and nothing handed one out, so an item could join a board only in the same breath as being created - anything already filed could not be put on a board at all. `issue view` and `pr view` now carry `node_id`
+### Fix
+
+- kept `allow_ips` and `block_ips` across a reload; the ipsets were rebuilt from `allow_domains` alone (#56)
+- generated the Squid config before flushing the old state, so a failed generation no longer leaves neither (#56)
+- made the reload check compare the `proxy` block, so `proxy.enabled` is no longer fixed until a restart (#56)
+- added `node_id` to `issue view` and `pr view`, so anything already filed can join a board (#56)
 
 ## 0.2.13 (2026-09-18)
 
-- The config file is writable from dev and applied on save, so an agent that read a hostile prompt could rewrite the rules holding it. `reload:` now takes auto (as before), manual, or a duration — a window that runs out rather than a mode someone has to close. Reopened only from inside the gateway
-- `python -m src.maint reload-follow 30m` / `reload-freeze` / `reload-status`. A save arriving with the window shut is counted and logged rather than dropped quietly
-- A pull request's head was never checked. GitHub reads `owner:branch` as a fork, so an agent could open a PR against a project repository carrying code the relay never saw. A head now satisfies the same globs a direct push would
-- Two updates to one upstream ref in a single push left the report-status rewriter unable to say which result belonged to which client ref. The rewrite produces a branch name from the agent's own commit, so it could name that branch as a second ref deliberately
-- Start-up seeded the allow ipset from allow_domains without consulting domain_handlers, so the upstream's real address went in for every domain the relay answers for — six here. The agent could reach the address directly and miss the relay
-- Domain matching compared suffixes without label boundaries, so `.debian.org` covered `evildebian.org`, a name anyone can register. The allow, block and ignore lists now share one comparison, which also settles a three-way disagreement about wildcards
-- The reload check compared the relay section through a model that keeps four keys, so adding a repository to the project, granting pr:merge or lifting the upload cap all read as no change at all
-- An unnamed TLS connection took the default upload cap, so omitting the SNI was a way to ask for whichever cap was loosest. It now takes the tightest of them
-- truncate() cut a byte at a time into a str: an upstream error body echoes what the agent sent, so a Japanese label name was enough to panic the task
-- Two messages that sent people the wrong way: operator commands now say they run inside the gateway, since an agent told to run `sekimore-relay keyscan` ran it in dev and got an unrelated cause; and a login timing out against a proxy inside a docker bridge subnet is now named at start-up
-- Two things the config quietly built wrong: a misspelled `domain_handlers` key was ignored, and the ones worth misspelling loosen (`max_uploads_bytes` read as no cap); and an ipset named from the domain cut to 31 characters was shared by any two agreeing on their first 25
-- Also: a missing `merged` field read as true and gated deleting the branch; `repo vocabulary` answered "no labels" when the read had failed; an idle timeout recorded zero bytes sent; SSH session channels were never released; glob_match backtracked exponentially over a ref name the agent chooses
+### Security
+
+- replaced the always-on config reload with `reload: auto | manual | <duration>`, reopened only from inside the gateway (#49)
+- checked a pull request's head against the same globs a push satisfies, so a fork cannot carry in code the relay never saw (#49)
+- seeded the allow ipset from `domain_handlers` as well, so the upstream's real address is no longer reachable directly (#49)
+- compared domains on label boundaries, so `.debian.org` no longer covers `evildebian.org` (#49)
+- gave an unnamed TLS connection the tightest upload cap rather than the default (#49)
+
+### Fix
+
+- named the client ref in report-status when one push updates an upstream ref twice (#49)
+- widened the reload check's model of the relay section, which kept four keys and read most changes as none (#49)
+- fixed `truncate()` cutting a byte at a time into a `str`; a Japanese label name panicked the task (#49)
+- said where operator commands run, and named a login timing out against a proxy in a docker bridge subnet (#49)
+- rejected a misspelled `domain_handlers` key, and stopped ipset names colliding after being cut to 31 characters (#49)
+- also: a missing `merged` field read as true; `repo vocabulary` said "no labels" on a failed read; an idle timeout recorded zero bytes; SSH session channels leaked; `glob_match` backtracked exponentially (#49)
+
+### Enhancement
+
+- added `python -m src.maint reload-follow 30m` / `reload-freeze` / `reload-status` (#49)
 
 ## 0.2.12 (2026-09-18)
 
-- Squid served the domains the relay owns. It resolves through Docker's DNS, never sees the DNS filter's answers, and served `github.com` to anyone setting `https_proxy=<gateway>:3128` — the real upstream, with none of the project's policy. Open whenever `proxy.enabled` is true
-- The generated squid.conf now denies the `github`, `https-relay` and `deny` domains ahead of the allowlist. The deny names each domain exactly, so `.github.com` keeps serving api.github.com and codeload.github.com — neither is the relay's, and taking the wildcard out would break fetching source tarballs
-- Applied on startup, reload and restart; a reload denies the old and the new handler sets both, since the relay keeps the old one until a restart. With no handlers the file is byte-identical to before
-- Separately: a name listed beside a wildcard that contains it (`deb.debian.org` and `.debian.org`) is a FATAL error to Squid, not a warning, so the proxy would not start at all. The redundant entry is now left out of the generated ACL
-- The squid.conf template is bind-mounted by each deployment, not baked into the image, so upgrading the gateway leaves an older one in place. The deny rule is now inserted into a template that predates it; one too unfamiliar to place it in fails the generation instead
+### Security
+
+- denied the relay's own domains in the generated `squid.conf`; Squid resolved through Docker's DNS and served `github.com` to anyone setting `https_proxy=<gateway>:3128` (#48)
+- named each denied domain exactly, so `.github.com` keeps serving api.github.com and codeload.github.com (#48)
+
+### Fix
+
+- applied the deny on startup, reload and restart, covering the old and new handler sets both (#48)
+- left out a name listed beside a wildcard containing it; `deb.debian.org` with `.debian.org` is FATAL to Squid (#48)
+- inserted the deny rule into a bind-mounted template that predates it, and failed generation on one too unfamiliar to place it in (#48)
 
 ## 0.2.11 (2026-09-17)
 
-- `cli/agent.rs` (948 lines) split into `cli/agent/`: the clap tree, the dispatch, the printing and the HTTP client. Each part now knows one thing — printing knows nothing about endpoints, the client nothing about subcommands
-- An endpoint's path is declared beside its flags, so the two cannot drift. A subcommand written without a path does not compile. The field mapping stays explicit: covering all 38 endpoints in a macro would need seven features and sixteen escapes, which costs more reading than it saves
-- The repeated handler preamble in `api/handlers.rs` folded into three scope helpers, about 150 lines. The permission stays an argument at every call site, because that is the security boundary and belongs where it can be read
-- No change to any command, flag, endpoint, permission or message. All 47 help screens are byte-identical in both languages
+### Enhancement
+
+- split `cli/agent.rs` (948 lines) into `cli/agent/`: the clap tree, the dispatch, the printing and the HTTP client (#47)
+- declared each endpoint's path beside its flags, so a subcommand written without a path does not compile (#47)
+- folded the repeated handler preamble in `api/handlers.rs` into three scope helpers, about 150 lines (#47)
+- no change to any command, flag, endpoint, permission or message; all 47 help screens are byte-identical in both languages (#47)
 
 ## 0.2.10 (2026-09-17)
 
-- `SEKIMORE_WEB_HOST`, `SEKIMORE_WEB_PORT` and `SEKIMORE_ULOG_PATH` were read into constants that nothing used, so setting them did nothing. They work now. `ULOG_FILE_PATH` also defaulted to `syslogemu.log` while the code read `firewall.log`; the default matches what ulogd writes
-- `login` now says whether it went through `proxy.upstream_proxy` or straight out. An unreachable proxy and an unreachable upstream produced the same timeout, and they are fixed in different places
-- Removed five unused dependencies: `thiserror` and `http` on the Rust side (the `http::` paths resolve to a local module of the same name), `pydantic-settings`, `python-json-logger` and `jinja2` on the Python side
-- Removed seven Rust functions, the `bootstrap` agent subcommand and `bootstrap status`, and four Python definitions, none of which had a caller. `agent-setup.sh` calls `POST /bootstrap` over HTTP, so the endpoint stays
+### Fix
+
+- honoured `SEKIMORE_WEB_HOST`, `SEKIMORE_WEB_PORT` and `SEKIMORE_ULOG_PATH`, read into constants nothing used (#46)
+- defaulted `ULOG_FILE_PATH` to `firewall.log`, which is what ulogd writes, rather than `syslogemu.log` (#46)
+
+### Enhancement
+
+- made `login` say whether it went through `proxy.upstream_proxy` or straight out (#46)
+- removed five unused dependencies: `thiserror`, `http`, `pydantic-settings`, `python-json-logger`, `jinja2` (#46)
+- removed seven Rust functions, the `bootstrap` agent subcommand, `bootstrap status`, and four Python definitions (#46)
 
 ## 0.2.9 (2026-09-17)
 
-- `sekimore pr merge` takes `--method merge|squash|rebase`, `--title`, `--message` and `--delete-branch`. A squash-only repository rejected the old empty body with 405
-- `--delete-branch` removes only the branch just merged, and needs `delete_merged_branch` on the repo. That is not the git-level `delete` authority
-- `sekimore pr reopen` / `issue reopen`, `issue unlabel`, `issue unassign`, `pr update --title/--body/--base`. Changing the base re-runs the base check
-- `sekimore release edit` can publish or amend a draft. Flipping draft to false needs the new `release:publish`
-- `sekimore ci rerun --run-id N [--all]` and `ci cancel`, under the new `ci:rerun`. Re-running spends Actions minutes and re-executes jobs holding repository secrets, so it is not `ci:read`
-- `sekimore repo vocabulary` lists the labels, assignable people and open milestones. `repo:read` was declared and checked nowhere until now
-- The changelog style is checked in CI: bullet length, one date-only heading per release, and the two languages describing the same releases
+### Fix
+
+- gave `pr merge` a body; a squash-only repository rejected the old empty one with 405 (#45)
+- checked `repo:read`, which was declared and checked nowhere until now (#45)
+
+### Enhancement
+
+- added `--method merge|squash|rebase`, `--title`, `--message` and `--delete-branch` to `pr merge` (#45)
+- added `pr reopen`, `issue reopen`, `issue unlabel`, `issue unassign`, `pr update --title/--body/--base` (#45)
+- added `release edit`, which needs the new `release:publish` to flip a draft to published (#45)
+- added `ci rerun --run-id N [--all]` and `ci cancel` under the new `ci:rerun`, not `ci:read` (#45)
+- added `repo vocabulary`: the labels, assignable people and open milestones (#45)
+- added a CI check on changelog style: bullet length, date-only headings, and the two languages in step (#45)
 
 ## 0.2.8 (2026-09-17)
 
-- `sekimore pr view` / `pr comments` / `pr list`, and `issue view` / `issue comments` / `issue list`. An agent could open an issue it could never read, and be reviewed without seeing the review
-- `pr comments` merges the conversation, the review verdicts and the line comments into one list, oldest first
-- `sekimore search "is:open label:bug"` searches issues and pull requests across the project. The query is scoped with `repo:` qualifiers and every result is checked against the project again
-- New permissions `issue:read` and `search:read`. `pr view` / `comments` / `list` use the existing `pr:read`
-- The guide now says comment text is data, not instruction
+### Enhancement
+
+- added `pr view` / `pr comments` / `pr list` and `issue view` / `issue comments` / `issue list` (#43)
+- merged the conversation, review verdicts and line comments into one `pr comments` list, oldest first (#43)
+- added `search "is:open label:bug"` across the project, scoped with `repo:` and re-checked per result (#43)
+- added the `issue:read` and `search:read` permissions (#43)
+- said in the guide that comment text is data, not instruction (#43)
 
 ## 0.2.7 (2026-09-17)
 
-- Security: a crafted tag or CI ref walked out of the repository path and read another repository with the operator's token. Path segments now percent-encode `/` and `.`; query values are unchanged. Reachable since 0.1.7 through `ci runs --ref` and 0.2.6 through `release view --tag`
-- Security: a Projects v2 board was reachable by node id with nothing checking it belonged to the project. Boards are declared in `relay.project.boards` as `{ org, number }` and resolved at startup. **Breaking**: an empty list refuses every Projects call
-- `dns_server.py` still compared against `git-relay` alone, so a domain written as `github` resolved to its real address and never reached the relay
-- `sekimore pr request-review --reviewers alice,bob [--teams t]`, under the new `pr:request_review`
-- `sekimore project fields` lists the board's fields and single-select option ids, which `update-item` needs
-- `find_pull_request` demanded `pr:create` for a read; it now accepts `pr:read`
-- The guide claimed force pushes were refused. The relay checks the ref name, not whether the push fast-forwards; upstream branch protection is what refuses one
+### Security
+
+- percent-encoded `/` and `.` in path segments; a crafted tag or CI ref read another repository with the operator's token, reachable since 0.1.7 (#40)
+- declared Projects v2 boards in `relay.project.boards` and resolved them at startup; **breaking**, an empty list refuses every Projects call (#42)
+- fixed `dns_server.py` comparing against `git-relay` alone, so a domain written as `github` never reached the relay (#39)
+
+### Fix
+
+- accepted `pr:read` in `find_pull_request`, which demanded `pr:create` for a read (#41)
+- corrected the guide's claim that force pushes are refused; upstream branch protection is what refuses one (#41)
+
+### Enhancement
+
+- added `pr request-review --reviewers alice,bob [--teams t]` under the new `pr:request_review` (#41)
+- added `project fields`: the board's fields and single-select option ids, which `update-item` needs (#42)
 
 ## 0.2.6 (2026-09-16)
 
-- `sekimore release create --tag vX.Y.Z [--title T] [--notes … | --notes-file F] [--draft] [--prerelease]`, plus `release view` and `release list`. With no body given, GitHub writes the notes from the pull requests since the previous tag
-- The tag has to exist upstream first, so this runs after `git push origin vX.Y.Z`
-- New permissions `release:create` and `release:read`. The device flow token already carries the `repo` scope
-- `handler: git-relay` is now written `handler: github`. The SSH git half is forge-agnostic but the API half is GitHub's, which leaves room for `gitlab` / `gitea` in 0.3.0
-- `git-relay` keeps working as an alias on both the Rust and the Python side; no config has to change
+### Enhancement
+
+- added `release create --tag vX.Y.Z [--title T] [--notes … | --notes-file F] [--draft] [--prerelease]`, `release view` and `release list` (#38)
+- left the notes to GitHub when no body is given, written from the pull requests since the previous tag (#38)
+- added the `release:create` and `release:read` permissions (#38)
+- renamed `handler: git-relay` to `handler: github`, leaving room for `gitlab` / `gitea` (#38)
+- kept `git-relay` working as an alias on both the Rust and the Python side (#38)
 
 ## 0.2.5 (2026-09-16)
 
-- Docker: copy `relay/locales` into the builder stage. The 0.2.4 dictionaries are pulled in with `include_str!` but only `relay/share` was copied, so the v0.2.4 image never published
-- No change to the relay; 0.2.4 and 0.2.5 are the same code
+### Fix
+
+- copied `relay/locales` into the Docker builder stage; the v0.2.4 image never published without it (#36)
+- no change to the relay; 0.2.4 and 0.2.5 are the same code (#37)
 
 ## 0.2.4 (2026-09-16)
 
-- Web UI: strings moved into `src/locales/{en,ja}.json`, English by default. The language is resolved in this order: `?lang=` → cookie (the in-page switcher) → `ui.language` in `config.yml` (`auto` / `en` / `ja`) → the browser's `Accept-Language` → English. New `/api/i18n`
-- `python -m src.maint`: `--help` and all messages follow `SEKIMORE_LANG` / `LC_ALL` / `LC_MESSAGES` / `LANG` (English by default)
-- Rust CLI: `--help` and operator-facing output moved into `relay/locales/{en,ja}.json` and selected at runtime from `SEKIMORE_LANG` / `LC_ALL` / `LC_MESSAGES` / `LANG` (English by default). A missing key falls back to English, then to the key name
-- `sekimore guide --lang en|ja`: the guide is now `relay/share/agent-guide.en.md` and `agent-guide.ja.md` (the English one is the full text, not a summary). What agent-setup writes into the skill and `AGENTS.md` is English by default (`SEKIMORE_GUIDE_LANG`)
-- README and CHANGELOG are English-primary; the Japanese versions are `README.ja.md` and `CHANGELOG.ja.md`
-- Denial reasons (`sekimore: …`) and the audit log stay English
+### Enhancement
+
+- moved the Web UI strings into `src/locales/{en,ja}.json`, resolved `?lang=` → cookie → `ui.language` → `Accept-Language` → English (#33)
+- made `python -m src.maint` follow `SEKIMORE_LANG` / `LC_ALL` / `LC_MESSAGES` / `LANG` (#33)
+- moved the Rust CLI's help and operator output into `relay/locales/{en,ja}.json`, falling back to English then the key (#34)
+- added `guide --lang en|ja`, with `agent-guide.{en,ja}.md` and `SEKIMORE_GUIDE_LANG` for what agent-setup writes (#34)
+- made README and CHANGELOG English-primary, with `README.ja.md` and `CHANGELOG.ja.md` (#34)
+- kept denial reasons (`sekimore: …`) and the audit log English (#34)
 
 ## 0.2.3 (2026-09-16)
 
-- Web UI: one poller walks a rowid cursor and ships only what is new, as a single message. Immediate for one row, batched when there are many. A snapshot of the latest 50 on connect and when a hidden tab returns
-- `/api/stats` is fetched at most once every 3 seconds after new rows, rather than per log line
-- SQLite: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout`, and indexes on `dns_queries(timestamp)` and `(status, timestamp)`
-- Records are never deleted. `python -m src.maint db-stats | db-prune | db-reset | db-vacuum` is run explicitly by the operator; `mise run gw:db-*` under Dev Containers
-- Relay tab: show the upstream's upload cap even when there is only one
-- No change to the relay itself
+### Enhancement
+
+- replaced the Web UI's per-line push with one poller walking a rowid cursor, shipping what is new as one message (#32)
+- fetched `/api/stats` at most once every 3 seconds after new rows, rather than per log line (#32)
+- set SQLite `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout`, and indexed `dns_queries(timestamp)` and `(status, timestamp)` (#32)
+- added `python -m src.maint db-stats | db-prune | db-reset | db-vacuum`; records are never deleted automatically (#32)
+- showed the upstream's upload cap in the Relay tab even when there is only one (#32)
+- no change to the relay itself (#32)
 
 ## 0.2.2 (2026-09-16)
 
-- Exfiltration controls: an upload cap on dev → upstream traffic through the 443 passthrough (`relay.https_max_upload_bytes`, 1 MiB by default, `-1` for unlimited). A connection that exceeds it is cut and audited as `https_upload_capped`
-- `handler: https-relay`: pass only 443 through the relay's passthrough and apply a per-destination `max_upload_bytes` (`-1` for destinations you push images to)
-- `network.allowed_ports` (sekimore-gw itself): restrict which destination ports reach allowed domains and IPs. Unset behaves as before — all ports
-- Web UI: the per-destination cap, a LARGE UPLOAD marker on passthrough connections that sent 1 MiB or more, and 24-hour counts (large uploads / cap hits)
-- `sekimore guide`: usage written for AI agents, embedded in the CLI. agent-setup installs it as a Claude Code skill and as a block in Codex CLI's `AGENTS.md` (`SEKIMORE_AGENT_INSTRUCTIONS`)
+### Security
+
+- capped dev → upstream uploads through the 443 passthrough (`relay.https_max_upload_bytes`, 1 MiB, `-1` to disable); exceeding it cuts the connection (#30)
+- added `network.allowed_ports` to restrict which destination ports reach allowed domains and IPs (#30)
+
+### Enhancement
+
+- added `handler: https-relay`: 443 only, with a per-destination `max_upload_bytes` (#30)
+- added the per-destination cap, a LARGE UPLOAD marker and 24-hour counts to the Web UI (#30)
+- added `sekimore guide`, installed by agent-setup as a Claude Code skill and into Codex CLI's `AGENTS.md` (#31)
 
 ## 0.2.1 (2026-09-16)
 
-- `project.upstreams.<domain>`: a per-upstream layer between the project defaults and the repos (a `permissions` delta, defaults for `push` / `tags` / `delete`, and `repos`)
-- `domain_handlers.<domain>.ssh_options` / `relay.ssh_options`: passed to the upstream ssh as `-o` (a bastion's `ProxyJump=`, for example). Options the relay enforces cannot be overridden
-- `domain_handlers.<domain>.api_base` / `graphql_base`: per-upstream API endpoints
-- `sekimore-relay keyscan`: add an upstream's or bastion's host key to known_hosts, printing its fingerprint
-- Web UI: per-upstream `ssh_options` and `api_base`. The orchestrator now treats a change to `ssh_port` as requiring a restart
+### Enhancement
+
+- added `project.upstreams.<domain>`: a per-upstream layer between the project defaults and the repos (#27)
+- added `ssh_options`, passed to the upstream ssh as `-o`; options the relay enforces cannot be overridden (#28)
+- added `api_base` / `graphql_base` per upstream (#28)
+- added `keyscan`: add an upstream's or bastion's host key to known_hosts, printing its fingerprint (#28)
+- showed `ssh_options` and `api_base` per upstream in the Web UI, and treated an `ssh_port` change as needing a restart (#28)
 
 ## 0.2.0 (2026-09-16)
 
-- Multiple upstreams: `domain_handlers` may list git-relay more than once. The relay listens on a separate port per upstream and picks the upstream from the port the connection arrived on
-- `repos[].name` accepts `host/Org/Repo`. The SSH path only looks at repos belonging to the upstream the connection arrived on
-- The 443 passthrough picks the upstream from the TLS SNI
-- `login` / `logout` / `whoami --upstream`. State for non-default upstreams lives in `/data/relay/upstreams/<host>/`
-- `/bootstrap` returns `git_domains`, and agent-setup writes a `Host` block and known_hosts entry per upstream
-- The Web UI Relay tab lists the upstreams
+### Enhancement
+
+- allowed `domain_handlers` to list git-relay more than once, one listening port per upstream (#24)
+- accepted `host/Org/Repo` in `repos[].name`, matched only against the upstream the connection arrived on (#24)
+- picked the upstream from the TLS SNI in the 443 passthrough (#25)
+- added `--upstream` to `login` / `logout` / `whoami`, with state under `/data/relay/upstreams/<host>/` (#25)
+- returned `git_domains` from `/bootstrap`, so agent-setup writes a `Host` block and known_hosts entry per upstream (#25)
+- listed the upstreams in the Web UI Relay tab (#26)
 
 ## 0.1.9 (2026-09-16)
 
-- Permissions consolidated under `project`: `permissions` is either `[…]` or `{allow, deny}` (deny wins), plus `push`, `tags` (globs) and `delete`
-- `repos[]` can override `tags`, `delete` and `permissions` (as a delta)
-- The old `relay.allow_tags` / `relay.allow_delete` are deprecated (still read, folded into the defaults with a warning)
+### Enhancement
+
+- consolidated permissions under `project`: `permissions` as `[…]` or `{allow, deny}`, plus `push`, `tags`, `delete` (#23)
+- allowed `repos[]` to override `tags`, `delete` and `permissions` as a delta (#23)
+- deprecated `relay.allow_tags` / `relay.allow_delete`, still read and folded into the defaults with a warning (#23)
 
 ## 0.1.8 (2026-09-16)
 
-- `ci jobs --number` aggregates every workflow run of a PR
-- `provenance: false` for Docker Publish
+### Enhancement
+
+- made `ci jobs --number` aggregate every workflow run of a PR (#22)
+- set `provenance: false` for Docker Publish (#22)
 
 ## 0.1.7 (2026-09-16)
 
-- `ci runs --ref <tag|branch|sha>`, and `--run-id` for `ci jobs` / `ci log`
-- Docker Publish parallelized across native runners per architecture (0.1.6 failed to publish and was skipped)
+### Enhancement
+
+- added `ci runs --ref <tag|branch|sha>`, and `--run-id` for `ci jobs` / `ci log` (#19)
+- parallelized Docker Publish across native runners per architecture; 0.1.6 failed to publish and was skipped (#17)
 
 ## 0.1.5 (2026-09-15)
 
-- `relay.allow_tags`
-- `ci:read`: `ci jobs` / `ci log` (GitHub Actions failure logs, read from the end)
+### Enhancement
+
+- added `relay.allow_tags` (#16)
+- added `ci:read` with `ci jobs` / `ci log`, reading GitHub Actions failure logs from the end (#16)
 
 ## 0.1.4 (2026-09-15)
 
-- Fix the Web UI Relay tab's API returning 404 in the real process
+### Fix
+
+- fixed the Web UI Relay tab's API returning 404 in the real process (#15)
 
 ## 0.1.3 (2026-09-15)
 
-- Honour `proxy.enabled`. Drop the authentication banner. Report a denied push through report-status as `ng`
-- Close audit gaps (tcpip-forward, missing Authorization, malformed bodies)
-- Re-bootstrapping with the same key revokes the previous token. Token records are swept 7 days after expiry
-- Web UI Relay tab. The signing key comment carries the project name and the user name
-- `pr status` (`pr:read`). Disable the credential helper and GIT_ASKPASS for HTTPS git on the dev side (so the operator's credentials cannot bypass the relay)
+### Security
+
+- closed audit gaps: tcpip-forward, missing Authorization, malformed bodies (#14)
+- revoked the previous token when re-bootstrapping with the same key, and swept token records 7 days after expiry (#14)
+- disabled the credential helper and GIT_ASKPASS for HTTPS git on the dev side, so the operator's credentials cannot bypass the relay (#14)
+
+### Fix
+
+- honoured `proxy.enabled`, dropped the authentication banner, and reported a denied push through report-status as `ng` (#14)
+
+### Enhancement
+
+- added the Web UI Relay tab, `pr status` (`pr:read`), and the project and user name in the signing key comment (#14)
 
 ## 0.1.0 – 0.1.2 (2026-09-08 – 13)
 
-- First release. Relaying SSH (git) and the GitHub API, project policy, PR creation from `refs/for/<base>`, bootstrap, the 443 passthrough, and bundling into the devcontainer base
+### Enhancement
+
+- first release: SSH (git) and GitHub API relaying, project policy, PR creation from `refs/for/<base>`, bootstrap, the 443 passthrough, and bundling into the devcontainer base (#11)
