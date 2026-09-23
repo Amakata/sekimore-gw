@@ -306,13 +306,36 @@ pub async fn dispatch(
 // ---- Permission checks ----
 
 async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiError> {
+    let perms = ctx.project.granted();
+    // #143: a repository's own allow / deny change what the relay decides for it, so its line
+    // says how its permissions differ from the project-wide ones: `+` what it adds, `-` what it
+    // takes away. Printing only the project line had an agent conclude it could not merge where
+    // the repository granted pr:merge.
     let repos: Vec<String> = ctx
         .project
         .repos
         .iter()
-        .map(|r| format!("{} ({})", r.full_name, r.mode.as_str()))
+        .map(|r| {
+            let effective = ctx.project.effective_keys(r);
+            let mut delta: Vec<String> = effective
+                .iter()
+                .filter(|k| !perms.contains(k))
+                .map(|k| format!("+{k}"))
+                .collect();
+            delta.extend(
+                perms
+                    .iter()
+                    .filter(|k| !effective.contains(k))
+                    .map(|k| format!("-{k}")),
+            );
+            let line = format!("{} ({})", r.full_name, r.mode.as_str());
+            if delta.is_empty() {
+                line
+            } else {
+                format!("{line} {}", delta.join(" "))
+            }
+        })
         .collect();
-    let perms = ctx.project.granted();
     // #59: said only when it is required. `optional` asks nothing of the agent, and a line about
     // a rule that does not apply is a line that gets ignored when it does.
     let signing = match strictest_signing(&ctx.project) {
@@ -335,7 +358,7 @@ async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiE
         _ => String::new(),
     };
     let msg = format!(
-        "project={} token={} expires={}\npermissions: {}{signing}\nrepos:\n  {}",
+        "project={} token={} expires={}\npermissions (every repo; a repo line's +/- adds or removes): {}{signing}\nrepos:\n  {}",
         rec.project,
         rec.label,
         humantime::format_rfc3339_seconds(rec.expires_at),

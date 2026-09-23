@@ -26,7 +26,7 @@ Start with `sekimore whoami` to see your project, your permissions and the repos
 
 ## Pull requests, CI and issues (the `sekimore` command)
 
-You may only use the operations listed under `permissions` in `sekimore whoami`. Anything else is refused with 403.
+You may only use the operations listed under `permissions` in `sekimore whoami`, as adjusted for each repository on its own line: `+x` adds `x` for that repository, `-x` takes it away. Anything else is refused with 403.
 
 There is no permission named after a command. Several commands share one key, and the key in
 brackets below is the one `sekimore whoami` has to list. If a command is missing from your
