@@ -406,7 +406,11 @@ async fn judge_commits(
             return Err(Denied::CommitNotSigned {
                 name: c.name.clone(),
                 sha: c.sha.clone(),
-                reason: "arrived in a form this relay could not read — a commit delta against another commit in the same pack. `git push --no-thin` sends whole objects".to_string(),
+                // #140: a delta against a commit in the pack is applied now; what is left is one
+                // whose base was too large to keep, or past the budget for one pack. --no-thin
+                // does nothing for it (it only stops deltas against objects outside the pack);
+                // turning off delta search does.
+                reason: "arrived as a delta against another commit in the same pack that this relay did not keep (a commit over 1 MiB, or more than 64 MiB of commits in one push), so it cannot see whether it is signed. `git -c pack.window=0 push` sends every commit whole".to_string(),
             });
         }
         // An advertised sha is a tip the upstream already has; there is no new history under it.
@@ -1786,12 +1790,53 @@ mod tests {
         }
 
         #[test]
-        fn a_commit_delta_against_a_commit_fails_closed() {
-            // Only tag bodies are kept whole, so a commit that arrived as a delta against another
-            // commit is a commit this scan cannot read — and an unreadable commit must not pass
-            // for a signed one.
+        fn two_signed_commits_one_a_delta_on_the_other_go_through() {
+            // #140: what `git push` of two alike commits sends. It used to be refused whatever
+            // the commits were, because the scan had no base to apply the delta to.
             let a = commit_body(&[], true, "one");
-            let delta = crate::git::pack::testutil::copy_then_insert_delta(&a, b"x");
+            let b = commit_body(&[&sha_of("commit", &a)], true, "two");
+            let delta = crate::git::pack::testutil::insert_only_delta(&a, &b);
+            let p = pack(&[
+                Entry::Whole(1, &a),
+                Entry::OfsDelta {
+                    back: 1,
+                    delta: &delta,
+                },
+            ]);
+            assert_eq!(
+                judge_commits(scan(&p), &branch(&sha_of("commit", &b)), &[]),
+                Ok(())
+            );
+        }
+
+        #[test]
+        fn an_unsigned_commit_behind_a_delta_on_a_signed_one_is_refused() {
+            // Resolving the delta must judge its result: an unsigned commit built from a signed
+            // base is an unsigned commit.
+            let a = commit_body(&[], true, "one");
+            let b = commit_body(&[&sha_of("commit", &a)], false, "two");
+            let delta = crate::git::pack::testutil::insert_only_delta(&a, &b);
+            let p = pack(&[
+                Entry::Whole(1, &a),
+                Entry::OfsDelta {
+                    back: 1,
+                    delta: &delta,
+                },
+            ]);
+            let (sha, why) =
+                why_commit(judge_commits(scan(&p), &branch(&sha_of("commit", &b)), &[]));
+            assert_eq!(sha, sha_of("commit", &b));
+            assert!(why.contains("no signature"), "{why}");
+        }
+
+        #[test]
+        fn a_commit_delta_on_a_base_too_large_to_keep_fails_closed() {
+            // A commit over the keep cap is read from its header block and not kept, so a delta
+            // against it cannot be applied — and an unreadable commit must not pass for a signed
+            // one. The hint is the one that works for this case, not --no-thin.
+            let a = commit_body(&[], true, &"x".repeat(1024 * 1024));
+            let b = commit_body(&[&sha_of("commit", &a)], true, "two");
+            let delta = crate::git::pack::testutil::insert_only_delta(&a, &b);
             let p = pack(&[
                 Entry::Whole(1, &a),
                 Entry::OfsDelta {
@@ -1800,7 +1845,8 @@ mod tests {
                 },
             ]);
             let (_, why) = why_commit(judge_commits(scan(&p), &branch(&sha_of("commit", &a)), &[]));
-            assert!(why.contains("--no-thin"), "{why}");
+            assert!(why.contains("pack.window=0"), "{why}");
+            assert!(!why.contains("--no-thin"), "{why}");
         }
 
         #[test]

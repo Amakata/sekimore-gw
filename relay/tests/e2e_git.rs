@@ -843,6 +843,69 @@ async fn an_unsigned_commit_cannot_arrive_as_a_delta_on_an_upstream_object() {
     assert!(audit.contains("push_denied_commit_not_signed"), "{audit}");
 }
 
+/// #140: two signed commits, the second sent as a delta against the first — the shape
+/// `pack-objects` gives two alike commits in one push. The relay has to apply the delta to see the
+/// second commit's signature, and then let it through to the upstream.
+///
+/// Built by hand, because whether `git push` deltifies two commits depends on how alike they are;
+/// this pack always has the delta.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_signed_commits_one_a_delta_on_the_other_go_up() {
+    require_tools!();
+    let e = setup_tuned(&[], |p| {
+        for r in &mut p.repos {
+            r.signing = SigningMode::Required;
+        }
+    })
+    .await;
+    let main_sha = seed_main_sha(&e, "LibOrg/awesome-lib");
+    let tree = cat_file(
+        &e,
+        "LibOrg/awesome-lib",
+        &format!("{main_sha}^{{tree}}"),
+        "tree",
+    );
+    // The relay checks that a signature is present, not whose it is; the upstream here is a bare
+    // repository that verifies nothing. So a well-formed gpgsig header is all a commit needs.
+    let commit = |parent: &str, message: &str| {
+        format!(
+            "tree {tree}\nparent {parent}\nauthor e2e <e2e@example.invalid> 0 +0000\ncommitter e2e <e2e@example.invalid> 0 +0000\ngpgsig -----BEGIN SSH SIGNATURE-----\n U1NIU0lHAAAAAQ==\n -----END SSH SIGNATURE-----\n\n{message}\n"
+        )
+    };
+    let first = commit(&main_sha, "first");
+    let first_sha = sha_of("commit", first.as_bytes());
+    let second = commit(&first_sha, "second");
+    let tip = sha_of("commit", second.as_bytes());
+    let delta = insert_only_delta(first.as_bytes(), second.as_bytes());
+    let crafted = pack(&[
+        Entry::Whole(1, first.as_bytes()),
+        Entry::OfsDelta {
+            back: 1,
+            delta: &delta,
+        },
+    ]);
+
+    let out = raw_receive_pack(
+        &e,
+        "LibOrg/awesome-lib",
+        ZERO_SHA,
+        &tip,
+        "refs/heads/sekimore/two",
+        &crafted,
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        e.bare_ref("LibOrg/awesome-lib", "refs/heads/sekimore/two")
+            .as_deref(),
+        Some(tip.as_str()),
+        "the push must go through:\n{text}"
+    );
+}
+
 /// The other side of the same question: a branch cut from a commit the upstream really does have.
 /// It leaves the pack at a sha nothing advertised, and it has to be allowed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1231,4 +1294,123 @@ async fn two_upstreams_are_kept_apart_by_listen_port() {
     let audit = std::fs::read_to_string(&e.audit_path).unwrap();
     assert!(audit.contains("ghe.test"), "{audit}");
     assert!(audit.contains("github.test"), "{audit}");
+}
+
+/// #140, the other direction: the second commit is unsigned. Applying the delta must not turn the
+/// signed first commit into a pass for it, and the refusal has to come back to the client.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unsigned_commit_behind_a_delta_on_a_signed_one_is_refused() {
+    require_tools!();
+    let e = setup_tuned(&[], |p| {
+        for r in &mut p.repos {
+            r.signing = SigningMode::Required;
+        }
+    })
+    .await;
+    let main_sha = seed_main_sha(&e, "LibOrg/awesome-lib");
+    let tree = cat_file(
+        &e,
+        "LibOrg/awesome-lib",
+        &format!("{main_sha}^{{tree}}"),
+        "tree",
+    );
+    let head = format!(
+        "tree {tree}\nparent {main_sha}\nauthor e2e <e2e@example.invalid> 0 +0000\ncommitter e2e <e2e@example.invalid> 0 +0000\n"
+    );
+    let first = format!(
+        "{head}gpgsig -----BEGIN SSH SIGNATURE-----\n U1NIU0lHAAAAAQ==\n -----END SSH SIGNATURE-----\n\nfirst\n"
+    );
+    let first_sha = sha_of("commit", first.as_bytes());
+    let second = format!(
+        "tree {tree}\nparent {first_sha}\nauthor e2e <e2e@example.invalid> 0 +0000\ncommitter e2e <e2e@example.invalid> 0 +0000\n\nsecond\n"
+    );
+    let tip = sha_of("commit", second.as_bytes());
+    let delta = insert_only_delta(first.as_bytes(), second.as_bytes());
+    let crafted = pack(&[
+        Entry::Whole(1, first.as_bytes()),
+        Entry::OfsDelta {
+            back: 1,
+            delta: &delta,
+        },
+    ]);
+
+    let out = raw_receive_pack(
+        &e,
+        "LibOrg/awesome-lib",
+        ZERO_SHA,
+        &tip,
+        "refs/heads/sekimore/unsigned",
+        &crafted,
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("no signature"),
+        "the unsigned commit must be refused:\n{text}"
+    );
+    assert!(
+        e.bare_ref("LibOrg/awesome-lib", "refs/heads/sekimore/unsigned")
+            .is_none(),
+        "the ref must not have moved"
+    );
+}
+
+/// #140, what is still refused: a delta against a commit too large for the relay to keep. It has
+/// to come back as a refusal that names what gets through, not as a hang or a pass.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_commit_delta_on_a_commit_too_large_to_keep_is_refused_with_the_way_through() {
+    require_tools!();
+    let e = setup_tuned(&[], |p| {
+        for r in &mut p.repos {
+            r.signing = SigningMode::Required;
+        }
+    })
+    .await;
+    let main_sha = seed_main_sha(&e, "LibOrg/awesome-lib");
+    let tree = cat_file(
+        &e,
+        "LibOrg/awesome-lib",
+        &format!("{main_sha}^{{tree}}"),
+        "tree",
+    );
+    let commit = |parent: &str, message: &str| {
+        format!(
+            "tree {tree}\nparent {parent}\nauthor e2e <e2e@example.invalid> 0 +0000\ncommitter e2e <e2e@example.invalid> 0 +0000\ngpgsig -----BEGIN SSH SIGNATURE-----\n U1NIU0lHAAAAAQ==\n -----END SSH SIGNATURE-----\n\n{message}\n"
+        )
+    };
+    let big = commit(&main_sha, &"x".repeat(1024 * 1024));
+    let big_sha = sha_of("commit", big.as_bytes());
+    let small = commit(&big_sha, "small");
+    let tip = sha_of("commit", small.as_bytes());
+    let delta = insert_only_delta(big.as_bytes(), small.as_bytes());
+    let crafted = pack(&[
+        Entry::Whole(1, big.as_bytes()),
+        Entry::OfsDelta {
+            back: 1,
+            delta: &delta,
+        },
+    ]);
+
+    let out = raw_receive_pack(
+        &e,
+        "LibOrg/awesome-lib",
+        ZERO_SHA,
+        &tip,
+        "refs/heads/sekimore/big",
+        &crafted,
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("pack.window=0"), "{text}");
+    assert!(
+        e.bare_ref("LibOrg/awesome-lib", "refs/heads/sekimore/big")
+            .is_none(),
+        "the ref must not have moved"
+    );
 }

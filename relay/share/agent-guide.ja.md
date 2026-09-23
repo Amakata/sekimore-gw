@@ -110,6 +110,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `updating refs/tags/vX is not allowed` | そのタグは既に公開済み | 新しい版を切る。公開済みタグを動かすにはタグ削除と同じ権限が要る |
 | `pushing refs/tags/vX is not allowed: …` | 署名付き tag オブジェクトでない（軽量タグ、または署名なし） | `git tag -s vX -m …` で打ち直して push。dev コンテナは既定で署名するので、それを回り込んで作ったタグということ |
 | `pushing refs/heads/… is not allowed: commit <sha> carries no signature` | 案件が `signing: required` で、push に署名の無いコミットがある | 先端は `git commit -S --amend --no-edit`、複数なら `git rebase --exec 'git commit -S --amend --no-edit' <base>`。`git config commit.gpgsign false` は絶対にしない |
+| `… arrived as a delta against another commit in the same pack that this relay did not keep …` | この push に 1 MiB を超えるコミットがあるか、コミットの合計が 64 MiB を超えていて、関所が次のコミットを復元して署名を確かめられなかった | `git -c pack.window=0 push …` ですべてのコミットを差分にせず送る。`--no-thin` では直らない |
 | `denied: pr:merge is not allowed by policy` | 権限が無い | 人間にマージを頼む |
 | `denied: token expired` | トークン期限切れ | 自動更新される。続くなら人間に agent-setup の再実行を頼む |
 | `head X is not allowed` | PR の head が `sekimore/*` の外、または fork を指している | 先に関所経由でブランチを push し、それを head にする |
