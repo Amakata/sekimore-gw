@@ -107,12 +107,11 @@ The agent will automatically discover the gateway and route all traffic through 
 
 The `gw:*` tasks an operator drives the gateway with are shipped in the image, in two languages:
 `/usr/local/share/sekimore/gateway.mise.en.toml` and `gateway.mise.ja.toml`. A project includes
-one of them rather than keeping a copy of the tasks, which falls behind the relay:
-
-```bash
-docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.en.toml \
-  > .devcontainer/gateway.mise.toml
-```
+one of them rather than keeping a copy of the tasks, which falls behind the relay. From
+sgw-devcontainer-base 0.2.20 on, `mise run upgrade:sync` (or `upgrade:apply`) takes the file from
+the gateway's release tag and writes it to `.devcontainer/sgw/gateway.mise.toml`, beside `sgw.sh`.
+Do not edit that copy — an edit by hand stops the next upgrade. To change a `gw:*` task, define one
+with the same name in the project's own `mise.toml`; mise prefers it.
 
 The choice of language only decides what `mise tasks` prints; the task names and the commands
 they run are identical in both, and a test holds them to that.
@@ -120,10 +119,10 @@ they run are identical in both, and a test holds them to that.
 ```toml
 # the project's mise.toml
 [task_config]
-includes = [".devcontainer/gateway.mise.toml"]
+includes = [".devcontainer/sgw/tasks.mise.toml", ".devcontainer/sgw/gateway.mise.toml"]
 
 [env]
-SGW = "{{config_root}}/.devcontainer/scripts/sgw.sh"
+SGW = "{{config_root}}/.devcontainer/sgw/sgw.sh"
 ```
 
 The project owns `sgw.sh` (it is what finds the container, so it cannot come from the image). The

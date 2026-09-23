@@ -7,15 +7,18 @@
 # as the relay binary, so the tasks always match the gateway they drive). The Japanese one is
 # gateway.mise.ja.toml; the only difference is what `mise tasks` prints — the tasks are identical.
 #
-#   docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.en.toml > .devcontainer/gateway.mise.toml
-#
-# and in the project's own mise.toml:
+# From sgw-devcontainer-base 0.2.20 on, `mise run upgrade:sync` (or `upgrade:apply`) takes this
+# file from the gateway's release tag and writes it to the project as
+# `.devcontainer/sgw/gateway.mise.toml`, beside `sgw.sh`. The project's mise.toml includes it:
 #
 #   [task_config]
-#   includes = [".devcontainer/gateway.mise.toml"]
+#   includes = [".devcontainer/sgw/tasks.mise.toml", ".devcontainer/sgw/gateway.mise.toml"]
 #
 #   [env]
-#   SGW = "{{config_root}}/.devcontainer/scripts/sgw.sh"
+#   SGW = "{{config_root}}/.devcontainer/sgw/sgw.sh"
+#
+# Do not edit the project's copy: an edit by hand stops the next upgrade. To change a gw:* task,
+# define one with the same name in the project's own mise.toml; mise prefers it.
 #
 # Two things the project owns and has to provide:
 #
@@ -149,7 +152,7 @@ if command -v security >/dev/null 2>&1; then
     echo "gw:keychain-set: nothing was stored - the Keychain has no sekimore-gw entry for '$project'" >&2
     exit 1
   fi
-  echo "gw:keychain-set: the macOS Keychain now holds a passphrase for '$project' (${#stored} characters). mise run gw:recreate will use it."
+  echo "gw:keychain-set: the macOS Keychain now holds a passphrase for '$project' ($(printf %s "$stored" | wc -m | tr -d ' ') characters). mise run gw:recreate will use it."
   exit 0
 fi
 
@@ -176,7 +179,7 @@ if command -v secret-tool >/dev/null 2>&1; then
     echo "gw:keychain-set: the Secret Service did not give back what was stored for '$project'" >&2
     exit 1
   fi
-  echo "gw:keychain-set: the Secret Service now holds a passphrase for '$project' (${#stored} characters). mise run gw:recreate will use it."
+  echo "gw:keychain-set: the Secret Service now holds a passphrase for '$project' ($(printf %s "$stored" | wc -m | tr -d ' ') characters). mise run gw:recreate will use it."
   exit 0
 fi
 
