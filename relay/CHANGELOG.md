@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.31 (2026-09-23)
+
+### Enhancement
+
+- no change to the relay; 0.2.30 and 0.2.31 are the same binary. The release ships the gateway's `gw:shell` fix (#150)
+
 ## 0.2.30 (2026-09-23)
 
 ### Fix
