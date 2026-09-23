@@ -130,6 +130,10 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     // The secret store before the loop: the upstream token lives in it (0.2.18), so each upstream
     // needs somewhere to read it from.
     let (secrets, secret_store) = open_secret_store(&r);
+    // #151: the upstream proxy's credential is in the store too. Keep it current for everything that
+    // goes through the proxy — the passthrough and every GitHub client built below read it per
+    // connection, from the cell this fills.
+    crate::proxy_credential::spawn_refresher(r.proxy.as_ref(), secrets.clone());
     let mut token_caches: Vec<Arc<crate::github::upstream_token::UpstreamTokenStore>> = Vec::new();
 
     // Per upstream: GitHub client, upstream git, SSH listener. The russh config, keys and session limit are shared

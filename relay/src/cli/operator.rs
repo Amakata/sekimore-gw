@@ -143,6 +143,9 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let r = resolve(path)?;
     let up = pick_upstream(&r, upstream)?.clone();
     let audit = open_audit(&r)?;
+    // #151: the device flow goes through the proxy when one is set, so take its credential from the
+    // store first
+    crate::proxy_credential::prime(r.proxy.as_ref(), &secret_source_via_socket(&r)).await;
     let (gh, store, http) = build_github_for(&r, &up, audit.clone(), secret_source_via_socket(&r))?;
     // Before the device flow, not after: it walks a person through authorising on github.com, and
     // discovering at the end that there is nowhere to put the result throws that away and leaves
@@ -433,6 +436,7 @@ pub async fn whoami(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let r = resolve(path)?;
     let up = pick_upstream(&r, upstream)?;
     let audit = open_audit(&r)?;
+    crate::proxy_credential::prime(r.proxy.as_ref(), &secret_source_via_socket(&r)).await;
     let (gh, _, _) = build_github_for(&r, up, audit, secret_source_via_socket(&r))?;
     let login = gh.whoami().await?;
     println!(
@@ -576,7 +580,17 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
     }
     // 0.1.9: tags, deletion and permissions are the project default plus the repo's overrides. The effective per-repo values are listed under repos below
     if let Some(px) = &r.proxy {
-        println!("{}{}", pad_label(&t("op.check.proxy"), 14), px.url);
+        // #151: which credential the relay presents — the store's, or the environment's — since
+        // Squid reads the store and the two can disagree
+        crate::proxy_credential::prime(Some(px), &secret_source_via_socket(&r)).await;
+        println!(
+            "{}{}",
+            pad_label(&t("op.check.proxy"), 14),
+            tf(
+                "op.check.proxy_credential",
+                &[("url", &px.url), ("source", px.credential_source())]
+            )
+        );
     }
     println!("\n{}", t("op.check.permissions"));
     let granted = r.project.granted();
@@ -1142,8 +1156,8 @@ pub async fn store_import(path: &Path, file: Option<&Path>) -> anyhow::Result<()
 /// The namespace and name the upstream proxy credential is filed under. The Python gateway reads
 /// the same pair when it generates Squid's config, so changing either is a breaking change across
 /// two languages.
-pub const PROXY_NAMESPACE: &str = "proxy";
-pub const PROXY_NAME: &str = "upstream";
+pub const PROXY_NAMESPACE: &str = crate::proxy_credential::NAMESPACE;
+pub const PROXY_NAME: &str = crate::proxy_credential::NAME;
 
 /// Put the corporate proxy's credential in the store.
 ///
@@ -1156,8 +1170,8 @@ pub async fn proxy_credential_set(path: &Path) -> anyhow::Result<()> {
     let sock = store_paths(path)?;
     eprintln!(
         "The upstream proxy's credential. It is stored sealed, so the gateway has to be\n\
-         unlocked (mise run gw:unlock) before Squid can use it — until then Squid runs\n\
-         without upstream authentication."
+         unlocked (mise run gw:unlock) before Squid and the relay can use it — until then\n\
+         they fall back to SEKIMORE_UPSTREAM_PROXY_* or config.yml, if either has one."
     );
     let user = store::control::prompt("Proxy username")?;
     let pass = store::control::prompt("Proxy password")?;
@@ -1176,8 +1190,8 @@ pub async fn proxy_credential_set(path: &Path) -> anyhow::Result<()> {
         bail!("the credential was not stored");
     }
     println!(
-        "Squid picks it up when the store is unlocked. If it is unlocked already, \
-         `mise run gw:restart` applies it now."
+        "The relay picks it up within seconds of the store being unlocked. Squid does too, when \
+         it is unlocked; if it is unlocked already, `mise run gw:restart` applies it to Squid now."
     );
     Ok(())
 }

@@ -139,15 +139,19 @@ still arrives over the control socket, and nothing inside the container can go a
 
 ## Configuration
 
-### Environment Variables (Optional)
+### Upstream proxy authentication
 
-The `.env` file is optional. Create it only if you need upstream proxy authentication:
+Put the corporate proxy's credential in the secret store, not in `.env`:
 
 ```bash
-# Optional: Upstream Proxy Authentication
-SEKIMORE_UPSTREAM_PROXY_USERNAME=your-username
-SEKIMORE_UPSTREAM_PROXY_PASSWORD=your-password
+mise run gw:proxy-credential      # prompts for the username and the password; stored sealed
 ```
+
+Squid and the relay (its HTTPS passthrough and its GitHub API calls) both read it from the store
+once it is unlocked, and pick up a change without a restart. `mise run gw:check` shows which
+credential the relay presents. `SEKIMORE_UPSTREAM_PROXY_USERNAME` / `_PASSWORD` are still read when
+the store holds none, but `.devcontainer/.env` is also the dev container's `env_file`, so a value
+there is readable by the agent.
 
 **Note**: Docker Compose automatically uses the directory name as the project name. Network names use default values (`internal-net` and `internet`). Override these with environment variables if needed.
 

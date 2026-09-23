@@ -14,6 +14,7 @@ pub mod netutil;
 pub mod passthrough;
 pub mod pktline;
 pub mod policy;
+pub mod proxy_credential;
 pub mod ssh;
 pub mod store;
 pub mod tokens;

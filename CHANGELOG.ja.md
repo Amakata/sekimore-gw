@@ -17,6 +17,7 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 ### Fix
 
 - mise がタスクの出力に接頭辞を付けるときも `gw:shell` がシェルを開く。`raw` にして `gw-tty` を通すようにし、端末から読むタスクには `raw = true` を CI が求める (#150)
+- README の上流 proxy の資格情報の置き場所を、dev コンテナから読める `.env` から秘密ストア (`gw:proxy-credential`) に改めた (#152)
 
 ## 0.2.30（2026-09-23）
 

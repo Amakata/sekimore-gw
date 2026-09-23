@@ -1248,11 +1248,38 @@ fn derive_api_bases(
 }
 
 /// The upstream proxy: `proxy.upstream_proxy` (host:port) from `config.yml`, plus credentials that environment variables may override.
+///
+/// #151: the credential in the secret store wins over both when there is one; `stored` is where the
+/// running relay keeps it, and `credential()` is what a connection presents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxySpec {
     pub url: String,
     pub username: Option<String>,
     pub password: Option<String>,
+    pub stored: crate::proxy_credential::StoredProxyCredential,
+}
+
+impl ProxySpec {
+    /// The credential to present to the proxy now: the secret store's, when it holds one; otherwise
+    /// `SEKIMORE_UPSTREAM_PROXY_*` or `config.yml`, as before 0.2.22.
+    pub fn credential(&self) -> Option<crate::proxy_credential::Credential> {
+        self.stored.get().or_else(|| {
+            self.username
+                .clone()
+                .map(|u| (u, self.password.clone().unwrap_or_default()))
+        })
+    }
+
+    /// Where `credential()` comes from, for `check` and for the message when the proxy refuses it.
+    pub fn credential_source(&self) -> &'static str {
+        if self.stored.get().is_some() {
+            "the secret store (gw:proxy-credential)"
+        } else if self.username.is_some() {
+            "SEKIMORE_UPSTREAM_PROXY_* or config.yml"
+        } else {
+            "none"
+        }
+    }
 }
 
 fn resolve_proxy(p: &ProxyConfig) -> Result<Option<ProxySpec>, ConfigError> {
@@ -1285,6 +1312,7 @@ fn resolve_proxy(p: &ProxyConfig) -> Result<Option<ProxySpec>, ConfigError> {
         url,
         username,
         password,
+        stored: Default::default(),
     }))
 }
 
