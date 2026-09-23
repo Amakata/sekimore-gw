@@ -18,7 +18,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         working-directory: relay
@@ -44,7 +44,7 @@ jobs:
           ! cargo tree -i openssl-sys 2>/dev/null
 
   audit:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         working-directory: relay
@@ -57,7 +57,7 @@ jobs:
           cargo audit
 
   musl-build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     defaults:
       run:
         working-directory: relay
