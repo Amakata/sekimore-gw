@@ -162,6 +162,55 @@ SIGNING_EOF
   return 0
 }
 
+# Git's signing settings, put where a later write to ~/.gitconfig cannot undo them (#145).
+#
+# The Dev Containers extension copies the host's user.name, user.email and user.signingkey into
+# ~/.gitconfig after postStart, every time the container starts — over what this script wrote, so
+# the AI's commits went to sign with the operator's own key, which the gateway's socket does not
+# hold. git reads a config file top to bottom and the last value wins, and `git config --global`
+# edits a key where it already is rather than moving it. So the settings go into a root-owned file
+# that ~/.gitconfig includes as its very last lines, and the same keys are written above it too:
+# the extension then rewrites those lines in place, above the include, and the include still wins.
+#
+# $1 = the user's home, $2 = its owner (user:group), $3 = the file to hold the settings,
+# $4 = the public key to sign with, or empty when there is none (signing is then turned off)
+sekimore_git_signing() {
+  local home=$1 own=$2 file=$3 key=$4
+  local signers="$home/.config/git/allowed_signers" tmp gpgsign=false
+  [ -n "$key" ] && gpgsign=true
+  tmp=$(mktemp "$file.XXXXXX")
+  {
+    echo "# Written by sekimore-agent-setup.sh on every start. ~/.gitconfig includes this last, so"
+    echo "# these win over anything written above them later (the Dev Containers extension copies the"
+    echo "# host's user.* in). Do not turn signing off: see the agent guide."
+  } > "$tmp"
+  git config --file "$tmp" gpg.format ssh
+  git config --file "$tmp" gpg.ssh.allowedSignersFile "$signers"
+  [ -z "$key" ] || git config --file "$tmp" user.signingkey "$key"
+  git config --file "$tmp" commit.gpgsign "$gpgsign"
+  git config --file "$tmp" tag.gpgsign "$gpgsign"
+  chmod 644 "$tmp"
+  # root's, so the agent cannot edit it; readable, so its git can
+  if [ "$(id -u)" = 0 ]; then chown root:root "$tmp"; fi
+  mv -f "$tmp" "$file"
+
+  # The same keys in ~/.gitconfig itself, so each already has a line there for the extension to
+  # rewrite in place. A key it had to add would land at the end, after the include, and win.
+  HOME=$home git config --global gpg.format ssh
+  HOME=$home git config --global gpg.ssh.allowedSignersFile "$signers"
+  [ -z "$key" ] || HOME=$home git config --global user.signingkey "$key"
+  HOME=$home git config --global commit.gpgsign "$gpgsign"
+  HOME=$home git config --global tag.gpgsign "$gpgsign"
+
+  # The include, last and once. An earlier one (from the previous start) is taken out first, so a
+  # restart does not leave it in the middle of the file with the extension's writes below it.
+  local re
+  re=$(printf '%s' "$file" | sed 's/[][\.*^$/]/\\&/g')
+  HOME=$home git config --global --unset-all include.path "^$re\$" 2>/dev/null || true
+  printf '[include]\n\tpath = %s\n' "$file" >> "$home/.gitconfig"
+  chown "$own" "$home/.gitconfig"
+}
+
 sekimore_relay_setup() {
   local gw=$1
   local api_port=${SEKIMORE_RELAY_API_PORT:-8420}
@@ -412,28 +461,21 @@ sekimore_relay_setup() {
   if [ -O "$home/.config" ]; then chown "$own" "$home/.config"; fi
   chown "$own" "$home/.config/git"
   local signers="$home/.config/git/allowed_signers"
-  HOME=$home git config --global gpg.format ssh
-  HOME=$home git config --global gpg.ssh.allowedSignersFile "$signers"
   touch "$signers"
+  local signkey=""
   if [ -n "$signing_pub" ]; then
-    if [ "$signing_mode" = gateway ]; then
-      HOME=$home git config --global user.signingkey "$keydir/signing.pub"
-    else
-      HOME=$home git config --global user.signingkey "$keydir/signing_ed25519.pub"
-    fi
-    HOME=$home git config --global commit.gpgsign true
-    HOME=$home git config --global tag.gpgsign true
+    if [ "$signing_mode" = gateway ]; then signkey="$keydir/signing.pub"; else signkey="$keydir/signing_ed25519.pub"; fi
+  fi
+  # No key: signing goes off. Leaving it on would make every commit fail, and signing with a key
+  # nobody registered is what #59 is about.
+  sekimore_git_signing "$home" "$own" "$(dirname "$env_file")/gitconfig" "$signkey"
+  if [ -n "$signing_pub" ]; then
     local sigpub principal
     sigpub=$(printf '%s' "$signing_pub" | cut -d' ' -f1,2)
     principal=${GIT_COMMITTER_EMAIL:-${GIT_AUTHOR_EMAIL:-*}}
     if ! grep -qF "$sigpub" "$signers"; then
       echo "$principal namespaces=\"git\" $sigpub" >> "$signers"
     fi
-  else
-    # No key to sign with. Turning signing off is the honest outcome: leaving it on would make
-    # every commit fail, and signing with a key nobody registered is what #59 is about.
-    HOME=$home git config --global commit.gpgsign false
-    HOME=$home git config --global tag.gpgsign false
   fi
   chown "$own" "$signers"
   if [ -f "$home/.gitconfig" ]; then chown "$own" "$home/.gitconfig"; fi

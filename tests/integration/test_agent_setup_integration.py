@@ -564,6 +564,83 @@ esac
         )
         return proc, home
 
+    def _git_get(home: Path, key: str) -> str:
+        """What git in the container would use: every config file, includes followed."""
+        return subprocess.run(
+            ["git", "config", "--get", key],
+            env={
+                "HOME": str(home),
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "GIT_CONFIG_NOSYSTEM": "1",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+
+    def _as_the_extension(home: Path, key: str, value: str):
+        """What the Dev Containers extension does after postStart: set the host's value globally."""
+        subprocess.run(
+            ["git", "config", "--global", key, value],
+            env={"HOME": str(home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+            check=True,
+        )
+
+    def it_keeps_signing_when_the_host_gitconfig_is_copied_over_it(tmp_path):
+        # #145: the extension copied the host's user.signingkey over agent-setup's, and commits
+        # went to sign with a key the gateway's socket does not hold. The settings the relay needs
+        # must survive any later `git config --global` of the same keys.
+        shim, _ = _shims(tmp_path)
+        proc, home = _run(tmp_path, shim)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        keydir = home / ".ssh" / "sekimore"
+        for key, host_value in [
+            (
+                "user.signingkey",
+                "key::ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHOSTKEYHOSTKEYHOSTKEYHOSTKEYHOSTKEY host",
+            ),
+            ("gpg.format", "openpgp"),
+            ("commit.gpgsign", "false"),
+            ("gpg.ssh.allowedSignersFile", "/Users/operator/.ssh/allowed_signers"),
+            ("user.name", "The Operator"),
+        ]:
+            _as_the_extension(home, key, host_value)
+        assert _git_get(home, "user.signingkey") == f"{keydir}/signing_ed25519.pub"
+        assert _git_get(home, "gpg.format") == "ssh"
+        assert _git_get(home, "commit.gpgsign") == "true"
+        assert _git_get(home, "tag.gpgsign") == "true"
+        assert _git_get(home, "gpg.ssh.allowedSignersFile") == f"{home}/.config/git/allowed_signers"
+        # what agent-setup does not own is left to whoever set it
+        assert _git_get(home, "user.name") == "The Operator"
+
+    def it_keeps_one_include_and_keeps_it_last_across_restarts(tmp_path):
+        # Each start runs agent-setup again. An include left in the middle by the previous start,
+        # with the extension's writes below it, would lose to them.
+        shim, _ = _shims(tmp_path)
+        _, home = _run(tmp_path, shim)
+        _as_the_extension(home, "user.signingkey", "key::ssh-ed25519 AAAAHOST")
+        _as_the_extension(
+            home, "core.editor", "vim"
+        )  # a key the file did not have: appended at the end
+        proc, _ = _run(tmp_path, shim)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        settings = tmp_path / "etc" / "gitconfig"
+        lines = [
+            line.strip() for line in (home / ".gitconfig").read_text().splitlines() if line.strip()
+        ]
+        assert lines.count(f"path = {settings}") == 1, lines
+        assert lines[-1] == f"path = {settings}", lines
+        assert _git_get(home, "user.signingkey") == f"{home}/.ssh/sekimore/signing_ed25519.pub"
+        assert _git_get(home, "core.editor") == "vim"
+
+    def it_puts_the_settings_where_the_agent_cannot_write(tmp_path):
+        shim, _ = _shims(tmp_path)
+        _, home = _run(tmp_path, shim)
+        settings = tmp_path / "etc" / "gitconfig"
+        assert stat.S_IMODE(settings.stat().st_mode) == 0o644
+        assert not str(settings).startswith(str(home))
+        assert "signingkey = " in settings.read_text()
+
     def it_bootstraps_and_configures_everything_once(tmp_path):
         shim, log = _shims(tmp_path)
         proc, home = _run(tmp_path, shim)

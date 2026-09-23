@@ -19,6 +19,7 @@ carried the whole project until the two were separated.
 
 - `gw:shell` opens a shell again when mise prefixes task output: it is `raw` and goes through `gw-tty`, and CI requires `raw = true` of every task that reads the terminal (#150)
 - the README puts the upstream proxy credential in the secret store (`gw:proxy-credential`) instead of `.env`, which the dev container can read (#152)
+- `agent-setup.sh` puts the signing settings in a root-owned file that `~/.gitconfig` includes last, so the Dev Containers extension copying the host's `user.signingkey` over them no longer breaks signing (#153)
 
 ## 0.2.30 (2026-09-23)
 
