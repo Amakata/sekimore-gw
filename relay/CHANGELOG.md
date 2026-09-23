@@ -6,6 +6,14 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.30 (2026-09-23)
+
+### Fix
+
+- applied a commit delta against another commit in the same pack, so a push of two signed commits under `signing: required` goes through; the delta's result is what is judged (#144)
+- a delta against a commit too large to keep (over 1 MiB, or past 64 MiB per pack) is still refused, and the refusal names `git -c pack.window=0 push` instead of `--no-thin` (#144)
+- `whoami` marks each repository with what its own allow / deny add to or take from the project's permissions, as `+x` / `-x` (#146)
+
 ## 0.2.29 (2026-09-21)
 
 ### Security
