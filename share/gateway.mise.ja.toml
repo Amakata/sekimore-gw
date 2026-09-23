@@ -7,15 +7,18 @@
 # バイナリと同じタグなので、タスクと、そのタスクが呼ぶコマンドは必ず同じリリースのもの)。
 # 英語版は gateway.mise.en.toml。違うのは `mise tasks` が表示する説明文だけで、タスクは同一。
 #
-#   docker exec sekimore-gw cat /usr/local/share/sekimore/gateway.mise.ja.toml > .devcontainer/gateway.mise.toml
-#
-# プロジェクト側の mise.toml:
+# sgw-devcontainer-base 0.2.20 からは、`mise run upgrade:sync` (または `upgrade:apply`) が
+# ゲートウェイのリリースタグからこのファイルを取り出し、プロジェクトの
+# `.devcontainer/sgw/gateway.mise.toml` (`sgw.sh` の隣) に書き込む。プロジェクト側の mise.toml:
 #
 #   [task_config]
-#   includes = [".devcontainer/gateway.mise.toml"]
+#   includes = [".devcontainer/sgw/tasks.mise.toml", ".devcontainer/sgw/gateway.mise.toml"]
 #
 #   [env]
-#   SGW = "{{config_root}}/.devcontainer/scripts/sgw.sh"
+#   SGW = "{{config_root}}/.devcontainer/sgw/sgw.sh"
+#
+# プロジェクト側のコピーは編集しない。手で編集すると次のアップグレードが止まる。gw:* タスクを変えたい
+# ときは、同じ名前のタスクをプロジェクト自身の mise.toml に定義する (mise はそちらを優先する)。
 #
 # プロジェクトが用意するものは 2 つ:
 #
@@ -147,7 +150,7 @@ if command -v security >/dev/null 2>&1; then
     echo "gw:keychain-set: nothing was stored - the Keychain has no sekimore-gw entry for '$project'" >&2
     exit 1
   fi
-  echo "gw:keychain-set: the macOS Keychain now holds a passphrase for '$project' (${#stored} characters). mise run gw:recreate will use it."
+  echo "gw:keychain-set: the macOS Keychain now holds a passphrase for '$project' ($(printf %s "$stored" | wc -m | tr -d ' ') characters). mise run gw:recreate will use it."
   exit 0
 fi
 
@@ -174,7 +177,7 @@ if command -v secret-tool >/dev/null 2>&1; then
     echo "gw:keychain-set: the Secret Service did not give back what was stored for '$project'" >&2
     exit 1
   fi
-  echo "gw:keychain-set: the Secret Service now holds a passphrase for '$project' (${#stored} characters). mise run gw:recreate will use it."
+  echo "gw:keychain-set: the Secret Service now holds a passphrase for '$project' ($(printf %s "$stored" | wc -m | tr -d ' ') characters). mise run gw:recreate will use it."
   exit 0
 fi
 

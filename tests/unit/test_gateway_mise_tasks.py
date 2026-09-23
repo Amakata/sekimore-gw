@@ -35,8 +35,8 @@ TASKS_FILES = {
 LANGS = sorted(TASKS_FILES)
 CLI_SOURCE = ROOT / "relay" / "src" / "cli" / "mod.rs"
 DOCKERFILE = ROOT / "Dockerfile"
-# Where the image puts them. sgw-devcontainer-base COPY --from's these paths, and a project reads
-# one with `docker exec sekimore-gw cat …`, so moving them breaks both.
+# Where the image puts them. sgw-devcontainer-base COPY --from's these paths, so moving them breaks
+# it. (Its `mise run upgrade:sync` reads share/ from the release tag instead.)
 SHIPPED_DIR = "/usr/local/share/sekimore"
 
 # Subcommands that deliberately have no task, and why. A reason is part of the entry: without one
@@ -77,6 +77,11 @@ PASSPHRASE_SINK = 'printf \'%s\\n\' "$pass" | bash "$SGW" gw sekimore-relay unlo
 # cannot come from the image — it is what finds the container — so every line of it is a line each
 # user has to patch by hand. A task needing a new primitive is a task that does not get shipped.
 SGW_PRIMITIVES = {"gw", "gw-tty", "id", "recreate"}
+
+# What opens a Tera tag. mise renders each `run` script as a Tera template, so any of these in a
+# shell script is read by Tera first. No task uses Tera on purpose; one that does is named here.
+TERA_TAGS = ("{#", "{%", "{{")
+USES_TERA: set[str] = set()
 
 # Everything of a task except the prose: this is what the two languages must agree on.
 SHARED_KEYS = ("run", "raw", "dir", "depends", "env")
@@ -238,6 +243,25 @@ def describe_gateway_mise_tasks():
                 f"{name} has no description; `mise tasks` lists it blank"
             )
 
+    @pytest.mark.parametrize("lang", LANGS)
+    def it_keeps_tera_syntax_out_of_the_run_scripts(lang):
+        # mise renders every `run` script as a Tera template before bash sees it. Bash's
+        # `${#var}` contains `{#`, which opens a Tera comment, and the task then fails to load
+        # with "Closing comment tag `#}` not found" — on the operator's machine, not here.
+        found = {
+            name: tag
+            for name, task in _tasks(lang).items()
+            if name not in USES_TERA
+            for tag in TERA_TAGS
+            if tag in str(task.get("run", ""))
+        }
+        assert found == {}, (
+            f"{TASKS_FILES[lang].name}: these `run` scripts contain Tera syntax: {found}. mise "
+            "renders run scripts as Tera templates, so bash's `${#var}` opens a comment and "
+            '`{{`/`{%` are expanded. Rewrite the shell (e.g. `$(printf %s "$v" | wc -m)` for a '
+            "length), or add the task to USES_TERA if it uses Tera on purpose."
+        )
+
     @pytest.mark.parametrize("task", sorted(_tasks("en")))
     def it_names_the_gateway_tasks_consistently(task):
         assert task == "gw" or task.startswith("gw:"), (
@@ -286,8 +310,8 @@ def describe_gateway_mise_tasks():
         )
 
     def it_is_shipped_in_the_image():
-        # Being in the repository is not enough: `docker exec sekimore-gw cat <path>` is how a
-        # project gets the file, and sgw-devcontainer-base COPY --from's the same path.
+        # Being in the repository is not enough: the image is what the release tag names, and
+        # sgw-devcontainer-base COPY --from's the same path.
         body = DOCKERFILE.read_text(encoding="utf-8")
         for lang, path in TASKS_FILES.items():
             line = f"COPY share/{path.name} {SHIPPED_DIR}/{path.name}"
