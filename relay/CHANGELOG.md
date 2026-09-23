@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.30 (unreleased)
+
+### Fix
+
+- applied a commit delta against another commit in the same pack, so a push of two signed commits under `signing: required` goes through; the result is judged, not its base. A commit up to 1 MiB is kept for this, within 64 MiB per pack; a delta against one that was not kept still refuses, now naming `git -c pack.window=0 push` instead of `--no-thin`, which does not help there (#144)
+
 ## 0.2.29 (2026-09-21)
 
 ### Security
