@@ -17,7 +17,7 @@ Without that, nothing changes.
   git clone / push       ─DNS→  :22  SSH                  ─ssh→   GitHub
   git@github.com:Org/Repo        · authenticates the disposable key
                                  · is this repo in the project?
-                                 · refs/for/<base> becomes a branch + PR
+                                 · refs/for/<base> and refs/pr/<branch> become a branch + PR
                                                     uses: the operator's ssh-agent
 
   sekimore pr create     ─HTTP→  :8420  REST API          ─API→   GitHub
@@ -197,8 +197,9 @@ is printed in the log.
 
 ```bash
 git clone git@github.com:Org/Repo.git           # the URL is unchanged; the relay brokers it transparently
+git push origin HEAD:refs/pr/feature/login      # 0.3.0: pushes to feature/login and opens a PR (base = the default branch)
 git push origin HEAD:refs/for/main              # pushes to sekimore/main-<sha7> and opens a PR (base=main)
-git push origin HEAD:refs/heads/sekimore/x      # a direct push inside your own namespace, sekimore/*
+git push origin HEAD:refs/heads/sekimore/x      # a direct push inside a branch `push` allows
 
 sekimore whoami                                 # your permissions and repos
 sekimore pr create --head sekimore/x --base main --title T --body="…"
@@ -225,7 +226,9 @@ so those tools pick it up on their own. For anything else, put the output of `se
 `sekimore` is a wrapper around `sekimore-relay agent`. Name a repo with `--repo Org/Repo`, or `host/Org/Repo` when there is more than one upstream.
 When the value of `--body` starts with `-`, write it as `--body="…"`.
 
-Denied by default: repositories outside the project, pushes to a read-only repo, `refs/for` against a base that is not in `bases`, direct pushes outside `sekimore/*`, tags, deletions, and any API action you have not allowed. The reason goes to stderr as `sekimore: …`.
+Denied by default: repositories outside the project, pushes to a read-only repo, `refs/for` against a base that is not in `bases`, direct pushes and `refs/pr/` names outside `push`, tags, deletions, and any API action you have not allowed. The reason goes to stderr as `sekimore: …`.
+
+`sekimore whoami` prints, for each read-write repository, the branch names it accepts (`push`), the bases it allows, and what each ref spelling names — so an agent does not have to guess before its first push.
 
 ## Configuration reference
 
@@ -275,6 +278,7 @@ Keys are exact FQDN matches. Listing `github` more than once gives you more than
 | `delete` | `false` | Deleting branches and tags, and moving a tag that already exists upstream. Delete-and-recreate and a forced update leave the same result, so they share one authority. Creating a tag that is not there yet only needs `tags` |
 | `delete_merged_branch` | `false` | Whether `pr merge --delete-branch` may remove the branch it just merged. Only that branch, so it is not the same authority as `delete`. Leave it off where the forge already deletes merged branches itself |
 | `signing` | `optional` | 0.2.29 (#59): whether a push to a branch may carry an unsigned commit — `required` \| `optional` \| `off`. `required` refuses a push to `refs/heads/*` or `refs/for/*` when any commit it brings has no signature; presence, not validity, like `signed_tags`. It **needs the upstream API** (see below), so the store has to be unlocked and logged in. `optional` when unset, so no existing project changes behaviour. Overridable per upstream and per repo |
+| `branch` | see below | 0.3.0 (#158): how `refs/for/<base>` names the branch it creates |
 | `boards` | `[]` | The Projects v2 boards this project may touch, written the way the URL reads: `{ org: acme, number: 3 }` for `github.com/orgs/acme/projects/3`, or `{ user: someone, number: 1 }`. Empty refuses every Projects operation |
 | `repos` | `[]` | Repositories. `Org/Repo` means the default upstream; `host/Org/Repo` names one explicitly |
 | `upstreams.<domain>` | | A per-upstream layer: `permissions` (a delta), `push` / `tags` / `delete` (that upstream's defaults), and `repos` |
@@ -285,9 +289,62 @@ Keys are exact FQDN matches. Listing `github` more than once gives you more than
 |---|---|---|
 | `name` | required | `Org/Repo` (no host needed inside `upstreams.<domain>.repos`) |
 | `mode` | required | `read-only` or `read-write`. read-only blocks every write |
-| `bases` | all | Branches allowed for `refs/for/<base>` and as a PR base |
+| `bases` | all | Branches allowed for `refs/for/<base>` and as a PR base. Omit it to let the agent choose, which `refs/pr/` requires |
 | `push` / `tags` / `delete` | the layer above | Override for this repo only |
 | `permissions` | no delta | `{allow, deny}` to add or remove. A plain list adds to allow |
+
+### Branch names (0.3.0, #158)
+
+A project's branches usually follow a convention — `feature/` for a feature, `fix/` for a bug — and
+two things decide whether the relay can follow it.
+
+**What the agent may name a branch** is `push`, a list of globs. It is checked for a direct push,
+for `refs/pr/<branch>`, and for the head of a pull request:
+
+```yaml
+repos:
+  - name: Org/Repo
+    mode: read-write
+    push: ["feature/*", "fix/*", "chore/*"]   # replaces the default sekimore/*
+```
+
+**What the relay names a branch** is `project.branch`, which applies to `refs/for/<base>`:
+
+```yaml
+relay:
+  project:
+    branch:
+      template: "sekimore/{branch}-{sha}"   # the default
+      on_exists: reject
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `template` | `sekimore/{branch}-{sha}` | `{branch}`, `{base}` and `{sha}` are substituted; `{sha}` is the short sha. On this path `{branch}` and `{base}` are the same string, since `refs/for/<base>` carries no branch name of its own. An unknown placeholder, an unbalanced brace, or a template with no placeholder at all is refused when the file loads |
+| `on_exists` | `reject` | What to do when the name is already upstream — `reject` or `update`. A template containing `{sha}` names a branch only that commit can land on, so re-pushing the same commit stays idempotent whatever this says |
+
+A project that does not want the string `sekimore` in its history sets `template: "agent/{base}-{sha}"`,
+or any other shape.
+
+#### Which spelling to push to
+
+| Spelling | Branch | Base |
+|---|---|---|
+| `refs/pr/<branch>` | exactly `<branch>` | the upstream's default branch (needs `bases` unset) |
+| `refs/for/<base>` | rendered from `template` | `<base>` |
+| `refs/heads/<branch>` | exactly `<branch>`, no pull request | — |
+
+`refs/pr/` names no base, because there is no way to carry one safely: every character git would
+accept as a separator is one it also accepts inside a branch name, and the characters it forbids in
+a branch name (`:` `^` `~`) are rejected in a refspec too. To open a pull request against another
+base, push without opening one and then `sekimore pr create --head <branch> --base <base>`, or
+retarget it afterwards with `sekimore pr update --base <base>`.
+
+**`refs/pr/` needs `bases` to be open.** It opens against the default branch, which the relay only
+learns from the API — after the push. A repository that lists `bases` would have that check land
+once the branch was already upstream, so the relay refuses the spelling instead, before anything is
+sent. Leave `bases` unset to use `refs/pr/`, or use `refs/for/<base>`, which names its base in the
+ref and is checked before the push goes out.
 
 ### How permissions resolve
 
@@ -423,6 +480,7 @@ Token records are swept 7 days after they expire. The permanent record is `audit
 | `known_hosts … has no entry for <host>` | The upstream's host key is missing | `sekimore-relay login` or `sekimore-relay keyscan <host>` |
 | `repository "X" is not in project "P"` | Outside the project | Add it to `repos`. If the denial was intended, do nothing |
 | `push to refs/heads/main is not allowed` | A direct push outside the namespace | Use `refs/for/main` to open a PR, or add a glob to `push` if you really need it |
+| `branch X already exists upstream` | The name is taken and `on_exists` is `reject` | Push a different name, or update it with a direct push to `refs/heads/<branch>` |
 | `tag is not allowed for this repository` | Tag pushes are denied by default | Add a glob to `tags` on that repo or upstream |
 | `Permission denied (publickey)` (from the relay) | The agent's key is not registered | `sudo sekimore-agent-setup.sh`, or `add-key` by the operator. Check for `bootstrap.disabled` |
 | `! [remote rejected] … (sekimore: …)` | A push the policy denied | Follow what the message says |

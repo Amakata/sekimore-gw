@@ -13,12 +13,15 @@ Start with `sekimore whoami` to see your project, your permissions and the repos
 ## git
 
 - clone / fetch / pull work with the plain URL: `git clone git@github.com:Org/Repo.git`
-- There are only two push targets.
-  - `git push origin HEAD:refs/for/<base>` puts the commits on a branch named `sekimore/<base>-<sha7>` and opens a pull request against `<base>` automatically. The title is generated, so use the other form when you want to write the title and body yourself.
-  - `git push origin HEAD:refs/heads/sekimore/<topic>` is a working branch. Open the pull request with `sekimore pr create`. This is the recommended path.
+- Where you may push, and what you may name a branch, differ per project. **Read `push` and `refs` in `sekimore whoami`.**
+  - `git push origin HEAD:refs/heads/<branch>` is a working branch. Open the pull request with `sekimore pr create`. This is the recommended path.
+  - `git push origin HEAD:refs/pr/<branch>` puts the commits on a branch of that name and opens a pull request against the default branch automatically. Not available where the project restricts its bases; `whoami` says so under `refs`.
+  - `git push origin HEAD:refs/for/<base>` puts them on a branch the relay names and opens a pull request against `<base>` automatically.
+  - A pull request opened automatically has a generated title. Use `sekimore pr create` when you want to write it yourself.
+  - To open one against a base other than the default, push without opening a pull request, then `sekimore pr create --head <branch> --base <base>`.
 - Direct pushes to `main`, tags and branch deletions are refused by default. They work only for repositories where they are allowed; check with `sekimore whoami`.
 - A tag that already exists upstream cannot be moved. Cut a new version instead of pointing a released name at different code; moving one needs the same authority as deleting it.
-- A force push inside your own `sekimore/*` namespace is not blocked by the relay. Branch protection upstream is what refuses one where it matters. Do not rewrite a branch someone else may be working from.
+- A force push inside a branch you may push to is not blocked by the relay. Branch protection upstream is what refuses one where it matters. Do not rewrite a branch someone else may be working from.
 - Commits are signed automatically with the AI signing key. Do not change the signing configuration.
 - That key may be held by the gateway rather than by this container, and reached through a socket that signs git signatures and nothing else. Either way `git commit` needs nothing from you. If signing fails, say so; do not turn `commit.gpgsign` off.
 - Some projects **require** it: the relay reads the pack and refuses a branch push carrying an unsigned commit (`commit <sha> carries no signature`). `sekimore whoami` says so when it applies. Amend with `git commit -S --amend --no-edit` rather than turning signing off.
@@ -33,7 +36,7 @@ brackets below is the one `sekimore whoami` has to list. If a command is missing
 permissions, it is the bracketed key you ask a human for, not the command's name.
 
 ```bash
-sekimore pr create --head sekimore/<topic> --base main --title "…" --body="…"   [pr:create]
+sekimore pr create --head <branch> --base main --title "…" --body="…"          [pr:create]
 sekimore pr update --number N --title "…"                     [pr:create]  edit your own PR
                                                               #   --base is re-checked against the allowed bases
 sekimore pr view --number N                                   [pr:read]  title, body, branches, counts
@@ -92,8 +95,8 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 ## The usual flow
 
 1. Work on a branch and get the tests passing.
-2. `git push origin HEAD:refs/heads/sekimore/<topic>`
-3. `sekimore pr create --head sekimore/<topic> --base main --title "…" --body="…"`
+2. `git push origin HEAD:refs/heads/<branch>`, where `<branch>` matches `push` in `sekimore whoami`
+3. `sekimore pr create --head <branch> --base main --title "…" --body="…"`
 4. Wait for `sekimore pr status --number N` to go green. Read `sekimore ci log` when it does not.
 5. With the permission and a human's go-ahead, `sekimore pr merge --number N`. Tags are pushed with `git push origin vX.Y.Z` and only for repositories where tags are allowed.
 6. After the tag is pushed, `sekimore release create --tag vX.Y.Z` turns it into a release. The body is written by GitHub from the pull requests since the previous tag, so you do not have to compose it. Pass `--notes` or `--notes-file` to write it yourself, and `--draft` to leave publishing to a human. A draft is finished with `sekimore release edit --tag vX.Y.Z --draft false`, which needs `release:publish`.
@@ -104,8 +107,9 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 |---|---|---|
 | `repository "X" is not in project "P"` | the repository is outside the project | ask a human to add it |
 | `X is read-only in project P` | read-only repository | reading only, no push and no PR |
-| `push to refs/heads/main is not allowed` | no direct push | push to `refs/heads/sekimore/<topic>` and open a PR |
-| `base branch X is not allowed` | no PR against that base | use an allowed base, see `sekimore whoami` |
+| `push to refs/heads/main is not allowed` | no direct push | push to a name `push` in `sekimore whoami` allows, and open a PR |
+| `base branch X is not allowed` | no PR against that base | use an allowed base, see `bases` in `sekimore whoami` |
+| `branch X already exists upstream` | that name is taken | push a different name, or update it by pushing to `refs/heads/<branch>` directly |
 | `tag is not allowed for this repository` | tags are refused | ask a human to tag, or to allow tags |
 | `updating refs/tags/vX is not allowed` | the tag is already published upstream | cut a new version; moving a released tag needs the same authority as deleting one |
 | `pushing refs/tags/vX is not allowed: …` | the tag is not a signed tag object (lightweight, or made without a signature) | `git tag -s vX -m …` and push again; the dev container signs by default, so this means the tag was made around that setup |
@@ -113,7 +117,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `… arrived as a delta against another commit in the same pack that this relay did not keep …` | a commit in this push is over 1 MiB, or the push brings more than 64 MiB of commits, so the relay could not rebuild the next one to check its signature | `git -c pack.window=0 push …` sends every commit whole. `--no-thin` does not help here |
 | `denied: pr:merge is not allowed by policy` | permission missing | ask a human to merge |
 | `denied: token expired` | the project token expired | it renews itself; if it keeps failing ask a human to re-run agent-setup |
-| `head X is not allowed` | the PR's head is outside `sekimore/*`, or names a fork | push the branch through the relay first, then open the PR from it |
+| `head X is not allowed` | the PR's head is outside `push`, or names a fork | push the branch through the relay first, then open the PR from it |
 | `known_hosts … has no entry for X` | the gateway has no host key for the upstream | **not something you can fix**: it is done on the host running docker, `mise run gw:login`. Relay the whole message |
 | `no upstream token for …` | the operator has not logged the gateway in | same — `mise run gw:login` on the host |
 | `the secret store is locked …` | the gateway holds the token but nobody has unlocked it | same — `mise run gw:unlock` on the host. A login would not help |
