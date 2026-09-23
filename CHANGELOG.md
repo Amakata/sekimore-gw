@@ -13,6 +13,12 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.31 (2026-09-23)
+
+### Fix
+
+- `gw:shell` opens a shell again when mise prefixes task output: it is `raw` and goes through `gw-tty`, and CI requires `raw = true` of every task that reads the terminal (#150)
+
 ## 0.2.30 (2026-09-23)
 
 ### Fix
