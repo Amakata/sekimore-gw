@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The suite finishes in under a minute; anything beyond this is the job wedged rather than slow,
     # and a wedged job blocks the pull request for the full six-hour default.
     timeout-minutes: 10
@@ -54,7 +54,7 @@ jobs:
   # and until this job the only audit on a pull request covered the smaller half; the alerts for
   # the rest sat on the Security tab, read by whoever happened to look.
   audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
