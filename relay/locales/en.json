@@ -195,6 +195,7 @@
   "op.check.bootstrap": "bootstrap:",
   "op.check.bootstrap_disabled": " (DISABLED by kill-switch)",
   "op.check.proxy": "proxy:",
+  "op.check.proxy_credential": "{url} (credential: {source})",
   "op.check.permissions": "permissions (default deny):",
   "op.check.deny_note": "  ([-] = project deny; wins over any allow)",
   "op.check.upstreams": "upstreams (layer between project defaults and repos):",

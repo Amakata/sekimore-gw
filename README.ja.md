@@ -137,15 +137,19 @@ SGW = "{{config_root}}/.devcontainer/sgw/sgw.sh"
 
 ## 設定
 
-### 環境変数（任意）
+### 上流プロキシの認証
 
-`.env` は任意です。上流プロキシの認証が必要なときだけ作ってください:
+社内プロキシの資格情報は `.env` ではなく秘密ストアに入れてください:
 
 ```bash
-# Optional: Upstream Proxy Authentication
-SEKIMORE_UPSTREAM_PROXY_USERNAME=your-username
-SEKIMORE_UPSTREAM_PROXY_PASSWORD=your-password
+mise run gw:proxy-credential      # ユーザー名とパスワードを聞かれる。封をして保存する
 ```
+
+Squid と relay (HTTPS の passthrough と GitHub API の呼び出し) は、ストアが解錠されていれば
+どちらもそこから読み、変更も再起動なしに反映します。relay がどの資格情報を使っているかは
+`mise run gw:check` に出ます。`SEKIMORE_UPSTREAM_PROXY_USERNAME` / `_PASSWORD` もストアに無いときは
+読みますが、`.devcontainer/.env` は dev コンテナの `env_file` でもあるので、そこに書いた値は
+エージェントから読めます。
 
 **補足**: Docker Compose はディレクトリ名をプロジェクト名として使います。ネットワーク名は既定値（`internal-net` と `internet`）です。必要なら環境変数で上書きしてください。
 

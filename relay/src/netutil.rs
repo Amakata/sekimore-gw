@@ -51,8 +51,10 @@ pub async fn http_connect_tunnel(
     let mut req = format!(
         "CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\nProxy-Connection: keep-alive\r\n"
     );
-    if let Some(u) = &proxy.username {
-        let cred = format!("{u}:{}", proxy.password.as_deref().unwrap_or(""));
+    // #151: read now, not at start: the secret store may have been unlocked, or the credential
+    // changed, since the relay came up
+    if let Some((u, p)) = proxy.credential() {
+        let cred = format!("{u}:{p}");
         req.push_str(&format!(
             "Proxy-Authorization: Basic {}\r\n",
             base64_encode(cred.as_bytes())
@@ -83,6 +85,16 @@ pub async fn http_connect_tunnel(
     }
     let head = String::from_utf8_lossy(&buf);
     let status = head.split_whitespace().nth(1).unwrap_or("");
+    if status == "407" {
+        // #151: say which credential was refused. Squid and the relay can read different ones, and
+        // "407" alone left the operator comparing the two by hand
+        return Err(io::Error::other(format!(
+            "proxy refused CONNECT {host}:{port}: {} — the relay presented the credential from {}. \
+             Set it with mise run gw:proxy-credential, and unlock the store (mise run gw:unlock)",
+            head.lines().next().unwrap_or(""),
+            proxy.credential_source()
+        )));
+    }
     if status != "200" {
         return Err(io::Error::other(format!(
             "proxy refused CONNECT {host}:{port}: {}",
@@ -103,6 +115,72 @@ mod tests {
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"user:pass"), "dXNlcjpwYXNz");
+    }
+
+    /// A proxy that accepts one CONNECT, hands back the Proxy-Authorization it saw, and answers
+    /// with `status`.
+    async fn one_connect(status: &'static str) -> (String, tokio::sync::oneshot::Receiver<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 2048];
+            let n = s.read(&mut buf).await.unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let auth = req
+                .lines()
+                .find_map(|l| l.strip_prefix("Proxy-Authorization: "))
+                .unwrap_or("-")
+                .to_string();
+            let _ = tx.send(auth);
+            s.write_all(format!("HTTP/1.1 {status}\r\n\r\n").as_bytes())
+                .await
+                .unwrap();
+        });
+        (format!("http://{addr}"), rx)
+    }
+
+    #[tokio::test]
+    async fn the_tunnel_presents_the_stored_credential_over_the_environments() {
+        // #151: the passthrough got 407 because it only ever had the environment's credential
+        let (url, seen) = one_connect("200 Connection established").await;
+        let spec = ProxySpec {
+            url,
+            username: Some("env-user".into()),
+            password: Some("env-pass".into()),
+            stored: Default::default(),
+        };
+        spec.stored
+            .set(Some(("store-user".into(), "store-pass".into())));
+        http_connect_tunnel(&spec, "example.com", 443)
+            .await
+            .unwrap();
+        assert_eq!(
+            seen.await.unwrap(),
+            format!("Basic {}", base64_encode(b"store-user:store-pass"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_407_says_whose_credential_was_refused() {
+        let (url, _) = one_connect("407 Proxy Authentication Required").await;
+        let spec = ProxySpec {
+            url,
+            username: Some("env-user".into()),
+            password: None,
+            stored: Default::default(),
+        };
+        let err = http_connect_tunnel(&spec, "example.com", 443)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("407"), "{err}");
+        assert!(
+            err.contains("SEKIMORE_UPSTREAM_PROXY_* or config.yml"),
+            "{err}"
+        );
+        assert!(err.contains("gw:proxy-credential"), "{err}");
     }
 
     #[tokio::test]
@@ -131,6 +209,7 @@ mod tests {
             url: format!("http://{addr}"),
             username: Some("user".into()),
             password: Some("pass".into()),
+            stored: Default::default(),
         };
         let mut s = http_connect_tunnel(&spec, "example.com", 443)
             .await

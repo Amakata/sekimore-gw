@@ -8,9 +8,10 @@ the pull request.
 
 ## 0.2.31 (2026-09-23)
 
-### Enhancement
+### Fix
 
-- no change to the relay; 0.2.30 and 0.2.31 are the same binary. The release ships the gateway's `gw:shell` fix (#150)
+- the passthrough and the GitHub API client use the upstream proxy credential in the secret store, read per connection, so an unlock or a new `gw:proxy-credential` applies at once (#152)
+- a 407 from the upstream proxy names the credential source the relay used, and `check` shows it (#152)
 
 ## 0.2.30 (2026-09-23)
 

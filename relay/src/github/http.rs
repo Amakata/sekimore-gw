@@ -56,11 +56,20 @@ pub fn build_client(opts: &HttpOptions<'_>) -> anyhow::Result<reqwest::Client> {
     }
 
     if let Some(px) = opts.proxy {
-        let mut proxy =
-            reqwest::Proxy::all(&px.url).with_context(|| format!("proxy url {}", px.url))?;
-        if let Some(u) = &px.username {
-            proxy = proxy.basic_auth(u, px.password.as_deref().unwrap_or(""));
-        }
+        // #151: the credential is looked up per request, not fixed here. The client is built at
+        // start, while the secret store is still locked; a static basic_auth would have kept the
+        // environment's credential (or none) for the life of the process. The URL carries it as
+        // userinfo, which reqwest turns into Proxy-Authorization; `url` percent-encodes it.
+        let base = url::Url::parse(&px.url).with_context(|| format!("proxy url {}", px.url))?;
+        let px = px.clone();
+        let proxy = reqwest::Proxy::custom(move |_| {
+            let mut u = base.clone();
+            if let Some((user, pass)) = px.credential() {
+                let _ = u.set_username(&user);
+                let _ = u.set_password(Some(&pass));
+            }
+            Some(u)
+        });
         b = b.proxy(proxy);
     }
     b.build().context("build http client")
@@ -136,5 +145,132 @@ mod tests {
         v.push(0xE3); // first byte of a 3-byte sequence, truncated
         let out = truncate(&v);
         assert!(!out.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+    use crate::netutil::base64_encode;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// A proxy that answers every request with 200 and reports the Proxy-Authorization it saw
+    /// (or "-" for none), one line per request.
+    async fn fake_proxy() -> (String, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = l.accept().await else {
+                    return;
+                };
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut b = [0u8; 1];
+                    while !buf.ends_with(b"\r\n\r\n") {
+                        if s.read(&mut b).await.unwrap_or(0) == 0 {
+                            return;
+                        }
+                        buf.push(b[0]);
+                    }
+                    let head = String::from_utf8_lossy(&buf).to_string();
+                    let auth = head
+                        .lines()
+                        .find_map(|l| {
+                            l.strip_prefix("proxy-authorization: ")
+                                .or_else(|| l.strip_prefix("Proxy-Authorization: "))
+                        })
+                        .unwrap_or("-")
+                        .to_string();
+                    let _ = tx.send(auth);
+                    let _ = s
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        )
+                        .await;
+                });
+            }
+        });
+        (format!("http://{addr}"), rx)
+    }
+
+    fn basic(user: &str, pass: &str) -> String {
+        format!(
+            "Basic {}",
+            base64_encode(format!("{user}:{pass}").as_bytes())
+        )
+    }
+
+    #[tokio::test]
+    async fn the_proxy_gets_whatever_credential_is_current_at_each_request() {
+        // #151: the client is built at start, while the store is locked. What reaches the proxy
+        // has to follow the store as it is unlocked and changed, and fall back to the environment's
+        // credential when the store has none.
+        let (url, mut seen) = fake_proxy().await;
+        let spec = ProxySpec {
+            url,
+            username: Some("env-user".into()),
+            password: Some("env-pass".into()),
+            stored: Default::default(),
+        };
+        let client = build_client(&HttpOptions {
+            proxy: Some(&spec),
+            ..Default::default()
+        })
+        .unwrap();
+        let get = || client.get("http://upstream.invalid/x").send();
+
+        get().await.unwrap();
+        assert_eq!(
+            seen.recv().await.unwrap(),
+            basic("env-user", "env-pass"),
+            "store empty: the environment's"
+        );
+
+        // the store is unlocked and holds one; characters that mean something in a URL survive
+        spec.stored
+            .set(Some(("store-user".into(), "p@ss:w/rd%".into())));
+        get().await.unwrap();
+        assert_eq!(
+            seen.recv().await.unwrap(),
+            basic("store-user", "p@ss:w/rd%"),
+            "the store's wins"
+        );
+
+        // changed with gw:proxy-credential, no restart
+        spec.stored
+            .set(Some(("store-user".into(), "rotated".into())));
+        get().await.unwrap();
+        assert_eq!(seen.recv().await.unwrap(), basic("store-user", "rotated"));
+
+        // locked again: back to the environment's
+        spec.stored.set(None);
+        get().await.unwrap();
+        assert_eq!(seen.recv().await.unwrap(), basic("env-user", "env-pass"));
+    }
+
+    #[tokio::test]
+    async fn no_credential_anywhere_sends_none() {
+        let (url, mut seen) = fake_proxy().await;
+        let spec = ProxySpec {
+            url,
+            username: None,
+            password: None,
+            stored: Default::default(),
+        };
+        let client = build_client(&HttpOptions {
+            proxy: Some(&spec),
+            ..Default::default()
+        })
+        .unwrap();
+        client
+            .get("http://upstream.invalid/x")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(seen.recv().await.unwrap(), "-");
     }
 }

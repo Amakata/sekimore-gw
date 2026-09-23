@@ -195,6 +195,7 @@
   "op.check.bootstrap": "bootstrap:",
   "op.check.bootstrap_disabled": " (kill-switch で停止中)",
   "op.check.proxy": "proxy:",
+  "op.check.proxy_credential": "{url} (資格情報: {source})",
   "op.check.permissions": "権限 (既定は拒否):",
   "op.check.deny_note": "  ([-] = 案件の deny。どの allow より優先)",
   "op.check.upstreams": "上流の層 (案件既定と repo の間):",

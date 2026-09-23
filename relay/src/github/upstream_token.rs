@@ -73,17 +73,23 @@ pub enum SecretSource {
 
 impl SecretSource {
     async fn get(&self, name: &str) -> Result<Option<String>, TokenError> {
+        self.get_in(NAMESPACE, name).await
+    }
+
+    /// A secret from any namespace. #151: the upstream proxy's credential lives under `proxy`, and the
+    /// relay reads it the same way it reads its upstream token.
+    pub async fn get_in(&self, namespace: &str, name: &str) -> Result<Option<String>, TokenError> {
         match self {
             SecretSource::InProcess(store) => {
                 let store = store.lock().await;
-                match store.get(NAMESPACE, name) {
+                match store.get(namespace, name) {
                     Ok(Some(s)) => {
                         String::from_utf8(s.as_bytes().to_vec())
                             .map(Some)
                             .map_err(|_| {
                                 TokenError::Io(std::io::Error::new(
                                     std::io::ErrorKind::InvalidData,
-                                    format!("{NAMESPACE}/{name} is not UTF-8"),
+                                    format!("{namespace}/{name} is not UTF-8"),
                                 ))
                             })
                     }
@@ -93,7 +99,7 @@ impl SecretSource {
                 }
             }
             SecretSource::ControlSocket(sock) => {
-                let body = serde_json::json!({"op": "get", "namespace": NAMESPACE, "name": name})
+                let body = serde_json::json!({"op": "get", "namespace": namespace, "name": name})
                     .to_string();
                 let (ok, message, data, code) = call(sock, &body).await?;
                 if ok {
