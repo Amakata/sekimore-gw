@@ -633,3 +633,25 @@ def describe_the_host_side_shell():
         r, calls = _run_recreate(tmp_path, unlock_exit=1)
         assert r.returncode != 0, f"a failed unlock was reported as a clean recreate: {calls!r}"
         assert "mise run gw:unlock" in r.stderr
+
+
+# A shell, or anything through gw-tty, reads from the terminal. In mise's prefix output mode a
+# task's stdout is a pipe unless the task is `raw`, and without a terminal an interactive shell
+# shows no prompt and looks hung (#149: gw:shell).
+_INTERACTIVE = re.compile(r'"\$SGW" (?:gw-tty\b|gw (?:bash|sh|zsh)\b)')
+
+
+def describe_interactive_tasks():
+    @pytest.mark.parametrize("lang", LANGS)
+    def it_gives_every_interactive_task_the_terminal(lang):
+        tasks = _tasks(lang)
+        interactive = [n for n, b in tasks.items() if _INTERACTIVE.search(str(b.get("run", "")))]
+        assert "gw:shell" in interactive, (
+            "gw:shell is not seen as interactive; the pattern is stale"
+        )
+        missing = sorted(n for n in interactive if tasks[n].get("raw") is not True)
+        assert missing == [], (
+            f"{TASKS_FILES[lang].name}: {missing} read from the terminal but are not `raw = true`. "
+            "mise's prefix output mode makes stdout a pipe, sgw.sh then drops `docker exec -t`, "
+            "and the command gets no terminal."
+        )

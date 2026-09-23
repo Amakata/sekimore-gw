@@ -314,4 +314,7 @@ fi
 
 ["gw:shell"]
 description = "A shell on the gateway (root)"
-run = 'bash "$SGW" gw bash'
+# raw + gw-tty: a shell needs the terminal. In mise's prefix output mode stdout is a pipe, the
+# plain `gw` then drops -t, and bash sits there without a prompt (#149)
+raw = true
+run = 'bash "$SGW" gw-tty bash'
