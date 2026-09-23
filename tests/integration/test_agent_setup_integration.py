@@ -568,7 +568,11 @@ esac
         """What git in the container would use: every config file, includes followed."""
         return subprocess.run(
             ["git", "config", "--get", key],
-            env={"HOME": str(home), "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GIT_CONFIG_NOSYSTEM": "1"},
+            env={
+                "HOME": str(home),
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "GIT_CONFIG_NOSYSTEM": "1",
+            },
             capture_output=True,
             text=True,
             check=False,
@@ -591,7 +595,10 @@ esac
         assert proc.returncode == 0, proc.stdout + proc.stderr
         keydir = home / ".ssh" / "sekimore"
         for key, host_value in [
-            ("user.signingkey", "key::ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHOSTKEYHOSTKEYHOSTKEYHOSTKEYHOSTKEY host"),
+            (
+                "user.signingkey",
+                "key::ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHOSTKEYHOSTKEYHOSTKEYHOSTKEYHOSTKEY host",
+            ),
             ("gpg.format", "openpgp"),
             ("commit.gpgsign", "false"),
             ("gpg.ssh.allowedSignersFile", "/Users/operator/.ssh/allowed_signers"),
@@ -612,11 +619,15 @@ esac
         shim, _ = _shims(tmp_path)
         _, home = _run(tmp_path, shim)
         _as_the_extension(home, "user.signingkey", "key::ssh-ed25519 AAAAHOST")
-        _as_the_extension(home, "core.editor", "vim")  # a key the file did not have: appended at the end
+        _as_the_extension(
+            home, "core.editor", "vim"
+        )  # a key the file did not have: appended at the end
         proc, _ = _run(tmp_path, shim)
         assert proc.returncode == 0, proc.stdout + proc.stderr
         settings = tmp_path / "etc" / "gitconfig"
-        lines = [line.strip() for line in (home / ".gitconfig").read_text().splitlines() if line.strip()]
+        lines = [
+            line.strip() for line in (home / ".gitconfig").read_text().splitlines() if line.strip()
+        ]
         assert lines.count(f"path = {settings}") == 1, lines
         assert lines[-1] == f"path = {settings}", lines
         assert _git_get(home, "user.signingkey") == f"{home}/.ssh/sekimore/signing_ed25519.pub"
