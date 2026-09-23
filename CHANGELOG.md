@@ -13,6 +13,13 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.30 (2026-09-23)
+
+### Fix
+
+- `gw:keychain-set` runs again: mise read `${#stored}` as the start of a template comment and refused the task; CI now fails on Tera syntax in any task script (#147)
+- the header of `gateway.mise.*.toml` describes `.devcontainer/sgw/` and `mise run upgrade:sync` instead of copying the file by hand (#147)
+
 ## 0.2.29 (2026-09-21)
 
 ### Security

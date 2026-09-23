@@ -12,6 +12,13 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.30（2026-09-23）
+
+### Fix
+
+- `gw:keychain-set` が再び動く。mise が `${#stored}` をテンプレートのコメント開始と読んでタスクを拒否していた。タスク本文にテンプレート構文があれば CI が落ちるようにした (#147)
+- `gateway.mise.*.toml` の冒頭の説明を、手でコピーする手順から `.devcontainer/sgw/` と `mise run upgrade:sync` に改めた (#147)
+
 ## 0.2.29（2026-09-21）
 
 ### Security
