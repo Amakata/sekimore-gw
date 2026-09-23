@@ -110,6 +110,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `updating refs/tags/vX is not allowed` | the tag is already published upstream | cut a new version; moving a released tag needs the same authority as deleting one |
 | `pushing refs/tags/vX is not allowed: …` | the tag is not a signed tag object (lightweight, or made without a signature) | `git tag -s vX -m …` and push again; the dev container signs by default, so this means the tag was made around that setup |
 | `pushing refs/heads/… is not allowed: commit <sha> carries no signature` | the project is `signing: required` and a commit in this push has none | `git commit -S --amend --no-edit` for the tip, `git rebase --exec 'git commit -S --amend --no-edit' <base>` for more. Never `git config commit.gpgsign false` |
+| `… arrived as a delta against another commit in the same pack that this relay did not keep …` | a commit in this push is over 1 MiB, or the push brings more than 64 MiB of commits, so the relay could not rebuild the next one to check its signature | `git -c pack.window=0 push …` sends every commit whole. `--no-thin` does not help here |
 | `denied: pr:merge is not allowed by policy` | permission missing | ask a human to merge |
 | `denied: token expired` | the project token expired | it renews itself; if it keeps failing ask a human to re-run agent-setup |
 | `head X is not allowed` | the PR's head is outside `sekimore/*`, or names a fork | push the branch through the relay first, then open the PR from it |

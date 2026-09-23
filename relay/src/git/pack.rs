@@ -16,9 +16,10 @@
 //! parents", or "some other kind of object" — enough to judge each `refs/tags/*` command and each
 //! branch push against.
 //!
-//! A commit's header block is where `gpgsig` / `gpgsig-sha256` live, and stopping at the blank
-//! line is what keeps this bounded: a commit with a 100 KB message costs a few hundred bytes here,
-//! where keeping whole commits would cost the message.
+//! A commit's header block is where `gpgsig` / `gpgsig-sha256` live, and it is all that is read
+//! to judge one. Whole commits are kept too since #140 — a later delta may need one as its base —
+//! but only up to a cap each and a budget for the pack; past either, a commit costs its header
+//! block and no more.
 //!
 //! What it deliberately does not do: verify a signature. That needs to know whose keys count, a
 //! decision the configuration does not yet hold. Presence is what this checks, and presence is
@@ -26,9 +27,13 @@
 //!
 //! Deltas: a tag object may arrive as a delta against another tag in the same pack (two release
 //! tags differ by a version number), so those are applied when the base is a tag this scan has
-//! seen. A delta against anything else is not resolved: its result cannot be a tag unless its
-//! base was one, and bases outside the pack are commits, trees and blobs — git never picks a tag
-//! it has not sent as a preferred base. Such an object is simply not a candidate.
+//! seen. Since 0.2.30 (#140) the same goes for commits: `pack-objects` deltifies one commit
+//! against another in the same pack whenever they look alike, so any push of two commits can
+//! carry one, and keeping only header blocks left the signing check nothing to apply it to. A
+//! commit up to `MAX_COMMIT_BYTES` is therefore kept whole, within `MAX_KEPT_COMMIT_BYTES` for
+//! the pack, and a delta against it is applied like a tag's. What is not kept stays unresolved and
+//! is counted, which refuses the push: "cannot tell" keeps meaning unsigned. A delta against
+//! anything else — a tree, a blob, an object outside the pack — is not resolved.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -44,6 +49,15 @@ const MAX_TAG_BYTES: usize = 1024 * 1024;
 /// this is the guard for a commit that has no blank line at all, or an absurd one. A commit whose
 /// header does not fit reads as unsigned, which refuses the push — the direction to fail in.
 const MAX_COMMIT_HEADER: usize = 64 * 1024;
+
+/// 0.2.30 (#140): a commit up to this size is kept whole, so that another commit in the same pack
+/// sent as a delta against it can be applied. Real commits are a few hundred bytes to a few KB.
+const MAX_COMMIT_BYTES: usize = 1024 * 1024;
+
+/// ...and this much of them at most, across one pack. A pack that brings more keeps the rest as
+/// header blocks only, and a delta against one of those is refused: sending many large commits
+/// cannot make this scan hold arbitrary memory.
+const MAX_KEPT_COMMIT_BYTES: usize = 64 * 1024 * 1024;
 
 /// git's object types as the pack header encodes them.
 const OBJ_COMMIT: u8 = 1;
@@ -97,11 +111,12 @@ pub enum Object {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Objects {
     pub by_sha: HashMap<String, Object>,
-    /// Deltas whose base was not a tag in this pack. Not an error; they are not tags.
+    /// Deltas this scan did not apply: their base was not a tag or a kept commit in this pack.
     pub unresolved_deltas: usize,
-    /// 0.2.29 (#59): of those, the ones whose base *was* a commit in this pack, so the delta's
-    /// result is a commit this scan could not read. Counted apart because it is the only kind of
-    /// unresolved delta that can hide a commit from the signing check — a thin pack's external
+    /// 0.2.29 (#59): of those, the ones whose base *was* a commit in this pack — since #140, one
+    /// too large to keep — so the delta's result is a commit this scan could not read. Counted
+    /// apart because it is the only kind of unresolved delta that can hide a commit from the
+    /// signing check — a thin pack's external
     /// bases are trees and blobs (`pack-objects` builds them with `add_preferred_base`, which
     /// dereferences a commit to its tree), so an unresolved delta on an absent base is not one
     pub unresolved_commit_deltas: usize,
@@ -136,7 +151,7 @@ enum State {
 enum Keep {
     /// Nothing: a tree, a blob, or something over its cap
     Nothing,
-    /// The whole body (a tag, or a delta to apply)
+    /// The whole body (a tag, a delta to apply, or since #140 a commit up to `MAX_COMMIT_BYTES`)
     Whole,
     /// A commit's header block: bytes up to the first blank line, at most `MAX_COMMIT_HEADER`
     CommitHeader,
@@ -164,6 +179,14 @@ pub struct PackScan {
     /// Decoded tag objects by pack offset (for OFS_DELTA) and by sha (for REF_DELTA)
     tags_by_offset: HashMap<u64, Vec<u8>>,
     tags_by_sha: HashMap<[u8; 20], Vec<u8>>,
+    /// 0.2.30 (#140): whole commit bodies by pack offset, and where each commit sits by sha, so a
+    /// commit delta finds its base either way. One copy per commit, unlike the tag maps: commits
+    /// are the bigger objects and there are many more of them
+    commits_by_offset: HashMap<u64, Vec<u8>>,
+    commit_offset_by_sha: HashMap<[u8; 20], u64>,
+    /// Bytes of whole commits claimed so far, against `commit_budget`
+    kept_commit_bytes: usize,
+    commit_budget: usize,
     /// 0.2.29 (#59): the resolved type of the object at each offset, so a delta chain's result
     /// type is known even where its bytes are not
     resolved_type: HashMap<u64, u8>,
@@ -189,9 +212,33 @@ impl PackScan {
             state: State::Header,
             tags_by_offset: HashMap::new(),
             tags_by_sha: HashMap::new(),
+            commits_by_offset: HashMap::new(),
+            commit_offset_by_sha: HashMap::new(),
+            kept_commit_bytes: 0,
+            commit_budget: MAX_KEPT_COMMIT_BYTES,
             resolved_type: HashMap::new(),
             objects: Objects::default(),
             error: None,
+        }
+    }
+
+    /// A scan that keeps at most `bytes` of whole commits, so a test reaches the budget without
+    /// building a 64 MiB pack.
+    #[cfg(test)]
+    fn with_commit_budget(bytes: usize) -> Self {
+        PackScan {
+            commit_budget: bytes,
+            ..Self::new()
+        }
+    }
+
+    /// Whether `size` more bytes of whole commit fit, and if so, claims them.
+    fn claim_commit_bytes(&mut self, size: usize) -> bool {
+        if size <= MAX_COMMIT_BYTES && self.kept_commit_bytes + size <= self.commit_budget {
+            self.kept_commit_bytes += size;
+            true
+        } else {
+            false
         }
     }
 
@@ -263,8 +310,11 @@ impl PackScan {
                         OBJ_TAG | OBJ_OFS_DELTA | OBJ_REF_DELTA if size <= MAX_TAG_BYTES => {
                             Keep::Whole
                         }
-                        // #59: only the header block, whatever the commit's total size — that is
-                        // where a signature lives, and a long message must not cost memory
+                        // #140: whole when it fits, so a later commit sent as a delta against it
+                        // can be applied
+                        OBJ_COMMIT if self.claim_commit_bytes(size) => Keep::Whole,
+                        // #59: otherwise only the header block — that is where a signature lives,
+                        // and a large commit must not cost memory
                         OBJ_COMMIT => Keep::CommitHeader,
                         _ => Keep::Nothing,
                     };
@@ -432,14 +482,8 @@ impl PackScan {
                 }
             }
             OBJ_COMMIT => {
-                self.resolved_type.insert(offset, OBJ_COMMIT);
-                self.objects.by_sha.insert(
-                    hex::encode(sha.unwrap()),
-                    Object::Commit {
-                        signed: commit_is_signed(&body),
-                        parents: commit_parents(&body),
-                    },
-                );
+                let sha: [u8; 20] = sha.unwrap().try_into().unwrap();
+                self.record_commit(offset, sha, body, keep == Keep::Whole);
             }
             OBJ_TREE | OBJ_BLOB => {
                 self.resolved_type.insert(offset, kind);
@@ -470,24 +514,40 @@ impl PackScan {
                 if let Some(t) = base_type {
                     self.resolved_type.insert(offset, t);
                 }
-                let base_body = match base {
-                    DeltaBase::Offset(_) => base_at.and_then(|at| self.tags_by_offset.get(&at)),
-                    DeltaBase::Ref(sha) => self.tags_by_sha.get(&sha),
-                    DeltaBase::None => None,
-                };
-                match base_body.and_then(|b| apply_delta(b, &body)) {
-                    Some(result) if result.len() <= MAX_TAG_BYTES => {
-                        let mut h = Sha1::new();
-                        h.update(format!("tag {}\0", result.len()).as_bytes());
-                        h.update(&result);
-                        let sha: [u8; 20] = h.finalize().into();
+                // The base's bytes, when this scan kept them: a tag, or (#140) a whole commit.
+                // The result is owned, so the borrow of the maps ends here.
+                let result = match (base, base_type) {
+                    (DeltaBase::Offset(_), Some(OBJ_TAG)) => {
+                        base_at.and_then(|at| self.tags_by_offset.get(&at))
+                    }
+                    (DeltaBase::Ref(sha), Some(OBJ_TAG)) => self.tags_by_sha.get(&sha),
+                    (DeltaBase::Offset(_), Some(OBJ_COMMIT)) => {
+                        base_at.and_then(|at| self.commits_by_offset.get(&at))
+                    }
+                    (DeltaBase::Ref(sha), Some(OBJ_COMMIT)) => self
+                        .commit_offset_by_sha
+                        .get(&sha)
+                        .and_then(|at| self.commits_by_offset.get(at)),
+                    _ => None,
+                }
+                .and_then(|b| apply_delta(b, &body, MAX_TAG_BYTES.max(MAX_COMMIT_BYTES)));
+                match (result, base_type) {
+                    (Some(result), Some(OBJ_TAG)) if result.len() <= MAX_TAG_BYTES => {
+                        let sha = object_sha("tag", &result);
                         self.record_tag(offset, sha, result);
+                    }
+                    (Some(result), Some(OBJ_COMMIT)) => {
+                        // The sha is the result's — a delta has none of its own — so it is the
+                        // name a ref points at and the name a child's `parent` line uses
+                        let sha = object_sha("commit", &result);
+                        let keep = self.claim_commit_bytes(result.len());
+                        self.record_commit(offset, sha, result, keep);
                     }
                     _ => {
                         self.objects.unresolved_deltas += 1;
-                        // Only a commit-based one can hide a commit from the signing check. Only
-                        // tag bodies are kept whole, so a commit delta is never applied and this
-                        // is how the check learns to fail closed.
+                        // Only a commit-based one can hide a commit from the signing check: one
+                        // whose base was too large to keep, or past the budget. Counting it is
+                        // how the check learns to fail closed.
                         if base_type == Some(OBJ_COMMIT) {
                             self.objects.unresolved_commit_deltas += 1;
                         }
@@ -495,6 +555,28 @@ impl PackScan {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A commit, from a whole object or a resolved delta. `keep` is whether its bytes were claimed
+    /// against the budget, and so may serve as a later delta's base.
+    ///
+    /// Only the first `MAX_COMMIT_HEADER` bytes are read for the signature and the parents, as
+    /// when only the header block is kept: whether a commit counts as signed must not depend on
+    /// whether it happened to fit the budget.
+    fn record_commit(&mut self, offset: u64, sha: [u8; 20], body: Vec<u8>, keep: bool) {
+        self.resolved_type.insert(offset, OBJ_COMMIT);
+        let header = &body[..body.len().min(MAX_COMMIT_HEADER)];
+        self.objects.by_sha.insert(
+            hex::encode(sha),
+            Object::Commit {
+                signed: commit_is_signed(header),
+                parents: commit_parents(header),
+            },
+        );
+        if keep {
+            self.commit_offset_by_sha.insert(sha, offset);
+            self.commits_by_offset.insert(offset, body);
         }
     }
 
@@ -578,9 +660,17 @@ fn parse_object_header(buf: &[u8]) -> Result<Option<(u8, usize, DeltaBase, usize
     Ok(Some((kind, size, base, i)))
 }
 
+/// git's object name: the SHA-1 of "<type> <size>\0" followed by the body.
+fn object_sha(kind: &str, body: &[u8]) -> [u8; 20] {
+    let mut h = Sha1::new();
+    h.update(format!("{kind} {}\0", body.len()).as_bytes());
+    h.update(body);
+    h.finalize().into()
+}
+
 /// git's delta format: two size varints, then copy (MSB set) and insert (MSB clear) instructions.
-/// None when the delta does not fit its base.
-fn apply_delta(base: &[u8], delta: &[u8]) -> Option<Vec<u8>> {
+/// None when the delta does not fit its base, or would make more than `max` bytes.
+fn apply_delta(base: &[u8], delta: &[u8], max: usize) -> Option<Vec<u8>> {
     fn varint(d: &[u8], i: &mut usize) -> Option<usize> {
         let mut v = 0usize;
         let mut shift = 0;
@@ -603,7 +693,7 @@ fn apply_delta(base: &[u8], delta: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let result_size = varint(delta, &mut i)?;
-    if result_size > MAX_TAG_BYTES {
+    if result_size > max {
         return None;
     }
     let mut out = Vec::with_capacity(result_size);
@@ -1148,10 +1238,10 @@ mod tests {
     }
 
     #[test]
-    fn a_hundred_kilobyte_commit_message_costs_nothing_and_still_reads_as_signed() {
-        // The reason the scan stops at the blank line. The message is far over the header cap;
-        // keeping whole commits would hold all of it, and the signature is in the first 500 bytes
-        // either way.
+    fn a_hundred_kilobyte_commit_message_still_reads_as_signed() {
+        // The message is far over the header cap. Since #140 a commit this size is kept whole (it
+        // may be a later delta's base), and the signature is judged from the header block either
+        // way.
         let message = "x".repeat(100 * 1024);
         let body = commit_body(&[], true, &message);
         assert!(body.len() > 100 * 1024);
@@ -1227,15 +1317,212 @@ mod tests {
         );
     }
 
+    fn raw_sha(kind: &str, body: &[u8]) -> [u8; 20] {
+        let mut out = [0u8; 20];
+        hex::decode_to_slice(sha_of(kind, body), &mut out).unwrap();
+        out
+    }
+
+    fn scan_with_budget(bytes: &[u8], budget: usize) -> Objects {
+        let mut s = PackScan::with_commit_budget(budget);
+        s.feed(bytes);
+        s.finish().unwrap()
+    }
+
+    #[test]
+    fn a_commit_sent_as_a_delta_against_another_commit_is_read() {
+        // #140: two commits that look alike, which is when pack-objects deltifies one against the
+        // other. Refusing this refused any ordinary push of two signed commits.
+        let c1 = commit_body(&[], true, "first");
+        let s1 = sha_of("commit", &c1);
+        let c2 = commit_body(&[&s1], true, "second");
+        let delta = insert_only_delta(&c1, &c2);
+        let want = Some(Object::Commit {
+            signed: true,
+            parents: vec![s1.clone()],
+        });
+        for chunk in [1, 3, 1024] {
+            let p = pack(&[
+                Entry::Whole(OBJ_COMMIT, &c1),
+                Entry::OfsDelta {
+                    back: 1,
+                    delta: &delta,
+                },
+            ]);
+            let o = scan(&p, chunk).unwrap();
+            assert_eq!(
+                o.by_sha.get(&sha_of("commit", &c2)),
+                want.as_ref(),
+                "chunk {chunk}"
+            );
+            assert_eq!(o.unresolved_commit_deltas, 0);
+            assert_eq!(o.unresolved_deltas, 0);
+        }
+        // and by sha
+        let p = pack(&[
+            Entry::Whole(OBJ_COMMIT, &c1),
+            Entry::RefDelta {
+                base_sha: raw_sha("commit", &c1),
+                delta: &delta,
+            },
+        ]);
+        let o = scan(&p, 1024).unwrap();
+        assert_eq!(o.by_sha.get(&sha_of("commit", &c2)), want.as_ref());
+        assert_eq!(o.unresolved_commit_deltas, 0);
+    }
+
+    #[test]
+    fn a_commit_delta_that_strips_the_signature_is_an_unsigned_commit() {
+        // Resolving deltas must not become a way around the check: the result is judged, not the
+        // base it was built from.
+        let signed = commit_body(&[], true, "same message");
+        let unsigned = commit_body(&[], false, "same message");
+        let delta = insert_only_delta(&signed, &unsigned);
+        let p = pack(&[
+            Entry::Whole(OBJ_COMMIT, &signed),
+            Entry::OfsDelta {
+                back: 1,
+                delta: &delta,
+            },
+        ]);
+        let o = scan(&p, 7).unwrap();
+        assert_eq!(
+            o.by_sha.get(&sha_of("commit", &unsigned)),
+            Some(&Object::Commit {
+                signed: false,
+                parents: vec![]
+            })
+        );
+    }
+
+    #[test]
+    fn a_chain_of_commit_deltas_is_followed() {
+        // git chains deltas up to --depth (50 by default): the base of the third is the second,
+        // which only exists once its own delta is applied.
+        let c1 = commit_body(&[], true, "one");
+        let c2 = commit_body(&[&sha_of("commit", &c1)], true, "two");
+        let c3 = commit_body(&[&sha_of("commit", &c2)], true, "three");
+        let d2 = insert_only_delta(&c1, &c2);
+        let d3 = insert_only_delta(&c2, &c3);
+        let p = pack(&[
+            Entry::Whole(OBJ_COMMIT, &c1),
+            Entry::OfsDelta {
+                back: 1,
+                delta: &d2,
+            },
+            Entry::OfsDelta {
+                back: 1,
+                delta: &d3,
+            },
+        ]);
+        let o = scan(&p, 5).unwrap();
+        assert_eq!(
+            o.by_sha.get(&sha_of("commit", &c3)),
+            Some(&Object::Commit {
+                signed: true,
+                parents: vec![sha_of("commit", &c2)]
+            })
+        );
+        assert_eq!(o.unresolved_commit_deltas, 0);
+    }
+
+    #[test]
+    fn a_delta_against_a_commit_too_large_to_keep_is_counted_not_guessed() {
+        // The commit itself is still read (its header block), but its bytes are not kept, so the
+        // delta against it cannot be applied — and that has to refuse, not pass.
+        let big = commit_body(&[], true, &"x".repeat(MAX_COMMIT_BYTES));
+        assert!(big.len() > MAX_COMMIT_BYTES);
+        let small = commit_body(&[], true, "small");
+        let delta = insert_only_delta(&big, &small);
+        let p = pack(&[
+            Entry::Whole(OBJ_COMMIT, &big),
+            Entry::OfsDelta {
+                back: 1,
+                delta: &delta,
+            },
+        ]);
+        let o = scan(&p, 64 * 1024).unwrap();
+        assert_eq!(
+            o.by_sha.get(&sha_of("commit", &big)),
+            Some(&Object::Commit {
+                signed: true,
+                parents: vec![]
+            })
+        );
+        assert!(!o.by_sha.contains_key(&sha_of("commit", &small)));
+        assert_eq!(o.unresolved_commit_deltas, 1);
+    }
+
+    #[test]
+    fn past_the_budget_a_commit_delta_is_refused_and_within_it_is_read() {
+        let c1 = commit_body(&[], true, "one");
+        let c2 = commit_body(&[], true, "two");
+        let delta = insert_only_delta(&c1, &c2);
+        let p = pack(&[
+            Entry::Whole(OBJ_COMMIT, &c1),
+            Entry::OfsDelta {
+                back: 1,
+                delta: &delta,
+            },
+        ]);
+        // one byte short of keeping the base
+        let o = scan_with_budget(&p, c1.len() - 1);
+        assert!(!o.by_sha.contains_key(&sha_of("commit", &c2)));
+        assert_eq!(o.unresolved_commit_deltas, 1);
+        // exactly enough
+        let o = scan_with_budget(&p, c1.len());
+        assert!(o.by_sha.contains_key(&sha_of("commit", &c2)));
+        assert_eq!(o.unresolved_commit_deltas, 0);
+    }
+
+    #[test]
+    fn keeping_a_commit_whole_does_not_change_whether_it_counts_as_signed() {
+        // A header block longer than MAX_COMMIT_HEADER with `gpgsig` beyond it: the header-only
+        // path gives up at the cap and says unsigned. The commit is small enough to be kept whole,
+        // and reading the whole of it must not turn that into signed — neither as an object nor as
+        // a delta's result.
+        let body = format!(
+            "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nx-padding {}\ngpgsig -----BEGIN SSH SIGNATURE-----\n U1NIU0lHAAAAAQ==\n -----END SSH SIGNATURE-----\n\nmsg\n",
+            "a".repeat(MAX_COMMIT_HEADER)
+        )
+        .into_bytes();
+        assert!(body.len() < MAX_COMMIT_BYTES);
+        let unsigned = Some(Object::Commit {
+            signed: false,
+            parents: vec![],
+        });
+        let p = pack(&[Entry::Whole(OBJ_COMMIT, &body)]);
+        assert_eq!(
+            scan(&p, 4096).unwrap().by_sha.get(&sha_of("commit", &body)),
+            unsigned.as_ref()
+        );
+
+        let base = commit_body(&[], false, "base");
+        let delta = insert_only_delta(&base, &body);
+        let p = pack(&[
+            Entry::Whole(OBJ_COMMIT, &base),
+            Entry::OfsDelta {
+                back: 1,
+                delta: &delta,
+            },
+        ]);
+        assert_eq!(
+            scan(&p, 4096).unwrap().by_sha.get(&sha_of("commit", &body)),
+            unsigned.as_ref()
+        );
+    }
+
     #[test]
     fn copy_instructions_are_applied() {
         let base = b"base bytes here";
         let delta = copy_then_insert_delta(base, b" and more");
         assert_eq!(
-            apply_delta(base, &delta).unwrap(),
+            apply_delta(base, &delta, MAX_TAG_BYTES).unwrap(),
             b"base bytes here and more".to_vec()
         );
         // wrong base size
-        assert!(apply_delta(b"short", &delta).is_none());
+        assert!(apply_delta(b"short", &delta, MAX_TAG_BYTES).is_none());
+        // a result over the cap
+        assert!(apply_delta(base, &delta, 8).is_none());
     }
 }
