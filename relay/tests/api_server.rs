@@ -159,6 +159,38 @@ async fn whoami_lists_permissions_and_repos() {
 }
 
 #[tokio::test]
+async fn whoami_shows_what_a_repository_adds_and_takes_away() {
+    // #143: the relay decides per repository (project grants, plus the repo's allow, minus its
+    // deny). A whoami that printed only the project line told an agent it could not merge in a
+    // repository that granted pr:merge, and would tell it it could comment where the repository
+    // denies it.
+    let mut p = project_case_a(&["pr:create", "issue:comment"]);
+    let lib = p
+        .repos
+        .iter_mut()
+        .find(|r| r.full_name == "LibOrg/awesome-lib")
+        .unwrap();
+    lib.allow = vec!["pr:merge".into()];
+    lib.deny = vec!["issue:comment".into()];
+    let f = start_api(p, BootstrapMode::Auto, true).await;
+    let (code, resp) = post(f.addr, "/whoami", Some(&f.token), &ApiRequest::default()).await;
+    assert_eq!(code, 200);
+    let msg = resp.message.unwrap();
+    assert!(
+        msg.contains("LibOrg/awesome-lib (read-write) +pr:merge -issue:comment"),
+        "{msg}"
+    );
+    // a repository with no delta of its own is its mode alone
+    assert!(
+        msg.lines()
+            .any(|l| l.trim() == "VendorOrg/reference-impl (read-only)"),
+        "{msg}"
+    );
+    // the project line is labelled as the part every repository starts from
+    assert!(msg.contains("permissions (every repo;"), "{msg}");
+}
+
+#[tokio::test]
 async fn issue_labels_need_label_permission() {
     let f = start_api(project_case_a(&["issue:create"]), BootstrapMode::Auto, true).await;
     let r = ApiRequest {
