@@ -13,6 +13,14 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.37 (2026-09-25)
+
+### Security
+
+- confined the agent on the host: two FORWARD rules in the host's `DOCKER-USER` chain let the internal bridge reach only the gateway, so a root process in the agent container can no longer route past it through Docker's own NAT (#189)
+- the gateway inserts and re-checks the rules itself through `pid: host` and nsenter, tags them `sekimore:<project>`, and logs an error at start when `pid: host` is missing (#189)
+- `network.host_enforcement` (default on) turns the rules off; the never-called `setup_host_firewall_rules` is gone (#189)
+
 ## 0.2.36 (2026-09-24)
 
 ### Security
