@@ -42,6 +42,23 @@ the gateway and dev containers together with the host-side tasks, already wired 
 For a DevContainer, the dev side of this is
 [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base).
 
+## When it fits, and when it does not
+
+**It fits** when you want an agent to work on GitHub but not to have the run of it: open a
+pull request but not merge it, touch this repository and no other, sign every commit, stay
+under a cap on what leaves, and leave a record of all of it — with no upstream credential in
+the agent's hands.
+
+**It does not fit** in these cases, where something smaller or something else will serve you
+better:
+
+| | |
+|---|---|
+| Narrowing the API of an upstream that is not GitHub | The SSH git half is not tied to a forge, but **the half that translates the API is GitHub's**. GitLab or an internal Artifactory can be allowed as a domain, or passed through 443 with an upload cap, and no further ([#50](https://github.com/Amakata/sekimore-gw/issues/50) is about changing that) |
+| Rules on the content of a request | TLS is not terminated, so the gateway sees the destination and the byte count, not `GET /v1/public/`. That is the trade for needing no MITM certificate |
+| Only closing the network | The four layers and the relay are there to narrow what an agent may do on GitHub. To restrict destinations alone, less will do |
+| An agent that never touches GitHub | If a person runs the git commands, the relay has nothing to do |
+
 ## How it works
 
 Four layers, built from one file (`config.yml`), because **fixing only one of them leaves the
