@@ -37,6 +37,8 @@
 
 ```bash
 sekimore pr create --head <branch> --base main --title "…" --body="…"          [pr:create]
+                                                              #   --draft なら CI だけ回す
+sekimore pr ready --number N                                  [pr:create]  draft をレビュー可能に (pr draft で戻す)
 sekimore pr update --number N --title "…"                     [pr:create]  自分の PR を編集する
                                                               #   --base は許可された base か改めて検査される
 sekimore pr view --number N                                   [pr:read]  タイトル、本文、ブランチ、件数
@@ -50,11 +52,16 @@ sekimore pr reopen --number N                                 [pr:close]  close 
 sekimore pr comment --number N --body="…"                     [pr:comment]
 sekimore pr reply --number N --comment-id C --body="…"          [pr:comment]  行コメントに、その場で返信する
 sekimore pr review --number N --event APPROVE                 [pr:review]  レビューを出す
+sekimore pr review --number N --event REQUEST_CHANGES \\        [pr:review]  …行を指して言う
+  --comment "src/main.rs:40:this should be >="                #   path:line:body。複数は繰り返す
+                                                              #   長い本文は --comments-file f.json
 sekimore pr request-review --number N --reviewers alice,bob   [pr:request_review]  レビューを依頼する
 sekimore ci runs --ref <tag|branch|sha>                       [ci:read]  ref に紐づく workflow run 一覧
 sekimore ci jobs --number N                                   [ci:read]  どのジョブが失敗したか、job_id
 sekimore ci log --number N                                    [ci:read]  失敗ジョブのログを末尾から。--before で前へ
 sekimore ci rerun --run-id N [--all]                          [ci:rerun]  ci:read ではない。Actions の分数を消費する
+sekimore ci dispatch --workflow release.yml --ref main        [ci:dispatch]  workflow_dispatch の run を起動
+                                                              #   --input key=value を繰り返す。run は ci runs --ref で探す
 sekimore ci cancel --run-id N                                 [ci:rerun]
 sekimore security alerts [--state open|dismissed|fixed|all]   [security:read]  Dependabot アラート: 重大度、パッケージ、マニフェスト、アドバイザリ、最初の修正版
 sekimore security view --number N                             [security:read]  1 件をリンク付きで

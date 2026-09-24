@@ -220,5 +220,14 @@
   "op.check.signing_key_ok": "  signing key:     in the host agent ({key})",
   "op.check.signing_key_missing": "  signing key:     NOT IN THE HOST AGENT — ssh-add {fingerprint} on the host; commits will not be signed",
   "agent.pr.reply": "Reply to a line comment, where it was left",
-  "agent.pr.reply.comment_id": "The comment to answer, as `pr comments` prints it (#2451 -> 2451)"
+  "agent.pr.reply.comment_id": "The comment to answer, as `pr comments` prints it (#2451 -> 2451)",
+  "agent.pr.review.comment": "A note on one line: path:line:body. Repeat for more than one",
+  "agent.pr.review.comments_file": "A JSON file of notes: [{\"path\":…,\"line\":…,\"body\":…}], for bodies too long or awkward for --comment",
+  "agent.pr.draft": "Put a pull request back to draft",
+  "agent.pr.ready": "Offer a draft for review",
+  "agent.pr.create.draft": "Open it as a draft: CI runs, nobody is asked to look yet",
+  "agent.ci.dispatch": "Start a workflow_dispatch run",
+  "agent.ci.dispatch.workflow": "The workflow file, e.g. release.yml",
+  "agent.ci.dispatch.ref": "The branch or tag to run it on",
+  "agent.ci.dispatch.input": "An input the workflow declares: key=value. Repeat for more"
 }

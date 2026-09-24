@@ -54,6 +54,10 @@ pub enum Action {
     /// 0.2.9: re-run or cancel a workflow run. Separate from `Read`, because re-running spends
     /// Actions minutes and runs workflow code with the repository's secrets
     Rerun,
+    /// 0.2.33 (#168): start a `workflow_dispatch` run. Separate from `Rerun`: re-running repeats
+    /// something that already happened on this repository, while a dispatch starts a workflow
+    /// that may never have run — a deploy, a release — on a ref of the agent's choosing
+    Dispatch,
     /// 0.2.28: dismiss a Dependabot alert (or reopen one). Not `Close`: an alert is not closed,
     /// it is set aside with a reason, and the reason is what the audit wants
     Dismiss,
@@ -97,7 +101,7 @@ impl Resource {
             Resource::Issue => &[Create, Comment, Close, Label, Assign, Read, Update],
             Resource::Project => &[Read, AddItem, UpdateItem],
             Resource::Repo => &[Read],
-            Resource::Ci => &[Read, Rerun],
+            Resource::Ci => &[Read, Rerun, Dispatch],
             Resource::Release => &[Create, Read, Publish],
             Resource::Search => &[Read],
             Resource::Security => &[Read, Dismiss],
@@ -131,6 +135,7 @@ impl Action {
             Action::RequestReview => "request_review",
             Action::Publish => "publish",
             Action::Rerun => "rerun",
+            Action::Dispatch => "dispatch",
             Action::Update => "update",
             Action::Dismiss => "dismiss",
         }
@@ -172,6 +177,7 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "request_review" => Action::RequestReview,
         "publish" => Action::Publish,
         "rerun" => Action::Rerun,
+        "dispatch" => Action::Dispatch,
         "update" => Action::Update,
         "dismiss" => Action::Dismiss,
         other => return Err(format!("unknown action {other:?}")),
@@ -1395,7 +1401,9 @@ mod tests {
         //   separate from opening one)
         // + security:read, security:dismiss (0.2.28: Dependabot alerts; hiding one is not
         //   reading one)
-        assert_eq!(all_permission_keys().len(), 28);
+        // + ci:dispatch (0.2.33 #168: starting a workflow that has never run can deploy, which
+        //   re-running something that already happened here cannot)
+        assert_eq!(all_permission_keys().len(), 29);
         // dismissing is not a kind of reading, and reading is not a kind of dismissing
         assert!(parse_permission("security:close").is_err());
         assert!(parse_permission("pr:dismiss").is_err());

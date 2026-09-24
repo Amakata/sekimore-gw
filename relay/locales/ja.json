@@ -220,5 +220,14 @@
   "op.check.signing_key_ok": "  署名鍵:          ホストの agent にある ({key})",
   "op.check.signing_key_missing": "  署名鍵:          ホストの agent に無い — ホストで {fingerprint} を ssh-add する。コミットは署名されない",
   "agent.pr.reply": "行コメントに、その場で返信する",
-  "agent.pr.reply.comment_id": "返信する相手のコメント。`pr comments` の表示のもの (#2451 なら 2451)"
+  "agent.pr.reply.comment_id": "返信する相手のコメント。`pr comments` の表示のもの (#2451 なら 2451)",
+  "agent.pr.review.comment": "1 行への指摘: path:line:body。複数あるときは繰り返す",
+  "agent.pr.review.comments_file": "指摘を JSON で渡すファイル: [{\"path\":…,\"line\":…,\"body\":…}]。--comment に収まらない長さや内容のとき",
+  "agent.pr.draft": "PR を draft に戻す",
+  "agent.pr.ready": "draft をレビュー可能にする",
+  "agent.pr.create.draft": "draft で開く。CI は回るが、まだ誰にも見てもらわない",
+  "agent.ci.dispatch": "workflow_dispatch の run を起動する",
+  "agent.ci.dispatch.workflow": "ワークフローのファイル名。例: release.yml",
+  "agent.ci.dispatch.ref": "実行するブランチまたはタグ",
+  "agent.ci.dispatch.input": "ワークフローが宣言している input: key=value。複数は繰り返す"
 }

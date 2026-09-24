@@ -53,6 +53,20 @@ pub struct ApiRequest {
     /// 0.2.33 (#165): the line comment `pr reply` answers
     #[serde(default, skip_serializing_if = "is_zero")]
     pub comment_id: u64,
+    /// 0.2.33 (#167): the line comments a review carries
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<ReviewComment>,
+    /// 0.2.33 (#169): open the pull request as a draft, or which way `pr draft` / `pr ready`
+    /// moves it. Its own field: `draft` above belongs to a release, and a pull request being a
+    /// draft has nothing to do with a release being one
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pr_draft: bool,
+    /// 0.2.33 (#168): the workflow file `ci dispatch` starts
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub workflow: String,
+    /// 0.2.33 (#168): its inputs
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub inputs: std::collections::BTreeMap<String, String>,
     /// Tag name / branch name / SHA (ci runs)
     #[serde(default, rename = "ref", skip_serializing_if = "String::is_empty")]
     pub git_ref: String,
@@ -211,4 +225,81 @@ pub struct GitDomain {
     pub upstream: String,
     #[serde(default)]
     pub default: bool,
+}
+
+/// 0.2.33 (#167): one note a review leaves on a line of the diff.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ReviewComment {
+    pub path: String,
+    pub line: u64,
+    pub body: String,
+}
+
+impl ReviewComment {
+    /// `path:line:body` — the form `--comment` takes. Split from the left twice and no further,
+    /// so a body may contain colons, which prose about code invariably does.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let (path, rest) = s
+            .split_once(':')
+            .ok_or_else(|| format!("expected path:line:body, got {s:?}"))?;
+        let (line, body) = rest
+            .split_once(':')
+            .ok_or_else(|| format!("expected path:line:body, got {s:?}"))?;
+        if path.is_empty() {
+            return Err(format!("no path in {s:?}"));
+        }
+        let line: u64 = line
+            .parse()
+            .map_err(|_| format!("line {line:?} is not a number, in {s:?}"))?;
+        if line == 0 {
+            return Err(format!("line 0 does not exist, in {s:?}"));
+        }
+        if body.trim().is_empty() {
+            return Err(format!("no comment body in {s:?}"));
+        }
+        Ok(ReviewComment {
+            path: path.to_string(),
+            line,
+            body: body.to_string(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod review_comment_parsing {
+    use super::ReviewComment;
+
+    #[test]
+    fn a_body_may_contain_colons() {
+        let c =
+            ReviewComment::parse("src/main.rs:40:see RFC 3339: the offset is required").unwrap();
+        assert_eq!(c.path, "src/main.rs");
+        assert_eq!(c.line, 40);
+        assert_eq!(c.body, "see RFC 3339: the offset is required");
+    }
+
+    #[test]
+    fn a_windows_looking_path_is_not_special() {
+        // The first colon wins, so a path is whatever precedes it; this is the form the guide
+        // documents, and a path with a colon in it cannot be expressed. Said, not silently wrong.
+        let c = ReviewComment::parse("a/b.rs:1:x").unwrap();
+        assert_eq!((c.path.as_str(), c.line), ("a/b.rs", 1));
+    }
+
+    #[test]
+    fn what_is_refused() {
+        for bad in [
+            "src/main.rs",         // no line, no body
+            "src/main.rs:40",      // no body
+            "src/main.rs:forty:x", // line is not a number
+            "src/main.rs:0:x",     // there is no line 0
+            ":40:x",               // no path
+            "src/main.rs:40:   ",  // a body of spaces says nothing
+        ] {
+            assert!(
+                ReviewComment::parse(bad).is_err(),
+                "{bad:?} should be refused"
+            );
+        }
+    }
 }

@@ -171,6 +171,8 @@ database_path: "/data/security_gateway.db"
 #     #     repos:
 #     #       - { name: Corp/Internal, mode: read-write, bases: [main] }
 #     permissions: [pr:create, issue:create, release:create]   # resource:action. Anything not listed is denied. {allow: [...], deny: [...]} also works
+#                             # 0.3.0+ ci:dispatch starts a workflow_dispatch run. Off by default and separate from
+#                             # ci:rerun: a re-run repeats what already happened here, a dispatch can start a deploy
 #                             # 0.2.28+ security:read / security:dismiss read and dismiss Dependabot alerts. The upstream
 #                             # token needs the security_events scope, which logins before 0.2.28 did not ask for: gw:login again
 #     # boards:                 # 0.2.7+ the Projects v2 boards this project may touch. Written the way the URL reads,

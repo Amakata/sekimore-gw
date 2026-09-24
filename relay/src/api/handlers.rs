@@ -256,6 +256,8 @@ pub async fn dispatch(
         "/pr/create" => pr_create(ctx, req).await,
         "/pr/comment" => pr_comment(ctx, req).await,
         "/pr/reply" => pr_reply(ctx, req).await,
+        "/pr/draft" => pr_draft(ctx, req).await,
+        "/ci/dispatch" => ci_dispatch(ctx, req).await,
         "/pr/review" => pr_review(ctx, req).await,
         "/pr/merge" => pr_merge(ctx, req).await,
         "/pr/close" => pr_close(ctx, req).await,
@@ -415,7 +417,14 @@ async fn pr_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
         .project
         .authorize_pr_from(&req.repo, &req.head, &req.base)?;
     let pr = gh(ctx, &auth)?
-        .create_pull_request(&auth, &req.head, &req.base, &req.title, &req.body)
+        .create_pull_request(
+            &auth,
+            &req.head,
+            &req.base,
+            &req.title,
+            &req.body,
+            req.pr_draft,
+        )
         .await?;
     Ok(ApiResponse {
         number: Some(pr.number),
@@ -454,6 +463,50 @@ async fn pr_reply(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Api
     Ok(ApiResponse::default())
 }
 
+/// #169: offer a draft for review, or put one back. `pr:create` rather than a key of its own —
+/// an agent that may open a ready pull request can already reach this state directly.
+async fn pr_draft(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need_repo(req)?;
+    need(req.number != 0, "number is required")?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Create)?;
+    client
+        .set_pull_request_draft(&auth, req.number, req.pr_draft)
+        .await?;
+    Ok(ApiResponse {
+        message: Some(format!(
+            "PR #{} is now {}",
+            req.number,
+            if req.pr_draft {
+                "a draft"
+            } else {
+                "ready for review"
+            }
+        )),
+        ..Default::default()
+    })
+}
+
+/// #168: start a workflow that has not run. `ci:dispatch`, not `ci:rerun`: a re-run repeats what
+/// already happened here, while this can start a deploy on a ref of the agent's choosing.
+async fn ci_dispatch(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need_repo(req)?;
+    need(
+        !req.workflow.is_empty() && !req.git_ref.is_empty(),
+        "workflow and ref are required",
+    )?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Dispatch)?;
+    client
+        .dispatch_workflow(&auth, &req.workflow, &req.git_ref, &req.inputs)
+        .await?;
+    Ok(ApiResponse {
+        message: Some(format!(
+            "dispatched {} on {}; find the run with `ci runs --ref {}`",
+            req.workflow, req.git_ref, req.git_ref
+        )),
+        ..Default::default()
+    })
+}
+
 async fn pr_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
     need(
@@ -467,9 +520,21 @@ async fn pr_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
         ),
         "event must be APPROVE, REQUEST_CHANGES or COMMENT",
     )?;
+    // #167: GitHub refuses a review with neither a body nor comments, and its message does not
+    // say which is missing.
+    need(
+        !req.body.is_empty() || !req.comments.is_empty(),
+        "a review needs a body, line comments, or both",
+    )?;
+    for c in &req.comments {
+        need(
+            !c.path.is_empty() && c.line != 0 && !c.body.trim().is_empty(),
+            "each comment needs a path, a line and a body",
+        )?;
+    }
     let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Review)?;
     client
-        .review_pull_request(&auth, req.number, &req.event, &req.body)
+        .review_pull_request(&auth, req.number, &req.event, &req.body, &req.comments)
         .await?;
     Ok(ApiResponse::default())
 }
