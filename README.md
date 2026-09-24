@@ -9,146 +9,162 @@
 
 **Let an AI agent work on GitHub without handing over your account.**
 
-sekimore-gw (short form: sgw) is a network gateway for AI agents that run in Docker. One
-container holds four layers — DNS, a firewall, Squid and a relay — configured from one file. The
-relay is the part that matters for GitHub: it holds the operator's credentials, and the agent
-holds nothing that works outside the gateway.
+sekimore-gw (sgw) is a network gateway for AI agents in Docker.
 
-## Why a token is not enough
+- One container, four layers: DNS, firewall, Squid, relay. One `config.yml`.
+- The relay holds the operator's GitHub credentials. The agent holds nothing that works outside the gateway.
+- Permissions are granted per action: `pr:create` allowed, `pr:merge` denied.
 
-Any token the agent holds is readable: an agent with a terminal reads `~/.ssh` and `.env`. A
-classic token with the `repo` scope grants read and write access to every repository the account
-can reach. A fine-grained token narrows the repositories but not the actions: "Pull requests:
-write" covers opening a pull request and merging it. Neither records what the agent did or caps
-what it sends.
+## Why not a token
 
-sekimore-gw keeps the credential in the gateway. The agent holds a disposable SSH key and a
-project token, and both are valid only at the gateway. The operator grants permissions one action
-at a time, for example `pr:create` allowed and `pr:merge` denied.
+- Any token in the agent's container is readable. So are `~/.ssh` and `.env`.
+- A classic `repo` token: read and write on every repository the account can reach.
+- A fine-grained token narrows repositories, not actions. "Pull requests: write" both opens and merges.
+- Neither records what the agent did. Neither caps what it sends.
 
 ```console
-# anywhere, including outside the container: the project token means nothing to GitHub
+# anywhere: the project token means nothing to GitHub
 $ curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: token skm_..." https://api.github.com/user
 401
 
-# in the dev container: an operation the policy allows goes through the gateway
+# in the dev container: allowed by the policy
 $ sekimore pr create --head sekimore/topic --base main --title "..."
 #42 https://github.com/Org/Repo/pull/42
 
-# an operation the policy does not allow stops at the gateway
+# in the dev container: not allowed
 $ sekimore pr merge --number 42
 sekimore: denied: pr:merge is not allowed by policy
 ```
 
-`gh` is not part of this setup. Given a token, it would connect to GitHub directly, past every
-permission configured here, so the dev-container image ships without it.
+`gh` is not part of this setup. With a token, it would bypass every permission here. The dev-container image does not include it.
 
 ## Get started
 
-**A. Dev container (recommended).** The complete setup — the gateway, the dev container, the relay
-and the host-side tasks — is the `examples/sgw-sample/` template in
-[sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base). Its README takes a new
-project from clone to a verified relay.
+### A. Dev container (recommended)
 
-**B. Gateway only.** Three commands on a Linux host give you the DNS allowlist, the firewall, Squid
-and the dashboard:
+Use the `examples/sgw-sample/` template in [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base).
+Its README goes from clone to a verified relay.
+
+### B. Gateway only
+
+DNS allowlist, firewall, Squid and the dashboard. No relay.
 
 ```bash
 git clone https://github.com/Amakata/sekimore-gw.git && cd sekimore-gw
-cp config/config.sample.yml config/config.yml    # allow_domains: the domains the agent may reach
+cp config/config.sample.yml config/config.yml    # allow_domains: what the agent may reach
 docker compose up -d                             # dashboard: http://localhost:8080
 ```
 
-This path does not include the relay. To add it, set `domain_handlers` and `relay` in
-`config.yml` as [relay/README.md](relay/README.md) describes (the end of `config.sample.yml` is
-the template), and give the agent container the pieces the dev-container template provides:
-`agent-setup.sh`, the `sekimore-relay` CLI and the `sekimore` wrapper. The `ai-agent` service in
-`docker-compose.yml` is a minimal agent container.
+To add the relay:
 
-If the host is behind a proxy that requires credentials: for a standalone gateway, run
-`cp .env.example .env` and fill in `SEKIMORE_UPSTREAM_PROXY_USERNAME` and `_PASSWORD`. In the
-dev-container setup, `mise run gw:proxy-credential -- set` stores them in the gateway's secret
-store instead, because `.devcontainer/.env` is also the dev container's `env_file` and the agent
-can read it.
+- Set `domain_handlers` and `relay` in `config.yml`. The template is at the end of `config.sample.yml`. See [relay/README.md](relay/README.md).
+- Give the agent container `agent-setup.sh`, the `sekimore-relay` CLI and the `sekimore` wrapper. The `ai-agent` service in `docker-compose.yml` is a minimal example.
+
+Behind a proxy that requires credentials, standalone gateway:
+
+```bash
+cp .env.example .env    # SEKIMORE_UPSTREAM_PROXY_USERNAME / _PASSWORD
+```
+
+Dev-container setup (`.devcontainer/.env` is readable by the agent, so use the secret store):
+
+```bash
+mise run gw:proxy-credential -- set
+```
 
 ## How it works
 
-The four layers are built from one `config.yml`, because restricting one of them leaves the others
-as a way around it.
+Four layers from one `config.yml`. Restricting one leaves the others as a bypass.
 
-| Layer | What it does |
+| Layer | Role |
 |---|---|
-| **DNS** (:53) | Resolves only allowlisted domains, and opens the firewall for the addresses it returns. The domains the relay handles resolve to the gateway itself. |
-| **Firewall** (iptables, ipset) | Forwards only to the addresses and ports that DNS admitted, and drops a connection to an IP address named directly. Agents can query the gateway's DNS; nothing else is reachable until DNS admits it. `network.allowed_ports` limits the destination ports; when it is not set, every port of an admitted address is open. |
-| **Squid** (:3128) | The proxy the agent's tools use. Squid resolves names itself, so the DNS layer does not cover it; Squid applies the same allowlist and refuses the domains the relay handles. |
-| **Relay** (sekimore-relay) | git over SSH (:22), the GitHub API (:8420) and a passthrough for other HTTPS (:443). The only component that holds upstream credentials. It enforces a per-project policy — repositories, read-only or read-write, 33 permissions, pull request base branches — turns `git push HEAD:refs/for/main` into a branch and a pull request, signs commits with a key the agent can use but not read, caps what a connection may upload through the 443 passthrough, and writes allowed and refused operations to an audit log. |
+| **DNS** (:53) | Resolves allowlisted domains only. Opens the firewall for the returned addresses. Relay domains resolve to the gateway. |
+| **Firewall** (iptables, ipset) | Forwards only to addresses and ports that DNS admitted. Drops direct-IP connections. `network.allowed_ports` limits ports; unset means all ports. |
+| **Squid** (:3128) | The agent's HTTP proxy. Resolves names itself, so it carries the same allowlist. Refuses relay domains. |
+| **Relay** (sekimore-relay) | git over SSH (:22), GitHub API (:8420), HTTPS passthrough (:443). The only holder of upstream credentials. |
+
+The relay:
+
+- enforces a per-project policy: repositories, read-only or read-write, 33 permissions, pull request base branches
+- turns `git push HEAD:refs/for/main` into a branch and a pull request
+- signs commits with a key the agent can use but not read
+- caps uploads through the 443 passthrough
+- logs allowed and refused operations
 
 The relay is optional. Without `domain_handlers`, the first three layers run alone.
-[relay/README.md](relay/README.md) covers its setup, the agent-side steps and the policy.
+Details: [relay/README.md](relay/README.md).
 
 ## When to use it
 
-**sekimore-gw fits** when an agent should work on GitHub within limits: open a pull request but
-not merge it, reach this repository and no other, sign every commit, stay under an upload cap on
-the HTTPS passthrough, and leave a record of every operation — with no upstream credential in the
-agent's hands.
+Fits when the agent should:
 
-**sekimore-gw does not fit** the following cases, where a smaller or a different tool serves
-better:
+- open a pull request, not merge it
+- reach this repository, no other
+- sign every commit
+- stay under an upload cap on the HTTPS passthrough
+- leave a record of every operation
+- hold no upstream credential
 
-| | |
+Does not fit:
+
+| Case | Why |
 |---|---|
-| Restricting the API of an upstream other than GitHub | The SSH git relay works with any Git host, but the API translation supports only GitHub. GitLab or an internal Artifactory can be allowlisted as a domain, or passed through port 443 with an upload cap, and no further. [#50](https://github.com/Amakata/sekimore-gw/issues/50) tracks changing this. |
-| Rules based on request content | The gateway does not terminate TLS. It sees the destination and the byte count, not `GET /v1/public/`. In exchange, no MITM certificate is needed. |
-| Restricting destinations alone | The four layers exist to restrict what an agent can do on GitHub. For an allowlist alone, a simpler tool is enough. |
-| An agent that does not use GitHub | If a person runs the git commands, the relay has no role. |
+| API rules for an upstream other than GitHub | Git over SSH works with any host. API translation is GitHub only. GitLab or Artifactory: allowlist, or 443 passthrough with a cap. [#50](https://github.com/Amakata/sekimore-gw/issues/50) |
+| Rules on request content | TLS is not terminated. Destination and byte count only. No MITM certificate needed. |
+| Destinations only | A plain allowlist needs less than this. |
+| An agent that does not use GitHub | The relay has no role. |
 
 ## Requirements
 
-- Docker 20.10 or later and Docker Compose 2.0 or later.
-- A Linux host, or Docker Desktop on macOS. The layers run inside the Docker VM; the dev-container
-  template is used on macOS.
-- `docker-compose.yml` runs the gateway with `NET_ADMIN` and `privileged: true`.
-- An agent container disables Docker's embedded DNS (`dns: [127.0.0.1]`) and runs
-  `agent-setup.sh`, which finds the gateway and sets the default route.
-- `network.allowed_ports` is unset by default, so every port of an admitted address is open. Set
-  it to `[80, 443]` unless the agent needs more; a change requires a restart.
+- Docker 20.10 or later, Docker Compose 2.0 or later
+- A Linux host, or Docker Desktop on macOS (the layers run inside the Docker VM)
+- The gateway runs with `NET_ADMIN` and `privileged: true` (see `docker-compose.yml`)
+- Agent containers: `dns: [127.0.0.1]`, and `agent-setup.sh` to find the gateway and set the default route
+- `network.allowed_ports` is unset by default, so every port is open. Set `[80, 443]` unless the agent needs more. A change requires a restart.
 
 ## Names
 
 | Name | What it is |
 |---|---|
-| sekimore-gw, sgw | This gateway. `sgw` is the short form in sgw-devcontainer-base, `sgw.sh` and `.devcontainer/sgw/`. |
-| sekimore-relay | The relay daemon inside the gateway, and the CLI binary of the same name in the dev container. |
-| `sekimore` | The wrapper in the dev container that runs `sekimore-relay agent …`. `sekimore guide` prints the agent's guide. |
-| sgw-devcontainer-base | The dev-container image. `examples/sgw-sample/` in it is the project template. |
-| `.devcontainer/sgw/`, `gw:*` | The host-side scripts and mise tasks, distributed with the images and replaced by `mise run upgrade:apply`. |
+| sekimore-gw, sgw | This gateway. `sgw` appears in sgw-devcontainer-base, `sgw.sh` and `.devcontainer/sgw/`. |
+| sekimore-relay | The relay daemon in the gateway, and the CLI of the same name in the dev container. |
+| `sekimore` | The wrapper in the dev container. Runs `sekimore-relay agent …`. `sekimore guide` prints the agent's guide. |
+| sgw-devcontainer-base | The dev-container image. `examples/sgw-sample/` is the project template. |
+| `.devcontainer/sgw/`, `gw:*` | Host-side scripts and mise tasks. Distributed with the images, replaced by `mise run upgrade:apply`. |
 
 ## Documentation
 
-- [relay/README.md](relay/README.md) — relay setup, agent-side steps, everyday use, the
-  configuration reference and the permission catalog
-- [config/config.sample.yml](config/config.sample.yml) — every key the gateway reads, with its
-  default and a comment
-- [docs/localization.md](docs/localization.md) — the Web UI and the CLI in English and Japanese
-- [CONTRIBUTING.md](CONTRIBUTING.md) — development, tests, building and preview images
-- [CHANGELOG.md](CHANGELOG.md) and [relay/CHANGELOG.md](relay/CHANGELOG.md) — one image carries
-  the gateway and the relay under one version number
-- [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) — the dev-container
-  side of the setup
+- [relay/README.md](relay/README.md) — relay setup, agent-side steps, everyday use, configuration reference, permission catalog
+- [config/config.sample.yml](config/config.sample.yml) — every key, with its default and a comment
+- [docs/localization.md](docs/localization.md) — Web UI and CLI in English and Japanese
+- [CONTRIBUTING.md](CONTRIBUTING.md) — development, tests, images
+- [CHANGELOG.md](CHANGELOG.md), [relay/CHANGELOG.md](relay/CHANGELOG.md) — one image, one version number
+- [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) — the dev-container side
 
 ## Troubleshooting
 
-- **The agent cannot find the gateway.** Check `dns: [127.0.0.1]` on the agent container and its
-  logs (`docker logs <agent-container>`). `agent-setup.sh` scans the whole subnet only when the
-  prefix length is 24 or more (256 addresses or fewer).
-- **A domain does not resolve.** Check `allow_domains` in `config/config.yml`, and the blocked
-  requests in the Web UI or in `docker logs sekimore-gw`.
-- **The database is large.** `python -m src.maint db-stats` in the gateway container shows the
-  size; `python -m src.maint db-prune --before-days 90 --yes --vacuum` deletes old records. The
-  `gw:db-*` mise tasks run these commands. The relay's audit log (`/data/relay/audit.jsonl`) is
-  a separate file that they do not touch.
+**The agent cannot find the gateway**
+
+- Check `dns: [127.0.0.1]` on the agent container
+- Check the agent's logs: `docker logs <agent-container>`
+- `agent-setup.sh` scans the whole subnet only when the prefix length is 24 or more
+
+**A domain does not resolve**
+
+- Check `allow_domains` in `config/config.yml`
+- Blocked requests: the Web UI, or `docker logs sekimore-gw`
+
+**The database is large**
+
+Run in the gateway container (the `gw:db-*` mise tasks wrap these):
+
+```bash
+python -m src.maint db-stats                                   # size and row counts
+python -m src.maint db-prune --before-days 90 --yes --vacuum   # delete old records
+```
+
+The relay's audit log (`/data/relay/audit.jsonl`) is a separate file. These commands do not touch it.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache License 2.0 — [LICENSE](LICENSE).
