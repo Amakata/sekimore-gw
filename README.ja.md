@@ -7,11 +7,54 @@
 [![Docker Publish](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-**AI エージェントに渡す環境から、鍵と持ち出しを切り離すための関所。**
+**AI に GitHub を触らせるのに、GitHub の全権限を渡さなくて済むゲートウェイ。**
 
-AI エージェントを動かすコンテナの外向きの通信を、まるごと引き受けるゲートウェイです。
-**エージェントは上流の資格情報を一切持ちません。** 鍵もトークンもこちら側に置いたまま、
-git と GitHub の操作だけを、案件ごとに決めた範囲で通します。
+AI エージェントに PR を作らせたい。でもそのためにトークンを渡すと、`repo` スコープ —
+**あなたが見えるリポジトリすべてに、読み書きできる権限**が丸ごと渡ります。
+ターミナルを持つ AI は `~/.ssh` も `.env` も読めるので、鍵の置き場所も同じ話です。
+
+sekimore-gw は、その資格情報を**エージェントの外**に置きます。
+エージェントが持つのは、ここにしか通用しない使い捨ての鍵と案件トークンだけ:
+
+```console
+$ curl -H "Authorization: token $SEKIMORE_TOKEN" https://api.github.com/user
+401 Bad credentials          # GitHub には通用しない
+
+$ sekimore pr create --title "..." --base main    # 関所を通せば、許した操作だけ通る
+#42 https://github.com/Org/Repo/pull/42
+
+$ sekimore pr merge --number 42                   # 許していない操作は、ここで止まる
+sekimore: denied: pr:merge is not allowed by policy
+```
+
+`gh` は使いません。トークンを持たせた `gh` は関所を素通りして GitHub に直接届くので、
+**ここで決めた権限がどれも効かなくなります** (`pr:merge` を拒否していても `gh pr merge` は通る)。
+そのため [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) の
+イメージにも入れていません。
+
+**かわりに、渡す権限を操作ごとに選べます。**
+
+```yaml
+# config.yml — 案件の流儀で決める
+permissions: [pr:create, pr:read, issue:create, issue:comment, ci:read]
+repos:
+  - { name: Org/Repo, mode: read-write, bases: [main] }
+```
+
+選べるのはこの 26 種類:
+
+```
+pr:      create  read  comment  review  request_review  close  merge
+issue:   create  read  update  comment  label  assign  close
+ci:      read  rerun          security: read  dismiss
+release: create  read  publish  project: read  add_item  update_item
+repo:    read           search: read
+```
+
+重いもの (`pr:merge`、`ci:rerun`、`security:dismiss`) は既定で落ちているので、
+必要になったら足します。リポジトリ単位で足し引きもできます。
+
+`sekimore` コマンドがこれらを話します。`sekimore guide` で AI 向けの一覧が出ます。
 
 ## クイックスタート
 
