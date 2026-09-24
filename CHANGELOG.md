@@ -13,6 +13,13 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.33 (2026-09-24)
+
+### Enhancement
+
+- `config.sample.yml` documents `ci:dispatch`, which starts a workflow that has never run and is therefore separate from `ci:rerun` (#168)
+- the dashboard lists `ci:dispatch` among the permissions, so an operator deciding what to allow can see it (#168)
+
 ## 0.2.32 (2026-09-24)
 
 ### Enhancement

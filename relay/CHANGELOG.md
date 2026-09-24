@@ -6,6 +6,16 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.33 (2026-09-24)
+
+### Enhancement
+
+- `pr comments` shows a review with the line comments it was submitted with, nested under it, and prints the id of the ones that can be answered (#165)
+- `pr reply --comment-id C` answers a line comment in its own thread, under `pr:comment` (#165)
+- `pr review --comment path:line:body` leaves notes on lines of the diff instead of only a body; `--comments-file` takes them as JSON (#167)
+- `ci dispatch --workflow f.yml --ref main` starts a `workflow_dispatch` run, under the new `ci:dispatch` — off unless a project asks for it (#168)
+- `pr create --draft`, and `pr ready` / `pr draft`, so work can get CI before anyone is asked to look (#169)
+
 ## 0.2.32 (2026-09-24)
 
 ### Enhancement

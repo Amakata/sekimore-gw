@@ -12,6 +12,13 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.33（2026-09-24）
+
+### Enhancement
+
+- `config.sample.yml` に `ci:dispatch` の説明を足した。まだ動いたことのないワークフローを起動するので `ci:rerun` とは別 (#168)
+- ダッシュボードの権限一覧に `ci:dispatch` を出す。何を許すか決める人に見えないと意味がないため (#168)
+
 ## 0.2.32（2026-09-24）
 
 ### Enhancement
