@@ -95,6 +95,9 @@ block_ips:
 # answers; served here, a relayed domain would stay reachable through
 # `https_proxy=<gateway>:3128` and skip the relay's policy. The deny names the domain exactly,
 # so a wildcard like `.github.com` keeps serving api.github.com and codeload.github.com.
+#
+# A change to any key under `proxy` needs a container restart; the config reload keeps the old
+# values. The credential in the secret store (below) is the exception.
 proxy:
   enabled: true                           # run Squid (not: enable upstream proxying — see above)
   port: 3128                              # Proxy port
@@ -104,11 +107,13 @@ proxy:
   upstream_proxy_tls: false               # Use TLS for upstream proxy connection
 
   # Upstream proxy authentication (Basic Auth)
-  # ⚠️  For security, it is recommended to use environment variables instead of writing credentials in config.yml
   # Environment variables: SEKIMORE_UPSTREAM_PROXY_USERNAME, SEKIMORE_UPSTREAM_PROXY_PASSWORD
   # If environment variables are set, the following values will be overridden
   # 0.2.22: the credential belongs in the secret store, not here and not in the environment.
+  #   mise run gw:proxy-credential -- set          # dev container setup
   #   docker compose exec sekimore-gw sekimore-relay proxy-credential set
+  # Squid and the relay (its 443 passthrough and its GitHub API calls) both read the store and
+  # pick up a change without a restart. The two variables are read when the store holds none.
   # Written here it is readable from the dev container, because config.yml is in the worktree.
   # The environment is not the answer either: `.devcontainer/.env` is the dev service's own
   # env_file, so anything in it becomes a variable in the agent's own process. Only the host
@@ -124,7 +129,6 @@ proxy:
   upstream_proxy_username: null           # prefer `sekimore-relay proxy-credential set`
   upstream_proxy_password: null           # readable from dev if set here
 
-# Network Configuration
 # Web UI language (0.2.4+). auto = follow the browser's Accept-Language; a choice made in the
 # UI is remembered in a cookie and wins over this. Set en or ja to pin it.
 # CLI tools follow the environment instead: SEKIMORE_LANG, LC_ALL, LC_MESSAGES, LANG (default en).
@@ -132,8 +136,11 @@ proxy:
 # ui:
 #   language: auto
 
+# Network Configuration
 network:
   # allowed_ports: [80, 443]     # 0.2.2+ destination TCP ports allowed to the allowed domains / IPs. Empty (the default) means every port, as before
+  # Restricting the ports closes bypass routes such as SSH to an allowlisted IP address.
+  # A change to allowed_ports needs a container restart; the config reload keeps the old value.
   # LAN-side network subnets
   # IMPORTANT: For sekimore-gw, this setting is primarily informational.
   # Network detection is performed dynamically via Docker API (see orchestrator.py).

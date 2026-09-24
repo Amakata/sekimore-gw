@@ -30,9 +30,11 @@ uv sync
 3. Verify the setup:
 
 ```bash
-uv run pytest
+uv run pytest -m "not e2e"
 uv run ruff check src/
 ```
+
+`mise run ci` runs the Rust and Python lints and tests in parallel.
 
 ## Development workflow
 
@@ -66,7 +68,7 @@ uv run ruff format src/
 uv run mypy src/
 
 # Check coverage
-uv run pytest --cov=src --cov-report=html
+uv run pytest --cov=src --cov-report=html -m "not e2e"
 ```
 
 ### 4. Commit changes
@@ -147,6 +149,7 @@ def describe_my_feature():
 - Add docstrings to all public functions and classes.
 - Use Google-style docstrings.
 - Update README.md for user-facing changes.
+- Update the Japanese translation (`*.ja.md`) next to each document that you change. See [docs/localization.md](docs/localization.md#documentation).
 - Update the inline comments that explain complex logic.
 
 Example docstring:
@@ -170,6 +173,25 @@ def my_function(arg1: str, arg2: int) -> bool:
 ```
 
 ## Testing guidelines
+
+### Running the tests
+
+```bash
+# Unit tests
+uv run pytest tests/unit/ -v
+
+# Integration tests (includes timeout tests for infinite loop detection)
+uv run pytest tests/integration/ -v
+
+# All tests except E2E (for CI and the dev container)
+uv run pytest -m "not e2e" -v
+
+# E2E tests (require docker compose; run on the host machine only)
+uv run pytest tests/e2e/ -v
+
+# With coverage
+uv run pytest --cov=src --cov-report=html -m "not e2e"
+```
 
 ### Unit tests
 
@@ -206,6 +228,19 @@ tests/functional/
 └── test_end_to_end.py
 ```
 
+### E2E tests
+
+The E2E tests (`tests/e2e/`) verify actual port binding and Docker integration. They cover the
+following:
+
+- The DNS server binding to port 53
+- Subnet auto-detection through the Docker API
+- Actual DNS query responses
+
+The E2E tests must run on a host machine with `docker compose`, not in CI or in a dev container.
+Stop any existing containers first, and then run `uv run pytest tests/e2e/ -v`. The E2E tests
+carry the `e2e` marker, so `-m "not e2e"` deselects them.
+
 ## Docker development
 
 ### Build the image
@@ -213,6 +248,29 @@ tests/functional/
 ```bash
 docker build -t sekimore-gw:dev .
 ```
+
+### Pull from GitHub Container Registry
+
+```bash
+docker pull ghcr.io/Amakata/sekimore-gw:latest
+```
+
+### Preview images
+
+Pull requests and pushes to `main` build an image for verification. **These images are not
+releases.**
+
+```bash
+docker pull ghcr.io/Amakata/sekimore-gw:pr-61   # the image for that pull request
+docker pull ghcr.io/Amakata/sekimore-gw:main    # the tip of main
+```
+
+Preview images are built for `linux/arm64` only. The next push overwrites the tag, so no
+long-running deployment should reference it. Version tags (`:0.2.14`) and `:latest` are created
+only from a `v*.*.*` Git tag.
+
+Preview images separate deploying a change for testing from publishing a version. Without them,
+testing a change on a real machine would require a release.
 
 ### Test with Docker Compose
 
