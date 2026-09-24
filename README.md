@@ -7,7 +7,7 @@
 [![Docker Publish](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-**Let an AI agent work on GitHub without handing over your GitHub account.**
+**Let an AI agent work on GitHub without handing over your account.**
 
 To let an agent open a pull request, you would normally give it a token. A token that can open a
 pull request carries the `repo` scope, which grants **read and write access to every repository

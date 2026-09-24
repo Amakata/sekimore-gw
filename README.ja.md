@@ -7,7 +7,7 @@
 [![Docker Publish](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-**GitHub アカウントを渡さずに、AI エージェントに GitHub 上の作業をさせる。**
+**アカウントを渡さずに、AI エージェントに GitHub 上の作業をさせる。**
 
 エージェントにプルリクエストを作らせるには、通常はトークンを渡します。プルリクエストを作れるトークンは
 `repo` スコープを持ち、**あなたのアカウントがアクセスできるすべてのリポジトリへの読み書き権限**を与えます。
