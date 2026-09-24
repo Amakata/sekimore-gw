@@ -43,6 +43,10 @@ sekimore pr update --number N --title "…"                     [pr:create]  edi
                                                               #   --base is re-checked against the allowed bases
 sekimore pr view --number N                                   [pr:read]  title, body, branches, counts
 sekimore pr comments --number N                               [pr:read]  conversation, reviews and line comments, oldest first
+sekimore pr files --number N                                  [pr:read]  which files it touches, and how much moved
+sekimore pr diff --number N [--path p]                        [pr:read]  one file of the diff, with line numbers
+                                                              #   those numbers are what pr review --comment takes
+                                                              #   --before <previous end> for the rest
 sekimore pr list [--state open]                               [pr:read]
 sekimore pr status --number N                                 [pr:read]  CI checks (--json for machine output)
 sekimore pr merge --number N                                  [pr:merge]  --method squash|merge|rebase if the repo requires one
@@ -108,6 +112,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 - To wait for CI, poll `sekimore pr status --number N` every 30 seconds. On failure read `sekimore ci log --number N`, fix the cause and push again.
 
 - `sekimore pr comments` groups each review with the line comments that came with it, and prints an id (`#2451`) on the ones you can answer. Reply there with `sekimore pr reply --comment-id 2451`; a comment with no id is part of the conversation, so `sekimore pr comment` is the way to answer it.
+- Look at a line before pointing at it. `sekimore pr files --number N` says which files the pull request touches, and `sekimore pr diff --number N --path <path>` prints one of them with its line numbers. The number in the left column is the `line` of `pr review --comment <path>:<line>:<body>`. A deleted line has none, because it is not in the new file, and cannot be commented on. When a file does not fit in one page, read on with `--before <the previous end>`.
 
 ## The usual flow
 

@@ -43,6 +43,10 @@ sekimore pr update --number N --title "…"                     [pr:create]  自
                                                               #   --base は許可された base か改めて検査される
 sekimore pr view --number N                                   [pr:read]  タイトル、本文、ブランチ、件数
 sekimore pr comments --number N                               [pr:read]  会話・レビュー・行への指摘を古い順に
+sekimore pr files --number N                                  [pr:read]  触るファイルと、その増減
+sekimore pr diff --number N [--path p]                        [pr:read]  差分を 1 ファイルずつ、行番号付きで
+                                                              #   その行番号を pr review --comment にそのまま渡す
+                                                              #   続きは --before <前ページの end>
 sekimore pr list [--state open]                               [pr:read]
 sekimore pr status --number N                                 [pr:read]  CI チェック（--json で機械可読）
 sekimore pr merge --number N                                  [pr:merge]  squash 限定の repo などは --method squash|merge|rebase
@@ -105,6 +109,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 - CI を待つときは `sekimore pr status --number N` を 30 秒間隔で確認します。失敗したら `sekimore ci log --number N` で原因を読み、直して push します。
 
 - `sekimore pr comments` はレビューごとに、その時の行コメントをまとめて出します。返信できるものには id (`#2451`) が付くので、`sekimore pr reply --comment-id 2451` で返します。id の無いものは会話欄のコメントなので、`sekimore pr comment` で答えます。
+- 行を指して指摘する前に、その行を見てください。`sekimore pr files --number N` で触るファイルが分かり、`sekimore pr diff --number N --path <path>` がその 1 つを行番号付きで出します。左端の番号が `pr review --comment <path>:<line>:<body>` の `line` です。削除された行に番号が無いのは、新しいファイルに存在しないからで、その行にコメントは付けられません。1 ページに収まらないときは `--before <前ページの end>` で続きを読みます。
 
 ## 標準的な流れ
 

@@ -261,6 +261,24 @@ endpoints! {
             #[arg(long, help = t("agent.json"))]
             json: bool,
         },
+        Files("/pr/files") = t("agent.pr.files") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long, help = t("agent.json"))]
+            json: bool,
+        },
+        Diff("/pr/diff") = t("agent.pr.diff") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long, help = t("agent.diff.path"))]
+            path: Option<String>,
+            #[arg(long, default_value_t = 400, help = t("agent.diff.window"))]
+            window: u64,
+            #[arg(long, help = t("agent.diff.before"))]
+            before: Option<u64>,
+            #[arg(long, help = t("agent.json"))]
+            json: bool,
+        },
         List("/pr/list") = t("agent.pr.list") => {
             #[arg(long, default_value = "open", help = t("agent.list.state"))]
             state: String,
