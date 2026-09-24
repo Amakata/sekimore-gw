@@ -118,7 +118,7 @@ mise run gw:proxy-credential -- set
 
 - Docker 20.10 以降、Docker Compose 2.0 以降
 - Linux ホスト、または macOS の Docker Desktop（各層は Docker の VM の中で動く）
-- ゲートウェイは `NET_ADMIN` と `privileged: true` で動く（`docker-compose.yml`）
+- ゲートウェイは `NET_ADMIN`、`privileged: true`、`pid: host` で動く（`docker-compose.yml`）。`pid: host` は、エージェントを閉じ込める FORWARD 規則をホストの DOCKER-USER チェーンに置くために要る
 - エージェントのコンテナ: `dns: [127.0.0.1]` と `agent-setup.sh`（ゲートウェイを見つけ、デフォルトルートを設定する）
 - `network.allowed_ports` は既定で未設定 = 全ポート。必要がなければ `[80, 443]` に絞る。変更には再起動が必要
 

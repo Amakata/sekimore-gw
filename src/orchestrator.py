@@ -20,6 +20,7 @@ from .dns_server import DNSServer
 from .domains import domain_matches
 from .firewall import FirewallManager
 from .firewall_monitor import FirewallMonitor
+from .host_enforcement import HostEnforcement
 from .ip_manager import StaticIPManager
 from .logger import ComponentType, log_error, log_system_event, setup_logging
 from .proxy_manager import ProxyManager
@@ -748,6 +749,9 @@ class SecurityGatewayOrchestrator:
         # Firewall monitor, tailing the iptables log
         self.firewall_monitor = FirewallMonitor(db_path=self.config.database_path)
 
+        # Host-side FORWARD enforcement (#186), set up in initialize()
+        self.host_enforcement: HostEnforcement | None = None
+
         # Proxy manager (Squid)
         # 0.2.22 (#53): set when the credential is in the store but the store was locked, so the
         # Squid config has to be redone once someone unlocks.
@@ -1085,6 +1089,25 @@ class SecurityGatewayOrchestrator:
             out.append((iface, cidr))
         return out
 
+    def _setup_host_enforcement(self) -> None:
+        """Insert the DOCKER-USER rules for this project's internal bridge (#186)."""
+        if not self.config.network.host_enforcement:
+            log_system_event("Host-side FORWARD enforcement disabled by network.host_enforcement")
+            return
+        project_name = os.getenv("PROJECT_NAME")
+        if not project_name:
+            log_system_event("Host-side FORWARD enforcement skipped: PROJECT_NAME is not set")
+            return
+        self.host_enforcement = HostEnforcement(
+            project_name, os.getenv("INTERNAL_NETWORK_NAME", "internal-net")
+        )
+        if not self.host_enforcement.apply():
+            log_error(
+                ComponentType.ORCHESTRATOR,
+                "Host-side FORWARD enforcement is NOT in place: a root process in an agent "
+                "container can route past the gateway (#186)",
+            )
+
     async def initialize(self) -> bool:
         """Initialize the security gateway.
 
@@ -1101,6 +1124,12 @@ class SecurityGatewayOrchestrator:
         if not self.firewall.initialize_firewall():
             log_error(ComponentType.ORCHESTRATOR, "Firewall initialization failed")
             return False
+
+        # 1b. Host-side FORWARD enforcement (#186): the one rule the agent cannot route around
+        # lives in the host's DOCKER-USER chain, not in this container. A failure is logged
+        # loudly but does not stop the gateway: the other layers still work, and the log is
+        # how an operator learns that `pid: host` is missing.
+        self._setup_host_enforcement()
 
         # 2. Configure the static IPs
         if not self.ip_manager.setup_static_ips(
@@ -1201,6 +1230,11 @@ class SecurityGatewayOrchestrator:
         # Start the firewall monitor in the background
         firewall_monitor_task = asyncio.create_task(self.firewall_monitor.start())
 
+        # Keep the host-side FORWARD rules in place (#186)
+        host_enforcement_task = None
+        if self.host_enforcement:
+            host_enforcement_task = asyncio.create_task(self.host_enforcement.watch())
+
         # Start the proxy monitor in the background, when enabled
         proxy_monitor_task = None
         if self.proxy_monitor:
@@ -1233,6 +1267,11 @@ class SecurityGatewayOrchestrator:
                 proxy_monitor_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await proxy_monitor_task
+
+            if host_enforcement_task:
+                host_enforcement_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await host_enforcement_task
 
             await self.cleanup()
 

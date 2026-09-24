@@ -118,7 +118,7 @@ Does not fit:
 
 - Docker 20.10 or later, Docker Compose 2.0 or later
 - A Linux host, or Docker Desktop on macOS (the layers run inside the Docker VM)
-- The gateway runs with `NET_ADMIN` and `privileged: true` (see `docker-compose.yml`)
+- The gateway runs with `NET_ADMIN`, `privileged: true` and `pid: host` (see `docker-compose.yml`). `pid: host` lets it place the FORWARD rules that confine the agent in the host's DOCKER-USER chain.
 - Agent containers: `dns: [127.0.0.1]`, and `agent-setup.sh` to find the gateway and set the default route
 - `network.allowed_ports` is unset by default, so every port is open. Set `[80, 443]` unless the agent needs more. A change requires a restart.
 

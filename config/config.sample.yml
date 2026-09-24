@@ -138,6 +138,8 @@ proxy:
 
 # Network Configuration
 network:
+  # host_enforcement: true      # 0.2.37+ (#186) the DOCKER-USER rules on the host that stop an agent container from
+  #                             #   routing past the gateway. Needs `pid: host` on the gateway service. Leave it on
   # allowed_ports: [80, 443]     # 0.2.2+ destination TCP ports allowed to the allowed domains / IPs. Empty (the default) means every port, as before
   # Restricting the ports closes bypass routes such as SSH to an allowlisted IP address.
   # A change to allowed_ports needs a container restart; the config reload keeps the old value.

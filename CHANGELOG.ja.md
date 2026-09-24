@@ -12,6 +12,14 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.37（2026-09-25）
+
+### Security
+
+- エージェントをホスト側で閉じ込めた。ホストの `DOCKER-USER` チェーンに FORWARD 規則を 2 行入れ、internal bridge から出られる先をゲートウェイだけにした。エージェントコンテナの root が Docker の NAT 経由でゲートウェイを迂回できなくなった (#189)
+- 規則はゲートウェイ自身が `pid: host` と nsenter で入れて定期的に確かめる。タグは `sekimore:<project>`。`pid: host` が無ければ起動時にエラーを記録する (#189)
+- `network.host_enforcement`（既定 on）で無効化できる。呼ばれていなかった `setup_host_firewall_rules` は削除した (#189)
+
 ## 0.2.36（2026-09-24）
 
 ### Security

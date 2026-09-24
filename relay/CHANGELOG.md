@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.37 (2026-09-25)
+
+### Enhancement
+
+- no change to the relay; 0.2.36 and 0.2.37 are the same binary. The release confines the agent on the host with FORWARD rules in `DOCKER-USER` (#189)
+
 ## 0.2.36 (2026-09-24)
 
 ### Security
