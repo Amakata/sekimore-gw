@@ -6,6 +6,14 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.36 (2026-09-24)
+
+### Security
+
+- refused a 443 passthrough whose upstream resolves into a denied range — link-local (IMDS), loopback, RFC1918, carrier-grade NAT and the IPv6 equivalents — since it resolves its own upstream and never sees the DNS answer (#178)
+- unwrapped an IPv4-mapped IPv6 address before judging it, so `::ffff:169.254.169.254` is judged as the IPv4 address it is (#178)
+- read the exceptions from `resolve_allow_cidrs`, so a range a project reaches on purpose stays reachable through the passthrough (#178)
+
 ## 0.2.35 (2026-09-24)
 
 ### Enhancement
