@@ -1070,8 +1070,8 @@ def describe_resolve_domain():
 
         # Mock socket.getaddrinfo to return sample addresses
         mock_addrinfo = [
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.1.1", 80)),
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.1.2", 80)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.35", 80)),
         ]
 
         with patch("asyncio.get_event_loop") as mock_loop:
@@ -1082,8 +1082,8 @@ def describe_resolve_domain():
 
         assert result is not None
         ips, ttl = result
-        assert "192.168.1.1" in ips
-        assert "192.168.1.2" in ips
+        assert "93.184.216.34" in ips
+        assert "93.184.216.35" in ips
         assert ttl == 300  # Default TTL for Docker DNS
 
     @pytest.mark.asyncio

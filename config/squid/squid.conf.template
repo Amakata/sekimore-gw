@@ -25,6 +25,12 @@ http_access deny manager
 # Refuse the relayed domains before the allowlist is consulted
 {RELAYED_DOMAINS_RULE}
 
+# #178: Squid resolves the name itself, so a destination the DNS path refused is still
+# reachable here. Refuse by address, before the allowlist is consulted: an allowed name is
+# not an allowed destination.
+{DENIED_DESTINATIONS_ACL}
+{DENIED_DESTINATIONS_RULE}
+
 # Allow whitelisted domains
 http_access allow allowed_domains
 

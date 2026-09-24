@@ -46,6 +46,29 @@ allow_ips: []
 block_ips:
   - 203.0.113.0/24       # Known malicious IP block
 
+# 0.2.36+ (#178): where an allowed domain may resolve to.
+#
+# An allowed name is not an allowed destination. The allowlist says which *names* an agent may
+# use; the address behind a name is chosen by whoever controls its DNS. Without this, one
+# allowlisted domain answering 169.254.169.254 opens the cloud metadata service — which serves
+# credentials — and one answering 10.0.0.5 opens a host on the internal network.
+#
+# The defaults below are refused wherever a name points: IMDS and link-local, loopback, the
+# RFC1918 ranges and their IPv6 equivalents. The gateway's own network is added automatically,
+# so `.lan` and container names keep resolving. Leave this alone unless a project has to reach
+# something inside one of these ranges on purpose.
+# resolve_deny_cidrs:
+#   - 169.254.0.0/16       # IMDS, link-local
+#   - 127.0.0.0/8          # loopback
+#   - 10.0.0.0/8           # RFC1918
+#   - 172.16.0.0/12
+#   - 192.168.0.0/16
+#
+# Exceptions, for what this project reaches deliberately — an internal mirror, a private
+# registry. These win over the denials above.
+# resolve_allow_cidrs:
+#   - 10.20.0.0/16         # the company's package mirror
+
 # Proxy Configuration (HTTP/HTTPS Proxy)
 #
 # `enabled` runs Squid inside the gateway. Turning it off stops Squid, its cache and its access

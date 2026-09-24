@@ -11,6 +11,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .domains import domain_matches
+from .resolved_ips import DEFAULT_DENY_CIDRS
 
 
 class DNSConfig(BaseModel):
@@ -227,6 +228,17 @@ class Config(BaseModel):
     # IP filtering
     allow_ips: list[str] = Field(default_factory=list, description="Allowed IPs")
     block_ips: list[str] = Field(default_factory=list, description="Blocked IPs")
+
+    # 0.2.36 (#178): an allowed name is not an allowed destination. These decide which addresses
+    # an allowlisted domain may resolve to; the gateway's own network is added at runtime.
+    resolve_deny_cidrs: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_DENY_CIDRS),
+        description="Address ranges an allowlisted domain may not resolve to (IMDS, loopback, RFC1918 …)",
+    )
+    resolve_allow_cidrs: list[str] = Field(
+        default_factory=list,
+        description="Exceptions to resolve_deny_cidrs: what this project reaches on purpose, such as an internal mirror",
+    )
 
     # Component settings
     dns: DNSConfig = Field(default_factory=DNSConfig)

@@ -741,6 +741,8 @@ class SecurityGatewayOrchestrator:
             lan_subnets=detected_lan_subnets,
             ignored_domains=self.config.ignore_domains,
             domain_handlers=_domain_handlers_of(self.config),
+            resolve_deny_cidrs=self.config.resolve_deny_cidrs,
+            resolve_allow_cidrs=self.config.resolve_allow_cidrs,
         )
 
         # Firewall monitor, tailing the iptables log
@@ -761,6 +763,13 @@ class SecurityGatewayOrchestrator:
                 upstream_dns="127.0.0.11",  # Docker's embedded DNS; squid runs inside the gateway, so it needs no filtering
                 upstream_proxy_username=username,
                 upstream_proxy_password=password,
+                # #178: Squid resolves names itself, so the DNS filter's refusals do not reach
+                # it. It has to be told the same ranges, or it becomes the way around them.
+                denied_destinations=self.config.resolve_deny_cidrs,
+                # The gateway's own network is RFC1918, so it has to be an exception or the
+                # deny below would refuse Squid's own side of the house
+                allowed_destinations=list(self.config.resolve_allow_cidrs)
+                + list(detected_lan_subnets or []),
             )
 
         # Proxy monitor, tailing the Squid access log
