@@ -164,7 +164,8 @@ class HostEnforcement:
             log_error(
                 ComponentType.FIREWALL,
                 "Host-side FORWARD enforcement is not in place: PID 1 is not the host's init. "
-                "Add `pid: host` to the gateway service in docker-compose.yml (#186)",
+                "The gateway service needs `pid: host` and `privileged: true` in "
+                "docker-compose.yml (#186)",
             )
             return False
         iptables = self._iptables_cmd()
@@ -180,17 +181,24 @@ class HostEnforcement:
             return False
         self.bridge = bridge
 
-        listing = self._exec([*iptables, "-S", CHAIN])
-        for delete in stale_rules(listing.stdout, self.tag):
-            self._exec([*iptables, *delete])
-        for position, body in enumerate(rules_for(bridge, self.tag), start=1):
-            result = self._exec([*iptables, "-I", CHAIN, str(position), *body])
-            if result.returncode != 0:
-                log_error(
-                    ComponentType.FIREWALL,
-                    f"Host-side FORWARD enforcement: {CHAIN} insert failed: {result.stderr.strip()}",
-                )
-                return False
+        try:
+            listing = self._exec([*iptables, "-S", CHAIN])
+            for delete in stale_rules(listing.stdout, self.tag):
+                self._exec([*iptables, *delete])
+            for position, body in enumerate(rules_for(bridge, self.tag), start=1):
+                result = self._exec([*iptables, "-I", CHAIN, str(position), *body])
+                if result.returncode != 0:
+                    log_error(
+                        ComponentType.FIREWALL,
+                        f"Host-side FORWARD enforcement: {CHAIN} insert failed: "
+                        f"{result.stderr.strip()}",
+                    )
+                    return False
+        except (OSError, subprocess.TimeoutExpired) as e:
+            # nsenter or iptables went away between the probe and the insert. The gateway
+            # keeps starting; the watcher retries, and the log says the agent is not confined.
+            log_error(ComponentType.FIREWALL, f"Host-side FORWARD enforcement: {e}")
+            return False
         self.in_place = True
         log_system_event("Host-side FORWARD enforcement in place", bridge=bridge, chain=CHAIN)
         return True
