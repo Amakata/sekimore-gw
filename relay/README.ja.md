@@ -264,7 +264,7 @@ agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimor
 | キー | 既定 | 意味 |
 |---|---|---|
 | `name` | 必須 | プロジェクト名。トークンとログに表示されます。 |
-| `permissions` | `[]` | プロジェクトの既定の権限。`[…]` または `{allow, deny}` で書きます。 |
+| `permissions` | `[]` | プロジェクトの既定の権限。`[…]` または `{allow, deny}` で書きます。どの層でも許可されていない権限は拒否されます。33 個の権限キーは[権限の決まり方](#権限の決まり方)に一覧があります。 |
 | `push` | `["sekimore/*"]` | 直接 push を許すブランチの glob |
 | `tags` | `[]` | push を許すタグの glob。空の場合、タグの push はすべて拒否されます。 |
 | `delete` | `false` | ブランチとタグの削除、および上流に既にあるタグの移動を許可するか。タグを削除して作り直すことと強制更新は同じ結果になるので、同じ権限にしています。まだ存在しないタグを作るだけなら `tags` で足ります。 |
@@ -339,7 +339,17 @@ base を検査できません。そのため関所は、そのようなリポジ
 
 - 実効権限 = (プロジェクト allow ∪ 上流 allow ∪ repo allow) − (プロジェクト deny ∪ 上流 deny ∪ repo deny)。deny はどの層に書いても優先されます。
 - `push` / `tags` / `delete` は、プロジェクト → 上流 → repo の順で上書きされます。glob では `*` と `?` が使えます。
-- 権限キーは 33 個です: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:request_review` `pr:merge` `pr:close` `pr:label` `pr:assign` `pr:comment_update` `pr:comment_delete`、`issue:create` `issue:read` `issue:comment` `issue:update` `issue:close` `issue:label` `issue:assign` `issue:comment_update` `issue:comment_delete`、`project:read` `project:add_item` `project:update_item`、`repo:read`、`ci:read` `ci:rerun` `ci:dispatch`、`release:create` `release:read` `release:publish`、`search:read`、`security:read` `security:dismiss`。設定が許可している権限は `sekimore-relay check` で表示できます。
+- 権限キーは 33 個あり、リソースごとに次のとおりです。設定が許可している権限は `sekimore-relay check` で表示できます。
+
+  ```
+  pr:      create  read  comment  comment_update  comment_delete  review  request_review
+           label  assign  close  merge
+  issue:   create  read  update  comment  comment_update  comment_delete  label  assign  close
+  ci:      read  rerun  dispatch          security: read  dismiss
+  release: create  read  publish          project:  read  add_item  update_item
+  repo:    read                           search:   read
+  ```
+
 - `pr:read` は、状態と CI チェックに加えて、本文とコメントも対象にします。`issue:read` は別の権限なので、非公開のトラッカーを読ませずに bug を登録させることができます。`search:read` は、検索が 1 つのリポジトリに宛てた操作ではないため、独立したリソースです。
 - `pr:review` はレビューを提出する権限、`pr:request_review` は他の人にレビューを依頼する権限です。前者は意見を記録し、後者は人に通知するので、分けています。
 - `ci:rerun` は workflow run の再実行と中止の権限です。再実行は Actions の時間を消費し、リポジトリの secret にアクセスできる workflow のコードを実行するので、`ci:read` には含めていません。
@@ -441,7 +451,8 @@ sekimore guide --lang ja                 # ガイドだけを日本語で表示
 
 ## 運用（運用者）
 
-Web UI（ホストの http://localhost:8090）の Relay タブで、設定、権限、トークン、アクセス履歴、ブロック履歴を確認できます。このタブは閲覧専用です。
+Web UI の Relay タブで、設定、権限、トークン、アクセス履歴、ブロック履歴を確認できます。このタブは閲覧専用です。
+dev コンテナ構成では `mise run web` で Web UI を開けます。このタスクは、公開しているポートを動いているゲートウェイのコンテナから読み取ります。mise を使わず `docker compose` だけで動かしている場合は、compose ファイルが Web UI 用に公開しているポートを開いてください（ゲートウェイはコンテナ内の 8080 で待ち受け、サンプルの `docker-compose.yml` は `8080:8080` を公開しています）。
 Dev Containers 構成では、`mise run gw:tokens` / `gw:revoke-project` / `gw:audit` / `gw -- <args>` も使えます。
 
 | コマンド | 用途 |

@@ -276,7 +276,7 @@ Each key is a fully qualified domain name and must match exactly. Configuring `g
 | Key | Default | Meaning |
 |---|---|---|
 | `name` | required | The project name. It appears in tokens and logs. |
-| `permissions` | `[]` | The project's default permissions, as either `[…]` or `{allow, deny}` |
+| `permissions` | `[]` | The project's default permissions, as either `[…]` or `{allow, deny}`. A permission that no layer allows is denied. The 33 keys are listed under [How permissions are resolved](#how-permissions-are-resolved). |
 | `push` | `["sekimore/*"]` | Branch globs that the agent can push to directly |
 | `tags` | `[]` | Tag globs that the agent can push. An empty list denies all tag pushes. |
 | `delete` | `false` | Whether the agent can delete branches and tags, and move a tag that already exists upstream. Deleting and recreating a tag has the same result as a forced update, so both require the same permission. Creating a tag that does not exist yet requires only `tags`. |
@@ -355,7 +355,17 @@ specifies the base in the ref and is checked before the push is sent.
 
 - Effective permissions = (project allow ∪ upstream allow ∪ repo allow) − (project deny ∪ upstream deny ∪ repo deny). A deny takes precedence at any layer.
 - `push` / `tags` / `delete` are overridden in the order project → upstream → repo. Globs support `*` and `?`.
-- There are 33 permission keys: `pr:create` `pr:read` `pr:comment` `pr:review` `pr:request_review` `pr:merge` `pr:close` `pr:label` `pr:assign` `pr:comment_update` `pr:comment_delete`, `issue:create` `issue:read` `issue:comment` `issue:update` `issue:close` `issue:label` `issue:assign` `issue:comment_update` `issue:comment_delete`, `project:read` `project:add_item` `project:update_item`, `repo:read`, `ci:read` `ci:rerun` `ci:dispatch`, `release:create` `release:read` `release:publish`, `search:read`, `security:read` `security:dismiss`. `sekimore-relay check` prints the ones that a configuration grants.
+- There are 33 permission keys, grouped by resource. `sekimore-relay check` prints the ones that a configuration grants.
+
+  ```
+  pr:      create  read  comment  comment_update  comment_delete  review  request_review
+           label  assign  close  merge
+  issue:   create  read  update  comment  comment_update  comment_delete  label  assign  close
+  ci:      read  rerun  dispatch          security: read  dismiss
+  release: create  read  publish          project:  read  add_item  update_item
+  repo:    read                           search:   read
+  ```
+
 - `pr:read` covers the state, the CI checks, the description and the comments. `issue:read` is a separate permission, so an agent can file bugs without being able to read a private tracker. `search:read` is a separate resource because a search is not addressed to a single repository.
 - `pr:review` submits a review, and `pr:request_review` requests a review from someone else. They are separate because the first records an opinion and the second notifies a person.
 - `ci:rerun` re-runs and cancels workflow runs. It is not part of `ci:read`, because a re-run consumes Actions minutes and executes workflow code that has access to the repository's secrets.
@@ -457,7 +467,8 @@ Denial reasons (`sekimore: …`) and the audit log `audit.jsonl` intentionally r
 
 ## Operations (operator)
 
-The Relay tab of the Web UI (http://localhost:8090 on the host) shows the configuration, permissions, tokens, access history and blocked attempts. The tab is read-only.
+The Relay tab of the Web UI shows the configuration, permissions, tokens, access history and blocked attempts. The tab is read-only.
+To open the Web UI in a dev container setup, run `mise run web`, which reads the published port from the running gateway container. With a standalone `docker compose` setup, open the port that your compose file publishes for the Web UI (the gateway listens on 8080 inside the container, and the sample `docker-compose.yml` publishes `8080:8080`).
 Dev Containers setups also provide `mise run gw:tokens` / `gw:revoke-project` / `gw:audit` / `gw -- <args>`.
 
 | Command | Purpose |
