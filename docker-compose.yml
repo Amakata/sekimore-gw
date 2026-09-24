@@ -20,7 +20,8 @@ services:
       - SYS_MODULE
       # Required for system administration operations
       - SYS_ADMIN
-    privileged: true          # For host-side iptables access
+    privileged: true          # with pid: host: nsenter into the host's network namespace (#186)
+    pid: host                 # the FORWARD rules that confine the agent live in the host's DOCKER-USER chain
     sysctls:
       # Enable IP forwarding within sekimore-gw container
       net.ipv4.ip_forward: "1"

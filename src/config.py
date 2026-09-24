@@ -75,6 +75,14 @@ class NetworkConfig(BaseModel):
         description="Destination TCP ports allowed to the allowed domains and IPs (empty = every port), e.g. [80, 443]",
     )
 
+    # 0.2.37 (#186): the FORWARD rules in the host's DOCKER-USER chain that keep an agent
+    # container from routing past the gateway. Needs `pid: host` on the gateway service;
+    # without it the gateway logs an error at start and the agent is not confined.
+    host_enforcement: bool = Field(
+        default=True,
+        description="Insert the DOCKER-USER rules on the host that confine the internal bridge to the gateway (needs pid: host)",
+    )
+
     @field_validator("allowed_ports")
     @classmethod
     def validate_allowed_ports(cls, v: list[int]) -> list[int]:
