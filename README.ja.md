@@ -7,80 +7,82 @@
 [![Docker Publish](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-**AI エージェント向けセキュリティゲートウェイ** - Docker 用の DNS / ファイアウォール / プロキシ
+**AI エージェントに渡す環境から、鍵と持ち出しを切り離すための関所。**
 
-Docker 上で動く AI エージェント環境のために設計したセキュリティゲートウェイです。DNS によるアクセス制御、iptables/ipset のファイアウォール管理、任意で Squid プロキシとの連携を提供します。
-
-## 機能
-
-### コアのセキュリティ
-
-- **DNS ベースのアクセス制御**: 許可リスト / 拒否リストによる動的なドメインフィルタリング
-- **多層ファイアウォール**: コンテナ側とホスト側の iptables ルールによる多重防御
-- **DNS 持ち出し対策**: エージェントからの許可されていない DNS 問い合わせを遮断
-- **静的 IP フィルタリング**: CIDR と IP レンジによる追加のアクセス制御
-
-### 動的な構成
-
-- **Docker API 連携**: Docker API でネットワーク構成を自動検出
-- **サブネット固定なし**: サブネットを動的に割り当てる複数組織の運用に対応
-- **自動探索**: AI エージェントは ARP によるサブネット走査でゲートウェイを見つける
-
-### 監視と運用
-
-- **Web UI**: ポート 8080 のリアルタイム監視ダッシュボード
-- **パケットログ**: ulogd2 を使った NFLOG ベースのファイアウォールログ
-- **SQLite データベース**: アクセスログと統計の永続化（WAL + 索引。記録は操作者が掃除するまで残る）
-- **保守用 CLI**（0.2.3）: ゲートウェイコンテナ内で `python -m src.maint db-stats | db-prune --before-days N --yes | db-reset --yes | db-vacuum`。ゲートウェイの稼働中でも安全に実行できる。関所の監査ログ（`/data/relay/audit.jsonl`）は別管理で、これらの操作では触らない。Dev Containers 環境では `mise run gw:db-stats` / `gw:db-prune` / `gw:db-reset` として用意されている
-- **ローカライズされた UI**（0.2.4）: Web UI は英語と日本語を備え、閲覧者ごとに切り替わる。[ローカライズ](#ローカライズ-024) を参照
-
-### 任意のコンポーネント
-
-- **Git / GitHub API 中継関所（sekimore-relay）**: 任意で有効化するコンテナ内の関所。AI エージェントが上流の資格情報を一切持たないまま、案件単位のポリシーのもとで `git@github.com:…` と小さな GitHub API CLI を使えるようにする。[relay/README.md](relay/README.md) を参照
-- **Squid プロキシ**: 上流プロキシにも対応した HTTP/HTTPS キャッシュプロキシ
-- **企業プロキシとの連携**: 企業環境向けの透過的なプロキシチェーン
+AI エージェントを動かすコンテナの外向きの通信を、まるごと引き受けるゲートウェイです。
+**エージェントは上流の資格情報を一切持ちません。** 鍵もトークンもこちら側に置いたまま、
+git と GitHub の操作だけを、案件ごとに決めた範囲で通します。
 
 ## クイックスタート
 
-### 前提
-
-- Docker 20.10 以降
-- Docker Compose 2.0 以降
-- iptables が使える Linux ホスト
-
-### インストール
-
-1. リポジトリを clone する:
-
 ```bash
-git clone https://github.com/YOUR_USERNAME/sekimore-gw.git
-cd sekimore-gw
+git clone https://github.com/Amakata/sekimore-gw.git && cd sekimore-gw
+cp config/config.sample.yml config/config.yml    # 許可するドメインを書く
+docker compose up -d                             # http://localhost:8080 で監視画面
 ```
 
-2. サンプル設定をコピーする:
+必要なもの: Docker 20.10 以降、Docker Compose 2.0 以降、iptables の使える Linux ホスト。
+上流プロキシに認証が要る環境なら `cp .env.example .env` してから編集します。
 
-```bash
-cp config/config.sample.yml config/config.yml
-```
+**DevContainer で使うなら、こちらではなく
+[sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) の
+`examples/sgw-sample/` を複製するほうが早いです。** gateway と dev の 2 コンテナと、
+ホスト側の操作が一式そろっています。
 
-3. （任意）上流プロキシの認証が必要なら `.env` を作る:
+## これで何ができるか
 
-```bash
-cp .env.example .env
-# .env を編集し、プロキシ認証の設定をコメント解除する
-```
+| | |
+|---|---|
+| **鍵を渡さずに git を使わせる** | エージェントが持つのはここにしか通じない使い捨ての鍵。GitHub に届くのは、関所が操作者の鍵で繋ぎ直したものです |
+| **GitHub の操作を1つずつ許す** | `pr:merge` は禁止、`issue:create` は許可、といった粒度。案件外のリポジトリには届きません |
+| **行き先を決める** | 許可していないドメインは名前が引けず、IP を直に指定してもファイアウォールが落とします |
+| **持ち出しに上限をかける** | 関所が扱う宛先への送信量を数え、超えたら切って記録します |
+| **何をしたかが残る** | 拒否だけでなく、通した操作も監査ログに残ります |
+| **署名を代行する** | 署名鍵は関所が持ち、エージェントからは署名を頼めるだけ。コミットは Verified になります |
 
-4. `config/config.yml` を編集して、許可 / 拒否するドメインと IP を設定する。
+DevContainer で使うなら、dev 側の土台は
+[sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) です。
 
-5. ゲートウェイを起動する:
+## 向くとき、向かないとき
 
-```bash
-docker-compose up -d
-```
+**向くとき** — AI に GitHub を操作させたいが、何をさせるかは絞りたい場合。
+PR は作らせるがマージはさせない、触れるのはこのリポジトリだけ、コミットは署名必須、
+持ち出しには上限、そして全部記録が残る。エージェントが上流の資格情報を持たないまま
+ここまでやるのが、このゲートウェイの狙いです。
 
-6. `http://localhost:8080` で Web UI を開く。
+**向かないとき** — 次のどれかに当てはまるなら、ほかの選択肢のほうが軽いか、確実です。
 
-### 例: AI エージェントのセットアップ
+| | |
+|---|---|
+| GitHub 以外の上流で、API まで絞りたい | SSH の git 中継は forge を選びませんが、**API を翻訳する側は GitHub 専用**です。GitLab や社内の Artifactory は、ドメインを許可して素通しするか、443 の上限つきで通すところまで ([#50](https://github.com/Amakata/sekimore-gw/issues/50) で扱う予定) |
+| リクエストの中身で許可を決めたい | TLS は終端しないので、宛先とバイト数までしか見ません。`GET /v1/public/` だけ許す、といった制御はできません。MITM 証明書を入れずに済む代わりです |
+| ネットワークを閉じたいだけ | 4 層と関所は、GitHub の操作を絞るためのものです。行き先を制限するだけなら、もっと小さい仕組みで足ります |
+| AI に GitHub を触らせない | 人が git を操作するなら、関所の取り分はありません |
+
+## 仕組み
+
+4 つの層が同じ設定 (`config.yml`) から作られ、**1 つだけ直すとそこが迂回路になる**ので
+まとめて動きます。
+
+| 層 | 受け持ち |
+|---|---|
+| **DNS** (:53) | 許可ドメインだけ実 IP を返し、同時に通行も許可する。関所が扱うドメインには関所自身の IP を返す |
+| **ファイアウォール** | iptables / ipset。DNS が許した宛先・ポートだけ通す。IP 直指定はここで落ちる |
+| **Squid** (:3128) | プロキシ経由の迂回を塞ぐ。Squid は自前で名前を解決するため、DNS だけでは足りない |
+| **関所** (sekimore-relay) | git (SSH :22)、GitHub API (:8420)、その他の HTTPS (:443)。**ここだけが上流の資格情報を持つ** |
+
+詳しくは [アーキテクチャ](#アーキテクチャ)、関所は [relay/README.md](relay/README.md)。
+
+## そのほかの機能
+
+- **Web UI** (:8080): 通信のリアルタイム監視。英語と日本語を備え、閲覧者ごとに切り替わる
+- **パケットログ**: ulogd2 による NFLOG ベースの記録
+- **SQLite**: アクセスログと統計の永続化 (WAL + 索引)。掃除は `mise run gw:db-prune` など。
+  関所の監査ログ (`/data/relay/audit.jsonl`) は別管理で、これらの操作では消えない
+- **Squid / 企業プロキシ**: 上流プロキシのある環境にも繋がる
+- **サブネット固定なし**: Docker API で構成を自動検出するので、割り当てが変わっても動く
+
+## 例: AI エージェントのセットアップ
 
 `docker-compose.yml` の `ai-agent` サービスをコメント解除して起動します:
 
