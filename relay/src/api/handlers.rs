@@ -256,6 +256,10 @@ pub async fn dispatch(
         "/pr/create" => pr_create(ctx, req).await,
         "/pr/comment" => pr_comment(ctx, req).await,
         "/pr/reply" => pr_reply(ctx, req).await,
+        "/pr/comment-edit" => comment_edit(ctx, req).await,
+        "/pr/comment-delete" => comment_delete(ctx, req).await,
+        "/issue/comment-edit" => comment_edit(ctx, req).await,
+        "/issue/comment-delete" => comment_delete(ctx, req).await,
         "/pr/draft" => pr_draft(ctx, req).await,
         "/ci/dispatch" => ci_dispatch(ctx, req).await,
         "/pr/review" => pr_review(ctx, req).await,
@@ -505,6 +509,42 @@ async fn ci_dispatch(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, 
         )),
         ..Default::default()
     })
+}
+
+/// #172: the permission follows what the number names, not which command was typed. GitHub keeps
+/// the conversation on a pull request and on an issue in one namespace, so `pr comment-edit`
+/// taken at its word would let `pr:comment_update` rewrite an issue comment a project meant to
+/// keep behind `issue:comment_update`. The comment is then checked to sit on that number.
+async fn comment_scope<'a>(
+    ctx: &'a ApiContext,
+    req: &'a ApiRequest,
+    action: Action,
+) -> Result<(Authorized<'a>, &'a GitHub), ApiError> {
+    need(req.comment_id != 0, "comment-id is required")?;
+    let (auth, client, target) = numbered_write_scope(ctx, req, action).await?;
+    // A line comment exists only on a pull request; the pulls endpoint is outside issue:*
+    need(
+        !req.inline || target == Numbered::PullRequest,
+        "--inline names a line comment, and only a pull request has those",
+    )?;
+    Ok((auth, client))
+}
+
+async fn comment_edit(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need(!req.body.is_empty(), "body is required")?;
+    let (auth, client) = comment_scope(ctx, req, Action::CommentUpdate).await?;
+    client
+        .update_comment(&auth, req.number, req.inline, req.comment_id, &req.body)
+        .await?;
+    Ok(ApiResponse::default())
+}
+
+async fn comment_delete(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    let (auth, client) = comment_scope(ctx, req, Action::CommentDelete).await?;
+    client
+        .delete_comment(&auth, req.number, req.inline, req.comment_id)
+        .await?;
+    Ok(ApiResponse::default())
 }
 
 async fn pr_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {

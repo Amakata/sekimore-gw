@@ -175,6 +175,30 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
             ]}),
         );
     }
+    // #172: who the upstream token belongs to, so the relay can tell the agent's own comments
+    // from a person's before editing or deleting one.
+    if method == "GET" && p.ends_with("/user") {
+        return (StatusCode::OK, serde_json::json!({"login": "agent-bot"}));
+    }
+    // #172: one comment, read before a write so its author can be checked. 4242 is the agent's
+    // own; anything else belongs to a person and must be refused. Every comment sits on #8 (a
+    // pull request), so an id named with another number must be refused too.
+    if method == "GET" {
+        if let Some((_, id)) = p.split_once("/comments/") {
+            let login = if id == "4242" {
+                "agent-bot"
+            } else {
+                "a-person"
+            };
+            return (
+                StatusCode::OK,
+                serde_json::json!({"id": id.parse::<u64>().unwrap_or(0),
+                                   "user": {"login": login}, "body": "…",
+                                   "issue_url": "https://github.example/api/repos/LibOrg/awesome-lib/issues/8",
+                                   "pull_request_url": "https://github.example/api/repos/LibOrg/awesome-lib/pulls/8"}),
+            );
+        }
+    }
     // #158: the repository itself, read by `refs/pr/<branch>` to learn the base it opens against.
     // The path has exactly two segments after /repos/, which is what tells it apart from the
     // sub-resources below.

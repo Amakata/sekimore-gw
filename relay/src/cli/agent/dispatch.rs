@@ -85,6 +85,28 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     req.body = body;
                     leaf
                 }
+                PrCmd::CommentEdit {
+                    number,
+                    comment_id,
+                    body,
+                    inline,
+                } => {
+                    req.number = number;
+                    req.comment_id = comment_id;
+                    req.body = body;
+                    req.inline = inline;
+                    leaf
+                }
+                PrCmd::CommentDelete {
+                    number,
+                    comment_id,
+                    inline,
+                } => {
+                    req.number = number;
+                    req.comment_id = comment_id;
+                    req.inline = inline;
+                    leaf
+                }
                 PrCmd::Reply {
                     number,
                     comment_id,
@@ -298,6 +320,21 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 IssueCmd::Comment { number, body } => {
                     req.number = number;
                     req.body = body;
+                    leaf
+                }
+                IssueCmd::CommentEdit {
+                    number,
+                    comment_id,
+                    body,
+                } => {
+                    req.number = number;
+                    req.comment_id = comment_id;
+                    req.body = body;
+                    leaf
+                }
+                IssueCmd::CommentDelete { number, comment_id } => {
+                    req.number = number;
+                    req.comment_id = comment_id;
                     leaf
                 }
                 IssueCmd::Update {

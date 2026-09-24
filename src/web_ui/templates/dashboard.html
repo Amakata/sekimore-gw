@@ -1243,8 +1243,8 @@
                 // Keep in step with Resource::valid_actions() in relay/src/policy.rs. A key missing
                 // here still shows once it is granted (see the push below), but it will not appear
                 // as an ungranted option.
-                const allPerms = ['issue:assign', 'issue:close', 'issue:comment', 'issue:create', 'issue:label',
-                    'issue:read', 'issue:update', 'pr:assign', 'pr:close', 'pr:comment', 'pr:create',
+                const allPerms = ['issue:assign', 'issue:close', 'issue:comment', 'issue:comment_update', 'issue:comment_delete', 'issue:create', 'issue:label',
+                    'issue:read', 'issue:update', 'pr:assign', 'pr:close', 'pr:comment', 'pr:comment_update', 'pr:comment_delete', 'pr:create',
                     'pr:label', 'pr:merge', 'pr:read', 'pr:request_review', 'pr:review',
                     'project:add_item', 'project:read', 'project:update_item', 'repo:read',
                     'ci:read', 'ci:rerun', 'ci:dispatch', 'release:create', 'release:publish', 'release:read',

@@ -165,6 +165,24 @@ endpoints! {
             #[arg(long, help = t("agent.number"))]
             number: u64,
         },
+        CommentEdit("/pr/comment-edit") = t("agent.pr.comment_edit") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long = "comment-id", help = t("agent.comment_id"))]
+            comment_id: u64,
+            #[arg(long, help = t("agent.body"))]
+            body: String,
+            #[arg(long, help = t("agent.comment_inline"))]
+            inline: bool,
+        },
+        CommentDelete("/pr/comment-delete") = t("agent.pr.comment_delete") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long = "comment-id", help = t("agent.comment_id"))]
+            comment_id: u64,
+            #[arg(long, help = t("agent.comment_inline"))]
+            inline: bool,
+        },
         Reply("/pr/reply") = t("agent.pr.reply") => {
             #[arg(long, help = t("agent.number"))]
             number: u64,
@@ -347,6 +365,20 @@ endpoints! {
             number: u64,
             #[arg(long, help = t("agent.body"))]
             body: String,
+        },
+        CommentEdit("/issue/comment-edit") = t("agent.issue.comment_edit") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long = "comment-id", help = t("agent.comment_id"))]
+            comment_id: u64,
+            #[arg(long, help = t("agent.body"))]
+            body: String,
+        },
+        CommentDelete("/issue/comment-delete") = t("agent.issue.comment_delete") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long = "comment-id", help = t("agent.comment_id"))]
+            comment_id: u64,
         },
         Update("/issue/update") = t("agent.issue.update") => {
             #[arg(long, help = t("agent.number"))]

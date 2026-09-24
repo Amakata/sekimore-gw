@@ -61,6 +61,11 @@ pub struct ApiRequest {
     /// draft has nothing to do with a release being one
     #[serde(default, skip_serializing_if = "is_false")]
     pub pr_draft: bool,
+    /// 0.2.34 (#172): the comment named by id is on a line of the diff, not in the conversation.
+    /// GitHub serves the two from different endpoints, and an id from one does not exist in the
+    /// other, so the caller has to say which
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub inline: bool,
     /// 0.2.33 (#168): the workflow file `ci dispatch` starts
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub workflow: String,

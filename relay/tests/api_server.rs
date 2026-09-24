@@ -1126,6 +1126,206 @@ async fn pr_comments_merges_the_three_sources_in_order() {
     assert!(msg.contains("CI is red"), "{msg}");
 }
 
+/// #172: the check that matters. GitHub lets a token with write access edit or delete anyone's
+/// comment, so an agent deleting a reviewer's note is one API call away. The relay reads the
+/// author first and refuses everything that is not its own.
+#[tokio::test]
+async fn a_comment_someone_else_wrote_cannot_be_touched() {
+    let f = start_api(
+        project_case_a(&["pr:comment_update", "pr:comment_delete"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    // 4242 is the agent's own in the fixture; any other id belongs to a person.
+    for (path, id) in [("/pr/comment-edit", 9999u64), ("/pr/comment-delete", 9999)] {
+        let r = ApiRequest {
+            number: 8,
+            comment_id: id,
+            body: "rewritten".into(),
+            ..req("LibOrg/awesome-lib")
+        };
+        let (status, resp) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(
+            status, 403,
+            "{path} must refuse a comment written by someone else"
+        );
+        let err = resp.error.unwrap_or_default();
+        assert!(
+            err.contains("not by this agent"),
+            "{path} should say whose it is: {err:?}"
+        );
+    }
+    // And nothing reached the upstream: no PATCH, no DELETE.
+    let rec = common::recorded(&f.recorder);
+    assert!(
+        !rec.iter()
+            .any(|c| c.method == "PATCH" || c.method == "DELETE"),
+        "a refused edit must not touch the upstream: {:?}",
+        rec.iter().map(|c| (&c.method, &c.path)).collect::<Vec<_>>()
+    );
+}
+
+/// Its own comment goes through, on the endpoint the id belongs to.
+#[tokio::test]
+async fn the_agents_own_comment_can_be_corrected_and_withdrawn() {
+    let f = start_api(
+        project_case_a(&["pr:comment_update", "pr:comment_delete"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 8,
+        comment_id: 4242,
+        body: "corrected".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, _) = post(f.addr, "/pr/comment-edit", Some(&f.token), &r).await;
+    assert_eq!(status, 200);
+
+    let r2 = ApiRequest {
+        number: 8,
+        comment_id: 4242,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, _) = post(f.addr, "/pr/comment-delete", Some(&f.token), &r2).await;
+    assert_eq!(status, 200);
+
+    let rec = common::recorded(&f.recorder);
+    let patch = rec.iter().find(|c| c.method == "PATCH").expect("an edit");
+    assert!(
+        patch.path.ends_with("/issues/comments/4242"),
+        "{}",
+        patch.path
+    );
+    assert_eq!(patch.body["body"], "corrected");
+    assert!(
+        rec.iter()
+            .any(|c| c.method == "DELETE" && c.path.ends_with("/issues/comments/4242")),
+        "a delete was sent"
+    );
+}
+
+/// A line comment and a conversation comment live in different namespaces; `--inline` says which.
+#[tokio::test]
+async fn an_inline_comment_is_edited_on_the_pulls_endpoint() {
+    let f = start_api(
+        project_case_a(&["pr:comment_update"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 8,
+        comment_id: 4242,
+        body: "corrected".into(),
+        inline: true,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, _) = post(f.addr, "/pr/comment-edit", Some(&f.token), &r).await;
+    assert_eq!(status, 200);
+    let rec = common::recorded(&f.recorder);
+    let patch = rec.iter().find(|c| c.method == "PATCH").expect("an edit");
+    assert!(
+        patch.path.ends_with("/pulls/comments/4242"),
+        "{}",
+        patch.path
+    );
+}
+
+/// Posting is not the authority to rewrite or remove: pr:comment alone gets neither.
+#[tokio::test]
+async fn pr_comment_alone_does_not_allow_editing_or_deleting() {
+    let f = start_api(project_case_a(&["pr:comment"]), BootstrapMode::Auto, true).await;
+    for path in ["/pr/comment-edit", "/pr/comment-delete"] {
+        let r = ApiRequest {
+            number: 8,
+            comment_id: 4242,
+            body: "rewritten".into(),
+            ..req("LibOrg/awesome-lib")
+        };
+        let (status, _) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(status, 403, "{path} must need its own permission");
+    }
+}
+
+/// The conversation on a pull request and on an issue share one namespace, so the command's
+/// name proves nothing. pr:comment_update alone must not rewrite a comment on an issue (#47 is
+/// an issue in the fixture), and must reach nothing upstream that writes.
+#[tokio::test]
+async fn pr_comment_update_does_not_reach_an_issue() {
+    let f = start_api(
+        project_case_a(&["pr:comment_update", "pr:comment_delete"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    for path in ["/pr/comment-edit", "/pr/comment-delete"] {
+        let r = ApiRequest {
+            number: 47,
+            comment_id: 4242,
+            body: "rewritten".into(),
+            ..req("LibOrg/awesome-lib")
+        };
+        let (status, _) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(status, 403, "{path} on an issue must need issue:*");
+    }
+    let rec = common::recorded(&f.recorder);
+    assert!(
+        !rec.iter()
+            .any(|c| c.method == "PATCH" || c.method == "DELETE"),
+        "{:?}",
+        rec.iter().map(|c| (&c.method, &c.path)).collect::<Vec<_>>()
+    );
+}
+
+/// The agent's own comment, named with a number it does not sit on. Without this check an id
+/// from a pull request would ride on an issue's permission (4242 is on #8, #47 is an issue).
+#[tokio::test]
+async fn a_comment_on_another_number_is_refused() {
+    let f = start_api(
+        project_case_a(&["issue:comment_update"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 47,
+        comment_id: 4242,
+        body: "rewritten".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, resp) = post(f.addr, "/issue/comment-edit", Some(&f.token), &r).await;
+    assert_eq!(status, 403);
+    let err = resp.error.unwrap_or_default();
+    assert!(err.contains("not on #47"), "{err:?}");
+    let rec = common::recorded(&f.recorder);
+    assert!(!rec.iter().any(|c| c.method == "PATCH"));
+}
+
+/// A line comment lives on the pulls endpoint, outside anything issue:* grants.
+#[tokio::test]
+async fn inline_on_an_issue_is_refused() {
+    let f = start_api(
+        project_case_a(&["issue:comment_update"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 47,
+        comment_id: 4242,
+        body: "rewritten".into(),
+        inline: true,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, _) = post(f.addr, "/issue/comment-edit", Some(&f.token), &r).await;
+    assert_eq!(status, 400);
+    let rec = common::recorded(&f.recorder);
+    assert!(!rec.iter().any(|c| c.path.contains("/pulls/comments/")));
+}
+
 /// #167: a review can point at lines of the diff, not only carry a body. The notes ride on the
 /// same request GitHub already takes for the verdict.
 #[tokio::test]

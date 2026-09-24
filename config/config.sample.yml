@@ -163,7 +163,7 @@ database_path: "/data/security_gateway.db"
 #       - name: Org/Repo
 #         mode: read-write        # read-only | read-write
 #         bases: [main]           # branches allowed as a PR base (omit = any). Direct pushes go to sekimore/* only, by default
-#         # push: ["feature/*", "fix/*", "chore/*"]   # 0.3.0+ branch name globs this repo accepts, for a direct push
+#         # push: ["feature/*", "fix/*", "chore/*"]   # 0.2.32+ branch name globs this repo accepts, for a direct push
 #                                   # and for refs/pr/<branch>. Replaces the default sekimore/*
 #     # upstreams:                # 0.2.1+ a per-upstream layer between the project defaults and the repos. permissions are a diff; push/tags/delete are that upstream's defaults
 #     #   ghe.example.com:
@@ -171,7 +171,11 @@ database_path: "/data/security_gateway.db"
 #     #     repos:
 #     #       - { name: Corp/Internal, mode: read-write, bases: [main] }
 #     permissions: [pr:create, issue:create, release:create]   # resource:action. Anything not listed is denied. {allow: [...], deny: [...]} also works
-#                             # 0.3.0+ ci:dispatch starts a workflow_dispatch run. Off by default and separate from
+#                             # 0.2.34+ pr:comment_update / pr:comment_delete (and the issue: pair) correct or
+#                             # withdraw a comment the agent posted. Both off by default, and separate from
+#                             # pr:comment: saying something is not the authority to rewrite or erase it.
+#                             # Only the agent's own comments — a person's is refused whatever is allowed
+#                             # 0.2.33+ ci:dispatch starts a workflow_dispatch run. Off by default and separate from
 #                             # ci:rerun: a re-run repeats what already happened here, a dispatch can start a deploy
 #                             # 0.2.28+ security:read / security:dismiss read and dismiss Dependabot alerts. The upstream
 #                             # token needs the security_events scope, which logins before 0.2.28 did not ask for: gw:login again
@@ -180,7 +184,7 @@ database_path: "/data/security_gateway.db"
 #     #   - { user: someone, number: 1 }  #   github.com/users/someone/projects/1
 #     # Omitted or empty refuses every Projects operation: a board's node id is opaque and says nothing
 #     # about its owner, so without this list any board the upstream token can see would be reachable.
-#     # branch:                                 # 0.3.0+ how refs/for/<base> names the branch it creates
+#     # branch:                                 # 0.2.32+ how refs/for/<base> names the branch it creates
 #     #   template: "sekimore/{branch}-{sha}"   #   {branch} {base} {sha} are substituted. This is the default;
 #     #                                         #   a project that does not want `sekimore` in its history changes it
 #     #   on_exists: reject                     #   reject | update, when that name is already upstream. A template
