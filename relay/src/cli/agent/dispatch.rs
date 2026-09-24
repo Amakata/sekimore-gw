@@ -73,6 +73,16 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     req.body = body;
                     leaf
                 }
+                PrCmd::Reply {
+                    number,
+                    comment_id,
+                    body,
+                } => {
+                    req.number = number;
+                    req.comment_id = comment_id;
+                    req.body = body;
+                    leaf
+                }
                 PrCmd::Review {
                     number,
                     event,

@@ -1080,17 +1080,28 @@ async fn pr_comments_merges_the_three_sources_in_order() {
         vec![
             ("comment", "carol"),
             ("review", "alice"),
+            // #165: an empty COMMENTED review is the envelope its line comments hang from, so it
+            // survives the fetch; the renderer is what drops one that turns out to be childless.
+            ("review_envelope", "alice"),
             ("inline", "alice"),
             ("comment", "bob"),
         ],
         "the three sources must come back as one timeline"
     );
 
-    // The review carries its state, the inline comment its place in the diff.
+    // The review carries its state, the inline comment its place in the diff. Found by kind
+    // rather than by index, so adding an entry to the timeline does not silently move these.
+    let inline = items
+        .iter()
+        .find(|i| i["kind"] == "inline")
+        .expect("an inline comment");
     assert_eq!(items[1]["state"], "CHANGES_REQUESTED");
-    assert_eq!(items[2]["path"], "src/main.rs");
-    assert_eq!(items[2]["line"], 40);
-    assert_eq!(items[2]["in_reply_to_id"], 555);
+    assert_eq!(inline["path"], "src/main.rs");
+    assert_eq!(inline["line"], 40);
+    assert_eq!(inline["in_reply_to_id"], 555);
+    // #165: the id `pr reply` needs, and the review it was submitted with.
+    assert_eq!(inline["id"], 2451);
+    assert_eq!(inline["review_id"], 902);
     assert!(
         items[0].get("state").is_none(),
         "a plain comment has no state"
@@ -1110,7 +1121,7 @@ async fn pr_comments_merges_the_three_sources_in_order() {
     }
 
     let msg = resp.message.unwrap_or_default();
-    assert!(msg.contains("[review CHANGES_REQUESTED]"), "{msg}");
+    assert!(msg.contains("review CHANGES_REQUESTED"), "{msg}");
     assert!(msg.contains("src/main.rs:40"), "{msg}");
     assert!(msg.contains("CI is red"), "{msg}");
 }
@@ -1345,12 +1356,15 @@ async fn pr_comments_renders_one_entry_per_block() {
     };
     let (_, resp) = post(f.addr, "/pr/comments", Some(&f.token), &r).await;
     let msg = resp.message.unwrap_or_default();
-    // Date, author, then what kind of entry it is; the body indented underneath.
+    // Date, author, then what kind of entry it is; the body indented underneath. #165: a review
+    // owns the line comments submitted with it, so they are nested rather than listed beside it,
+    // and each carries the id `pr reply` needs. The empty COMMENTED review is kept here because
+    // it has one; with none it would print nothing.
     assert_eq!(
         msg,
-        "2026-09-17 carol  [comment]\n  first\n\
-         2026-09-17 alice  [review CHANGES_REQUESTED]\n  the null check is inverted\n\
-         2026-09-17 alice  src/main.rs:40\n  this should be >=\n\
+        "2026-09-17 carol  [comment]\n  first\n\n\
+         2026-09-17 alice  review CHANGES_REQUESTED\n  the null check is inverted\n\n\
+         2026-09-17 alice  review COMMENTED\n    src/main.rs:40  #2451\n      this should be >=\n\n\
          2026-09-17 bob    [comment]\n  CI is red"
     );
 }

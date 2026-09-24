@@ -234,6 +234,14 @@ pub struct CommentItem {
     /// Set when an inline comment answers another one
     #[serde(skip_serializing_if = "Option::is_none")]
     pub in_reply_to_id: Option<u64>,
+    /// 0.2.33 (#165): the comment's own id, which `pr reply` needs to answer it. Inline comments
+    /// only: a conversation comment is answered with `pr comment`, which names no id
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+    /// 0.2.33 (#165): the review this belongs to. A review carries its own id here and its line
+    /// comments repeat it, which is what lets one submission be shown as one thing
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_id: Option<u64>,
 }
 
 /// 0.2.8: one line of `issue list`.
@@ -1033,6 +1041,25 @@ impl GitHub {
             "POST",
             &format!("/repos/{}/issues/{number}/comments", auth.repo()),
             Some(json!({"body": body})),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// #165: reply to a line comment, in the thread it belongs to. GitHub takes this on the
+    /// pulls endpoint with `in_reply_to`; the conversation endpoint cannot address a thread.
+    pub async fn reply_to_review_comment(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        comment_id: u64,
+        body: &str,
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Pr, Action::Comment)?;
+        self.rest::<Value>(
+            "POST",
+            &format!("/repos/{}/pulls/{number}/comments", auth.repo()),
+            Some(json!({"body": body, "in_reply_to": comment_id})),
         )
         .await?;
         Ok(())
@@ -1921,6 +1948,8 @@ impl GitHub {
                 path: None,
                 line: None,
                 in_reply_to_id: None,
+                id: None,
+                review_id: None,
             });
         }
 
@@ -1935,12 +1964,15 @@ impl GitHub {
             let body = str_at(r, "body");
             let state = str_at(r, "state");
             // A COMMENTED review with no body is just the envelope around the inline comments
-            // below; it carries nothing to read, so it would only be noise.
-            if body.is_empty() && state == "COMMENTED" {
-                continue;
-            }
+            // below. It carries nothing to read on its own, but it is what they hang from, so it
+            // is kept and the renderer drops it when it turns out to have none (#165).
+            let empty_envelope = body.is_empty() && state == "COMMENTED";
             out.push(CommentItem {
-                kind: "review".into(),
+                kind: if empty_envelope {
+                    "review_envelope".into()
+                } else {
+                    "review".into()
+                },
                 author: pointer_str(r, "/user/login"),
                 // A review is stamped when it is submitted; a pending one has no timestamp.
                 created_at: str_at(r, "submitted_at"),
@@ -1949,6 +1981,8 @@ impl GitHub {
                 path: None,
                 line: None,
                 in_reply_to_id: None,
+                id: None,
+                review_id: r.get("id").and_then(Value::as_u64),
             });
         }
 
@@ -1973,6 +2007,8 @@ impl GitHub {
                     .and_then(Value::as_u64)
                     .or_else(|| c.get("original_line").and_then(Value::as_u64)),
                 in_reply_to_id: c.get("in_reply_to_id").and_then(Value::as_u64),
+                id: c.get("id").and_then(Value::as_u64),
+                review_id: c.get("pull_request_review_id").and_then(Value::as_u64),
             });
         }
 
@@ -2102,6 +2138,8 @@ impl GitHub {
                 path: None,
                 line: None,
                 in_reply_to_id: None,
+                id: None,
+                review_id: None,
             })
             .collect())
     }

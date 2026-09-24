@@ -50,6 +50,9 @@ pub struct ApiRequest {
     pub job_id: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub run_id: u64,
+    /// 0.2.33 (#165): the line comment `pr reply` answers
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub comment_id: u64,
     /// Tag name / branch name / SHA (ci runs)
     #[serde(default, rename = "ref", skip_serializing_if = "String::is_empty")]
     pub git_ref: String,

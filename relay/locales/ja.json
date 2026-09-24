@@ -218,5 +218,7 @@
   "op.check.signing_on": "{fingerprint} (namespace {namespace}, socket {socket}, uid {uid})",
   "op.check.signing_off": "なし — dev が自分で生成する (relay.signing_key)",
   "op.check.signing_key_ok": "  署名鍵:          ホストの agent にある ({key})",
-  "op.check.signing_key_missing": "  署名鍵:          ホストの agent に無い — ホストで {fingerprint} を ssh-add する。コミットは署名されない"
+  "op.check.signing_key_missing": "  署名鍵:          ホストの agent に無い — ホストで {fingerprint} を ssh-add する。コミットは署名されない",
+  "agent.pr.reply": "行コメントに、その場で返信する",
+  "agent.pr.reply.comment_id": "返信する相手のコメント。`pr comments` の表示のもの (#2451 なら 2451)"
 }

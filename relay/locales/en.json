@@ -218,5 +218,7 @@
   "op.check.signing_on": "{fingerprint} (namespace {namespace}, socket {socket}, uid {uid})",
   "op.check.signing_off": "none — the dev container generates its own (relay.signing_key)",
   "op.check.signing_key_ok": "  signing key:     in the host agent ({key})",
-  "op.check.signing_key_missing": "  signing key:     NOT IN THE HOST AGENT — ssh-add {fingerprint} on the host; commits will not be signed"
+  "op.check.signing_key_missing": "  signing key:     NOT IN THE HOST AGENT — ssh-add {fingerprint} on the host; commits will not be signed",
+  "agent.pr.reply": "Reply to a line comment, where it was left",
+  "agent.pr.reply.comment_id": "The comment to answer, as `pr comments` prints it (#2451 -> 2451)"
 }
