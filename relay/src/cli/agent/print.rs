@@ -28,6 +28,64 @@ pub fn print_pr_status(resp: &ApiResponse) {
     }
 }
 
+/// #173: one file's diff, with the line numbers `pr review --comment path:line:body` takes.
+///
+/// The number in the left column is the point of the whole command: it is GitHub's line in the
+/// new file, which is what a line comment is addressed by. A deleted line has none — it is not in
+/// the new file — so its column is blank and it cannot be quoted by line.
+pub fn print_pr_diff(resp: &ApiResponse) {
+    let Some(raw) = &resp.raw else { return };
+    let s = |k: &str| raw.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    let u = |k: &str| raw.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    let path = s("path");
+    let number = resp.number.unwrap_or(0);
+    eprintln!(
+        "== {path}  {}  +{} -{}  (file {}/{})",
+        s("status"),
+        u("additions"),
+        u("deletions"),
+        u("file_index"),
+        u("file_count"),
+    );
+    if let Some(w) = raw.get("no_patch").and_then(|v| v.as_str()) {
+        eprintln!("-- {w}");
+    }
+    if let Some(lines) = raw.get("lines").and_then(|v| v.as_array()) {
+        for l in lines {
+            let kind = l.get("kind").and_then(|v| v.as_str()).unwrap_or("ctx");
+            let text = l.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            if kind == "hunk" {
+                println!("{text}");
+                continue;
+            }
+            let num = l
+                .get("line")
+                .and_then(|v| v.as_u64())
+                .map(|n| n.to_string())
+                .unwrap_or_default();
+            let mark = match kind {
+                "add" => "+",
+                "del" => "-",
+                _ => " ",
+            };
+            println!("{num:>5} {mark} {kind}  {text}");
+        }
+    }
+    // What to run next, so that reading a wide pull request does not need the JSON
+    if raw
+        .get("has_more_after")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        eprintln!(
+            "-- more of {path}. next: sekimore pr diff --number {number} --path {path} --before {}",
+            u("end")
+        );
+    } else if let Some(next) = raw.get("next_path").and_then(|v| v.as_str()) {
+        eprintln!("-- next file: sekimore pr diff --number {number} --path {next}");
+    }
+}
+
 /// Human-readable rendering of `ci log`. raw holds the CiLogPage JSON.
 pub fn print_ci_log(resp: &ApiResponse) {
     let Some(raw) = &resp.raw else { return };

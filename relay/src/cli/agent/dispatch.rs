@@ -8,7 +8,9 @@ use serde_json::Value;
 
 use super::client::AgentClient;
 use super::cmd::{AgentCmd, CiCmd, IssueCmd, PrCmd, ProjectCmd, ReleaseCmd, RepoCmd, SecurityCmd};
-use super::print::{print_ci_log, print_pr_status, print_project_items, print_response};
+use super::print::{
+    print_ci_log, print_pr_diff, print_pr_status, print_project_items, print_response,
+};
 use crate::api::types::ApiRequest;
 
 fn split_csv(s: &str) -> Vec<String> {
@@ -208,6 +210,33 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 PrCmd::View { number, json } => {
                     req.number = number;
                     return call_and_print(&client, leaf, &req, json).await;
+                }
+                PrCmd::Files { number, json } => {
+                    req.number = number;
+                    return call_and_print(&client, leaf, &req, json).await;
+                }
+                PrCmd::Diff {
+                    number,
+                    path,
+                    window,
+                    before,
+                    json,
+                } => {
+                    req.number = number;
+                    req.file_path = path.unwrap_or_default();
+                    req.window = window;
+                    req.before = before;
+                    let resp = client.call(leaf, &req).await?;
+                    if !resp.ok {
+                        eprintln!("sekimore: {}", resp.error.unwrap_or_default());
+                        return Ok(1);
+                    }
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&resp.raw)?);
+                    } else {
+                        print_pr_diff(&resp);
+                    }
+                    return Ok(0);
                 }
                 PrCmd::Comments {
                     number,

@@ -1326,6 +1326,189 @@ async fn inline_on_an_issue_is_refused() {
     assert!(!rec.iter().any(|c| c.path.contains("/pulls/comments/")));
 }
 
+/// #173: the numbers in a rendered diff are the ones `pr review --comment path:line:body` takes.
+/// If they drift, an agent leaves its note on the wrong line, so they are pinned here.
+#[tokio::test]
+async fn a_diff_carries_githubs_line_numbers() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, resp) = post(f.addr, "/pr/diff", Some(&f.token), &r).await;
+    assert_eq!(status, 200);
+    let raw = resp.raw.expect("a diff page");
+    // Without --path it takes the first file, so an agent holding only the number gets a diff
+    assert_eq!(raw["path"], "src/main.rs");
+    assert_eq!(raw["file_index"], 1);
+    assert_eq!(raw["file_count"], 3);
+    let got: Vec<(Option<u64>, &str)> = raw["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| (l["line"].as_u64(), l["kind"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (None, "hunk"),
+            (Some(38), "ctx"),
+            (None, "del"), // deleted: not in the new file, so nothing to comment on
+            (Some(39), "add"),
+            (Some(40), "add"),
+            (Some(41), "ctx"),
+        ]
+    );
+    // The next file is named, so a whole pull request can be read without guessing paths
+    assert_eq!(raw["next_path"], "logo.png");
+    assert_eq!(raw["has_more_after"], false);
+}
+
+/// A file GitHub sends no patch for says so, rather than rendering as an empty diff.
+#[tokio::test]
+async fn a_binary_file_says_it_has_no_patch() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        file_path: "logo.png".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, resp) = post(f.addr, "/pr/diff", Some(&f.token), &r).await;
+    assert_eq!(status, 200);
+    let raw = resp.raw.expect("a diff page");
+    assert!(raw["no_patch"].as_str().unwrap_or("").contains("binary"));
+    assert_eq!(raw["lines"].as_array().map(Vec::len), Some(0));
+}
+
+/// A path the pull request does not touch is refused, and says how to find the ones it does.
+/// Without this the caller gets the first file instead and reviews the wrong one.
+#[tokio::test]
+async fn a_path_outside_the_pull_request_is_refused() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        file_path: "src/secrets.rs".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, resp) = post(f.addr, "/pr/diff", Some(&f.token), &r).await;
+    assert_eq!(status, 403);
+    let err = resp.error.unwrap_or_default();
+    assert!(err.contains("does not touch"), "{err:?}");
+    assert!(
+        err.contains("pr files"),
+        "it should say how to look: {err:?}"
+    );
+}
+
+/// A window walks forward through one file, and says when there is more.
+#[tokio::test]
+async fn a_long_file_is_read_a_window_at_a_time() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        window: 2,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, resp) = post(f.addr, "/pr/diff", Some(&f.token), &r).await;
+    assert_eq!(status, 200);
+    let raw = resp.raw.expect("a diff page");
+    assert_eq!(raw["lines"].as_array().map(Vec::len), Some(2));
+    assert_eq!(raw["has_more_after"], true);
+    assert_eq!(raw["end"], 2);
+
+    // The second page starts where the first ended, and the numbering carries on correctly
+    let r2 = ApiRequest {
+        number: 7,
+        window: 2,
+        before: Some(2),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, resp) = post(f.addr, "/pr/diff", Some(&f.token), &r2).await;
+    assert_eq!(status, 200);
+    let raw = resp.raw.expect("a diff page");
+    let got: Vec<Option<u64>> = raw["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["line"].as_u64())
+        .collect();
+    assert_eq!(got, vec![None, Some(39)]);
+}
+
+/// `pr files` lists what moved, and carries no patches: it is the cheap half of reading a diff.
+#[tokio::test]
+async fn pr_files_lists_the_paths_without_their_patches() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, resp) = post(f.addr, "/pr/files", Some(&f.token), &r).await;
+    assert_eq!(status, 200);
+    let msg = resp.message.unwrap_or_default();
+    assert!(msg.contains("src/main.rs"), "{msg}");
+    assert!(msg.contains("3 files, +3 -1"), "{msg}");
+    let raw = serde_json::to_string(&resp.raw).unwrap_or_default();
+    assert!(
+        !raw.contains("ctx one"),
+        "pr files must not carry patches: {raw}"
+    );
+}
+
+/// Reading a diff is reading the pull request: without pr:read there is no diff.
+#[tokio::test]
+async fn reading_a_diff_needs_pr_read() {
+    let f = start_api(project_case_a(&["pr:comment"]), BootstrapMode::Auto, true).await;
+    for path in ["/pr/files", "/pr/diff"] {
+        let r = ApiRequest {
+            number: 7,
+            ..req("LibOrg/awesome-lib")
+        };
+        let (status, _) = post(f.addr, path, Some(&f.token), &r).await;
+        assert_eq!(status, 403, "{path} must need pr:read");
+    }
+}
+
+/// #173: every file's patch rides along on this endpoint whether or not it is wanted, and `rest`
+/// truncates at 1 MiB — a response cut mid-JSON does not parse. So the page has to stay well under
+/// GitHub's 100, or a wide pull request fails to read at all: exactly the case this is for.
+#[tokio::test]
+async fn the_file_list_is_asked_for_in_small_pages() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, _) = post(f.addr, "/pr/files", Some(&f.token), &r).await;
+    assert_eq!(status, 200);
+    let rec = common::recorded(&f.recorder);
+    let call = rec
+        .iter()
+        .find(|c| c.path.contains("/pulls/7/files"))
+        .expect("the files endpoint");
+    let per_page: u32 = call
+        .path
+        .split("per_page=")
+        .nth(1)
+        .and_then(|s| s.split('&').next())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    assert!(
+        per_page > 0 && per_page <= 30,
+        "a page of patches must fit under RESPONSE_CAP: {}",
+        call.path
+    );
+    assert!(call.path.contains("page=1"), "{}", call.path);
+    // The fixture returns fewer files than a page holds, so the walk stops without asking again
+    assert_eq!(
+        rec.iter()
+            .filter(|c| c.path.contains("/pulls/7/files"))
+            .count(),
+        1,
+        "a short page means there is no more to fetch"
+    );
+}
+
 /// #167: a review can point at lines of the diff, not only carry a body. The notes ride on the
 /// same request GitHub already takes for the verdict.
 #[tokio::test]

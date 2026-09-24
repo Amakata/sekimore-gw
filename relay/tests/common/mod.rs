@@ -199,6 +199,20 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
             );
         }
     }
+    // #173: the files of a pull request, with their patches. logo.png has none (binary), which is
+    // what the relay must say rather than render as empty.
+    if method == "GET" && p.contains("/pulls/") && p.ends_with("/files") {
+        return (
+            StatusCode::OK,
+            serde_json::json!([
+                {"filename": "src/main.rs", "status": "modified", "additions": 2, "deletions": 1,
+                 "patch": "@@ -38,4 +38,5 @@ fn check()\n ctx one\n-gone\n+added\n+more\n ctx two"},
+                {"filename": "logo.png", "status": "modified", "additions": 0, "deletions": 0},
+                {"filename": "README.md", "status": "added", "additions": 1, "deletions": 0,
+                 "patch": "@@ -0,0 +1,1 @@\n+hello"}
+            ]),
+        );
+    }
     // #158: the repository itself, read by `refs/pr/<branch>` to learn the base it opens against.
     // The path has exactly two segments after /repos/, which is what tells it apart from the
     // sub-resources below.

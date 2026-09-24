@@ -79,6 +79,10 @@ pub struct ApiRequest {
     pub window: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<u64>,
+    /// 0.2.35 (#173): which file of a pull request `pr diff` reads. Without one it takes the
+    /// first, so a caller holding only the number still gets a diff to read
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub file_path: String,
     /// 0.2.6: releases. `tag` names the release; `generate_notes` asks GitHub to write the body
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub tag: String,

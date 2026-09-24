@@ -32,6 +32,15 @@ pub const API_VERSION: &str = "2022-11-28";
 const RESPONSE_CAP: usize = 1 << 20;
 /// CI logs are large. The relay truncates them to the tail before returning, but caps the fetch at 16 MiB.
 const CI_LOG_CAP: usize = 16 << 20;
+/// #173: how many files of a pull request are asked for at once. Every file's patch comes with it
+/// whether or not it is wanted, and `rest` truncates at `RESPONSE_CAP` (1 MiB) — a response cut
+/// mid-JSON does not parse — so the page is kept well inside that rather than GitHub's 100.
+const PR_FILES_PER_PAGE: u32 = 30;
+/// #173: how many such pages are walked. 30 × 10 = 300 files, past which listing a pull request
+/// file by file has stopped being a way to read it.
+const PR_FILES_PAGES: u32 = 10;
+/// #173: the most diff lines one `pr diff` page returns, matching the cap on a CI log page.
+const PR_DIFF_MAX_LINES: usize = 2000;
 
 #[derive(Debug)]
 pub enum GhError {
@@ -573,6 +582,62 @@ pub struct CiLogPage {
     pub has_more_before: bool,
 }
 
+/// One file in a pull request, without its patch. What `pr files` answers with.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PrFile {
+    pub path: String,
+    /// added / modified / removed / renamed / copied / changed / unchanged
+    pub status: String,
+    pub additions: u64,
+    pub deletions: u64,
+    /// Set when GitHub sends no patch for this file: binary, or too large to diff
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_patch: Option<String>,
+    /// The hunks, as GitHub sends them. Not serialized: `pr files` answers without patches, and
+    /// `pr diff` renders them into `DiffLine`s
+    #[serde(skip)]
+    pub patch: Option<String>,
+}
+
+/// One line of a diff, carrying the number to quote it by.
+///
+/// #173: `pr review --comment path:line:body` takes GitHub's line number in the new file, and
+/// nothing else in the relay could tell an agent what that number is. A deleted line has no
+/// number in the new file, so `line` is None there — it cannot be commented on by line.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DiffLine {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    /// add / del / ctx / hunk
+    pub kind: String,
+    pub text: String,
+}
+
+/// One page of one file's patch. Paged like `ci log`, but forwards from the top: a diff is read
+/// from its first hunk, where a log is read from its last line.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PrDiffPage {
+    pub path: String,
+    pub status: String,
+    pub additions: u64,
+    pub deletions: u64,
+    pub lines: Vec<DiffLine>,
+    pub total_lines: usize,
+    /// The range being returned, [start, end) as zero-based line numbers within this file's patch
+    pub start: usize,
+    pub end: usize,
+    pub has_more_after: bool,
+    /// The file after this one, when the pull request touches more than the one being shown
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_path: Option<String>,
+    /// Set instead of `lines` when GitHub sends no patch for this file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_patch: Option<String>,
+    /// How many files the pull request touches, and which one this is (1-based)
+    pub file_index: usize,
+    pub file_count: usize,
+}
+
 /// An Actions run attached to a ref (tag / branch / SHA). Runs triggered by a tag push, such as Docker Publish,
 /// have no PR, so they are reached through the ref rather than a PR number.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1039,6 +1104,128 @@ impl GitHub {
             end,
             lines,
             has_more_before: start > 0,
+        })
+    }
+
+    /// #173: the files a pull request touches, without their patches.
+    ///
+    /// The cheap half of reading a diff: which files, and how much moved in each. `pr diff` then
+    /// asks for one of them.
+    ///
+    /// `pages` bounds how much is fetched. Every patch of every file arrives on this endpoint, and
+    /// `rest` reads at most `RESPONSE_CAP` and *truncates* — a page cut mid-JSON fails to parse,
+    /// which is exactly what a wide pull request would do. So the list is walked a page at a time
+    /// and stops rather than asking for one oversized response.
+    async fn pull_request_files_paged(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        pages: u32,
+        per_page: u32,
+    ) -> Result<(Vec<PrFile>, bool), GhError> {
+        auth.ensure(Resource::Pr, Action::Read)?;
+        let mut all = Vec::new();
+        for page in 1..=pages {
+            let out: Value = self
+                .rest(
+                    "GET",
+                    &format!(
+                        "/repos/{}/pulls/{number}/files?per_page={per_page}&page={page}",
+                        auth.repo()
+                    ),
+                    None,
+                )
+                .await?;
+            let batch = out.as_array().map(Vec::as_slice).unwrap_or_default();
+            let short = batch.len() < per_page as usize;
+            all.extend(batch.iter().map(pr_file));
+            if short {
+                return Ok((all, false));
+            }
+        }
+        // A full last page means GitHub may hold more than was asked for
+        Ok((all, true))
+    }
+
+    /// #173: the file list alone.
+    ///
+    /// The patches ride along whether or not they are wanted — GitHub has no way to ask for the
+    /// list without them — so the page is kept small enough that a page of large ones still fits
+    /// under `RESPONSE_CAP`, and each patch is dropped once its counts have been read.
+    pub async fn pull_request_files(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+    ) -> Result<(Vec<PrFile>, bool), GhError> {
+        let (mut files, more) = self
+            .pull_request_files_paged(auth, number, PR_FILES_PAGES, PR_FILES_PER_PAGE)
+            .await?;
+        for f in &mut files {
+            f.patch = None;
+        }
+        Ok((files, more))
+    }
+
+    /// #173: one file's patch, with GitHub's line numbers, a window at a time.
+    ///
+    /// `path` names the file; without one the first file of the pull request is taken, so that an
+    /// agent that knows only the number still gets something to read. Paged forward from `before`
+    /// — here a start offset, not an end — because a diff is read from the top.
+    pub async fn pull_request_diff(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        path: Option<&str>,
+        window: usize,
+        from: usize,
+    ) -> Result<PrDiffPage, GhError> {
+        // Keeps the patches: this is the one caller that renders them
+        let (files, truncated) = self
+            .pull_request_files_paged(auth, number, PR_FILES_PAGES, PR_FILES_PER_PAGE)
+            .await?;
+        if files.is_empty() {
+            return Err(GhError::Refused(format!(
+                "pull request #{number} touches no files"
+            )));
+        }
+        let idx = match path {
+            None => 0,
+            Some(p) => files.iter().position(|f| f.path == p).ok_or_else(|| {
+                // Saying which it is matters: "not in this pull request" and "past the point
+                // where the relay stopped listing" call for different next steps
+                let tail = if truncated {
+                    format!(
+                        "; #{number} touches more files than the relay lists ({} so far)",
+                        files.len()
+                    )
+                } else {
+                    String::new()
+                };
+                GhError::Refused(format!(
+                    "#{number} does not touch {p}{tail}; sekimore pr files --number {number} lists what it does"
+                ))
+            })?,
+        };
+        let f = &files[idx];
+        let all = f.patch.as_deref().map(parse_patch).unwrap_or_default();
+        let total = all.len();
+        let window = window.clamp(1, PR_DIFF_MAX_LINES);
+        let start = from.min(total);
+        let end = (start + window).min(total);
+        Ok(PrDiffPage {
+            path: f.path.clone(),
+            status: f.status.clone(),
+            additions: f.additions,
+            deletions: f.deletions,
+            lines: all[start..end].to_vec(),
+            total_lines: total,
+            start,
+            end,
+            has_more_after: end < total,
+            next_path: files.get(idx + 1).map(|n| n.path.clone()),
+            no_patch: f.no_patch.clone(),
+            file_index: idx + 1,
+            file_count: files.len(),
         })
     }
 
@@ -2409,6 +2596,79 @@ fn u64_at(v: &Value, key: &str) -> u64 {
 }
 
 /// A string at a JSON pointer, or "" (`/user/login` is null on a comment left by a deleted account).
+/// #173: one file of `/pulls/{n}/files`. GitHub omits `patch` for a binary file and for one whose
+/// diff it considers too large; either way there is nothing to render, and saying which is the
+/// only useful answer.
+fn pr_file(v: &Value) -> PrFile {
+    let patch = v.get("patch").and_then(Value::as_str).map(str::to_string);
+    let status = pointer_str(v, "/status");
+    let no_patch = if patch.is_some() {
+        None
+    } else if status == "renamed" {
+        Some("renamed with no change to its contents".to_string())
+    } else {
+        Some("no patch: binary, or too large for GitHub to diff".to_string())
+    };
+    PrFile {
+        path: pointer_str(v, "/filename"),
+        status,
+        additions: v.get("additions").and_then(Value::as_u64).unwrap_or(0),
+        deletions: v.get("deletions").and_then(Value::as_u64).unwrap_or(0),
+        no_patch,
+        patch,
+    }
+}
+
+/// #173: a unified diff hunk, numbered as GitHub numbers it.
+///
+/// `@@ -a,b +c,d @@` says the hunk's first line is line `c` of the new file; every added or
+/// context line after it advances that counter, and a deleted line does not — it does not exist in
+/// the new file, so it has no number to be commented on. This is exactly the number that
+/// `pr review --comment path:line:body` wants, which is the reason for rendering rather than
+/// handing over the raw diff.
+fn parse_patch(patch: &str) -> Vec<DiffLine> {
+    let mut out = Vec::new();
+    let mut new_line = 0u64;
+    for raw in patch.lines() {
+        if let Some(rest) = raw.strip_prefix("@@") {
+            // The `+c` of `@@ -a,b +c,d @@`; anything unparseable leaves the counter where it was
+            if let Some(plus) = rest.split('+').nth(1) {
+                let num: String = plus.chars().take_while(char::is_ascii_digit).collect();
+                if let Ok(n) = num.parse::<u64>() {
+                    new_line = n;
+                }
+            }
+            out.push(DiffLine {
+                line: None,
+                kind: "hunk".into(),
+                text: raw.to_string(),
+            });
+            continue;
+        }
+        // "\ No newline at end of file" is a note about the line above it, not a line of the
+        // file, so it takes no number: counting it would shift every number after it by one
+        let (kind, text, counts) = match raw.as_bytes().first() {
+            Some(b'+') => ("add", &raw[1..], true),
+            Some(b'-') => ("del", &raw[1..], false),
+            Some(b'\\') => ("ctx", raw, false),
+            _ => ("ctx", raw.get(1..).unwrap_or(""), true),
+        };
+        let line = if !counts {
+            None
+        } else {
+            let n = new_line;
+            new_line += 1;
+            Some(n)
+        };
+        out.push(DiffLine {
+            line,
+            kind: kind.into(),
+            text: text.to_string(),
+        });
+    }
+    out
+}
+
 fn pointer_str(v: &Value, ptr: &str) -> String {
     v.pointer(ptr)
         .and_then(Value::as_str)
@@ -2513,6 +2773,67 @@ mod tests {
             store,
             Arc::new(Audit::disabled()),
         )
+    }
+
+    /// #173: the line numbers are the whole point of rendering a patch rather than passing it
+    /// through, so they are pinned here against a hunk that has every kind of line in it.
+    #[test]
+    fn a_patch_is_numbered_the_way_github_numbers_it() {
+        let lines = parse_patch(
+            "@@ -38,4 +38,5 @@ fn check()\n ctx one\n-gone\n+added\n ctx two\n\\ No newline at end of file",
+        );
+        let got: Vec<_> = lines
+            .iter()
+            .map(|l| (l.line, l.kind.as_str(), l.text.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (None, "hunk", "@@ -38,4 +38,5 @@ fn check()"),
+                (Some(38), "ctx", "ctx one"),
+                // A deleted line is not in the new file, so it has no number to be quoted by
+                (None, "del", "gone"),
+                (Some(39), "add", "added"),
+                (Some(40), "ctx", "ctx two"),
+                (None, "ctx", "\\ No newline at end of file"),
+            ]
+        );
+    }
+
+    /// A second hunk restarts the counter at its own header rather than carrying on.
+    #[test]
+    fn each_hunk_restarts_the_count_at_its_header() {
+        let lines = parse_patch("@@ -1,1 +1,1 @@\n a\n@@ -80,2 +90,2 @@\n b\n+c");
+        let nums: Vec<_> = lines.iter().map(|l| l.line).collect();
+        assert_eq!(nums, vec![None, Some(1), None, Some(90), Some(91)]);
+    }
+
+    /// A hunk header the parser cannot read must not silently renumber what follows: better to
+    /// carry the previous count than to claim a line is line 0.
+    #[test]
+    fn an_unreadable_hunk_header_does_not_reset_to_zero() {
+        let lines = parse_patch("@@ -1,1 +5,1 @@\n a\n@@ garbage @@\n b");
+        assert_eq!(lines[1].line, Some(5));
+        assert_eq!(lines[3].line, Some(6));
+    }
+
+    /// A file GitHub sends no patch for (binary, or too large) says so instead of rendering empty.
+    #[test]
+    fn a_file_with_no_patch_says_why() {
+        let f = pr_file(&json!({
+            "filename": "logo.png", "status": "modified", "additions": 0, "deletions": 0
+        }));
+        assert_eq!(
+            f.no_patch.as_deref().unwrap_or(""),
+            "no patch: binary, or too large for GitHub to diff"
+        );
+        assert!(f.patch.is_none());
+        // And a file that does have one carries no warning
+        let g = pr_file(&json!({
+            "filename": "a.rs", "status": "modified", "additions": 1, "deletions": 0,
+            "patch": "@@ -1,1 +1,2 @@\n a\n+b"
+        }));
+        assert!(g.no_patch.is_none());
     }
 
     #[tokio::test]

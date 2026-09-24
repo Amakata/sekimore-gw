@@ -270,6 +270,8 @@ pub async fn dispatch(
         "/pr/status" => pr_status(ctx, req).await,
         "/pr/view" => pr_view(ctx, req).await,
         "/pr/comments" => pr_comments(ctx, req).await,
+        "/pr/files" => pr_files(ctx, req).await,
+        "/pr/diff" => pr_diff(ctx, req).await,
         "/pr/list" => pr_list(ctx, req).await,
         "/issue/view" => issue_view(ctx, req).await,
         "/issue/comments" => issue_comments(ctx, req).await,
@@ -870,6 +872,77 @@ async fn pr_comments(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, 
         number: Some(req.number),
         message: Some(msg),
         raw: serde_json::to_value(&items).ok(),
+        ..ApiResponse::ok()
+    })
+}
+
+/// #173: which files a pull request touches, and how much moved in each.
+async fn pr_files(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
+    let (files, truncated) = client.pull_request_files(&auth, req.number).await?;
+    let (add, del): (u64, u64) = files
+        .iter()
+        .fold((0, 0), |(a, d), f| (a + f.additions, d + f.deletions));
+    let mut msg = files
+        .iter()
+        .map(|f| {
+            format!(
+                "{:<10} +{:<5} -{:<5} {}{}",
+                f.status,
+                f.additions,
+                f.deletions,
+                f.path,
+                f.no_patch
+                    .as_deref()
+                    .map(|w| format!("  ({w})"))
+                    .unwrap_or_default()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if files.is_empty() {
+        msg = format!("PR #{} touches no files", req.number);
+    } else {
+        msg.push_str(&format!(
+            "\n{}{} files, +{add} -{del}. sekimore pr diff --number {} --path <path>",
+            files.len(),
+            // Say so rather than let a file the relay never listed look like one that is not there
+            if truncated { "+" } else { "" },
+            req.number
+        ));
+    }
+    Ok(ApiResponse {
+        number: Some(req.number),
+        message: Some(msg),
+        raw: serde_json::to_value(&files).ok(),
+        ..ApiResponse::ok()
+    })
+}
+
+/// #173: one file's patch, numbered the way `pr review --comment` wants.
+async fn pr_diff(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
+    let window = if req.window == 0 {
+        400
+    } else {
+        req.window as usize
+    };
+    let page = client
+        .pull_request_diff(
+            &auth,
+            req.number,
+            if req.file_path.is_empty() {
+                None
+            } else {
+                Some(&req.file_path)
+            },
+            window,
+            req.before.unwrap_or(0) as usize,
+        )
+        .await?;
+    Ok(ApiResponse {
+        number: Some(req.number),
+        raw: serde_json::to_value(&page).ok(),
         ..ApiResponse::ok()
     })
 }
