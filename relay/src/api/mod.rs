@@ -205,6 +205,9 @@ impl From<GhError> for ApiError {
     fn from(e: GhError) -> Self {
         let status = match &e {
             GhError::Denied(_) => StatusCode::FORBIDDEN,
+            // #172: the relay refused, not the upstream — the agent asked for something it may
+            // not have, which is the same answer shape as a denial
+            GhError::Refused(_) => StatusCode::FORBIDDEN,
             GhError::Token(_) => StatusCode::SERVICE_UNAVAILABLE,
             GhError::Status { .. } | GhError::Http(_) | GhError::Parse(_) | GhError::Graphql(_) => {
                 StatusCode::BAD_GATEWAY

@@ -51,6 +51,10 @@ sekimore pr close --number N                                  [pr:close]
 sekimore pr reopen --number N                                 [pr:close]  close の逆
 sekimore pr comment --number N --body="…"                     [pr:comment]
 sekimore pr reply --number N --comment-id C --body="…"          [pr:comment]  行コメントに、その場で返信する
+sekimore pr comment-edit --number N --comment-id C --body="…"   [pr:comment_update]  自分の発言を直す
+sekimore pr comment-delete --number N --comment-id C            [pr:comment_delete]  取り下げる
+                                                              #   行コメントの id なら --inline を付ける
+                                                              #   自分が書いたものだけ。人のものは拒否される
 sekimore pr review --number N --event APPROVE                 [pr:review]  レビューを出す
 sekimore pr review --number N --event REQUEST_CHANGES \\        [pr:review]  …行を指して言う
   --comment "src/main.rs:40:this should be >="                #   path:line:body。複数は繰り返す

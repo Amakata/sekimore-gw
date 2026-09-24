@@ -65,6 +65,13 @@ pub enum Action {
     /// the change instruction the agent is working from: a project can want issues opened without
     /// wanting what a person wrote to be rewritable
     Update,
+    /// 0.2.34 (#172): correct a comment the agent posted. Separate from `Comment`: saying
+    /// something and changing what was said are different authorities, the same distinction
+    /// `Update` draws above for an issue's body
+    CommentUpdate,
+    /// 0.2.34 (#172): withdraw a comment the agent posted. Its own key because it destroys a
+    /// record, which nothing else here does — a project can well allow correction and refuse this
+    CommentDelete,
 }
 
 impl Resource {
@@ -97,8 +104,20 @@ impl Resource {
                 Assign,
                 Read,
                 RequestReview,
+                CommentUpdate,
+                CommentDelete,
             ],
-            Resource::Issue => &[Create, Comment, Close, Label, Assign, Read, Update],
+            Resource::Issue => &[
+                Create,
+                Comment,
+                Close,
+                Label,
+                Assign,
+                Read,
+                Update,
+                CommentUpdate,
+                CommentDelete,
+            ],
             Resource::Project => &[Read, AddItem, UpdateItem],
             Resource::Repo => &[Read],
             Resource::Ci => &[Read, Rerun, Dispatch],
@@ -137,6 +156,8 @@ impl Action {
             Action::Rerun => "rerun",
             Action::Dispatch => "dispatch",
             Action::Update => "update",
+            Action::CommentUpdate => "comment_update",
+            Action::CommentDelete => "comment_delete",
             Action::Dismiss => "dismiss",
         }
     }
@@ -179,6 +200,8 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "rerun" => Action::Rerun,
         "dispatch" => Action::Dispatch,
         "update" => Action::Update,
+        "comment_update" => Action::CommentUpdate,
+        "comment_delete" => Action::CommentDelete,
         "dismiss" => Action::Dismiss,
         other => return Err(format!("unknown action {other:?}")),
     };
@@ -1403,7 +1426,9 @@ mod tests {
         //   reading one)
         // + ci:dispatch (0.2.33 #168: starting a workflow that has never run can deploy, which
         //   re-running something that already happened here cannot)
-        assert_eq!(all_permission_keys().len(), 29);
+        // + pr:comment_update, pr:comment_delete, issue:comment_update, issue:comment_delete
+        //   (#172: posting is not the authority to rewrite or remove)
+        assert_eq!(all_permission_keys().len(), 33);
         // dismissing is not a kind of reading, and reading is not a kind of dismissing
         assert!(parse_permission("security:close").is_err());
         assert!(parse_permission("pr:dismiss").is_err());

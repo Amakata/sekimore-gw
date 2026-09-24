@@ -51,6 +51,10 @@ sekimore pr close --number N                                  [pr:close]
 sekimore pr reopen --number N                                 [pr:close]  the inverse of close
 sekimore pr comment --number N --body="…"                     [pr:comment]
 sekimore pr reply --number N --comment-id C --body="…"          [pr:comment]  answer a line comment where it was left
+sekimore pr comment-edit --number N --comment-id C --body="…"   [pr:comment_update]  correct what you said
+sekimore pr comment-delete --number N --comment-id C            [pr:comment_delete]  withdraw it
+                                                              #   add --inline when the id is a line comment
+                                                              #   only your own comments; a person's is refused
 sekimore pr review --number N --event APPROVE                 [pr:review]  submit a review
 sekimore pr review --number N --event REQUEST_CHANGES \\        [pr:review]  …pointing at lines
   --comment "src/main.rs:40:this should be >="                #   path:line:body, repeat for more

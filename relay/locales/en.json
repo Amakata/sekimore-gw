@@ -229,5 +229,11 @@
   "agent.ci.dispatch": "Start a workflow_dispatch run",
   "agent.ci.dispatch.workflow": "The workflow file, e.g. release.yml",
   "agent.ci.dispatch.ref": "The branch or tag to run it on",
-  "agent.ci.dispatch.input": "An input the workflow declares: key=value. Repeat for more"
+  "agent.ci.dispatch.input": "An input the workflow declares: key=value. Repeat for more",
+  "agent.pr.comment_edit": "Correct a comment this agent posted",
+  "agent.pr.comment_delete": "Withdraw a comment this agent posted",
+  "agent.comment_id": "The comment, as `pr comments` prints it (#2451 -> 2451)",
+  "agent.comment_inline": "It is a comment on a line of the diff, not in the conversation",
+  "agent.issue.comment_edit": "Correct a comment this agent posted",
+  "agent.issue.comment_delete": "Withdraw a comment this agent posted"
 }

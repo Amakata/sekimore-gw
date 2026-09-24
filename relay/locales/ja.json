@@ -229,5 +229,11 @@
   "agent.ci.dispatch": "workflow_dispatch の run を起動する",
   "agent.ci.dispatch.workflow": "ワークフローのファイル名。例: release.yml",
   "agent.ci.dispatch.ref": "実行するブランチまたはタグ",
-  "agent.ci.dispatch.input": "ワークフローが宣言している input: key=value。複数は繰り返す"
+  "agent.ci.dispatch.input": "ワークフローが宣言している input: key=value。複数は繰り返す",
+  "agent.pr.comment_edit": "このエージェントが書いたコメントを直す",
+  "agent.pr.comment_delete": "このエージェントが書いたコメントを取り下げる",
+  "agent.comment_id": "対象のコメント。`pr comments` の表示のもの (#2451 なら 2451)",
+  "agent.comment_inline": "会話欄ではなく、差分の行に付いたコメントである",
+  "agent.issue.comment_edit": "このエージェントが書いたコメントを直す",
+  "agent.issue.comment_delete": "このエージェントが書いたコメントを取り下げる"
 }

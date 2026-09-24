@@ -46,6 +46,9 @@ pub enum GhError {
     },
     Parse(String),
     Graphql(String),
+    /// 0.2.34 (#172): the upstream would have allowed it and the relay would not. Its own variant
+    /// so the audit can tell "we refused" apart from "GitHub refused"
+    Refused(String),
 }
 
 impl fmt::Display for GhError {
@@ -62,6 +65,7 @@ impl fmt::Display for GhError {
             } => write!(f, "{method} {path}: HTTP {status} ({body})"),
             GhError::Parse(m) => write!(f, "parse upstream response: {m}"),
             GhError::Graphql(m) => write!(f, "graphql: {m}"),
+            GhError::Refused(m) => write!(f, "{m}"),
         }
     }
 }
@@ -275,6 +279,9 @@ pub struct GitHub {
     http: reqwest::Client,
     tokens: Arc<UpstreamTokenStore>,
     audit: Arc<Audit>,
+    /// 0.2.34 (#172): who the token belongs to, read once. It cannot change without the token
+    /// changing, and checking a comment's author on every edit would otherwise pay for it twice
+    viewer: std::sync::OnceLock<String>,
 }
 
 impl GitHub {
@@ -291,6 +298,7 @@ impl GitHub {
             http,
             tokens,
             audit,
+            viewer: std::sync::OnceLock::new(),
         }
     }
 
@@ -1048,6 +1056,94 @@ impl GitHub {
             Some(json!({"body": body})),
         )
         .await?;
+        Ok(())
+    }
+
+    /// #172: who the upstream token belongs to. Cached for the life of the client: it cannot
+    /// change without the token changing, and every edit or delete would otherwise pay for it.
+    async fn viewer_login(&self) -> Result<String, GhError> {
+        if let Some(l) = self.viewer.get() {
+            return Ok(l.clone());
+        }
+        let me: Value = self.rest("GET", "/user", None).await?;
+        let login = me
+            .get("login")
+            .and_then(Value::as_str)
+            .ok_or_else(|| GhError::Parse("no login for the upstream token".into()))?
+            .to_string();
+        let _ = self.viewer.set(login.clone());
+        Ok(login)
+    }
+
+    /// #172: refuse to touch a comment the agent did not write, or one on another number.
+    ///
+    /// GitHub lets a token with write access edit or delete anyone's comment. An agent deleting a
+    /// reviewer's note would be worse than anything this feature is for, so the author is read
+    /// before the write and anything else is refused. The number is checked too: the caller was
+    /// authorized for what `number` names, and a comment id is repo-wide, so without it an id from
+    /// an issue would ride on a pull request's permission. Returns the path to write to.
+    async fn own_comment(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        inline: bool,
+        comment_id: u64,
+    ) -> Result<String, GhError> {
+        // A conversation comment and a line comment live in different namespaces
+        let (kind, parent_field, parent_kind) = if inline {
+            ("pulls", "/pull_request_url", "pulls")
+        } else {
+            ("issues", "/issue_url", "issues")
+        };
+        let path = format!("/repos/{}/{kind}/comments/{comment_id}", auth.repo());
+        let c: Value = self.rest("GET", &path, None).await?;
+        let parent = pointer_str(&c, parent_field);
+        if !parent.ends_with(&format!("/{parent_kind}/{number}")) {
+            return Err(GhError::Refused(format!(
+                "comment {comment_id} is not on #{number}"
+            )));
+        }
+        let author = pointer_str(&c, "/user/login");
+        let me = self.viewer_login().await?;
+        if author.is_empty() || !author.eq_ignore_ascii_case(&me) {
+            return Err(GhError::Refused(format!(
+                "comment {comment_id} was written by {}, not by this agent ({me}); \
+                 only its own comments can be changed or removed",
+                if author.is_empty() {
+                    "someone else"
+                } else {
+                    &author
+                }
+            )));
+        }
+        Ok(path)
+    }
+
+    /// #172: correct a comment the agent posted on `number`. `inline` names a line comment.
+    pub async fn update_comment(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        inline: bool,
+        comment_id: u64,
+        body: &str,
+    ) -> Result<(), GhError> {
+        let path = self.own_comment(auth, number, inline, comment_id).await?;
+        self.rest::<Value>("PATCH", &path, Some(json!({"body": body})))
+            .await?;
+        Ok(())
+    }
+
+    /// #172: withdraw a comment the agent posted on `number`.
+    pub async fn delete_comment(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        inline: bool,
+        comment_id: u64,
+    ) -> Result<(), GhError> {
+        let path = self.own_comment(auth, number, inline, comment_id).await?;
+        self.rest::<Value>("DELETE", &path, None).await?;
         Ok(())
     }
 
