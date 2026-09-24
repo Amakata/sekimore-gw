@@ -15,7 +15,14 @@ from dnslib import AAAA, QTYPE, RR, A, DNSRecord
 
 from . import constants
 from .domains import domain_matches
-from .logger import ComponentType, log_dns_query, log_error, log_system_event
+from .logger import (
+    ComponentType,
+    log_dns_query,
+    log_error,
+    log_firewall_action,
+    log_system_event,
+)
+from .resolved_ips import DEFAULT_DENY_CIDRS, filter_addresses
 
 if TYPE_CHECKING:
     from .firewall_manager import FirewallManager  # type: ignore[import-untyped]
@@ -322,6 +329,8 @@ class DNSServer:
         lan_subnets: list[str] | None = None,
         ignored_domains: list[str] | None = None,
         domain_handlers: dict[str, str] | None = None,
+        resolve_deny_cidrs: list[str] | None = None,
+        resolve_allow_cidrs: list[str] | None = None,
     ):
         """Initialize the server.
 
@@ -356,6 +365,15 @@ class DNSServer:
         self.running = False
         self.lan_subnets = lan_subnets or constants.DEFAULT_LAN_SUBNETS
         self.ignored_domains = ignored_domains or []
+        # #178: an allowed name is not an allowed destination. The gateway's own networks are
+        # exceptions of their own: they are RFC1918, and `.lan` / container names resolve into
+        # them on purpose, so denying the range outright would break the gateway itself.
+        self.resolve_deny_cidrs: list[str] = list(
+            resolve_deny_cidrs if resolve_deny_cidrs is not None else DEFAULT_DENY_CIDRS
+        )
+        self.resolve_allow_cidrs: list[str] = list(resolve_allow_cidrs or []) + list(
+            self.lan_subnets
+        )
         # The relay: git-relay domains resolve to the relay's own IP (see relay/README.md)
         self.domain_handlers: dict[str, str] = dict(domain_handlers or {})
         self._relay_ip_warned = False
@@ -534,6 +552,31 @@ class DNSServer:
                     ttl=str(ttl),
                     ip_count=str(len(ips)),
                 )
+
+            # #178: drop the addresses this name may not point at before anything else sees
+            # them. Done here, at the one place an answer enters, so that every caller — the
+            # query path, the refresh worker, and anything added later — is covered, and so a
+            # refused address is never cached and never served from the cache afterwards.
+            # getattr, not self.x: this method sits inside a broad `except Exception`, so an
+            # instance built without __init__ would turn a missing attribute into "resolution
+            # failed" rather than a visible error. Falling back to the defaults keeps the check
+            # on — the one direction that cannot open something by accident.
+            ips, refused = filter_addresses(
+                ips,
+                getattr(self, "resolve_deny_cidrs", DEFAULT_DENY_CIDRS),
+                getattr(self, "resolve_allow_cidrs", ()),
+            )
+            for bad in refused:
+                log_firewall_action(
+                    action="DENIED",
+                    src_ip="dns",
+                    dst_ip=bad,
+                    dst_port=0,
+                    domain=domain,
+                    reason="an allowed name may not resolve into this range (#178)",
+                )
+            if not ips:
+                return None
 
             # Store in the cache
             if self.cache_enabled and self.cache:

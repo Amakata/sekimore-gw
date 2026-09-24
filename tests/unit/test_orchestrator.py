@@ -137,6 +137,8 @@ def describe_security_gateway_orchestrator():
         mock_config.network.static_allow_ips = []
         mock_config.network.static_block_ips = []
         mock_config.proxy.enabled = False
+        mock_config.resolve_deny_cidrs = []
+        mock_config.resolve_allow_cidrs = []
         mock_load_config.return_value = mock_config
 
         # Mock network detection (6 values: internet_if, internal_if, internal_ip, internet_ip, internet_gw, internal_subnet)
@@ -182,6 +184,8 @@ def describe_security_gateway_orchestrator():
         mock_config.network.static_block_ips = []
         mock_config.network.lan_subnets = ["10.100.0.0/16"]
         mock_config.proxy.enabled = False
+        mock_config.resolve_deny_cidrs = []
+        mock_config.resolve_allow_cidrs = []
         mock_load_config.return_value = mock_config
 
         # Docker API detection fails
@@ -211,6 +215,8 @@ def describe_security_gateway_orchestrator():
         mock_config.network.static_allow_ips = []
         mock_config.network.static_block_ips = []
         mock_config.proxy.enabled = False
+        mock_config.resolve_deny_cidrs = []
+        mock_config.resolve_allow_cidrs = []
         mock_load_config.return_value = mock_config
 
         mock_detect.return_value = (
@@ -243,6 +249,8 @@ def describe_security_gateway_orchestrator():
         mock_config.network.static_allow_ips = []
         mock_config.network.static_block_ips = []
         mock_config.proxy.enabled = False
+        mock_config.resolve_deny_cidrs = []
+        mock_config.resolve_allow_cidrs = []
         mock_load_config.return_value = mock_config
 
         mock_detect.return_value = (
@@ -275,6 +283,8 @@ def describe_security_gateway_orchestrator():
         mock_config.network.static_allow_ips = ["1.2.3.4"]
         mock_config.network.static_block_ips = ["10.0.0.1"]
         mock_config.proxy.enabled = False
+        mock_config.resolve_deny_cidrs = []
+        mock_config.resolve_allow_cidrs = []
         mock_load_config.return_value = mock_config
 
         mock_detect.return_value = (
@@ -309,6 +319,8 @@ def describe_security_gateway_orchestrator():
         mock_config.network.static_allow_ips = []
         mock_config.network.static_block_ips = []
         mock_config.proxy.enabled = True
+        mock_config.resolve_deny_cidrs = []
+        mock_config.resolve_allow_cidrs = []
         mock_config.proxy.port = 3128
         mock_config.proxy.allow_domains = []
         mock_config.proxy.cache_enabled = True
@@ -345,6 +357,8 @@ def describe_security_gateway_orchestrator():
         mock_config.network.static_allow_ips = []
         mock_config.network.static_block_ips = []
         mock_config.proxy.enabled = False
+        mock_config.resolve_deny_cidrs = []
+        mock_config.resolve_allow_cidrs = []
         mock_load_config.return_value = mock_config
 
         mock_detect.return_value = (
@@ -381,6 +395,8 @@ def describe_security_gateway_orchestrator():
         mock_config.network.static_allow_ips = []
         mock_config.network.static_block_ips = []
         mock_config.proxy.enabled = False
+        mock_config.resolve_deny_cidrs = []
+        mock_config.resolve_allow_cidrs = []
         mock_load_config.return_value = mock_config
 
         mock_detect.return_value = (

@@ -52,6 +52,41 @@ pub struct Passthrough {
     pub allow_local: bool,
 }
 
+/// #178: whether `ip` is a destination no allowed name may reach.
+///
+/// The DNS path and Squid refuse these already, but the passthrough resolves the upstream name
+/// itself and never sees either answer — the same gap that made Squid's own deny necessary. A
+/// domain given `https-relay` and pointed at 169.254.169.254 would otherwise reach the metadata
+/// service, which serves credentials, through the one component holding the upstream token.
+///
+/// Deliberately not configurable here: `is_local_ip` below already covers the gateway's own
+/// addresses, and the ranges named here are ones no public upstream has a reason to sit in.
+pub fn is_denied_destination(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local() // 169.254.0.0/16: IMDS lives here
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.octets()[0] == 0
+                // 100.64.0.0/10, carrier-grade NAT
+                || (v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]))
+        }
+        IpAddr::V6(v6) => {
+            // An IPv4 address in an IPv6 shape is the same destination
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_denied_destination(IpAddr::V4(v4));
+            }
+            v6.is_loopback()
+                || v6.is_unspecified()
+                // fe80::/10 link-local, fc00::/7 unique-local
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+        }
+    }
+}
+
 /// Whether `ip` is an address of this host (detects a DNS self-loop).
 pub fn is_local_ip(ip: IpAddr) -> bool {
     if ip.is_loopback() {
@@ -196,9 +231,18 @@ impl Passthrough {
         let addrs = tokio::net::lookup_host((host, port)).await?;
         let mut last: Option<std::io::Error> = None;
         let mut skipped_self = false;
+        let mut refused: Vec<String> = Vec::new();
         for addr in addrs {
+            // Self-loop first: it is a configuration mistake with a diagnostic of its own, and
+            // the gateway's own addresses are private ones, so #178 would otherwise swallow it
             if !self.allow_local && is_local_ip(addr.ip()) {
                 skipped_self = true;
+                continue;
+            }
+            // #178: an allowed name is not an allowed destination. Checked here, where the name
+            // has just been resolved, because this is the last point before the connection.
+            if !self.allow_local && is_denied_destination(addr.ip()) {
+                refused.push(addr.ip().to_string());
                 continue;
             }
             match tokio::time::timeout(Duration::from_secs(20), TcpStream::connect(addr)).await {
@@ -212,9 +256,25 @@ impl Passthrough {
                 }
             }
         }
+        if !refused.is_empty() {
+            self.audit.deny(
+                "resolved_address_refused",
+                Actor::System,
+                "an allowed name may not resolve into this range",
+                &[("host", host), ("addresses", &refused.join(","))],
+            );
+        }
         if skipped_self && last.is_none() {
             return Err(std::io::Error::other(format!(
                 "{host} resolves to this gateway itself (DNS self-reference loop); the gateway must resolve the upstream via the real resolver"
+            )));
+        }
+        if !refused.is_empty() && last.is_none() {
+            // Said plainly: "the gateway refused" and "it did not resolve" are different facts,
+            // and only the first one means someone pointed an allowed name somewhere it may not go
+            return Err(std::io::Error::other(format!(
+                "{host} resolves to {}, which this gateway refuses to reach (link-local, loopback or a private range)",
+                refused.join(", ")
             )));
         }
         Err(last.unwrap_or_else(|| {
@@ -440,6 +500,80 @@ mod tests {
     /// omits it gets whichever cap is loosest — here the deployment holds github.com to
     /// 256 KiB while the default is 1 MiB, so leaving the name out would be a fourfold raise
     /// for the asking.
+    /// #178: the passthrough resolves the upstream name itself, so the refusals made in the DNS
+    /// path and in Squid never reach it. Without this check a domain given `https-relay` and
+    /// pointed at 169.254.169.254 reaches the metadata service — which serves credentials —
+    /// through the component that holds the upstream token.
+    #[test]
+    fn a_name_may_not_resolve_into_a_denied_range() {
+        for ip in [
+            "169.254.169.254", // the metadata service itself
+            "169.254.0.1",     // the rest of link-local, not only the well-known address
+            "127.0.0.1",
+            "10.0.0.5",
+            "172.16.0.1",
+            "192.168.1.1",
+            "0.0.0.0",
+            "100.64.0.1", // carrier-grade NAT
+        ] {
+            assert!(
+                is_denied_destination(ip.parse().unwrap()),
+                "{ip} must be refused"
+            );
+        }
+    }
+
+    /// The traffic the gateway exists to carry is not refused, including the addresses just
+    /// outside each denied range: one written slightly too wide would break real upstreams.
+    #[test]
+    fn ordinary_public_addresses_are_still_reachable() {
+        for ip in [
+            "140.82.114.4", // github.com
+            "8.8.8.8",
+            "9.255.255.255",  // just below 10.0.0.0/8
+            "11.0.0.0",       // just above it
+            "172.15.255.255", // just below 172.16.0.0/12
+            "172.32.0.0",     // just above it
+            "192.167.255.255",
+            "192.169.0.0",
+            "169.253.255.255", // just below 169.254.0.0/16
+            "169.255.0.0",     // just above it
+            "100.63.255.255",  // just below 100.64.0.0/10
+            "100.128.0.0",     // just above it
+        ] {
+            assert!(
+                !is_denied_destination(ip.parse().unwrap()),
+                "{ip} must stay reachable"
+            );
+        }
+    }
+
+    /// An IPv4 destination in an IPv6 shape is the same destination: ::ffff:169.254.169.254
+    /// would otherwise walk past a check written in IPv4.
+    #[test]
+    fn an_ipv4_address_in_an_ipv6_shape_is_judged_as_ipv4() {
+        assert!(is_denied_destination(
+            "::ffff:169.254.169.254".parse().unwrap()
+        ));
+        assert!(is_denied_destination("::ffff:10.0.0.5".parse().unwrap()));
+        // …and the same shape carrying a public address is still allowed
+        assert!(!is_denied_destination(
+            "::ffff:140.82.114.4".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn the_ipv6_private_ranges_are_refused() {
+        for ip in ["::1", "fe80::1", "fc00::1", "fd00::1", "::"] {
+            assert!(
+                is_denied_destination(ip.parse().unwrap()),
+                "{ip} must be refused"
+            );
+        }
+        // A public IPv6 address is not
+        assert!(!is_denied_destination("2606:4700::1111".parse().unwrap()));
+    }
+
     #[test]
     fn an_unnamed_connection_gets_the_tightest_cap_not_the_default() {
         let mut p = pt("upstream.test", 443, true);

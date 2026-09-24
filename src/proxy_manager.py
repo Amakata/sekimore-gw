@@ -22,6 +22,8 @@ class ProxyManager:
         upstream_dns: str = "127.0.0.11",
         upstream_proxy_username: str | None = None,
         upstream_proxy_password: str | None = None,
+        denied_destinations: list[str] | None = None,
+        allowed_destinations: list[str] | None = None,
     ):
         """Initialize the manager.
 
@@ -36,6 +38,8 @@ class ProxyManager:
             upstream_dns: Upstream DNS server (default: Docker's built-in DNS, 127.0.0.11)
             upstream_proxy_username: Username for upstream proxy authentication
             upstream_proxy_password: Password for upstream proxy authentication
+            denied_destinations: Address ranges refused whatever a name resolves to (#178)
+            allowed_destinations: Exceptions to denied_destinations
         """
         self.template_path = Path(config_template_path or constants.SQUID_TEMPLATE_PATH)
         self.output_path = Path(config_output_path or constants.SQUID_CONFIG_PATH)
@@ -47,6 +51,10 @@ class ProxyManager:
         self.upstream_dns = upstream_dns
         self.upstream_proxy_username = upstream_proxy_username
         self.upstream_proxy_password = upstream_proxy_password
+        # #178: destinations refused whatever an allowlisted name resolves to, and the
+        # exceptions to that (the gateway's own network, an internal mirror a project names)
+        self.denied_destinations: list[str] = list(denied_destinations or [])
+        self.allowed_destinations: list[str] = list(allowed_destinations or [])
 
     def generate_config(
         self, allowed_domains: list[str], relayed_domains: list[str] | None = None
@@ -93,6 +101,9 @@ class ProxyManager:
             # placeholders. str.format would drop the deny rule silently and leave the relay
             # reachable through the proxy, so put it in ourselves when the template lacks it.
             template = self._ensure_relay_placeholders(template)
+            template = self._ensure_destination_placeholders(template)
+
+            denied_acls, denied_rule = self._generate_denied_destinations()
 
             # Fill in the template
             config = template.format(
@@ -100,6 +111,8 @@ class ProxyManager:
                 ALLOWED_DOMAINS_ACL=domain_acls,
                 RELAYED_DOMAINS_ACL=relayed_acls,
                 RELAYED_DOMAINS_RULE=relayed_rule,
+                DENIED_DESTINATIONS_ACL=denied_acls,
+                DENIED_DESTINATIONS_RULE=denied_rule,
                 CACHE_CONFIG=cache_config,
                 UPSTREAM_PROXY_CONFIG=upstream_config,
                 DNS_NAMESERVERS=self.upstream_dns,
@@ -110,6 +123,15 @@ class ProxyManager:
                 log_error(
                     ComponentType.PROXY,
                     "Squid config would not refuse the relayed domains; refusing to write it",
+                )
+                return False
+
+            # The same, for the destinations no name may reach (#178). A config written without
+            # this rule serves IMDS through the proxy to anything that asks.
+            if self.denied_destinations and "http_access deny denied_destinations" not in config:
+                log_error(
+                    ComponentType.PROXY,
+                    "Squid config would not refuse the denied destinations; refusing to write it",
                 )
                 return False
 
@@ -164,6 +186,38 @@ class ProxyManager:
         # The ACL definitions have to precede the rule that uses them.
         return template.replace(
             "{ALLOWED_DOMAINS_ACL}", "{ALLOWED_DOMAINS_ACL}\n{RELAYED_DOMAINS_ACL}", 1
+        )
+
+    @staticmethod
+    def _ensure_destination_placeholders(template: str) -> str:
+        """Add the destination placeholders to a template written before they existed (#178).
+
+        Same reasoning as `_ensure_relay_placeholders`: the template is bind-mounted by the
+        deployment, so a gateway can run this code against a template from an older release.
+        `str.format` would drop the deny silently and serve IMDS through the proxy.
+
+        A template that already carries the placeholders is returned untouched.
+        """
+        if "{DENIED_DESTINATIONS_RULE}" in template:
+            return template
+
+        allow_rule = "http_access allow allowed_domains"
+        if allow_rule not in template:
+            log_error(
+                ComponentType.PROXY,
+                "Squid template has neither the destination placeholders nor the expected "
+                "allow rule; cannot place the deny rule",
+            )
+            return template
+
+        log_system_event(
+            "Squid template predates the denied-destination rule; inserting it",
+        )
+        # Both go in above the allowlist: Squid takes the first rule that matches
+        return template.replace(
+            allow_rule,
+            "{DENIED_DESTINATIONS_ACL}\n{DENIED_DESTINATIONS_RULE}\n\n" + allow_rule,
+            1,
         )
 
     def _generate_domain_acls(self, domains: list[str]) -> str:
@@ -232,6 +286,39 @@ class ProxyManager:
             "http_access deny relayed_domains"
         )
         return acl, rule
+
+    def _generate_denied_destinations(self) -> tuple[str, str]:
+        """Build the ACL and the access rule that refuse a destination by address (#178).
+
+        Returns a (acl, rule) pair, both empty when nothing is denied.
+
+        The DNS path already refuses these, but Squid resolves the name itself and never sees
+        that answer — the same gap that made the relayed-domain deny necessary above. Without
+        this, an allowlisted domain pointed at 169.254.169.254 is refused to anything going
+        direct and served to anything going through the proxy.
+
+        `dst` matches on the address Squid resolved, so it holds whatever the name says.
+        """
+        if not self.denied_destinations:
+            return "", ""
+        acl = "\n".join(
+            f"acl denied_destinations dst {c}" for c in sorted(self.denied_destinations)
+        )
+        # An exception is written as its own ACL and allowed first: Squid takes the first rule
+        # that matches, so the project's own network survives the deny below it
+        if self.allowed_destinations:
+            acl += "\n" + "\n".join(
+                f"acl allowed_destinations dst {c}" for c in sorted(self.allowed_destinations)
+            )
+        rule_lines = []
+        if self.allowed_destinations:
+            rule_lines.append("http_access allow allowed_destinations")
+        rule_lines.append(
+            "# An allowed name is not an allowed destination: refuse IMDS, loopback and the\n"
+            "# private ranges whatever an allowlisted domain resolves to (#178)"
+        )
+        rule_lines.append("http_access deny denied_destinations")
+        return acl, "\n".join(rule_lines)
 
     def _generate_cache_config(self) -> str:
         """Build the cache configuration.
