@@ -5,6 +5,14 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.34（2026-09-24）
+
+### Enhancement
+
+- `pr comment-edit` / `issue comment-edit` が自分の投稿したコメントを直し、`pr comment-delete` / `issue comment-delete` が取り下げる (#174)
+- 新しい `pr:comment_update` `pr:comment_delete` `issue:comment_update` `issue:comment_delete` 権限が要る (すべて既定オフ) (#174)
+- 他人のコメントや、指定した番号にないコメントは拒否する (#174)
+
 ## 0.2.33（2026-09-24）
 
 ### Enhancement

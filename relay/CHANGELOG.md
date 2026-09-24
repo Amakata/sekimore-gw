@@ -6,6 +6,14 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.34 (2026-09-24)
+
+### Enhancement
+
+- `pr comment-edit` / `issue comment-edit` correct, and `pr comment-delete` / `issue comment-delete` withdraw, a comment the agent posted (#174)
+- they need the new `pr:comment_update`, `pr:comment_delete`, `issue:comment_update` and `issue:comment_delete`, all off by default (#174)
+- a comment written by anyone else, or one that is not on the number named, is refused (#174)
+
 ## 0.2.33 (2026-09-24)
 
 ### Enhancement
