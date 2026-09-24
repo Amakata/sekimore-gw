@@ -1,27 +1,27 @@
 # Contributing to sekimore-gw
 
-Thank you for your interest in contributing to sekimore-gw! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to sekimore-gw. This document describes how to set up a development environment and how to submit changes.
 
-## Development Setup
+## Development setup
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.11 or later
 - [uv](https://github.com/astral-sh/uv) package manager
-- Docker 20.10+
-- Docker Compose 2.0+
+- Docker 20.10 or later
+- Docker Compose 2.0 or later
 - Git
 
-### Initial Setup
+### Initial setup
 
-1. Fork and clone the repository:
+1. Fork the repository and clone your fork:
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/sekimore-gw.git
 cd sekimore-gw
 ```
 
-2. Install dependencies:
+2. Install the dependencies:
 
 ```bash
 uv sync
@@ -34,9 +34,9 @@ uv run pytest
 uv run ruff check src/
 ```
 
-## Development Workflow
+## Development workflow
 
-### 1. Create a Branch
+### 1. Create a branch
 
 ```bash
 git checkout -b feature/your-feature-name
@@ -44,15 +44,15 @@ git checkout -b feature/your-feature-name
 git checkout -b fix/your-bug-fix
 ```
 
-### 2. Make Changes
+### 2. Make changes
 
-- Write code following the project's coding standards
-- Add tests for new functionality
-- Update documentation as needed
+- Follow the coding standards of the project.
+- Add tests for new functionality.
+- Update the documentation as needed.
 
-### 3. Run Tests and Linters
+### 3. Run the tests and linters
 
-Before committing, ensure all checks pass:
+Before you commit, make sure that all checks pass:
 
 ```bash
 # Run tests
@@ -69,9 +69,9 @@ uv run mypy src/
 uv run pytest --cov=src --cov-report=html
 ```
 
-### 4. Commit Changes
+### 4. Commit changes
 
-Follow conventional commit format:
+Use the Conventional Commits format:
 
 ```bash
 git commit -m "feat: add new domain filtering feature"
@@ -81,32 +81,35 @@ git commit -m "test: add unit tests for firewall module"
 ```
 
 Commit types:
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation changes
-- `test`: Test additions or modifications
-- `refactor`: Code refactoring
-- `chore`: Maintenance tasks
+
+- `feat`: a new feature
+- `fix`: a bug fix
+- `docs`: documentation changes
+- `test`: new or modified tests
+- `refactor`: code refactoring
+- `chore`: maintenance tasks
 - `ci`: CI/CD changes
 
-### 5. Push and Create Pull Request
+### 5. Push and create a pull request
 
 ```bash
 git push origin feature/your-feature-name
 ```
 
-Then create a Pull Request on GitHub.
+Then create a pull request on GitHub.
 
-## Code Standards
+## Code standards
 
-### Python Style
+### Python style
 
-- Follow [PEP 8](https://peps.python.org/pep-0008/)
-- Use type hints for function signatures
-- Maximum line length: 100 characters (configured in pyproject.toml)
-- Use `ruff` for linting and formatting
+- Follow [PEP 8](https://peps.python.org/pep-0008/).
+- Use type hints in function signatures.
+- Keep lines at 100 characters or fewer. This limit is configured in pyproject.toml.
+- Use `ruff` for linting and formatting.
 
-### Code Organization
+### Code organization
+
+The following tree shows the main modules. It is not a complete listing of `src/`.
 
 ```
 src/
@@ -122,10 +125,10 @@ src/
 
 ### Testing
 
-- Use `pytest` with `pytest-describe` for BDD-style tests
-- Aim for >80% code coverage
-- Write unit tests for new functions/classes
-- Add integration tests for complex workflows
+- Use `pytest` with `pytest-describe` for BDD-style tests.
+- Aim for more than 80% code coverage.
+- Write unit tests for new functions and classes.
+- Add integration tests for complex workflows.
 
 Example test structure:
 
@@ -141,10 +144,10 @@ def describe_my_feature():
 
 ### Documentation
 
-- Add docstrings to all public functions and classes
-- Use Google-style docstrings
-- Update README.md for user-facing changes
-- Update inline comments for complex logic
+- Add docstrings to all public functions and classes.
+- Use Google-style docstrings.
+- Update README.md for user-facing changes.
+- Update the inline comments that explain complex logic.
 
 Example docstring:
 
@@ -166,9 +169,9 @@ def my_function(arg1: str, arg2: int) -> bool:
     """
 ```
 
-## Testing Guidelines
+## Testing guidelines
 
-### Unit Tests
+### Unit tests
 
 Place unit tests in `tests/unit/`:
 
@@ -179,13 +182,13 @@ tests/unit/
 └── test_firewall.py
 ```
 
-Run unit tests:
+Run the unit tests:
 
 ```bash
 uv run pytest tests/unit/ -v
 ```
 
-### Integration Tests
+### Integration tests
 
 Place integration tests in `tests/integration/`:
 
@@ -194,7 +197,7 @@ tests/integration/
 └── test_orchestrator.py
 ```
 
-### Functional Tests
+### Functional tests
 
 Place functional tests in `tests/functional/`:
 
@@ -203,47 +206,47 @@ tests/functional/
 └── test_end_to_end.py
 ```
 
-## Docker Development
+## Docker development
 
-### Building the Image
+### Build the image
 
 ```bash
 docker build -t sekimore-gw:dev .
 ```
 
-### Testing with Docker Compose
+### Test with Docker Compose
 
 ```bash
 # Start services
-docker-compose up -d
+docker compose up -d
 
 # View logs
-docker-compose logs -f sekimore-gw
+docker compose logs -f sekimore-gw
 
 # Stop services
-docker-compose down
+docker compose down
 ```
 
-## Pull Request Guidelines
+## Pull request guidelines
 
-### Before Submitting
+### Before you submit
 
-- [ ] All tests pass
-- [ ] Code is formatted with `ruff format`
-- [ ] No linting errors (`ruff check`)
-- [ ] Documentation is updated
-- [ ] Commit messages follow conventional format
-- [ ] Branch is up-to-date with master
+- [ ] All tests pass.
+- [ ] The code is formatted with `ruff format`.
+- [ ] `ruff check` reports no errors.
+- [ ] The documentation is updated.
+- [ ] The commit messages follow the Conventional Commits format.
+- [ ] The branch is up to date with `main`.
 
-### PR Description
+### Pull request description
 
-Include:
+Include the following sections:
 
-1. **What**: Brief description of changes
-2. **Why**: Motivation and context
-3. **How**: Technical details if complex
-4. **Testing**: How you tested the changes
-5. **Screenshots**: For UI changes
+1. **What**: a brief description of the changes
+2. **Why**: the motivation and context
+3. **How**: technical details, if the change is complex
+4. **Testing**: how you tested the changes
+5. **Screenshots**: for UI changes
 
 Example:
 
@@ -268,29 +271,29 @@ Users requested IPv6 support for allow/block lists
 Fixes #123
 ```
 
-## Code Review Process
+## Code review process
 
-1. Automated checks run on all PRs (CI/CD)
-2. At least one maintainer review required
-3. Address review comments promptly
-4. Once approved, maintainers will merge
+1. Automated checks (CI/CD) run on every pull request.
+2. At least one maintainer must review the pull request.
+3. Address review comments promptly.
+4. After the pull request is approved, a maintainer merges it.
 
-## Release Process
+## Release process
 
-1. Update version in `pyproject.toml`
-2. Update CHANGELOG (if exists)
-3. Create git tag: `git tag v0.0.2`
-4. Push tag: `git push origin v0.0.2`
-5. GitHub Actions will build and publish Docker image
+1. Update the version in `pyproject.toml` and in `relay/Cargo.toml`.
+2. Update the changelogs: `CHANGELOG.md`, `CHANGELOG.ja.md`, `relay/CHANGELOG.md` and `relay/CHANGELOG.ja.md`.
+3. Create the git tag: `git tag v0.0.2`.
+4. Push the tag: `git push origin v0.0.2`.
+5. GitHub Actions builds and publishes the Docker image.
 
-## Getting Help
+## Getting help
 
-- Open an issue for bugs or feature requests
-- Discuss in pull request comments
-- Check existing issues and PRs first
+- Open an issue to report a bug or request a feature.
+- Discuss changes in pull request comments.
+- Check the existing issues and pull requests first.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+By contributing, you agree that your contributions will be licensed under the Apache License 2.0.
 
-Thank you for contributing to sekimore-gw!
+Thank you for contributing to sekimore-gw.
