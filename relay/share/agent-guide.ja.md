@@ -13,12 +13,15 @@
 ## git
 
 - clone / fetch / pull は URL そのままで動きます: `git clone git@github.com:Org/Repo.git`
-- push 先は 2 種類だけです。
-  - `git push origin HEAD:refs/for/<base>` — `sekimore/<base>-<sha7>` というブランチに置かれ、PR（base=`<base>`）が自動で作られます。PR のタイトルは定型なので、タイトルや本文を自分で書きたいときは次の方法を使ってください。
-  - `git push origin HEAD:refs/heads/sekimore/<topic>` — 作業ブランチ。PR は `sekimore pr create` で作ります（推奨）。
+- push 先と、使ってよいブランチ名は案件ごとに違います。**`sekimore whoami` の `push` と `refs` を見てください。**
+  - `git push origin HEAD:refs/heads/<branch>` — 作業ブランチ。PR は `sekimore pr create` で作ります（推奨）。
+  - `git push origin HEAD:refs/pr/<branch>` — その名前のブランチに置かれ、PR（base は上流の既定ブランチ）が自動で作られます。案件が base を絞っているときは使えません（`whoami` の `refs` に出ます）。
+  - `git push origin HEAD:refs/for/<base>` — 関所が名前を決めたブランチに置かれ、PR（base=`<base>`）が自動で作られます。
+  - 自動で作られる PR はタイトルが定型です。自分で書きたいときは `sekimore pr create` を使ってください。
+  - 既定ブランチ以外を base にしたいときは、PR を作らずに push してから `sekimore pr create --head <branch> --base <base>`。
 - `main` などへの直接 push、タグ、ブランチ削除は既定で拒否されます。許可されている repo だけ通ります（`sekimore whoami` で確認）。
 - 既に upstream にあるタグは動かせません。公開済みの名前を別のコードに向け直すのではなく、新しい版を切ってください（動かすにはタグ削除と同じ権限が要ります）。
-- 自分の `sekimore/*` の中での force push は関所では止めません。必要な場所では上流のブランチ保護が拒否します。他の人が作業しているかもしれないブランチを書き換えないでください。
+- 自分が push できるブランチの中での force push は関所では止めません。必要な場所では上流のブランチ保護が拒否します。他の人が作業しているかもしれないブランチを書き換えないでください。
 - コミットは AI 専用鍵で自動署名されます。署名の設定を変えないでください。
 - その鍵はこのコンテナではなくゲートウェイ側にあることがあります（git 署名だけを通す socket 経由）。どちらでも `git commit` はそのまま動きます。署名に失敗したら、そう報告してください。`commit.gpgsign` を false にしないでください。
 - 案件によっては署名が**必須**です。関所が pack を読み、署名の無いコミットを含む branch への push を拒否します（`commit <sha> carries no signature`）。該当するときは `sekimore whoami` に出ます。署名を切るのではなく `git commit -S --amend --no-edit` で付け直してください。
@@ -33,7 +36,7 @@
 キーを人間に頼んでください。
 
 ```bash
-sekimore pr create --head sekimore/<topic> --base main --title "…" --body="…"   [pr:create]
+sekimore pr create --head <branch> --base main --title "…" --body="…"          [pr:create]
 sekimore pr update --number N --title "…"                     [pr:create]  自分の PR を編集する
                                                               #   --base は許可された base か改めて検査される
 sekimore pr view --number N                                   [pr:read]  タイトル、本文、ブランチ、件数
@@ -92,8 +95,8 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 ## 標準的な流れ
 
 1. ブランチで作業し、テストを通す。
-2. `git push origin HEAD:refs/heads/sekimore/<topic>`
-3. `sekimore pr create --head sekimore/<topic> --base main --title "…" --body="…"`
+2. `git push origin HEAD:refs/heads/<branch>`（`<branch>` は `sekimore whoami` の `push` に合う名前）
+3. `sekimore pr create --head <branch> --base main --title "…" --body="…"`
 4. `sekimore pr status --number N` で緑になるのを待つ。失敗は `sekimore ci log` で確認。
 5. 権限があり、人間の指示があれば `sekimore pr merge --number N`。タグは許可された repo でのみ `git push origin vX.Y.Z`。
 6. タグを push したら `sekimore release create --tag vX.Y.Z` で Release にする。本文は前のタグからの PR を元に GitHub が書くので、自分で組み立てなくてよい。自分で書くときは `--notes` か `--notes-file`、公開を人間に任せるときは `--draft`。draft を仕上げるのは `sekimore release edit --tag vX.Y.Z --draft false`（`release:publish` が要る）。
@@ -104,8 +107,9 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 |---|---|---|
 | `repository "X" is not in project "P"` | 案件外の repo | 人間に repo の追加を頼む |
 | `X is read-only in project P` | 読み取り専用の repo | push や PR はできない。閲覧のみ |
-| `push to refs/heads/main is not allowed` | 直接 push 不可 | `refs/heads/sekimore/<topic>` に push して PR を作る |
-| `base branch X is not allowed` | その base への PR は不可 | 許可された base（`sekimore whoami`）を使う |
+| `push to refs/heads/main is not allowed` | 直接 push 不可 | `sekimore whoami` の `push` にある名前に push して PR を作る |
+| `base branch X is not allowed` | その base への PR は不可 | 許可された base（`sekimore whoami` の `bases`）を使う |
+| `branch X already exists upstream` | その名前は既に使われている | 別の名前で push する。更新したいなら `refs/heads/<branch>` へ直接 push する |
 | `tag is not allowed for this repository` | タグの push は不可 | 人間にタグを頼む、または許可の追加を頼む |
 | `updating refs/tags/vX is not allowed` | そのタグは既に公開済み | 新しい版を切る。公開済みタグを動かすにはタグ削除と同じ権限が要る |
 | `pushing refs/tags/vX is not allowed: …` | 署名付き tag オブジェクトでない（軽量タグ、または署名なし） | `git tag -s vX -m …` で打ち直して push。dev コンテナは既定で署名するので、それを回り込んで作ったタグということ |
@@ -113,7 +117,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `… arrived as a delta against another commit in the same pack that this relay did not keep …` | この push に 1 MiB を超えるコミットがあるか、コミットの合計が 64 MiB を超えていて、関所が次のコミットを復元して署名を確かめられなかった | `git -c pack.window=0 push …` ですべてのコミットを差分にせず送る。`--no-thin` では直らない |
 | `denied: pr:merge is not allowed by policy` | 権限が無い | 人間にマージを頼む |
 | `denied: token expired` | トークン期限切れ | 自動更新される。続くなら人間に agent-setup の再実行を頼む |
-| `head X is not allowed` | PR の head が `sekimore/*` の外、または fork を指している | 先に関所経由でブランチを push し、それを head にする |
+| `head X is not allowed` | PR の head が `push` の外、または fork を指している | 先に関所経由でブランチを push し、それを head にする |
 | `known_hosts … has no entry for X` | 関所に上流のホスト鍵が無い | **自分では直せない**。docker を動かしているホストで `mise run gw:login`。メッセージをそのまま伝える |
 | `no upstream token for …` | 操作者が関所にログインしていない | 同じく、ホストで `mise run gw:login` |
 | `the secret store is locked …` | トークンはあるが誰も解錠していない | 同じく、ホストで `mise run gw:unlock`。ログインでは解決しない |

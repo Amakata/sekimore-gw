@@ -13,7 +13,7 @@ use crate::config::BootstrapMode;
 use crate::github::GitHub;
 use crate::github::SecurityAlert;
 use crate::policy::SigningMode;
-use crate::policy::{Action, Authorized, Resource};
+use crate::policy::{Action, Authorized, Mode, Resource};
 use crate::ssh::authorized_keys::Added;
 use crate::tokens::TokenRecord;
 
@@ -328,12 +328,39 @@ async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiE
                     .filter(|k| !effective.contains(k))
                     .map(|k| format!("-{k}")),
             );
-            let line = format!("{} ({})", r.full_name, r.mode.as_str());
-            if delta.is_empty() {
-                line
-            } else {
-                format!("{line} {}", delta.join(" "))
+            let mut line = format!("{} ({})", r.full_name, r.mode.as_str());
+            if !delta.is_empty() {
+                line = format!("{line} {}", delta.join(" "));
             }
+            // #158: which branch names this repository accepts, and how each ref spelling names
+            // the branch it creates. Without them an agent has to guess, and the guess that fails
+            // is a push that has already been made. Read-only repositories say nothing: a rule
+            // that cannot apply is a line that gets ignored when it can (the reasoning of #59).
+            if r.mode == Mode::ReadWrite {
+                let bases = if r.bases.is_empty() {
+                    "any".to_string()
+                } else {
+                    r.bases.join(" ")
+                };
+                // `refs/pr/` opens against the default branch, so it is refused where `bases`
+                // restricts which base a pull request may have (#158).
+                let pr_line = if r.bases.is_empty() {
+                    "refs/pr/<branch>   the branch as named, PR against the default branch"
+                } else {
+                    "refs/pr/<branch>   not available here: this repository restricts its bases"
+                };
+                line.push_str(&format!(
+                    "\n  push   {}\n  bases  {bases}\n  refs   {pr_line}\n         refs/for/<base>    {}, PR against <base>",
+                    r.push.join(" "),
+                    ctx.project
+                        .branch
+                        .template
+                        .replace("{branch}", "<base>")
+                        .replace("{base}", "<base>")
+                        .replace("{sha}", "<sha7>"),
+                ));
+            }
+            line
         })
         .collect();
     // #59: said only when it is required. `optional` asks nothing of the agent, and a line about

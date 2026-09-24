@@ -24,15 +24,51 @@ use super::{
     Watchdog,
 };
 use crate::audit::Actor;
+use crate::config::OnExists;
 use crate::github::GhError;
 use crate::pktline::{
     caps_contain, encode_commands, encode_into, parse_receive_pack, validate_ref_name, CommandLine,
     CommandSection, Frame, PktReader, RefUpdate,
 };
-use crate::policy::{Denied, GitAuthorized, Project, SigningMode};
+use crate::policy::{Action, Denied, GitAuthorized, Project, Resource, SigningMode};
 
-/// The agent's branch namespace.
+/// The agent's branch namespace, and the default a branch template renders to.
 pub const SEKIMORE_BRANCH_PREFIX: &str = "sekimore/";
+
+/// Renders a branch template. Unknown placeholders cannot reach here: the template is checked
+/// when the configuration loads, and an unchecked one would put `{brnach}` in a branch name.
+pub fn render_branch(template: &str, branch: &str, base: &str, sha: &str) -> String {
+    let mut out = String::with_capacity(template.len() + branch.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after.find('}') {
+            Some(close) => {
+                match &after[..close] {
+                    "branch" => out.push_str(branch),
+                    "base" => out.push_str(base),
+                    "sha" => out.push_str(short_sha(sha)),
+                    // validate() rejects these, so reaching one means the template was never
+                    // checked. Keeping it literal is what the name would have been anyway.
+                    other => {
+                        out.push('{');
+                        out.push_str(other);
+                        out.push('}');
+                    }
+                }
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push('{');
+                out.push_str(after);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OwnedCommand {
@@ -50,7 +86,10 @@ pub struct PrIntent {
     pub client_ref: String,
     pub upstream_ref: String,
     pub head_branch: String,
-    pub base: String,
+    /// The base the pull request opens against. `None` for `refs/pr/<branch>`, which does not
+    /// name one: it is resolved to the upstream's default branch when the PR is created, the
+    /// step that already talks to the API (#158).
+    pub base: Option<String>,
     pub sha: String,
 }
 
@@ -190,14 +229,28 @@ pub fn plan_push(
             }
             // pr:create + read-write + an allowed base (the Authorized is dropped here and re-obtained in stage E)
             project.authorize_pr(auth.repo(), base)?;
-            let head_branch = format!("{SEKIMORE_BRANCH_PREFIX}{base}-{}", short_sha(u.new));
+            // `refs/for/<base>` carries no branch name of its own, so `{branch}` and `{base}`
+            // are the same string here. The default template reproduces sekimore/<base>-<sha7>.
+            let head_branch = render_branch(&project.branch.template, base, base, u.new);
             let upstream_ref = format!("refs/heads/{head_branch}");
             validate_ref_name(&upstream_ref).map_err(|reason| Denied::InvalidRef {
                 name: upstream_ref.clone(),
                 reason,
             })?;
             claim(&upstream_ref, u.name)?;
-            // Re-pushing the same commit updates the existing branch rather than failing with "already exists".
+            // A template carrying {sha} names a branch only this commit can land on, so finding
+            // it upstream means the same commit is being pushed again — AC-4.5.6 asks that to be
+            // idempotent, and on_exists must not change it. A template without {sha} can collide
+            // with work that has nothing to do with this push, and that is what it answers (#158).
+            if project.branch.on_exists == OnExists::Reject
+                && !project.branch.template.contains("{sha}")
+                && adv.contains_key(&upstream_ref)
+            {
+                return Err(Denied::BranchExists {
+                    name: u.name.to_string(),
+                    branch: head_branch,
+                });
+            }
             let old = adv
                 .get(&upstream_ref)
                 .cloned()
@@ -207,7 +260,74 @@ pub fn plan_push(
                 client_ref: u.name.to_string(),
                 upstream_ref: upstream_ref.clone(),
                 head_branch,
-                base: base.to_string(),
+                base: Some(base.to_string()),
+                sha: u.new.to_string(),
+            });
+            if policy.signing == SigningMode::Required {
+                commit_checks.push(CommitCheck {
+                    name: u.name.to_string(),
+                    sha: u.new.to_string(),
+                });
+            }
+            commands.push(OwnedCommand::Update {
+                old,
+                new: u.new.to_string(),
+                name: upstream_ref,
+            });
+        } else if let Some(branch) = u.refs_pr_branch() {
+            // 0.3.0 (#158): the agent names the branch, and the project's own push globs say
+            // whether that name is one it may use. No base is named here; the pull request opens
+            // against the upstream's default branch, resolved in stage E.
+            if u.is_delete() {
+                return Err(Denied::RefNotAllowed {
+                    name: u.name.to_string(),
+                    reason: "refs/pr/* cannot be deleted",
+                });
+            }
+            // pr:create + read-write.
+            project.authorize(auth.repo(), Resource::Pr, Action::Create)?;
+            // `refs/pr/` opens against the upstream's default branch, which is not knowable here:
+            // planning is offline, and the receive-pack advertisement carries no symref for HEAD.
+            // A project that restricts `bases` would therefore have its base checked only after
+            // the branch had already reached upstream — the one thing this function promises not
+            // to do. So the spelling is refused outright where it could not be honoured, and the
+            // message says which two ways round it there are (#158).
+            if !policy.bases.is_empty() {
+                return Err(Denied::RefNotAllowed {
+                    name: u.name.to_string(),
+                    reason: "refs/pr/* opens against the default branch, which this repository's `bases` restricts; push to refs/for/<base>, or to refs/heads/<branch> and open the PR with `sekimore pr create --base`",
+                });
+            }
+            if !policy.allows_push(branch) {
+                return Err(Denied::RefNotAllowed {
+                    name: u.name.to_string(),
+                    reason: "branch is outside the allowed push namespace (repos[].push, default sekimore/*)",
+                });
+            }
+            let upstream_ref = format!("refs/heads/{branch}");
+            validate_ref_name(&upstream_ref).map_err(|reason| Denied::InvalidRef {
+                name: upstream_ref.clone(),
+                reason,
+            })?;
+            claim(&upstream_ref, u.name)?;
+            // The agent chose this name, so an existing one is someone else's work unless the
+            // project says otherwise — there is no sha here to make it unique.
+            if project.branch.on_exists == OnExists::Reject && adv.contains_key(&upstream_ref) {
+                return Err(Denied::BranchExists {
+                    name: u.name.to_string(),
+                    branch: branch.to_string(),
+                });
+            }
+            let old = adv
+                .get(&upstream_ref)
+                .cloned()
+                .unwrap_or_else(|| zero_like(u.old));
+            rewrites.insert(upstream_ref.clone(), u.name.to_string());
+            prs.push(PrIntent {
+                client_ref: u.name.to_string(),
+                upstream_ref: upstream_ref.clone(),
+                head_branch: branch.to_string(),
+                base: None,
                 sha: u.new.to_string(),
             });
             if policy.signing == SigningMode::Required {
@@ -1126,21 +1246,39 @@ async fn create_pr(
         .await;
         return false;
     };
+    // `refs/pr/<branch>` names no base, so the default branch stands in. Resolved before the
+    // proof is taken, because `bases` has to be checked against the base actually used (#158).
+    let base = match &pr.base {
+        Some(b) => b.clone(),
+        None => match gh.default_branch(auth).await {
+            Ok(b) => b,
+            Err(e) => {
+                say(
+                    io,
+                    &format!("push of {} accepted, but the default branch could not be read, so no PR was opened: {e}", pr.client_ref),
+                )
+                .await;
+                return false;
+            }
+        },
+    };
     // Re-obtain the proof (plan_push already checked it; this can only fail if the policy changed since).
-    let api_auth = match ctx.project.authorize_pr_for(auth, &pr.base) {
+    // For `refs/pr/` this is the first time `bases` sees the base at all, since it was not known
+    // when the push was planned.
+    let api_auth = match ctx.project.authorize_pr_for(auth, &base) {
         Ok(a) => a,
         Err(d) => {
             say(io, &format!("push ok but PR creation refused: {d}")).await;
             return false;
         }
     };
-    let title = format!("[agent] {} → {}", pr.head_branch, pr.base);
+    let title = format!("[agent] {} → {}", pr.head_branch, base);
     let body = format!(
-        "Created via sekimore-relay (`refs/for/{}`). Pushed by an AI agent through the gateway.\n\nCommit: {}",
-        pr.base, pr.sha
+        "Created via sekimore-relay (`{}`). Pushed by an AI agent through the gateway.\n\nCommit: {}",
+        pr.client_ref, pr.sha
     );
     match gh
-        .create_pull_request(&api_auth, &pr.head_branch, &pr.base, &title, &body)
+        .create_pull_request(&api_auth, &pr.head_branch, &base, &title, &body)
         .await
     {
         Ok(r) => {
@@ -1151,14 +1289,14 @@ async fn create_pr(
                 &[
                     ("repo", auth.repo()),
                     ("head", &pr.head_branch),
-                    ("base", &pr.base),
+                    ("base", &base),
                     ("number", &r.number.to_string()),
                 ],
             );
             true
         }
         Err(GhError::Status { status: 422, .. }) => match gh
-            .find_pull_request(&api_auth, &pr.head_branch, &pr.base)
+            .find_pull_request(&api_auth, &pr.head_branch, &base)
             .await
         {
             Ok(Some(existing)) => {
@@ -1926,6 +2064,278 @@ mod tests {
         let data = section_of(lines);
         let sec = parse_receive_pack(&data).unwrap();
         plan_push(&p, &auth, &sec, adv)
+    }
+
+    /// A plan with the project's branch naming and push globs set (#158).
+    fn plan_named(
+        lines: &[String],
+        adv: &HashMap<String, String>,
+        push: &[&str],
+        template: &str,
+        on_exists: OnExists,
+    ) -> Result<PushPlan, Denied> {
+        let mut p = project();
+        p.branch = crate::config::BranchConfig {
+            template: template.to_string(),
+            on_exists,
+        };
+        for r in &mut p.repos {
+            r.push = push.iter().map(|s| s.to_string()).collect();
+            // `refs/pr/` opens against the default branch, so these cases leave the base open;
+            // the one that does not has its own test below.
+            r.bases = vec![];
+        }
+        let auth = p
+            .authorize_git(GitVerb::ReceivePack, "LibOrg/awesome-lib.git")
+            .unwrap();
+        let data = section_of(lines);
+        let sec = parse_receive_pack(&data).unwrap();
+        plan_push(&p, &auth, &sec, adv)
+    }
+
+    const CONV: &[&str] = &["feature/*", "fix/*", "chore/*"];
+
+    /// #158: the agent names the branch, and it is the name that reaches upstream — no prefix
+    /// added, no sha appended.
+    #[test]
+    fn refs_pr_pushes_the_branch_the_agent_named() {
+        let pl = plan_named(
+            &[format!("{ZERO} {SHA} refs/pr/feature/login")],
+            &HashMap::new(),
+            CONV,
+            "sekimore/{branch}-{sha}",
+            OnExists::Reject,
+        )
+        .unwrap();
+        assert_eq!(pl.prs.len(), 1);
+        assert_eq!(pl.prs[0].head_branch, "feature/login");
+        assert_eq!(pl.prs[0].upstream_ref, "refs/heads/feature/login");
+        // No base is named; stage E resolves the default branch.
+        assert_eq!(pl.prs[0].base, None);
+        assert_eq!(
+            pl.rewrites["refs/heads/feature/login"],
+            "refs/pr/feature/login"
+        );
+        assert_eq!(
+            pl.commands[0],
+            OwnedCommand::Update {
+                old: ZERO.into(),
+                new: SHA.into(),
+                name: "refs/heads/feature/login".into()
+            }
+        );
+    }
+
+    /// A slash in the name is not a separator: everything after the prefix is the branch.
+    #[test]
+    fn refs_pr_keeps_every_slash_in_the_name() {
+        let pl = plan_named(
+            &[format!("{ZERO} {SHA} refs/pr/fix/crash/in/parser")],
+            &HashMap::new(),
+            &["fix/*"],
+            "sekimore/{branch}-{sha}",
+            OnExists::Reject,
+        )
+        .unwrap();
+        assert_eq!(pl.prs[0].head_branch, "fix/crash/in/parser");
+    }
+
+    /// The same globs a direct push goes through decide whether the name may be used.
+    #[test]
+    fn refs_pr_refuses_a_name_outside_the_push_globs() {
+        let err = plan_named(
+            &[format!("{ZERO} {SHA} refs/pr/hotfix/x")],
+            &HashMap::new(),
+            CONV,
+            "sekimore/{branch}-{sha}",
+            OnExists::Reject,
+        )
+        .unwrap_err();
+        match err {
+            Denied::RefNotAllowed { name, .. } => assert_eq!(name, "refs/pr/hotfix/x"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn refs_pr_cannot_be_deleted() {
+        let err = plan_named(
+            &[format!("{SHA} {ZERO} refs/pr/feature/login")],
+            &HashMap::new(),
+            CONV,
+            "sekimore/{branch}-{sha}",
+            OnExists::Reject,
+        )
+        .unwrap_err();
+        match err {
+            Denied::RefNotAllowed { reason, .. } => assert!(reason.contains("cannot be deleted")),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The agent chose the name, so an existing one is someone else's work.
+    #[test]
+    fn refs_pr_refuses_a_name_already_upstream() {
+        let adv = HashMap::from([("refs/heads/feature/login".to_string(), SHA2.to_string())]);
+        let err = plan_named(
+            &[format!("{ZERO} {SHA} refs/pr/feature/login")],
+            &adv,
+            CONV,
+            "sekimore/{branch}-{sha}",
+            OnExists::Reject,
+        )
+        .unwrap_err();
+        match err {
+            Denied::BranchExists { branch, .. } => assert_eq!(branch, "feature/login"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn refs_pr_updates_a_name_already_upstream_when_asked_to() {
+        let adv = HashMap::from([("refs/heads/feature/login".to_string(), SHA2.to_string())]);
+        let pl = plan_named(
+            &[format!("{ZERO} {SHA} refs/pr/feature/login")],
+            &adv,
+            CONV,
+            "sekimore/{branch}-{sha}",
+            OnExists::Update,
+        )
+        .unwrap();
+        // The update starts from what is upstream, not from the zero the client sent.
+        assert_eq!(
+            pl.commands[0],
+            OwnedCommand::Update {
+                old: SHA2.into(),
+                new: SHA.into(),
+                name: "refs/heads/feature/login".into()
+            }
+        );
+    }
+
+    /// #158: the collision `claim` exists to stop, reached the new way round — a `refs/pr/`
+    /// name and a direct push naming the same upstream branch. Two updates to one ref leave the
+    /// report-status rewriter unable to say which result belongs to which client ref.
+    #[test]
+    fn a_refs_pr_name_cannot_collide_with_a_direct_push() {
+        let err = plan_named(
+            &[
+                format!("{ZERO} {SHA} refs/pr/feature/login"),
+                format!("{ZERO} {SHA2} refs/heads/feature/login"),
+            ],
+            &HashMap::new(),
+            CONV,
+            "sekimore/{branch}-{sha}",
+            OnExists::Reject,
+        )
+        .unwrap_err();
+        match err {
+            Denied::RefNotAllowed { reason, .. } => {
+                assert!(reason.contains("same upstream branch"), "{reason}")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A name that git would refuse as a ref must not reach upstream. `..` is caught when the
+    /// command section is parsed, the rest when the rewritten name is validated; either way the
+    /// push is refused, which is what matters.
+    #[test]
+    fn refs_pr_refuses_a_name_git_would_not_accept() {
+        for bad in ["feature/..x", "feature/x.lock", "feature/.hidden"] {
+            let data = section_of(&[format!("{ZERO} {SHA} refs/pr/{bad}")]);
+            let refused = match parse_receive_pack(&data) {
+                Err(_) => true,
+                Ok(sec) => {
+                    let mut p = project();
+                    for r in &mut p.repos {
+                        r.push = CONV.iter().map(|s| s.to_string()).collect();
+                        r.bases = vec![];
+                    }
+                    let auth = p
+                        .authorize_git(GitVerb::ReceivePack, "LibOrg/awesome-lib.git")
+                        .unwrap();
+                    plan_push(&p, &auth, &sec, &HashMap::new()).is_err()
+                }
+            };
+            assert!(refused, "{bad} was not refused");
+        }
+    }
+
+    /// #158: `refs/pr/` cannot tell, while planning, which base it will open against — the
+    /// advertisement carries no symref for HEAD and planning is offline. A repository that
+    /// restricts `bases` would have that check land only after the branch reached upstream, so
+    /// the spelling is refused before anything is sent.
+    #[test]
+    fn refs_pr_is_refused_when_bases_is_restricted() {
+        let mut p = project();
+        for r in &mut p.repos {
+            r.push = vec!["feature/*".into()];
+            r.bases = vec!["develop".into()];
+        }
+        let auth = p
+            .authorize_git(GitVerb::ReceivePack, "LibOrg/awesome-lib.git")
+            .unwrap();
+        let data = section_of(&[format!("{ZERO} {SHA} refs/pr/feature/login")]);
+        let sec = parse_receive_pack(&data).unwrap();
+        match plan_push(&p, &auth, &sec, &HashMap::new()).unwrap_err() {
+            Denied::RefNotAllowed { reason, .. } => assert!(reason.contains("bases"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// #158: a project that does not want the string `sekimore` in its history can say so.
+    #[test]
+    fn refs_for_follows_the_projects_template() {
+        let pl = plan_named(
+            &[format!("{ZERO} {SHA} refs/for/main")],
+            &HashMap::new(),
+            &["agent/*"],
+            "agent/{base}-{sha}",
+            OnExists::Reject,
+        )
+        .unwrap();
+        assert_eq!(pl.prs[0].head_branch, "agent/main-abcdef1");
+        assert_eq!(pl.prs[0].upstream_ref, "refs/heads/agent/main-abcdef1");
+        assert_eq!(pl.prs[0].base.as_deref(), Some("main"));
+    }
+
+    /// A template with no `{sha}` names a branch that is not unique to this commit, so an
+    /// existing one is refused rather than updated.
+    #[test]
+    fn a_template_without_a_sha_refuses_a_branch_already_upstream() {
+        let adv = HashMap::from([("refs/heads/agent/main".to_string(), SHA2.to_string())]);
+        let err = plan_named(
+            &[format!("{ZERO} {SHA} refs/for/main")],
+            &adv,
+            &["agent/*"],
+            "agent/{branch}",
+            OnExists::Reject,
+        )
+        .unwrap_err();
+        match err {
+            Denied::BranchExists { branch, .. } => assert_eq!(branch, "agent/main"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// AC-4.5.6 asks that re-pushing the same commit be idempotent. A `{sha}` template names a
+    /// branch only that commit can land on, so `on_exists: reject` must not break it.
+    #[test]
+    fn a_sha_template_still_repushes_the_same_commit() {
+        let adv = HashMap::from([(
+            "refs/heads/sekimore/main-abcdef1".to_string(),
+            SHA.to_string(),
+        )]);
+        let pl = plan_named(
+            &[format!("{ZERO} {SHA} refs/for/main")],
+            &adv,
+            &["sekimore/*"],
+            "sekimore/{branch}-{sha}",
+            OnExists::Reject,
+        )
+        .unwrap();
+        assert_eq!(pl.prs[0].head_branch, "sekimore/main-abcdef1");
     }
 
     #[test]

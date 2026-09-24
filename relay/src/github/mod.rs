@@ -767,6 +767,24 @@ impl GitHub {
         }
     }
 
+    /// 0.3.0 (#158): the repository's default branch, for `refs/pr/<branch>`, which names no base.
+    ///
+    /// Read at pull-request time rather than when the push is planned: planning is offline and
+    /// synchronous, and creating the pull request already calls the API.
+    pub async fn default_branch(
+        &self,
+        auth: &crate::policy::GitAuthorized<'_>,
+    ) -> Result<String, GhError> {
+        let r: Value = self
+            .rest("GET", &format!("/repos/{}", auth.repo()), None)
+            .await?;
+        r.get("default_branch")
+            .and_then(Value::as_str)
+            .filter(|b| !b.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| GhError::Parse(format!("no default_branch for {}", auth.repo())))
+    }
+
     /// Resolve a ref (tag name / branch name / SHA) to a SHA. `GET /repos/{repo}/commits/{ref}` accepts all three forms.
     async fn resolve_sha(&self, repo: &str, git_ref: &str) -> Result<String, GhError> {
         let c: Value = self

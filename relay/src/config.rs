@@ -327,6 +327,14 @@ pub struct ProjectConfig {
     /// that. Presence of a signature is what is checked, not validity
     #[serde(default)]
     pub signing: SigningMode,
+    /// 0.3.0 (#158): how the relay names the branch it creates for `refs/for/<base>`, and what it
+    /// does when that name is already upstream.
+    ///
+    /// The name used to be `sekimore/<base>-<sha7>` with no way to change it, which a project
+    /// whose branches follow its own convention cannot use, and which puts the string `sekimore`
+    /// in a history that has no other reason to carry it.
+    #[serde(default)]
+    pub branch: BranchConfig,
     /// 0.2.7: the Projects v2 boards this project may touch.
     ///
     /// A board is named the way it appears in its URL — `github.com/orgs/<org>/projects/<number>`
@@ -338,6 +346,108 @@ pub struct ProjectConfig {
     /// would reach any board the upstream token can see, whether or not it belongs to this project.
     #[serde(default)]
     pub boards: Vec<BoardRef>,
+}
+
+/// What the relay does when the branch it is about to create is already upstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnExists {
+    /// Refuse the push and say which branch is in the way
+    #[default]
+    Reject,
+    /// Update it, the way a push to an existing branch would
+    Update,
+}
+
+impl OnExists {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OnExists::Reject => "reject",
+            OnExists::Update => "update",
+        }
+    }
+}
+
+/// 0.3.0 (#158): how `refs/for/<base>` names the branch it creates.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BranchConfig {
+    /// `{branch}`, `{base}` and `{sha}` are substituted; anything else is an error at load time.
+    ///
+    /// The default reproduces what the relay did before this was configurable. `{branch}` and
+    /// `{base}` are the same string on this path — `refs/for/<base>` carries no branch name of
+    /// its own — and both are accepted so a template reads the way its author meant it.
+    #[serde(default = "d_branch_template")]
+    pub template: String,
+    /// What to do when the rendered name is already upstream. A template without `{sha}` can
+    /// collide with work that is not this push, so refusing is the default.
+    #[serde(default)]
+    pub on_exists: OnExists,
+}
+
+fn d_branch_template() -> String {
+    "sekimore/{branch}-{sha}".to_string()
+}
+
+impl Default for BranchConfig {
+    fn default() -> Self {
+        BranchConfig {
+            template: d_branch_template(),
+            on_exists: OnExists::default(),
+        }
+    }
+}
+
+/// The placeholders a branch template may use.
+pub const BRANCH_PLACEHOLDERS: &[&str] = &["branch", "base", "sha"];
+
+impl BranchConfig {
+    /// Rejects a template whose placeholders are not ones this relay substitutes.
+    ///
+    /// An unknown placeholder is a typo that would otherwise reach a branch name literally —
+    /// `{brnach}` would push a branch called `{brnach}-abc1234` — and a lone `{` or `}` means the
+    /// author meant something the renderer will not do. Both are found at load time, where the
+    /// person who wrote the file is still looking, rather than at the first push.
+    pub fn validate(&self) -> Result<(), String> {
+        let mut rest = self.template.as_str();
+        let mut saw_any = false;
+        while let Some(open) = rest.find('{') {
+            let after = &rest[open + 1..];
+            let close = after.find('}').ok_or_else(|| {
+                format!(
+                    "branch template {:?} has a '{{' with no '}}'",
+                    self.template
+                )
+            })?;
+            let name = &after[..close];
+            if !BRANCH_PLACEHOLDERS.contains(&name) {
+                return Err(format!(
+                    "branch template {:?} uses unknown placeholder {{{name}}} (known: {})",
+                    self.template,
+                    BRANCH_PLACEHOLDERS
+                        .iter()
+                        .map(|p| format!("{{{p}}}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ));
+            }
+            saw_any = true;
+            rest = &after[close + 1..];
+        }
+        if rest.contains('}') {
+            return Err(format!(
+                "branch template {:?} has a '}}' with no '{{'",
+                self.template
+            ));
+        }
+        if !saw_any {
+            return Err(format!(
+                "branch template {:?} has no placeholder, so every push would name the same branch",
+                self.template
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// One Projects v2 board, written the way its URL reads.
@@ -943,6 +1053,13 @@ impl Loaded {
         for b in &relay.project.boards {
             b.validate().map_err(ConfigError::Invalid)?;
         }
+        // A template is checked here rather than at the first push, so a typo is found by the
+        // person who just wrote it.
+        relay
+            .project
+            .branch
+            .validate()
+            .map_err(ConfigError::Invalid)?;
         if let Some(sk) = &relay.signing_key {
             sk.validate()?;
         }
@@ -1080,6 +1197,7 @@ impl Loaded {
         )
         .map_err(ConfigError::Invalid)?;
         project.set_default_host(&domain);
+        project.branch = pc.branch.clone();
         if project.name.trim().is_empty() {
             return Err(ConfigError::Invalid("project.name is required".into()));
         }
@@ -1429,6 +1547,49 @@ mod tests {
 
     fn p(text: &str) -> Result<Loaded, ConfigError> {
         parse(Path::new("test.yml"), text)
+    }
+
+    /// #158: a template that would put an unsubstituted placeholder into a branch name is
+    /// refused where the person who wrote it is still looking, not at the first push.
+    #[test]
+    fn a_bad_branch_template_stops_the_config_from_loading() {
+        let body = |branch: &str| {
+            format!(
+                r#"
+domain_handlers:
+  github.com: {{ handler: github }}
+relay:
+  project:
+    name: case-branch
+{branch}
+    repos:
+      - {{ name: Org/App, mode: read-write, bases: [main] }}
+"#
+            )
+        };
+        let ok = p(&body(
+            "    branch: { template: \"agent/{base}-{sha}\", on_exists: update }",
+        ))
+        .expect("a good template parses")
+        .resolve()
+        .expect("and resolves");
+        assert_eq!(ok.relay.project.branch.template, "agent/{base}-{sha}");
+        assert_eq!(ok.relay.project.branch.on_exists, OnExists::Update);
+
+        for bad in [
+            "    branch: { template: \"x/{nope}\" }",
+            "    branch: { template: \"x/{branch\" }",
+            "    branch: { template: \"x/fixed\" }",
+        ] {
+            assert!(
+                p(&body(bad)).and_then(|l| l.resolve()).is_err(),
+                "should reject {bad}"
+            );
+        }
+
+        // Omitting the block keeps what the relay did before it was configurable
+        let none = p(&body("")).expect("no branch block").resolve().unwrap();
+        assert_eq!(none.relay.project.branch, BranchConfig::default());
     }
 
     /// 0.2.7: a Projects v2 board is written the way its URL reads, because the node id the API
@@ -2270,5 +2431,56 @@ mod domain_handler_strictness {
     fn the_top_level_stays_lenient() {
         // Python owns keys the relay has never heard of; those must keep working.
         parse(&format!("{BASE}something_python_added: 1\n")).expect("top level");
+    }
+
+    // ---- #158: branch naming ----
+
+    fn tmpl(t: &str) -> Result<(), String> {
+        BranchConfig {
+            template: t.to_string(),
+            on_exists: OnExists::Reject,
+        }
+        .validate()
+    }
+
+    #[test]
+    fn the_default_template_is_what_the_relay_did_before() {
+        let b = BranchConfig::default();
+        assert_eq!(b.template, "sekimore/{branch}-{sha}");
+        assert_eq!(b.on_exists, OnExists::Reject);
+        assert!(b.validate().is_ok());
+    }
+
+    #[test]
+    fn a_template_may_use_the_placeholders_the_relay_substitutes() {
+        for t in [
+            "sekimore/{branch}-{sha}",
+            "agent/{base}-{sha}",
+            "{branch}",
+            "ai/{base}/{branch}-{sha}",
+        ] {
+            assert!(tmpl(t).is_ok(), "{t}");
+        }
+    }
+
+    /// A typo would otherwise reach a branch name literally, and only at the first push.
+    #[test]
+    fn a_misspelt_placeholder_is_refused_when_the_file_loads() {
+        let e = tmpl("sekimore/{brnach}-{sha}").unwrap_err();
+        assert!(e.contains("{brnach}"), "{e}");
+        assert!(e.contains("{branch}"), "{e}");
+    }
+
+    #[test]
+    fn an_unbalanced_brace_is_refused() {
+        assert!(tmpl("sekimore/{branch-{sha}").is_err());
+        assert!(tmpl("sekimore/branch}").is_err());
+    }
+
+    /// Without one, every push would name the same branch.
+    #[test]
+    fn a_template_with_no_placeholder_is_refused() {
+        let e = tmpl("sekimore/work").unwrap_err();
+        assert!(e.contains("no placeholder"), "{e}");
     }
 }

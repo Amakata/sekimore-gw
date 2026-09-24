@@ -72,7 +72,10 @@ fn the_guide_is_available_in_both_languages() {
     // Both guides describe the same commands, so an agent gets the same rules either way.
     for needle in [
         "refs/for/",
-        "refs/heads/sekimore/",
+        // #158: the branch namespace is the project's to choose, so the guide names no
+        // particular one. What both languages must still describe is the spelling itself.
+        "refs/heads/<branch>",
+        "refs/pr/",
         "sekimore whoami",
         "sekimore pr create",
         "sekimore ci log",

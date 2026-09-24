@@ -223,6 +223,14 @@ impl<'a> RefUpdate<'a> {
             .strip_prefix("refs/for/")
             .filter(|b| !b.is_empty())
     }
+    /// 0.3.0 (#158): the branch name in `refs/pr/<branch>`.
+    ///
+    /// Everything after the prefix is the name. Nothing is split out of it, so a name containing
+    /// a slash is not ambiguous — which is why the base is not carried here: every character git
+    /// would accept as a separator is one it also accepts inside a branch name.
+    pub fn refs_pr_branch(&self) -> Option<&'a str> {
+        self.name.strip_prefix("refs/pr/").filter(|b| !b.is_empty())
+    }
     pub fn is_delete(&self) -> bool {
         self.new.bytes().all(|b| b == b'0')
     }

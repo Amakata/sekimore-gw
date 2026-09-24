@@ -162,7 +162,9 @@ database_path: "/data/security_gateway.db"
 #     repos:
 #       - name: Org/Repo
 #         mode: read-write        # read-only | read-write
-#         bases: [main]           # branches allowed as a PR base. Direct pushes go to sekimore/* only, by default
+#         bases: [main]           # branches allowed as a PR base (omit = any). Direct pushes go to sekimore/* only, by default
+#         # push: ["feature/*", "fix/*", "chore/*"]   # 0.3.0+ branch name globs this repo accepts, for a direct push
+#                                   # and for refs/pr/<branch>. Replaces the default sekimore/*
 #     # upstreams:                # 0.2.1+ a per-upstream layer between the project defaults and the repos. permissions are a diff; push/tags/delete are that upstream's defaults
 #     #   ghe.example.com:
 #     #     permissions: { allow: [pr:create], deny: [pr:merge] }
@@ -176,6 +178,11 @@ database_path: "/data/security_gateway.db"
 #     #   - { user: someone, number: 1 }  #   github.com/users/someone/projects/1
 #     # Omitted or empty refuses every Projects operation: a board's node id is opaque and says nothing
 #     # about its owner, so without this list any board the upstream token can see would be reachable.
+#     # branch:                                 # 0.3.0+ how refs/for/<base> names the branch it creates
+#     #   template: "sekimore/{branch}-{sha}"   #   {branch} {base} {sha} are substituted. This is the default;
+#     #                                         #   a project that does not want `sekimore` in its history changes it
+#     #   on_exists: reject                     #   reject | update, when that name is already upstream. A template
+#     #                                         #   with no {sha} can collide with unrelated work, so reject is default
 #     tags: []                                  # default globs of tags that may be pushed (empty = denied). Override per repo with repos[].tags
 #     delete: false                             # default for deleting branches and tags, and for moving a tag that is
 #                                               # already upstream — the two leave the same result. Override with repos[].delete

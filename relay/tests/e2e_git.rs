@@ -346,6 +346,93 @@ fn clone(e: &E2e, repo: &str, name: &str) -> PathBuf {
     work
 }
 
+/// #158: a project whose branches follow its own convention. `refs/pr/<branch>` puts the commits
+/// on exactly the branch the agent named, and the pull request opens against the default branch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refs_pr_push_uses_the_name_the_agent_chose() {
+    require_tools!();
+    let e = setup_tuned(&["pr:create"], |p| {
+        for r in &mut p.repos {
+            r.push = vec!["feature/*".into(), "fix/*".into()];
+            // `refs/pr/` opens against the default branch, so the project leaves the base open
+            r.bases = vec![];
+        }
+    })
+    .await;
+    seed_main(&e, "LibOrg/awesome-lib");
+    let work = clone(&e, "LibOrg/awesome-lib", "work");
+
+    let sha = e.commit_file(&work, "feature.txt", b"feature\n");
+    let o = e.git(&work, &["push", "origin", "HEAD:refs/pr/feature/login"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "push failed:\n{err}");
+
+    // The name reaches upstream unchanged: no prefix, no sha appended.
+    assert_eq!(
+        e.bare_ref("LibOrg/awesome-lib", "refs/heads/feature/login")
+            .as_deref(),
+        Some(sha.as_str()),
+        "{err}"
+    );
+
+    // The pull request opens from that branch, against the default branch the relay read.
+    let rec = common::recorded(&e.recorder);
+    let pulls: Vec<_> = rec
+        .iter()
+        .filter(|c| c.path.ends_with("/pulls") && c.body.get("head").is_some())
+        .collect();
+    assert_eq!(pulls.len(), 1, "{rec:?}");
+    assert_eq!(pulls[0].body["head"], "feature/login");
+    assert_eq!(pulls[0].body["base"], "main");
+
+    // A name outside the project's globs is refused, and says so.
+    let sha2 = e.commit_file(&work, "other.txt", b"other\n");
+    let o = e.git(&work, &["push", "origin", "HEAD:refs/pr/hotfix/x"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "a name outside push must be refused");
+    assert!(err.contains("refs/pr/hotfix/x"), "{err}");
+    assert!(
+        e.bare_ref("LibOrg/awesome-lib", "refs/heads/hotfix/x")
+            .is_none(),
+        "nothing may reach upstream when the name is refused"
+    );
+    let _ = sha2;
+}
+
+/// #158: `refs/pr/` opens against the default branch, which the relay cannot learn before the
+/// push reaches upstream. A repository that restricts `bases` would otherwise have its base
+/// checked only after the branch was already written, so the spelling is refused up front —
+/// nothing reaches upstream, which is what `plan_push` promises.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refs_pr_is_refused_where_bases_would_be_checked_too_late() {
+    require_tools!();
+    let e = setup_tuned(&["pr:create"], |p| {
+        for r in &mut p.repos {
+            r.push = vec!["feature/*".into()];
+            r.bases = vec!["develop".into()];
+        }
+    })
+    .await;
+    seed_main(&e, "LibOrg/awesome-lib");
+    let work = clone(&e, "LibOrg/awesome-lib", "work");
+    e.commit_file(&work, "f.txt", b"f\n");
+
+    let o = e.git(&work, &["push", "origin", "HEAD:refs/pr/feature/login"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "must be refused:\n{err}");
+    assert!(err.contains("bases"), "{err}");
+    // The refusal happens before the upstream is touched, unlike a base rejected in stage E.
+    assert!(
+        !err.contains("push ok"),
+        "the branch must not reach upstream first:\n{err}"
+    );
+    assert!(
+        e.bare_ref("LibOrg/awesome-lib", "refs/heads/feature/login")
+            .is_none(),
+        "nothing may reach upstream"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn clone_then_refs_for_push_creates_branch_and_pr() {
     require_tools!();

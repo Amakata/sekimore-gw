@@ -175,6 +175,19 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
             ]}),
         );
     }
+    // #158: the repository itself, read by `refs/pr/<branch>` to learn the base it opens against.
+    // The path has exactly two segments after /repos/, which is what tells it apart from the
+    // sub-resources below.
+    if method == "GET" {
+        if let Some(rest) = p.split_once("/repos/").map(|(_, r)| r) {
+            if rest.split('/').count() == 2 {
+                return (
+                    StatusCode::OK,
+                    serde_json::json!({"default_branch": "main"}),
+                );
+            }
+        }
+    }
     if method == "POST" && p.ends_with("/pulls") {
         if body.get("head").and_then(|h| h.as_str()) == Some("sekimore/main-dup0000") {
             return (

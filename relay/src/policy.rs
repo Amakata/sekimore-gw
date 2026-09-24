@@ -421,6 +421,8 @@ pub struct Project {
     denies: HashSet<(Resource, Action)>,
     /// 0.2.0: the upstream domain a repo without a `host`, or a bare `Org/Repo`, refers to. Empty means there is only one upstream
     default_host: String,
+    /// 0.3.0 (#158): how `refs/for/<base>` names the branch it creates
+    pub branch: crate::config::BranchConfig,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -455,6 +457,12 @@ pub enum Denied {
     RefNotAllowed {
         name: String,
         reason: &'static str,
+    },
+    /// 0.3.0 (#158): the branch this push would create is already upstream, and the project
+    /// asked to be told rather than to have it updated
+    BranchExists {
+        name: String,
+        branch: String,
     },
     /// Deletion is denied by default
     DeleteNotAllowed {
@@ -507,6 +515,10 @@ impl fmt::Display for Denied {
             Denied::RefNotAllowed { name, reason } => {
                 write!(f, "push to {name} is not allowed: {reason}")
             }
+            Denied::BranchExists { name, branch } => write!(
+                f,
+                "push to {name} is not allowed: branch {branch} already exists upstream (project.branch.on_exists is reject); push a different name, or update it directly"
+            ),
             Denied::DeleteNotAllowed { name } => {
                 write!(
                     f,
@@ -550,6 +562,7 @@ impl Denied {
             Denied::NotPermitted { .. } => "not_permitted",
             Denied::UnsupportedCommand { .. } => "unsupported_command",
             Denied::RefNotAllowed { .. } => "ref_not_allowed",
+            Denied::BranchExists { .. } => "branch_exists",
             Denied::DeleteNotAllowed { .. } => "delete_not_allowed",
             Denied::TagUpdateNotAllowed { .. } => "tag_update_not_allowed",
             Denied::TagNotSigned { .. } => "tag_not_signed",
@@ -650,6 +663,7 @@ impl Project {
             perms: HashSet::new(),
             denies: HashSet::new(),
             default_host: String::new(),
+            branch: crate::config::BranchConfig::default(),
         }
     }
 
