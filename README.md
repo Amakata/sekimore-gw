@@ -56,8 +56,8 @@ repo:    read                           search:   read
 
 The relay grants only the permissions that the configuration lists. When `permissions` is not
 set, every permission is denied. Consequential permissions such as `pr:merge`, `ci:rerun`,
-`ci:dispatch` and `security:dismiss` therefore stay denied until the operator adds them. Each
-repository can also add or remove permissions for itself.
+`ci:dispatch` and `security:dismiss` therefore stay denied until the operator adds them. The
+operator can also add or remove permissions per repository.
 
 The `sekimore` command provides all of these operations. `sekimore guide` prints the usage guide
 written for the agent.
