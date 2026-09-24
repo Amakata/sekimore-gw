@@ -7,80 +7,65 @@
 [![Docker Publish](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-**AI Agent Security Gateway** - DNS/Firewall/Proxy for Docker
+**A gateway that keeps the keys, so the agent's environment does not have to.**
 
-A security gateway designed for AI agent environments running in Docker. Provides DNS-based access control, iptables/ipset firewall management, and optional Squid proxy integration.
-
-## Features
-
-### Core Security
-
-- **DNS-based Access Control**: Dynamic domain filtering with whitelist/blacklist support
-- **Multi-layer Firewall**: Container-side and host-side iptables rules for defense in depth
-- **DNS Exfiltration Protection**: Blocks unauthorized DNS queries from agents
-- **Static IP Filtering**: CIDR and IP range support for additional access control
-
-### Dynamic Configuration
-
-- **Docker API Integration**: Auto-detects network configuration using Docker API
-- **No Static Subnets**: Supports multi-organization deployments with dynamic subnet assignment
-- **Automatic Discovery**: AI agents discover gateway via ARP-based subnet scanning
-
-### Monitoring & Management
-
-- **Web UI**: Real-time monitoring dashboard on port 8080
-- **Packet Logging**: NFLOG-based firewall logging with ulogd2
-- **SQLite Database**: Persistent storage for access logs and statistics (WAL, indexed; records are kept until an operator prunes them)
-- **Maintenance CLI** (0.2.3): `python -m src.maint db-stats | db-prune --before-days N --yes | db-reset --yes | db-vacuum` inside the gateway container. Safe while the gateway is running. The relay audit (`/data/relay/audit.jsonl`) is separate and untouched. Dev Containers setups expose these as `mise run gw:db-stats` / `gw:db-prune` / `gw:db-reset`
-- **Localized UI** (0.2.4): the Web UI ships in English and Japanese, chosen per viewer. See [Localization](#localization-024)
-
-### Optional Components
-
-- **Git / GitHub API Relay (sekimore-relay)**: Opt-in, in-container relay that lets AI agents use `git@github.com:…` and a small GitHub API CLI under a per-project policy, without ever holding upstream credentials. See [relay/README.md](relay/README.md)
-- **Squid Proxy**: HTTP/HTTPS caching proxy with upstream proxy support
-- **Corporate Proxy Integration**: Transparent proxy chaining for enterprise environments
+Everything leaving the container an AI agent runs in comes through here. **The agent holds no
+upstream credential at all** — the keys and tokens stay on this side, and what gets through is
+git and the GitHub operations the project allows, and nothing else.
 
 ## Quick Start
 
-### Prerequisites
-
-- Docker 20.10+
-- Docker Compose 2.0+
-- Linux host with iptables support
-
-### Installation
-
-1. Clone the repository:
-
 ```bash
-git clone https://github.com/YOUR_USERNAME/sekimore-gw.git
-cd sekimore-gw
+git clone https://github.com/Amakata/sekimore-gw.git && cd sekimore-gw
+cp config/config.sample.yml config/config.yml    # list the domains you allow
+docker compose up -d                             # http://localhost:8080 for the dashboard
 ```
 
-2. Copy the example configuration:
+Needs Docker 20.10+, Docker Compose 2.0+, and a Linux host where iptables works.
+Behind an upstream proxy that wants a password, `cp .env.example .env` first and edit it.
 
-```bash
-cp config/config.sample.yml config/config.yml
-```
+**For a DevContainer, copy `examples/sgw-sample/` from
+[sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) instead** — it has
+the gateway and dev containers together with the host-side tasks, already wired up.
 
-3. (Optional) Create `.env` file if you need upstream proxy authentication:
+## What it gets you
 
-```bash
-cp .env.example .env
-# Edit .env and uncomment proxy authentication settings
-```
+| | |
+|---|---|
+| **git without giving the agent a key** | It holds a disposable key only this gateway accepts. What reaches GitHub is what the gateway sent on with the operator's key |
+| **GitHub actions allowed one at a time** | `pr:merge` refused, `issue:create` allowed, and so on. Nothing reaches a repository outside the project |
+| **Somewhere to go, and nowhere else** | An unlisted domain does not resolve, and naming its IP directly gets dropped by the firewall |
+| **A cap on what can leave** | The gateway counts the bytes sent to the destinations it handles, and cuts the connection when they pass the limit |
+| **A record of what happened** | Not only refusals: what went through is in the audit log too |
+| **Signing, done for the agent** | The signing key is the gateway's; the agent can ask for a signature and nothing more. Commits come out Verified |
 
-4. Edit `config/config.yml` to configure allowed/blocked domains and IPs.
+For a DevContainer, the dev side of this is
+[sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base).
 
-5. Start the gateway:
+## How it works
 
-```bash
-docker-compose up -d
-```
+Four layers, built from one file (`config.yml`), because **fixing only one of them leaves the
+others as a way around it**.
 
-6. Access the Web UI at `http://localhost:8080`
+| Layer | What it decides |
+|---|---|
+| **DNS** (:53) | Returns a real IP only for an allowed domain, and admits the traffic at the same time. Domains the gateway handles resolve to the gateway itself |
+| **Firewall** | iptables / ipset. Only the destinations and ports DNS admitted. Naming an IP directly ends here |
+| **Squid** (:3128) | Closes the way round through a proxy. Squid resolves names on its own, so DNS alone is not enough |
+| **The relay** (sekimore-relay) | git (SSH :22), the GitHub API (:8420) and other HTTPS (:443). **The only part holding an upstream credential** |
 
-### Example: AI Agent Setup
+See [Architecture](#architecture), and [relay/README.md](relay/README.md) for the relay.
+
+## Also in here
+
+- **Web UI** (:8080): live traffic, in English and Japanese, per viewer
+- **Packet log**: NFLOG through ulogd2
+- **SQLite**: access log and statistics (WAL + indexes); pruned with `mise run gw:db-prune` and friends.
+  The relay's audit log (`/data/relay/audit.jsonl`) is kept separately and none of those touch it
+- **Squid / corporate proxy**: works behind an upstream proxy
+- **No fixed subnet**: the Docker API reports the layout, so a changing allocation is fine
+
+## Example: AI Agent Setup
 
 Uncomment the `ai-agent` service in `docker-compose.yml` and start:
 
