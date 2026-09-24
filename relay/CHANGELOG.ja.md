@@ -5,6 +5,16 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.33（2026-09-24）
+
+### Enhancement
+
+- `pr comments` がレビューと、そのとき出された行コメントをまとめて表示する。返信できるものには id が付く (#165)
+- `pr reply --comment-id C` が行コメントにその場で返信する。権限は `pr:comment` (#165)
+- `pr review --comment path:line:body` が差分の行に指摘を残せる。JSON で渡す `--comments-file` もある (#167)
+- `ci dispatch --workflow f.yml --ref main` が `workflow_dispatch` の run を起動する。新しい `ci:dispatch` 権限が要る (既定オフ) (#168)
+- `pr create --draft` と `pr ready` / `pr draft`。誰かに見てもらう前に CI だけ回せる (#169)
+
 ## 0.2.32（2026-09-24）
 
 ### Enhancement
