@@ -1,4 +1,10 @@
-"""The src.maint operations command (inspect, prune, and reset the DB)."""
+"""The src.maint operations command (inspect, prune, and reset the DB).
+
+Every `maint.main` call here pins `lang="en"`. Its output has been localized since 0.2.4, and
+without a language the CLI takes one from the environment (`SEKIMORE_LANG`, then `LC_ALL`,
+`LC_MESSAGES`, `LANG`), so assertions on English prose passed only where none of those said
+otherwise — CI, but not a dev container that sets `SEKIMORE_LANG=ja` (#160).
+"""
 
 import sqlite3
 import time
@@ -57,10 +63,10 @@ def describe_db_stats():
     def it_prints_and_returns_zero(tmp_path, capsys):
         db = tmp_path / "gw.db"
         _make_db(str(db), rows_per_table=2)
-        assert maint.main(["--db", str(db), "db-stats"]) == 0
+        assert maint.main(["--db", str(db), "db-stats"], lang="en") == 0
         out = capsys.readouterr().out
         assert "dns_queries" in out and "2 rows" in out
-        assert maint.main(["--db", str(db), "db-stats", "--json"]) == 0
+        assert maint.main(["--db", str(db), "db-stats", "--json"], lang="en") == 0
         assert '"rows": 2' in capsys.readouterr().out
 
 
@@ -84,15 +90,15 @@ def describe_db_prune_and_reset():
     def it_requires_yes_for_destructive_commands(tmp_path, capsys):
         db = tmp_path / "gw.db"
         _make_db(str(db), rows_per_table=1)
-        assert maint.main(["--db", str(db), "db-prune", "--before-days", "1"]) == 2
+        assert maint.main(["--db", str(db), "db-prune", "--before-days", "1"], lang="en") == 2
         assert "--yes" in capsys.readouterr().out
-        assert maint.main(["--db", str(db), "db-reset"]) == 2
+        assert maint.main(["--db", str(db), "db-reset"], lang="en") == 2
         assert maint.stats(str(db))["tables"]["dns_queries"]["rows"] == 1  # Nothing was deleted
 
     def it_resets_everything_and_vacuums(tmp_path, capsys):
         db = tmp_path / "gw.db"
         _make_db(str(db), rows_per_table=50)
-        assert maint.main(["--db", str(db), "db-reset", "--yes"]) == 0
+        assert maint.main(["--db", str(db), "db-reset", "--yes"], lang="en") == 0
         out = capsys.readouterr().out
         assert "dns_queries" in out and "deleted 50 rows" in out and "vacuumed" in out
         s = maint.stats(str(db))
@@ -101,7 +107,7 @@ def describe_db_prune_and_reset():
         assert "idx_dns_timestamp" in s["tables"]["dns_queries"]["indexes"]
 
     def it_fails_cleanly_when_the_db_is_missing(tmp_path):
-        assert maint.main(["--db", str(tmp_path / "none.db"), "db-reset", "--yes"]) == 1
+        assert maint.main(["--db", str(tmp_path / "none.db"), "db-reset", "--yes"], lang="en") == 1
 
     def it_reads_the_db_path_from_config(tmp_path):
         cfg = tmp_path / "config.yml"
