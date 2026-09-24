@@ -5,6 +5,15 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.35（2026-09-24）
+
+### Enhancement
+
+- `pr files` が PR の触ったファイルを並べ、`pr diff --path <path>` がその1つを GitHub の行番号付きで表示する (#173)
+- その番号が `pr review --comment <path>:<line>:<body>` の `line`。読んでから行に指摘を置ける (#173)
+- 削除された行に番号は無く、コメントできない。長いファイルは `ci log` と同じく `--window` / `--before` で送る (#173)
+- どちらも `pr:read` を使う。新しい権限は要らない (#173)
+
 ## 0.2.34（2026-09-24）
 
 ### Enhancement

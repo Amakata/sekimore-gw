@@ -13,6 +13,12 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.35 (2026-09-24)
+
+### Enhancement
+
+- the agent guide shipped in the image documents `pr files` and `pr diff`, which read a pull request's diff under the existing `pr:read` (#173)
+
 ## 0.2.34 (2026-09-24)
 
 ### Enhancement

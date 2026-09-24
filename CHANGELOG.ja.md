@@ -12,6 +12,12 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.35（2026-09-24）
+
+### Enhancement
+
+- イメージに入るエージェントガイドに `pr files` と `pr diff` の説明を足した。どちらも既存の `pr:read` で PR の差分を読む (#173)
+
 ## 0.2.34（2026-09-24）
 
 ### Enhancement

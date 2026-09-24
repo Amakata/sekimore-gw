@@ -6,6 +6,15 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.35 (2026-09-24)
+
+### Enhancement
+
+- `pr files` lists the files a pull request touches, and `pr diff --path <path>` prints one of them with GitHub's line numbers in the left column (#173)
+- those numbers are the `line` that `pr review --comment <path>:<line>:<body>` takes, so a note can be put on a line that was read first (#173)
+- a deleted line carries no number and cannot be commented on; a long file is paged with `--window` / `--before`, as `ci log` pages a log (#173)
+- both reuse `pr:read`; no new permission (#173)
+
 ## 0.2.34 (2026-09-24)
 
 ### Enhancement
