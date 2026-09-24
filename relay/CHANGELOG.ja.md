@@ -5,6 +5,14 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.36（2026-09-24）
+
+### Security
+
+- 443 passthrough の上流が拒否範囲 — link-local (IMDS)、ループバック、RFC1918、carrier-grade NAT とその IPv6 相当 — に解決したら拒否するようにした。passthrough は自分で名前を解決し、関所の DNS の答えを見ないため (#178)
+- IPv4-mapped IPv6 をほどいてから判定するようにした。`::ffff:169.254.169.254` は IPv4 として扱う (#178)
+- 例外は `resolve_allow_cidrs` から読む。案件が意図して使う範囲は passthrough でも通る (#178)
+
 ## 0.2.35（2026-09-24）
 
 ### Enhancement

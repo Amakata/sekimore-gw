@@ -13,6 +13,15 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.36 (2026-09-24)
+
+### Security
+
+- refused a destination an allowed name may not reach: an allowlisted domain resolving into link-local (IMDS), loopback, RFC1918, carrier-grade NAT or their IPv6 equivalents is denied, in the DNS path, in Squid and in the 443 passthrough (#178)
+- checked the address at the single point a DNS answer enters, so the query path, the TTL refresh and the cache are all covered and a refused address is never cached (#178)
+- unwrapped an IPv4 address in IPv6 shape (`::ffff:a.b.c.d`) and judged it as IPv4, so `::ffff:169.254.169.254` cannot walk past a list written in IPv4 (#178)
+- added `resolve_deny_cidrs` and `resolve_allow_cidrs`; both have defaults, so nothing has to be configured. The gateway's own network is an exception automatically, since `.lan` names resolve into it (#178)
+
 ## 0.2.35 (2026-09-24)
 
 ### Enhancement

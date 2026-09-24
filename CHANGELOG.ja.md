@@ -12,6 +12,15 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.36（2026-09-24）
+
+### Security
+
+- 許可した名前が指してよい宛先を検査するようにした。許可ドメインが link-local (IMDS)、ループバック、RFC1918、carrier-grade NAT とその IPv6 相当に解決したら拒否する。DNS・Squid・relay の 443 passthrough の3箇所すべてで効く (#178)
+- DNS の答えが入る唯一の地点で判定するようにした。問い合わせ経路も TTL 更新もキャッシュも覆い、拒否した address はキャッシュに残らない (#178)
+- IPv6 の形をした IPv4 (`::ffff:a.b.c.d`) をほどいて IPv4 として判定するようにした。`::ffff:169.254.169.254` が IPv4 で書いた一覧をすり抜けない (#178)
+- `resolve_deny_cidrs` と `resolve_allow_cidrs` を足した。どちらも既定値があるので設定は要らない。`.lan` が解決する先なので、関所自身のネットワークは自動で例外になる (#178)
+
 ## 0.2.35（2026-09-24）
 
 ### Enhancement
