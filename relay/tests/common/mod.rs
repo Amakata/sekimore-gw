@@ -207,10 +207,11 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
             StatusCode::OK,
             serde_json::json!([
                 // Out of order on purpose: the relay has to sort the three sources into one timeline.
-                {"user": {"login": "alice"}, "state": "CHANGES_REQUESTED",
+                {"id": 901, "user": {"login": "alice"}, "state": "CHANGES_REQUESTED",
                  "body": "the null check is inverted", "submitted_at": "2026-09-17T10:00:00Z"},
-                // No body and COMMENTED: only the envelope around the inline comments, and dropped.
-                {"user": {"login": "alice"}, "state": "COMMENTED",
+                // No body and COMMENTED: only the envelope around its inline comments. It is kept
+                // so they have somewhere to hang, and dropped again when it turns out to have none.
+                {"id": 902, "user": {"login": "alice"}, "state": "COMMENTED",
                  "body": "", "submitted_at": "2026-09-17T10:05:00Z"}
             ]),
         );
@@ -219,9 +220,9 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
         return (
             StatusCode::OK,
             serde_json::json!([
-                {"user": {"login": "alice"}, "body": "this should be >=",
+                {"id": 2451, "user": {"login": "alice"}, "body": "this should be >=",
                  "created_at": "2026-09-17T10:05:00Z", "path": "src/main.rs", "line": 40,
-                 "in_reply_to_id": 555}
+                 "in_reply_to_id": 555, "pull_request_review_id": 902}
             ]),
         );
     }

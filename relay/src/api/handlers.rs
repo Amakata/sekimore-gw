@@ -255,6 +255,7 @@ pub async fn dispatch(
         "/whoami" => whoami(ctx, rec).await,
         "/pr/create" => pr_create(ctx, req).await,
         "/pr/comment" => pr_comment(ctx, req).await,
+        "/pr/reply" => pr_reply(ctx, req).await,
         "/pr/review" => pr_review(ctx, req).await,
         "/pr/merge" => pr_merge(ctx, req).await,
         "/pr/close" => pr_close(ctx, req).await,
@@ -437,6 +438,22 @@ async fn pr_comment(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, A
     Ok(ApiResponse::default())
 }
 
+/// #165: answer a line comment where it was left. `pr:comment` rather than a permission of its
+/// own — it is the same act as commenting, in a different place, so a project that allowed one
+/// does not have to declare the other.
+async fn pr_reply(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need_repo(req)?;
+    need(
+        req.number != 0 && req.comment_id != 0 && !req.body.is_empty(),
+        "number, comment-id and body are required",
+    )?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Comment)?;
+    client
+        .reply_to_review_comment(&auth, req.number, req.comment_id, &req.body)
+        .await?;
+    Ok(ApiResponse::default())
+}
+
 async fn pr_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
     need(
@@ -610,24 +627,89 @@ fn list_state(state: &str) -> Result<&str, ApiError> {
 }
 
 /// Render one discussion entry. The body is whatever a human wrote: it is printed, never parsed.
+/// #165: a review is one submission — a verdict, a body, and the line comments that came with
+/// it — so it is shown as one thing, with its comments nested under it. Flat and sorted by time,
+/// which is what this did before, left the reader to guess which comment belonged to which
+/// review, and two reviewers landing in the same second made that guess unreliable.
 fn comment_lines(items: &[crate::github::CommentItem]) -> String {
-    let mut out = String::new();
-    for c in items {
-        // The date alone is enough to follow a discussion; the time is in the JSON.
-        let day = c.created_at.split('T').next().unwrap_or("").to_string();
-        let tail = match c.kind.as_str() {
-            "review" => format!("[review {}]", c.state.clone().unwrap_or_default()),
-            "inline" => match (&c.path, c.line) {
-                (Some(p), Some(l)) => format!("{p}:{l}"),
-                (Some(p), None) => p.clone(),
-                _ => "[inline]".to_string(),
-            },
-            _ => "[comment]".to_string(),
+    // The date alone is enough to follow a discussion; the time is in the JSON.
+    let day =
+        |c: &crate::github::CommentItem| c.created_at.split('T').next().unwrap_or("").to_string();
+    // Where an inline comment sits, and the id `pr reply` needs. The id appears only on the
+    // lines that can be answered, so its presence is what says a reply is possible.
+    let inline_tail = |c: &crate::github::CommentItem| {
+        let where_ = match (&c.path, c.line) {
+            (Some(p), Some(l)) => format!("{p}:{l}"),
+            (Some(p), None) => p.clone(),
+            _ => "[inline]".to_string(),
         };
-        out.push_str(&format!("{day} {:<6} {tail}\n", c.author));
-        for line in c.body.lines() {
-            out.push_str(&format!("  {line}\n"));
+        match c.id {
+            Some(id) => format!("{where_}  #{id}"),
+            None => where_,
         }
+    };
+
+    let mut out = String::new();
+    let mut first = true;
+    for c in items {
+        match c.kind.as_str() {
+            // An inline comment is printed under its review, below; one that belongs to no
+            // review (a reply posted on its own) is printed where it falls.
+            "inline" if c.review_id.is_some() => continue,
+            // A review without an id cannot own anything: matching on None would make every
+            // parentless inline comment belong to it, and to every other such review too.
+            "review" | "review_envelope"
+                if c.review_id.is_none() && c.kind == "review_envelope" =>
+            {
+                continue
+            }
+            "review" | "review_envelope" => {
+                let children: Vec<_> = match c.review_id {
+                    Some(rid) => items
+                        .iter()
+                        .filter(|x| x.kind == "inline" && x.review_id == Some(rid))
+                        .collect(),
+                    None => Vec::new(),
+                };
+                // An envelope exists only to hold line comments; with none it says nothing.
+                if c.kind == "review_envelope" && children.is_empty() {
+                    continue;
+                }
+                if !first {
+                    out.push('\n');
+                }
+                out.push_str(&format!(
+                    "{} {:<6} review {}\n",
+                    day(c),
+                    c.author,
+                    c.state.clone().unwrap_or_default()
+                ));
+                for line in c.body.lines() {
+                    out.push_str(&format!("  {line}\n"));
+                }
+                for ch in children {
+                    out.push_str(&format!("    {}\n", inline_tail(ch)));
+                    for line in ch.body.lines() {
+                        out.push_str(&format!("      {line}\n"));
+                    }
+                }
+            }
+            _ => {
+                let tail = if c.kind == "inline" {
+                    inline_tail(c)
+                } else {
+                    "[comment]".to_string()
+                };
+                if !first {
+                    out.push('\n');
+                }
+                out.push_str(&format!("{} {:<6} {tail}\n", day(c), c.author));
+                for line in c.body.lines() {
+                    out.push_str(&format!("  {line}\n"));
+                }
+            }
+        }
+        first = false;
     }
     out.trim_end().to_string()
 }
@@ -1690,4 +1772,125 @@ fn strictest_signing(project: &crate::policy::Project) -> SigningMode {
 #[allow(dead_code)]
 fn now() -> SystemTime {
     SystemTime::now()
+}
+
+#[cfg(test)]
+mod comment_rendering {
+    use crate::github::CommentItem;
+
+    fn item(kind: &str, author: &str, body: &str) -> CommentItem {
+        CommentItem {
+            kind: kind.into(),
+            author: author.into(),
+            created_at: "2026-09-24T10:00:00Z".into(),
+            body: body.into(),
+            state: None,
+            path: None,
+            line: None,
+            in_reply_to_id: None,
+            id: None,
+            review_id: None,
+        }
+    }
+    fn review(author: &str, state: &str, body: &str, rid: u64) -> CommentItem {
+        CommentItem {
+            state: Some(state.into()),
+            review_id: Some(rid),
+            ..item("review", author, body)
+        }
+    }
+    fn inline(
+        author: &str,
+        path: &str,
+        line: u64,
+        body: &str,
+        id: u64,
+        rid: Option<u64>,
+    ) -> CommentItem {
+        CommentItem {
+            path: Some(path.into()),
+            line: Some(line),
+            id: Some(id),
+            review_id: rid,
+            ..item("inline", author, body)
+        }
+    }
+
+    /// #165: one submission reads as one thing, whoever else reviewed in the same second.
+    #[test]
+    fn line_comments_sit_under_the_review_they_came_with() {
+        let items = vec![
+            item("comment", "alice", "looks fine"),
+            review("bob", "CHANGES_REQUESTED", "two things", 1),
+            inline("bob", "pack.rs", 142, "why is this safe?", 2451, Some(1)),
+            review("carol", "APPROVED", "lgtm", 2),
+            inline("carol", "policy.rs", 88, "nice", 2452, Some(2)),
+        ];
+        let out = super::comment_lines(&items);
+        let bob = out.find("review CHANGES_REQUESTED").unwrap();
+        let carol = out.find("review APPROVED").unwrap();
+        let q = out.find("why is this safe?").unwrap();
+        let n = out.find("nice").unwrap();
+        assert!(
+            bob < q && q < carol,
+            "bob's comment must sit inside bob's review:\n{out}"
+        );
+        assert!(
+            carol < n,
+            "carol's comment must sit inside carol's review:\n{out}"
+        );
+        assert!(
+            out.contains("      why is this safe?"),
+            "nested deeper than its review:\n{out}"
+        );
+    }
+
+    /// The id is what says "you can answer this", so it appears only where a reply is possible.
+    #[test]
+    fn only_the_lines_that_can_be_replied_to_carry_an_id() {
+        let items = vec![
+            item("comment", "alice", "looks fine"),
+            review("bob", "COMMENTED", "a note", 1),
+            inline("bob", "pack.rs", 142, "why?", 2451, Some(1)),
+        ];
+        let out = super::comment_lines(&items);
+        assert!(out.contains("pack.rs:142  #2451"), "{out}");
+        let conversation = out.lines().find(|l| l.contains("[comment]")).unwrap();
+        assert!(
+            !conversation.contains('#'),
+            "a conversation comment needs no id: {conversation}"
+        );
+    }
+
+    /// A COMMENTED review with no body is only an envelope; with nothing in it, it says nothing.
+    #[test]
+    fn an_empty_envelope_is_dropped_but_a_full_one_is_not() {
+        let empty = vec![CommentItem {
+            ..review("bob", "COMMENTED", "", 1)
+        }];
+        let mut e = empty.clone();
+        e[0].kind = "review_envelope".into();
+        assert_eq!(
+            super::comment_lines(&e),
+            "",
+            "an envelope with no comments must not print"
+        );
+
+        let mut full = e.clone();
+        full.push(inline("bob", "pack.rs", 1, "here", 99, Some(1)));
+        let out = super::comment_lines(&full);
+        assert!(
+            out.contains("pack.rs:1  #99"),
+            "its comments must still show:\n{out}"
+        );
+    }
+
+    /// A reply posted on its own belongs to no review, and still has to appear.
+    #[test]
+    fn an_inline_comment_with_no_review_is_not_lost() {
+        let items = vec![inline("bob", "pack.rs", 7, "standalone", 42, None)];
+        let out = super::comment_lines(&items);
+        assert!(out.contains("pack.rs:7  #42"), "{out}");
+        assert!(out.contains("standalone"), "{out}");
+    }
 }

@@ -155,6 +155,14 @@ endpoints! {
             #[arg(long, help = t("agent.body"))]
             body: String,
         },
+        Reply("/pr/reply") = t("agent.pr.reply") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long = "comment-id", help = t("agent.pr.reply.comment_id"))]
+            comment_id: u64,
+            #[arg(long, help = t("agent.body"))]
+            body: String,
+        },
         Review("/pr/review") = t("agent.pr.review") => {
             #[arg(long, help = t("agent.number"))]
             number: u64,
