@@ -7,11 +7,55 @@
 [![Docker Publish](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/Amakata/sekimore-gw/actions/workflows/docker-publish.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-**A gateway that keeps the keys, so the agent's environment does not have to.**
+**Let an AI work on GitHub without handing it GitHub.**
 
-Everything leaving the container an AI agent runs in comes through here. **The agent holds no
-upstream credential at all** — the keys and tokens stay on this side, and what gets through is
-git and the GitHub operations the project allows, and nothing else.
+You want the agent to open a pull request. Giving it a token to do that hands over the `repo`
+scope — **read and write on every repository you can see**. And an agent with a terminal can
+read `~/.ssh` and `.env`, so where you keep a key is the same problem.
+
+sekimore-gw keeps that credential **outside the agent**. What the agent holds is a disposable
+key and a project token, neither of which means anything anywhere else:
+
+```console
+$ curl -H "Authorization: token $SEKIMORE_TOKEN" https://api.github.com/user
+401 Bad credentials          # useless against GitHub
+
+$ sekimore pr create --title "..." --base main    # through the gateway, what you allowed works
+#42 https://github.com/Org/Repo/pull/42
+
+$ sekimore pr merge --number 42                   # what you did not, stops here
+sekimore: denied: pr:merge is not allowed by policy
+```
+
+`gh` is not used here. A `gh` holding a token goes straight past the gateway to GitHub, so
+**none of the permissions you set apply** — `pr:merge` refused here would not stop
+`gh pr merge`. That is why the
+[sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) image does not
+carry it.
+
+**What you get instead is a choice, one action at a time.**
+
+```yaml
+# config.yml — however your project wants it
+permissions: [pr:create, pr:read, issue:create, issue:comment, ci:read]
+repos:
+  - { name: Org/Repo, mode: read-write, bases: [main] }
+```
+
+The 26 to choose from:
+
+```
+pr:      create  read  comment  review  request_review  close  merge
+issue:   create  read  update  comment  label  assign  close
+ci:      read  rerun          security: read  dismiss
+release: create  read  publish  project: read  add_item  update_item
+repo:    read           search: read
+```
+
+The consequential ones (`pr:merge`, `ci:rerun`, `security:dismiss`) are off unless you say
+otherwise, and a repository can add or remove any of them for itself.
+
+The `sekimore` command speaks all of this; `sekimore guide` prints the agent's copy.
 
 ## Quick Start
 
