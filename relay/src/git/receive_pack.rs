@@ -1278,7 +1278,7 @@ async fn create_pr(
         pr.client_ref, pr.sha
     );
     match gh
-        .create_pull_request(&api_auth, &pr.head_branch, &base, &title, &body)
+        .create_pull_request(&api_auth, &pr.head_branch, &base, &title, &body, false)
         .await
     {
         Ok(r) => {

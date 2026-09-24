@@ -303,13 +303,18 @@ impl GitHub {
         base: &str,
         title: &str,
         body: &str,
+        draft: bool,
     ) -> Result<PrResult, GhError> {
         auth.ensure(Resource::Pr, Action::Create)?;
         let out: Value = self
             .rest(
                 "POST",
                 &format!("/repos/{}/pulls", auth.repo()),
-                Some(json!({"title": title, "head": head, "base": base, "body": body})),
+                Some(json!({
+                    "title": title, "head": head, "base": base, "body": body,
+                    // #169: a draft runs CI without asking anyone to look yet
+                    "draft": draft,
+                })),
             )
             .await?;
         serde_json::from_value::<PrResult>(out.clone()).map_err(|_| {
@@ -1048,6 +1053,72 @@ impl GitHub {
 
     /// #165: reply to a line comment, in the thread it belongs to. GitHub takes this on the
     /// pulls endpoint with `in_reply_to`; the conversation endpoint cannot address a thread.
+    /// #168: start a `workflow_dispatch` run. `workflow_id` takes the file name, which is what a
+    /// person writes. The response is 204 with no body, so the run is found afterwards with
+    /// `ci runs --ref`.
+    pub async fn dispatch_workflow(
+        &self,
+        auth: &Authorized<'_>,
+        workflow: &str,
+        git_ref: &str,
+        inputs: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Ci, Action::Dispatch)?;
+        let mut payload = json!({"ref": git_ref});
+        if !inputs.is_empty() {
+            payload["inputs"] = json!(inputs);
+        }
+        self.rest::<Value>(
+            "POST",
+            &format!(
+                "/repos/{}/actions/workflows/{}/dispatches",
+                auth.repo(),
+                path_segment(workflow)
+            ),
+            Some(payload),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// #169: offer a draft for review, or put one back. REST does not serve either; GraphQL is
+    /// the only way, and it wants the pull request's node id rather than its number.
+    pub async fn set_pull_request_draft(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        draft: bool,
+    ) -> Result<(), GhError> {
+        auth.ensure(Resource::Pr, Action::Create)?;
+        let pr: Value = self
+            .rest(
+                "GET",
+                &format!("/repos/{}/pulls/{number}", auth.repo()),
+                None,
+            )
+            .await?;
+        let node_id = pr
+            .get("node_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| GhError::Parse(format!("no node_id for pull request {number}")))?;
+        let (mutation, field) = if draft {
+            ("convertPullRequestToDraft", "convertPullRequestToDraft")
+        } else {
+            (
+                "markPullRequestReadyForReview",
+                "markPullRequestReadyForReview",
+            )
+        };
+        let query = format!(
+            "mutation($id: ID!) {{ {mutation}(input: {{pullRequestId: $id}})              {{ pullRequest {{ isDraft }} }} }}"
+        );
+        let out = self.graphql(&query, json!({"id": node_id})).await?;
+        out.pointer(&format!("/data/{field}/pullRequest/isDraft"))
+            .and_then(Value::as_bool)
+            .map(|_| ())
+            .ok_or_else(|| GhError::Parse(format!("pull request {number} was not changed")))
+    }
+
     pub async fn reply_to_review_comment(
         &self,
         auth: &Authorized<'_>,
@@ -1071,12 +1142,22 @@ impl GitHub {
         number: u64,
         event: &str,
         body: &str,
+        comments: &[crate::api::types::ReviewComment],
     ) -> Result<(), GhError> {
         auth.ensure(Resource::Pr, Action::Review)?;
+        let mut payload = json!({"event": event, "body": body});
+        // #167: the same endpoint takes the notes that hang on lines of the diff. Sent only when
+        // there are some: an empty array is not the same as the key being absent to GitHub.
+        if !comments.is_empty() {
+            payload["comments"] = json!(comments
+                .iter()
+                .map(|c| json!({"path": c.path, "line": c.line, "body": c.body}))
+                .collect::<Vec<_>>());
+        }
         self.rest::<Value>(
             "POST",
             &format!("/repos/{}/pulls/{number}/reviews", auth.repo()),
-            Some(json!({"event": event, "body": body})),
+            Some(payload),
         )
         .await?;
         Ok(())
@@ -2359,7 +2440,8 @@ mod tests {
         ));
         // Even with the right proof, a missing upstream token is a Token error (nothing hits the network).
         assert!(matches!(
-            g.create_pull_request(&auth, "h", "main", "t", "").await,
+            g.create_pull_request(&auth, "h", "main", "t", "", false)
+                .await,
             Err(GhError::Token(_))
         ));
     }

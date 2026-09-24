@@ -61,11 +61,23 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     base,
                     title,
                     body,
+                    draft,
                 } => {
                     req.head = head;
                     req.base = base;
                     req.title = title;
                     req.body = body;
+                    req.pr_draft = draft;
+                    leaf
+                }
+                PrCmd::Draft { number } => {
+                    req.number = number;
+                    req.pr_draft = true;
+                    leaf
+                }
+                PrCmd::Ready { number } => {
+                    req.number = number;
+                    req.pr_draft = false;
                     leaf
                 }
                 PrCmd::Comment { number, body } => {
@@ -87,10 +99,28 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     number,
                     event,
                     body,
+                    comment,
+                    comments_file,
                 } => {
                     req.number = number;
                     req.event = event;
                     req.body = body;
+                    // #167: read here rather than in the relay — the file is the agent's, and a
+                    // bad line should say which one before anything is sent upstream.
+                    for c in &comment {
+                        req.comments.push(
+                            crate::api::types::ReviewComment::parse(c).map_err(|e| anyhow!(e))?,
+                        );
+                    }
+                    if !comments_file.is_empty() {
+                        let text = std::fs::read_to_string(&comments_file)
+                            .with_context(|| format!("reading {comments_file}"))?;
+                        let from_file: Vec<crate::api::types::ReviewComment> =
+                            serde_json::from_str(&text).with_context(|| {
+                                format!("{comments_file} is not [{{path, line, body}}, …]")
+                            })?;
+                        req.comments.extend(from_file);
+                    }
                     leaf
                 }
                 PrCmd::Merge {
@@ -198,6 +228,21 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 CiCmd::Rerun { run_id, all } => {
                     req.run_id = run_id;
                     req.all = all;
+                    leaf
+                }
+                CiCmd::Dispatch {
+                    workflow,
+                    git_ref,
+                    input,
+                } => {
+                    req.workflow = workflow;
+                    req.git_ref = git_ref;
+                    for kv in &input {
+                        let (k, v) = kv
+                            .split_once('=')
+                            .ok_or_else(|| anyhow!("expected key=value, got {kv:?}"))?;
+                        req.inputs.insert(k.to_string(), v.to_string());
+                    }
                     leaf
                 }
                 CiCmd::Cancel { run_id } => {

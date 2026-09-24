@@ -37,6 +37,8 @@ permissions, it is the bracketed key you ask a human for, not the command's name
 
 ```bash
 sekimore pr create --head <branch> --base main --title "…" --body="…"          [pr:create]
+                                                              #   --draft opens it for CI only
+sekimore pr ready --number N                                  [pr:create]  offer a draft for review (pr draft puts it back)
 sekimore pr update --number N --title "…"                     [pr:create]  edit your own PR
                                                               #   --base is re-checked against the allowed bases
 sekimore pr view --number N                                   [pr:read]  title, body, branches, counts
@@ -50,11 +52,19 @@ sekimore pr reopen --number N                                 [pr:close]  the in
 sekimore pr comment --number N --body="…"                     [pr:comment]
 sekimore pr reply --number N --comment-id C --body="…"          [pr:comment]  answer a line comment where it was left
 sekimore pr review --number N --event APPROVE                 [pr:review]  submit a review
+sekimore pr review --number N --event REQUEST_CHANGES \\        [pr:review]  …pointing at lines
+  --comment "src/main.rs:40:this should be >="                #   path:line:body, repeat for more
+                                                              #   --comments-file f.json for long bodies
+sekimore pr review --number N --event REQUEST_CHANGES \\        [pr:review]  …and point at lines:
+  --comment "src/main.rs:40:this should be >=" --comment …   #   path:line:body, repeated
+                                                             #   --comments-file f.json for long ones
 sekimore pr request-review --number N --reviewers alice,bob   [pr:request_review]  ask someone else for one
 sekimore ci runs --ref <tag|branch|sha>                       [ci:read]  workflow runs for a ref
 sekimore ci jobs --number N                                   [ci:read]  which job failed, and its job_id
 sekimore ci log --number N                                    [ci:read]  the failed job's log from the end; --before pages back
 sekimore ci rerun --run-id N [--all]                          [ci:rerun]  not ci:read — it spends Actions minutes
+sekimore ci dispatch --workflow release.yml --ref main        [ci:dispatch]  start a workflow_dispatch run
+                                                              #   --input key=value, repeated. Find the run with ci runs --ref
 sekimore ci cancel --run-id N                                 [ci:rerun]
 sekimore security alerts [--state open|dismissed|fixed|all]   [security:read]  Dependabot alerts: severity, package, manifest, advisory, first fixed version
 sekimore security view --number N                             [security:read]  one alert, with its link

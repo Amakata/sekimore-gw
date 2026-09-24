@@ -1126,6 +1126,88 @@ async fn pr_comments_merges_the_three_sources_in_order() {
     assert!(msg.contains("CI is red"), "{msg}");
 }
 
+/// #167: a review can point at lines of the diff, not only carry a body. The notes ride on the
+/// same request GitHub already takes for the verdict.
+#[tokio::test]
+async fn a_review_carries_its_line_comments_upstream() {
+    let f = start_api(project_case_a(&["pr:review"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        event: "REQUEST_CHANGES".into(),
+        body: "two things".into(),
+        comments: vec![
+            sekimore_relay::api::types::ReviewComment {
+                path: "src/main.rs".into(),
+                line: 40,
+                body: "this should be >=".into(),
+            },
+            sekimore_relay::api::types::ReviewComment {
+                path: "src/lib.rs".into(),
+                line: 7,
+                body: "see RFC 3339: the offset is required".into(),
+            },
+        ],
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, _) = post(f.addr, "/pr/review", Some(&f.token), &r).await;
+    assert_eq!(status, 200);
+
+    let rec = common::recorded(&f.recorder);
+    let call = rec
+        .iter()
+        .find(|c| c.path.ends_with("/pulls/7/reviews"))
+        .expect("a review was submitted");
+    assert_eq!(call.body["event"], "REQUEST_CHANGES");
+    let sent = call.body["comments"]
+        .as_array()
+        .expect("comments were sent");
+    assert_eq!(sent.len(), 2, "{:?}", call.body);
+    assert_eq!(sent[0]["path"], "src/main.rs");
+    assert_eq!(sent[0]["line"], 40);
+    // A body with a colon in it survives; prose about code is full of them.
+    assert_eq!(sent[1]["body"], "see RFC 3339: the offset is required");
+}
+
+/// Without comments the request must not grow an empty array: to GitHub that is not the same as
+/// the key being absent.
+#[tokio::test]
+async fn a_review_with_no_line_comments_sends_no_comments_key() {
+    let f = start_api(project_case_a(&["pr:review"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        event: "APPROVE".into(),
+        body: "lgtm".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, _) = post(f.addr, "/pr/review", Some(&f.token), &r).await;
+    assert_eq!(status, 200);
+    let rec = common::recorded(&f.recorder);
+    let call = rec
+        .iter()
+        .find(|c| c.path.ends_with("/pulls/7/reviews"))
+        .expect("a review was submitted");
+    assert!(call.body.get("comments").is_none(), "{:?}", call.body);
+}
+
+/// GitHub refuses a review that says nothing, with a message that does not say which half is
+/// missing; the relay answers before spending the call.
+#[tokio::test]
+async fn a_review_that_says_nothing_is_refused_here() {
+    let f = start_api(project_case_a(&["pr:review"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        event: "COMMENT".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (status, resp) = post(f.addr, "/pr/review", Some(&f.token), &r).await;
+    assert_eq!(status, 400);
+    let err = resp.error.unwrap_or_default();
+    assert!(
+        err.contains("body, line comments"),
+        "the refusal should name both ways to say something: {err:?}"
+    );
+}
+
 #[tokio::test]
 async fn an_empty_commented_review_is_not_listed() {
     // GitHub wraps line comments in a review with no body. It says nothing, so it is noise.

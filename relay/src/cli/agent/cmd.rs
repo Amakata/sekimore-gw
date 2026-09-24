@@ -148,12 +148,22 @@ endpoints! {
             title: String,
             #[arg(long, default_value = "", help = t("agent.pr.create.body"))]
             body: String,
+            #[arg(long, help = t("agent.pr.create.draft"))]
+            draft: bool,
         },
         Comment("/pr/comment") = t("agent.pr.comment") => {
             #[arg(long, help = t("agent.number"))]
             number: u64,
             #[arg(long, help = t("agent.body"))]
             body: String,
+        },
+        Draft("/pr/draft") = t("agent.pr.draft") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+        },
+        Ready("/pr/draft") = t("agent.pr.ready") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
         },
         Reply("/pr/reply") = t("agent.pr.reply") => {
             #[arg(long, help = t("agent.number"))]
@@ -170,6 +180,10 @@ endpoints! {
             event: String,
             #[arg(long, default_value = "", help = t("agent.body"))]
             body: String,
+            #[arg(long = "comment", value_name = "PATH:LINE:BODY", help = t("agent.pr.review.comment"))]
+            comment: Vec<String>,
+            #[arg(long = "comments-file", default_value = "", help = t("agent.pr.review.comments_file"))]
+            comments_file: String,
         },
         Merge("/pr/merge") = t("agent.pr.merge") => {
             #[arg(long, help = t("agent.number"))]
@@ -288,6 +302,14 @@ endpoints! {
             run_id: u64,
             #[arg(long, help = t("agent.ci.rerun.all"))]
             all: bool,
+        },
+        Dispatch("/ci/dispatch") = t("agent.ci.dispatch") => {
+            #[arg(long, help = t("agent.ci.dispatch.workflow"))]
+            workflow: String,
+            #[arg(long = "ref", help = t("agent.ci.dispatch.ref"))]
+            git_ref: String,
+            #[arg(long = "input", value_name = "KEY=VALUE", help = t("agent.ci.dispatch.input"))]
+            input: Vec<String>,
         },
         Cancel("/ci/cancel") = t("agent.ci.cancel") => {
             #[arg(long, help = t("agent.ci.run_id"))]
