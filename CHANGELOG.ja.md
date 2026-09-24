@@ -12,6 +12,12 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.34（2026-09-24）
+
+### Enhancement
+
+- ダッシュボードの権限一覧に `pr:comment_update` `pr:comment_delete` `issue:comment_update` `issue:comment_delete` を出し、`config.sample.yml` に説明を足した (#174)
+
 ## 0.2.33（2026-09-24）
 
 ### Enhancement

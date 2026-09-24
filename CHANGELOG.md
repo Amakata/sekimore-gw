@@ -13,6 +13,12 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.34 (2026-09-24)
+
+### Enhancement
+
+- the dashboard lists `pr:comment_update`, `pr:comment_delete`, `issue:comment_update` and `issue:comment_delete` among the permissions, and `config.sample.yml` documents them (#174)
+
 ## 0.2.33 (2026-09-24)
 
 ### Enhancement
