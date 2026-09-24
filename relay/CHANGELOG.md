@@ -6,6 +6,14 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.32 (2026-09-24)
+
+### Enhancement
+
+- `refs/pr/<branch>` pushes the branch the agent named and opens a pull request against the default branch; the name goes through `repos[].push`, the globs a direct push already answers to (#158)
+- `relay.project.branch.template` names the branch `refs/for/<base>` creates, so a project can drop the `sekimore/` prefix. `on_exists` says what happens when that name is taken (#158)
+- `whoami` lists, per read-write repository, the branch names it accepts, its bases, and what each ref spelling produces (#158)
+
 ## 0.2.31 (2026-09-23)
 
 ### Fix

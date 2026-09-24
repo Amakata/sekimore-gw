@@ -12,6 +12,12 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.32（2026-09-24）
+
+### Enhancement
+
+- `config.sample.yml` に `repos[].push` と新しい `project.branch` の説明を足した。push がどのブランチに着くかを決める設定 (#158)
+
 ## 0.2.31（2026-09-23）
 
 ### Fix

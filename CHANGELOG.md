@@ -13,6 +13,12 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.32 (2026-09-24)
+
+### Enhancement
+
+- `config.sample.yml` documents `repos[].push` and the new `project.branch` block, which name the branch a push lands on (#158)
+
 ## 0.2.31 (2026-09-23)
 
 ### Fix

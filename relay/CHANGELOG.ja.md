@@ -5,6 +5,14 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.32（2026-09-24）
+
+### Enhancement
+
+- `refs/pr/<branch>` は AI が名付けたブランチをそのまま push し、上流の既定ブランチを base に PR を開く。名前は直接 push と同じ `repos[].push` の glob で検査する (#158)
+- `relay.project.branch.template` が `refs/for/<base>` の作るブランチ名を決める。`sekimore/` を外せる。`on_exists` はその名前が既にあるときの動作 (#158)
+- `whoami` が read-write の repo ごとに、使えるブランチ名・base・各 ref 綴りが作る名前を表示する (#158)
+
 ## 0.2.31（2026-09-23）
 
 ### Fix
