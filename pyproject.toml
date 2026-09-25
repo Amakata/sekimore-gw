@@ -50,13 +50,12 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-timeout>=2.2.0",
     "httpx>=0.26.0",
-
     # Code Quality
     "ruff>=0.4.0",
     "mypy>=1.8.0",
-
     # Type Stubs
     "types-PyYAML>=6.0.12",
+    "networkx>=3.3",
 ]
 
 [tool.pytest.ini_options]

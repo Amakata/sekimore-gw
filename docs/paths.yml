@@ -1,0 +1,401 @@
+# The path ledger (#223): every way traffic moves through the gateway, as data.
+#
+# tests/unit/test_paths.py loads this into a graph and checks the rules that the bugs of
+# 2026-09-25 broke (#186, #190, #205, #212, #217, #220). scripts/paths.py answers questions
+# about it and draws it. src/paths.py and relay/src/paths.rs carry the same edge ids, and the
+# test refuses an id that is in one place and not the others.
+#
+# An edge is one connection one component opens. Every edge says:
+#   resolves       who turns the name into an address
+#   verifies_peer  who checks the far end's identity, and with what
+#   presents       what credential goes on the wire, and from where
+#   audit          where a record of it lands
+#   switches       the config that changes its shape
+#   impl / tests   where it lives and what covers it
+#   verify         the relay:verify item (sgw-devcontainer-base) that probes it on a real machine
+# `blocked_by` marks an edge that must NOT work: it is drawn so the rule that closes it is named.
+
+version: 1
+
+nodes:
+  dev:
+    kind: agent
+    trust: untrusted
+    note: "the dev container; root inside it is assumed hostile"
+  gateway.dns:
+    kind: policy
+    note: "DNS answers only for allow_domains; admits the answer into the firewall"
+  gateway.firewall:
+    kind: policy
+    note: "ipset + FORWARD/NAT inside the gateway container"
+  host.forward:
+    kind: policy
+    note: "DOCKER-USER rules on the host (#186), written by the gateway through pid host"
+  host.input:
+    kind: policy
+    note: "INPUT rules on the host (#190)"
+  gateway.squid:
+    kind: proxy
+    note: "Squid, the explicit proxy; the only way out under direct_egress deny"
+  gateway.relay.ssh:
+    kind: relay
+    note: "sekimore-relay's SSH front, port 22"
+  gateway.relay.api:
+    kind: relay
+    note: "sekimore-relay's agent API, port 8420"
+  gateway.relay.github:
+    kind: relay
+    note: "the relay's GitHub API client (reqwest)"
+  gateway.relay.passthrough:
+    kind: relay
+    note: "the relay's 443 passthrough"
+  gateway.webui:
+    kind: service
+    note: "FastAPI on 8080; read from dev by design, writes refused"
+  gateway.store:
+    kind: store
+    note: "the secret store; keys live only in the relay's memory while unlocked"
+  gateway.signing:
+    kind: service
+    note: "the filtered signing agent socket"
+  host:
+    kind: host
+    note: "the Docker host (the Docker Desktop VM on a Mac)"
+  operator:
+    kind: person
+    note: "the human with the ssh-agent and the passphrase"
+  upstream_proxy:
+    kind: external
+    note: "the corporate proxy (proxy.upstream_proxy)"
+  bastion:
+    kind: external
+    note: "a ProxyJump hop in front of an upstream"
+  upstream.git:
+    kind: external
+    note: "github.com or a GHES, over SSH"
+  upstream.api:
+    kind: external
+    note: "api.github.com or a GHES API"
+  internet:
+    kind: external
+    note: "any allowlisted destination"
+
+secrets:
+  upstream_proxy_password:
+    held_by: gateway.store
+    used_by: [squid.upstream_proxy, relay.github.via_proxy, passthrough.via_proxy]
+    exposed_via: []          # was dev.webui until #217 (squid.config_text carried login=)
+    tests: [tests/unit/test_web_ui.py]
+    verify: "the gateway's API must not hand out the upstream proxy password"
+  upstream_token:
+    held_by: gateway.store
+    used_by: [relay.github.api]
+    exposed_via: []          # /api/relay/tokens lists metadata only
+    tests: [tests/unit/test_web_ui_relay.py]
+  operator_ssh_agent:
+    held_by: operator
+    used_by: [relay.ssh.bastion, relay.ssh.upstream]
+    exposed_via: []          # the dev container must see only the filtered signing key
+    verify: "only the gateway's filtered signing key may be reachable"
+  signing_key:
+    held_by: gateway.signing
+    used_by: [dev.signing]
+    exposed_via: []          # sign-only; the key itself never leaves
+    verify: "git signs with the key it is meant to"
+  project_token:
+    held_by: dev
+    used_by: [dev.relay.api]
+    exposed_via: [dev.relay.api]   # by design: it means nothing outside the gateway
+  disposable_ssh_key:
+    held_by: dev
+    used_by: [dev.relay.ssh]
+    exposed_via: [dev.relay.ssh]   # by design: accepted only by this gateway
+
+edges:
+  # ---- dev's ordinary traffic -------------------------------------------------------------
+  - id: dev.dns
+    from: dev
+    to: gateway.dns
+    proto: dns/53
+    resolves: gateway.dns
+    verifies_peer: none (the answer comes from the default route set by agent-setup)
+    presents: none
+    audit: sqlite dns log
+    impl: [src/dns_server.py, agent-setup.sh]
+    tests: [tests/unit/test_dns_server.py]
+
+  - id: dev.egress.direct
+    from: dev
+    to: internet
+    via: [gateway.firewall, host.forward]
+    proto: tcp (allowed_ports)
+    resolves: gateway.dns
+    verifies_peer: dev's own TLS, end to end
+    presents: none
+    audit: NFLOG for drops; nothing for accepts (the point of #212)
+    switches: {direct_egress: allow}
+    warned: true              # the gateway logs a WARN at start when an upstream proxy exists
+    impl: [src/firewall.py, src/dns_server.py, src/host_enforcement.py]
+    tests: [tests/unit/test_firewall.py, tests/unit/test_dns_server.py, tests/unit/test_host_enforcement.py]
+    verify: "the upstream proxy is used for ordinary traffic"
+
+  - id: dev.egress.route_past_gateway
+    from: dev
+    to: internet
+    via: [host]
+    proto: tcp (default route moved to the bridge's .1)
+    resolves: any
+    verifies_peer: n/a
+    presents: none
+    audit: none — the gateway never sees it
+    blocked_by: host.forward
+    impl: [src/host_enforcement.py]
+    tests: [tests/unit/test_host_enforcement.py]
+    verify: "a root process must not route past the gateway"
+
+  - id: dev.host_input
+    from: dev
+    to: host
+    proto: "any (the bridge's .1: ping, published ports, the VM's services)"
+    resolves: n/a
+    verifies_peer: n/a
+    presents: none
+    audit: none
+    blocked_by: host.input
+    impl: [src/host_enforcement.py]
+    tests: [tests/unit/test_host_enforcement.py]
+    verify: "the host itself must not answer dev"
+
+  - id: dev.squid
+    from: dev
+    to: gateway.squid
+    proto: http proxy/3128 (HTTP_PROXY from /api/proxy-env)
+    resolves: gateway.squid (allow_domains; relayed domains refused)
+    verifies_peer: none (plain, inside the gateway's network)
+    presents: none
+    audit: squid access.log → sqlite proxy log
+    switches: {upstream_proxy: set, direct_egress: deny}
+    impl: [src/proxy_manager.py, src/web_ui/app.py, agent-setup.sh]
+    tests: [tests/unit/test_proxy_manager.py, tests/unit/test_web_ui.py]
+    verify: "the upstream proxy is used for ordinary traffic"
+
+  - id: squid.upstream_proxy
+    from: gateway.squid
+    to: upstream_proxy
+    proto: http CONNECT, or TLS then CONNECT (cache_peer … tls)
+    resolves: squid
+    verifies_peer: OpenSSL, the system CA store
+    tls_impl: openssl
+    presents: upstream_proxy_password (login=, from the store via the watcher)
+    audit: squid access.log
+    switches: {upstream_proxy: set, upstream_proxy_tls: any}
+    impl: [src/proxy_manager.py, src/orchestrator.py]
+    tests: [tests/unit/test_proxy_manager.py, tests/unit/test_orchestrator.py]
+    interop: passthrough.via_squid   # #205, the relay reaches a TLS proxy through this hop
+
+  - id: squid.internet
+    from: gateway.squid
+    to: internet
+    proto: tcp/80,443
+    resolves: squid
+    verifies_peer: dev's own TLS, end to end (CONNECT)
+    presents: none
+    audit: squid access.log
+    switches: {upstream_proxy: unset}
+    impl: [src/proxy_manager.py]
+    tests: [tests/unit/test_proxy_manager.py]
+
+  # ---- git over the relay ------------------------------------------------------------------
+  - id: dev.relay.ssh
+    from: dev
+    to: gateway.relay.ssh
+    proto: ssh/22
+    resolves: gateway.dns (the relayed domain resolves to the gateway)
+    verifies_peer: dev's ~/.ssh/known_hosts, written by agent-setup with the relay's host key
+    presents: disposable_ssh_key
+    audit: audit.jsonl ssh_auth_*, git_*
+    impl: [relay/src/ssh, agent-setup.sh]
+    tests: [relay/tests/ssh_server.rs, relay/tests/e2e_git.rs]
+    verify: "git ls-remote through the relay"
+
+  - id: relay.ssh.bastion
+    from: gateway.relay.ssh
+    to: bastion
+    proto: ssh (ProxyJump hop, run by OpenSSH as ssh -W)
+    resolves: the gateway's resolver
+    verifies_peer: the upstream's known_hosts, through the -F ssh_config the relay writes (#220)
+    presents: operator_ssh_agent
+    audit: none of its own; the git event covers the connection
+    switches: {ProxyJump: set}
+    hops: true
+    impl: [relay/src/git/upstream_ssh.rs]
+    tests: [relay/src/git/upstream_ssh.rs]
+    check: "bastion:"
+
+  - id: relay.ssh.upstream
+    from: gateway.relay.ssh
+    to: upstream.git
+    via: [bastion]
+    proto: ssh (git-upload-pack / git-receive-pack)
+    resolves: the gateway's resolver, or the last bastion
+    verifies_peer: the upstream's known_hosts (/data/relay/…/known_hosts), -o and -F
+    presents: operator_ssh_agent
+    audit: audit.jsonl git_push / git_fetch
+    switches: {ProxyJump: any}
+    impl: [relay/src/git/upstream_ssh.rs]
+    tests: [relay/src/git/upstream_ssh.rs, relay/tests/e2e_git.rs]
+    verify: "git ls-remote through the relay"
+    check: "known_hosts:"
+
+  # ---- the GitHub API over the relay ------------------------------------------------------
+  - id: dev.relay.api
+    from: dev
+    to: gateway.relay.api
+    proto: http/8420
+    resolves: gateway.dns
+    verifies_peer: none (plain, inside the gateway's network)
+    presents: project_token
+    audit: audit.jsonl api_*
+    impl: [relay/src/api]
+    tests: [relay/tests/api_server.rs]
+    verify: "one GitHub API call through the relay"
+
+  - id: relay.github.api
+    from: gateway.relay.github
+    to: upstream.api
+    proto: https (end to end; the hop to a proxy is relay.github.via_proxy or relay.github.via_squid)
+    resolves: reqwest, or the proxy
+    verifies_peer: rustls — platform roots, SSL_CERT_FILE, relay.ca_file
+    tls_impl: rustls
+    presents: upstream_token
+    audit: audit.jsonl api_call
+    switches: {upstream_proxy: any, upstream_proxy_tls: any}
+    impl: [relay/src/github/http.rs, relay/src/github/mod.rs]
+    tests: [relay/src/github/http.rs, relay/tests/api_server.rs]
+    verify: "one GitHub API call through the relay"
+
+  - id: relay.github.via_proxy
+    from: gateway.relay.github
+    to: upstream_proxy
+    proto: http CONNECT (plain proxy), or TLS then CONNECT (Squid disabled)
+    resolves: reqwest
+    verifies_peer: rustls (TLS proxy only)
+    tls_impl: rustls
+    presents: upstream_proxy_password (Proxy-Authorization, from the store)
+    audit: audit.jsonl api_call (the failure reason names the proxy)
+    switches: {upstream_proxy: set, upstream_proxy_tls: false-or-squid-disabled}
+    impl: [relay/src/github/http.rs, relay/src/config.rs]
+    tests: [relay/src/github/http.rs]
+    interop: squid.upstream_proxy
+
+  - id: relay.github.via_squid
+    from: gateway.relay.github
+    to: gateway.squid
+    proto: http CONNECT to 127.0.0.1:<proxy.port>
+    resolves: n/a (loopback)
+    verifies_peer: none (loopback)
+    presents: none (Squid presents login= to the upstream)
+    audit: audit.jsonl api_call; squid access.log
+    switches: {upstream_proxy: set, upstream_proxy_tls: true}
+    impl: [relay/src/config.rs, relay/src/github/http.rs, src/proxy_manager.py]
+    tests: [relay/src/config.rs, tests/unit/test_proxy_manager.py]
+
+  # ---- the 443 passthrough ----------------------------------------------------------------
+  - id: dev.passthrough
+    from: dev
+    to: gateway.relay.passthrough
+    proto: tcp/443 (SNI picks the target; upload cap)
+    resolves: gateway.dns (the relayed domain resolves to the gateway)
+    verifies_peer: dev's own TLS, end to end
+    presents: none
+    audit: audit.jsonl https_passthrough / https_failed / https_upload_capped
+    impl: [relay/src/passthrough.rs]
+    tests: [relay/src/passthrough.rs]
+    verify: "HTTPS to a relayed domain must reach the upstream"
+
+  - id: passthrough.upstream
+    from: gateway.relay.passthrough
+    to: upstream.api
+    proto: tcp/443 (direct)
+    resolves: the relay, with the #178 destination deny
+    verifies_peer: dev's own TLS, end to end
+    presents: none
+    audit: audit.jsonl https_passthrough
+    switches: {upstream_proxy: unset}
+    impl: [relay/src/passthrough.rs]
+    tests: [relay/src/passthrough.rs]
+
+  - id: passthrough.via_proxy
+    from: gateway.relay.passthrough
+    to: upstream_proxy
+    proto: http CONNECT (plain proxy), or TLS then CONNECT (Squid disabled)
+    resolves: the proxy
+    verifies_peer: rustls (TLS proxy only)
+    tls_impl: rustls
+    presents: upstream_proxy_password (Proxy-Authorization, from the store)
+    audit: audit.jsonl https_failed names the proxy
+    switches: {upstream_proxy: set, upstream_proxy_tls: false-or-squid-disabled}
+    impl: [relay/src/netutil.rs]
+    tests: [relay/src/netutil.rs]
+    interop: squid.upstream_proxy
+
+  - id: passthrough.via_squid
+    from: gateway.relay.passthrough
+    to: gateway.squid
+    proto: http CONNECT to 127.0.0.1:<proxy.port>
+    resolves: n/a (loopback)
+    verifies_peer: none (loopback)
+    presents: none (Squid presents login= to the upstream)
+    audit: audit.jsonl https_passthrough; squid access.log
+    switches: {upstream_proxy: set, upstream_proxy_tls: true}
+    impl: [relay/src/netutil.rs, relay/src/config.rs, src/proxy_manager.py]
+    tests: [relay/src/netutil.rs, relay/src/config.rs, tests/unit/test_proxy_manager.py]
+    check: "reach:"
+
+  # ---- the gateway's own services ---------------------------------------------------------
+  - id: dev.webui
+    from: dev
+    to: gateway.webui
+    proto: http/8080
+    resolves: gateway.dns
+    verifies_peer: none
+    presents: none (GET is open by design; no write endpoints since #217)
+    audit: uvicorn access log
+    impl: [src/web_ui/app.py]
+    tests: [tests/unit/test_web_ui.py]
+    verify: "the gateway's API must not hand out the upstream proxy password"
+
+  - id: operator.webui
+    from: host
+    to: gateway.webui
+    proto: http (the published port)
+    resolves: n/a
+    verifies_peer: none
+    presents: none
+    audit: uvicorn access log
+    impl: [src/web_ui/app.py]
+    tests: [tests/unit/test_web_ui.py]
+
+  - id: dev.signing
+    from: dev
+    to: gateway.signing
+    proto: ssh-agent protocol over a shared unix socket
+    resolves: n/a
+    verifies_peer: n/a (socket permissions, uid)
+    presents: none (sign requests only)
+    audit: audit.jsonl signing events
+    impl: [relay/src/git/agent_proxy.rs]
+    tests: [relay/tests/signing_agent.rs]
+    verify: "only the gateway's filtered signing key may be reachable"
+
+  - id: operator.store
+    from: operator
+    to: gateway.store
+    proto: the control socket, through docker exec (gw:unlock, gw:proxy-credential)
+    resolves: n/a
+    verifies_peer: n/a
+    presents: the passphrase, typed or from the host's keychain
+    audit: relay log
+    impl: [relay/src/store/control.rs, relay/src/cli/operator.rs]
+    tests: [relay/src/store/control.rs]
+    verify: "the secret store"

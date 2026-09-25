@@ -142,6 +142,7 @@ dev コンテナは起動時にゲートウェイから `HTTP_PROXY` と `NO_PRO
 - [relay/README.ja.md](relay/README.ja.md) — 関所の設定、エージェント側の手順、日々の使い方、設定リファレンス、権限の一覧
 - [config/config.sample.yml](config/config.sample.yml) — すべてのキー。既定値とコメント付き
 - [docs/localization.ja.md](docs/localization.ja.md) — Web UI と CLI の言語（英語・日本語）
+- [docs/paths.ja.md](docs/paths.ja.md) — 経路台帳: すべての接続の辺をグラフとして検査
 - [CONTRIBUTING.md](CONTRIBUTING.md) — 開発、テスト、イメージ
 - [CHANGELOG.ja.md](CHANGELOG.ja.md)、[relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) — 1 つのイメージ、1 つの版番号
 - [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) — dev コンテナ側
