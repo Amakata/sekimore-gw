@@ -144,6 +144,7 @@
   "relay.file.present": "present",
   "relay.file.missing": "missing",
   "relay.large_upload_badge": "⚠ LARGE UPLOAD",
+  "relay.to_destination": "to",
   "maint.description": "Operator commands for the gateway log database (SQLite): inspect, prune, reset.",
   "maint.db": "path of the SQLite file (default: database_path in config.yml)",
   "maint.config": "path of config.yml",

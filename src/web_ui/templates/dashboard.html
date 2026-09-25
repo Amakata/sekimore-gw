@@ -1168,11 +1168,12 @@
                         <span style="background: rgba(139, 148, 158, 0.15); color: ${color}; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 8px;">${escapeHtml(e.component)}</span>
                         <span class="log-action ${actionClass}">${emoji} ${escapeHtml(e.event)}</span>
                         ${e.peer ? `<span class="log-ip" style="color: #8b949e;">from ${escapeHtml(e.peer)}</span>` : ''}
+                        ${e.destination ? `<span class="log-domain">${tr('relay.to_destination')} ${escapeHtml(e.destination)}</span>` : ''}
                         ${what ? `<span class="log-domain">${escapeHtml(what)}</span>` : ''}
                         ${e.label ? `<span class="log-ip">${escapeHtml(e.label)}</span>` : ''}
                         ${e.reason ? `<span style="color: #f85149; margin-left: 8px;">(${escapeHtml(e.reason)})</span>` : ''}
                         ${e.flag === 'large_upload' ? `<span class="badge badge-blocked" style="margin-left: 8px;">${tr('relay.large_upload_badge')}</span>` : ''}
-                        ${e.detail ? `<span style="color: #8b949e; margin-left: 8px; font-size: 11px;">${escapeHtml(e.detail)}</span>` : ''}
+                        ${e.detail && e.detail !== e.reason ? `<span style="color: #8b949e; margin-left: 8px; font-size: 11px;">${escapeHtml(e.detail)}</span>` : ''}
                     </div>`;
             }).join('');
         }
