@@ -6,6 +6,16 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.44 (2026-09-25)
+
+### Security
+
+- every ProxyJump hop is held to the upstream's known_hosts with `StrictHostKeyChecking yes`; the enforced options move into a generated ssh_config passed with `-F`, which OpenSSH hands to the jump ssh, so a bastion with no key fails closed (#220)
+
+### Enhancement
+
+- `keyscan` and `login` fetch the host key of an upstream behind a ProxyJump bastion through the bastion, one connection per key type; `login` takes the missing bastion keys first, with fingerprints and a yes/no (#221)
+
 ## 0.2.43 (2026-09-25)
 
 ### Enhancement

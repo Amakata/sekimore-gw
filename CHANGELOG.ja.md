@@ -12,6 +12,13 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.44（2026-09-25）
+
+### Enhancement
+
+- 経路台帳 `docs/paths.yml` を足した。接続の各辺について、誰が名前を解決し、誰が相手を検証し、何を提示し、どこに記録が残るかを書く。`tests/unit/test_paths.py` がグラフとして検査し、id は `src/paths.py` と `relay/src/paths.rs` にある (#223)
+- README からゲートウェイ単体の構成を消した。入口は dev コンテナである (#226)
+
 ## 0.2.43（2026-09-25）
 
 ### Security
