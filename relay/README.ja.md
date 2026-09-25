@@ -433,6 +433,11 @@ agent-setup が `~/.ssh/config` に上流ごとの `Host` と `Port` を書き�
 443 番ポートでは、TLS の SNI で上流を選びます。関所の ssh はホスト側の `~/.ssh/config` を読まないので、踏み台やプロキシは `ssh_options` に設定します。
 踏み台のホスト鍵は `sekimore-relay keyscan bastion.example.com --upstream ghe.example.com` で追加します。
 
+`keyscan` と `login` はどちらもホスト鍵を取り込みますが、意図して 1 つ違いがあります。
+
+- `keyscan <host>` は fingerprint を表示して保存します。運用者がコマンドラインでホストを名指ししたこと自体が確認です
+- `login` は先に yes/no を聞きます。ログインのついでに、運用者が名指ししていないホスト（踏み台と、その先の上流）の鍵を取るので、黙って信用してはいけないからです。鍵を保存せずに終わった段があれば、login は device flow に進まず 0 以外で終わります（0.2.45）。確認を省くなら、先に各ホストを `keyscan` してください
+
 ## 表示言語（0.2.4）
 
 CLI の文言は `relay/locales/en.json` と `relay/locales/ja.json` にあり、バイナリに埋め込まれます。
