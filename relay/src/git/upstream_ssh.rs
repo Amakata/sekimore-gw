@@ -174,6 +174,67 @@ impl OpenSshUpstream {
         Ok(path)
     }
 
+    /// The host key types the relay asks for, one connection each (#221).
+    ///
+    /// `ssh-keyscan -t ed25519,ecdsa,rsa` takes them all in one go, but a scan through a
+    /// ProxyJump bastion is an ordinary `ssh`, and ssh negotiates exactly one host key per
+    /// connection. So the types are asked for one at a time, and a server that offers none of
+    /// a given type simply yields nothing for it.
+    pub const KEYSCAN_KEY_TYPES: &'static [&'static str] =
+        &["ssh-ed25519", "ecdsa-sha2-nistp256", "rsa-sha2-512"];
+
+    /// The `ssh` arguments that record `host:port`'s host key of one type into `scratch` (#221).
+    ///
+    /// `-F` is this upstream's enforced config, so **every** hop — the bastions included — is
+    /// held to this upstream's known_hosts with `StrictHostKeyChecking yes`: a bastion whose key
+    /// is missing fails here rather than asking. OpenSSH hands the jump ssh the `-F` file but not
+    /// the command line, so `UserKnownHostsFile=<scratch>` and `StrictHostKeyChecking=accept-new`
+    /// apply to the target hop alone — which is exactly the hop whose key we are here to learn.
+    pub fn keyscan_via_bastion_args(
+        &self,
+        cfg: &Path,
+        scratch: &Path,
+        host: &str,
+        port: u16,
+        key_type: &str,
+    ) -> Vec<String> {
+        let mut args: Vec<String> = vec![
+            "-F".into(),
+            cfg.display().to_string(),
+            "-o".into(),
+            format!("UserKnownHostsFile={}", scratch.display()),
+            "-o".into(),
+            "StrictHostKeyChecking=accept-new".into(),
+            "-o".into(),
+            format!("HostKeyAlgorithms={key_type}"),
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-o".into(),
+            "GlobalKnownHostsFile=/dev/null".into(),
+            "-o".into(),
+            "UpdateHostKeys=no".into(),
+            "-o".into(),
+            "ConnectTimeout=20".into(),
+            "-o".into(),
+            "LogLevel=ERROR".into(),
+        ];
+        // The ProxyJump from config has to come along: the scan takes the route the real
+        // connection takes. These come last, and ssh keeps the first value it was given, so
+        // nothing here can widen the options above.
+        for opt in &self.extra_options {
+            args.push("-o".into());
+            args.push(opt.clone());
+        }
+        args.push("-T".into());
+        args.push("-p".into());
+        args.push(port.to_string());
+        args.push(format!("git@{host}"));
+        // Authentication is expected to fail (there is no key for this host in the agent, and
+        // BatchMode forbids asking); the host key is recorded before that, which is all we want.
+        args.push("true".into());
+        args
+    }
+
     /// What to do about a missing host key, written for whoever reads it on stderr.
     ///
     /// That reader is an agent inside the dev container, where none of these commands exist —
@@ -181,20 +242,35 @@ impl OpenSshUpstream {
     /// usable instruction and running `sekimore-relay keyscan` locally, where it fails
     /// against a config.yml the dev container does not have and points at the wrong cause.
     pub fn known_hosts_remedy(&self) -> String {
+        // #221: behind a ProxyJump the gateway cannot reach the upstream directly at all, so the
+        // bare `ssh-keyscan` fallback would only send the reader down a route that cannot work.
+        // Say instead that keyscan takes the bastion, and that the bastion's own key comes first.
+        let bastions = self.bastions();
+        let via = match bastions.first() {
+            None => format!(
+                " Failing those, append the output of `ssh-keyscan -t ed25519,ecdsa,rsa -p {} {}` \
+                 to that file, again from inside the gateway.",
+                self.port, self.host,
+            ),
+            Some((bhost, bport)) => format!(
+                " {} sits behind a ProxyJump bastion, so `keyscan {} --port {} --upstream <this \
+                 upstream's domain>` goes through the bastion rather than connecting directly. \
+                 The bastion hop is verified against this same known_hosts, so its key has to be \
+                 there first: `sekimore-relay keyscan {} --port {}` for the same upstream.",
+                self.host, self.host, self.port, bhost, bport,
+            ),
+        };
         format!(
             "known_hosts {} has no entry for {}. This is fixed by the operator, on the host \
              running docker (not in this container): `docker compose exec sekimore-gw \
              sekimore-relay login` fetches the upstream host keys, or `docker compose exec \
              sekimore-gw sekimore-relay keyscan {} --port {}` takes them from the host itself \
-             (also for a ProxyJump bastion). In the devcontainer setup that is `mise run gw:login`. \
-             Failing those, append the output of `ssh-keyscan -t ed25519,ecdsa,rsa -p {} {}` to \
-             that file, again from inside the gateway.",
+             (also for a ProxyJump bastion). In the devcontainer setup that is `mise run gw:login`.{}",
             self.known_hosts.display(),
             self.host,
             self.host,
             self.port,
-            self.port,
-            self.host,
+            via,
         )
     }
 
@@ -483,6 +559,82 @@ mod tests {
         std::fs::write(&kh, "bastion.example.net ssh-ed25519 AAAA\n").unwrap();
         assert!(up.known_hosts_has("bastion.example.net", 22).unwrap());
         assert!(!up.known_hosts_has("bastion.example.net", 2222).unwrap());
+    }
+
+    /// #221: the scan through the bastion. The `-F` file holds every hop to the upstream's
+    /// known_hosts; the command line reaches the target hop only, and that is where the scratch
+    /// file and `accept-new` go.
+    #[test]
+    fn the_through_bastion_keyscan_loosens_the_target_hop_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        let up = OpenSshUpstream::new("ghe.example.com", 2222, &kh, None)
+            .with_options(vec!["ProxyJump=user@bastion.example.net:2222".into()]);
+        let cfg = up.ensure_ssh_config().unwrap();
+        let scratch = dir.path().join("scratch");
+        let args =
+            up.keyscan_via_bastion_args(&cfg, &scratch, "ghe.example.com", 2222, "ssh-ed25519");
+        let pos = |s: &str| args.iter().position(|a| a == s);
+        // the enforced config comes first, so the jump hop is checked against the real file
+        assert_eq!(args[0], "-F");
+        assert_eq!(args[1], cfg.display().to_string());
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        assert!(text.contains("  StrictHostKeyChecking yes"), "{text}");
+        assert!(text.contains(&format!("  UserKnownHostsFile {}\n", kh.display())));
+        // the target hop writes into the scratch file instead
+        assert!(pos(&format!("UserKnownHostsFile={}", scratch.display())).is_some());
+        assert!(pos("StrictHostKeyChecking=accept-new").is_some());
+        assert!(pos("HostKeyAlgorithms=ssh-ed25519").is_some());
+        assert!(pos("BatchMode=yes").is_some());
+        // ...but the real known_hosts is never named on the command line
+        assert!(
+            !args.iter().any(|a| a.contains(&kh.display().to_string())),
+            "the upstream's known_hosts must not be the target hop's file: {args:?}"
+        );
+        // the route from config comes along, after the enforced options
+        assert!(
+            pos("ProxyJump=user@bastion.example.net:2222").unwrap()
+                > pos("StrictHostKeyChecking=accept-new").unwrap()
+        );
+        assert_eq!(args[args.len() - 3], "2222");
+        assert_eq!(args[args.len() - 2], "git@ghe.example.com");
+        assert_eq!(args[args.len() - 1], "true");
+    }
+
+    #[test]
+    fn one_connection_per_key_type() {
+        assert_eq!(
+            OpenSshUpstream::KEYSCAN_KEY_TYPES,
+            &["ssh-ed25519", "ecdsa-sha2-nistp256", "rsa-sha2-512"]
+        );
+    }
+
+    /// #221: behind a bastion, a direct `ssh-keyscan` from the gateway cannot reach the upstream
+    /// at all, so the remedy must not offer it as the fallback.
+    #[test]
+    fn the_remedy_says_keyscan_goes_through_the_bastion() {
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        let plain = OpenSshUpstream::new("github.com", 22, &kh, None);
+        assert!(plain.known_hosts_remedy().contains("ssh-keyscan -t"));
+        assert!(
+            !plain
+                .known_hosts_remedy()
+                .contains("goes through the bastion"),
+            "no ProxyJump, no detour"
+        );
+
+        let up = OpenSshUpstream::new("ghe.example.com", 2222, &kh, None)
+            .with_options(vec!["ProxyJump=user@bastion.example.net:2222".into()]);
+        let m = up.known_hosts_remedy();
+        assert!(m.contains("ProxyJump bastion"), "{m}");
+        assert!(m.contains("goes through the bastion"), "{m}");
+        // and how to get the bastion's own key in first
+        assert!(m.contains("keyscan bastion.example.net --port 2222"), "{m}");
+        assert!(
+            !m.contains("ssh-keyscan -t"),
+            "a direct scan cannot reach it; do not offer it: {m}"
+        );
     }
 
     #[test]

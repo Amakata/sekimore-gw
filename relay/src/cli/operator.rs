@@ -155,6 +155,10 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
         .writable()
         .await
         .context("the upstream token cannot be stored, so there is no point starting a login")?;
+    // #221: the bastions first. Their keys are what makes every later hop possible — including the
+    // through-the-bastion scan of the upstream itself, further down — and they are the only keys
+    // here that can be taken without a token.
+    login_bastion_keys(&r, &up, &audit)?;
     if r.upstreams.len() > 1 {
         let mark = if up.is_default {
             t("op.login.default_mark")
@@ -242,29 +246,217 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
                 )
             );
         }
-        Ok(_) => eprintln!(
-            "{}",
-            tf(
-                "op.login.no_meta_keys",
-                &[("path", &up.known_hosts.display().to_string())]
-            )
-        ),
-        Err(e) => eprintln!(
-            "{}",
-            tf(
-                "op.login.meta_failed",
-                &[
-                    ("error", &e.to_string()),
-                    ("path", &up.known_hosts.display().to_string())
-                ]
-            )
-        ),
+        // GHE's /api/v3/meta has no ssh_keys at all (#221). Behind a bastion there is still a way
+        // to the key — the same route the relay uses for git — so take it rather than leaving the
+        // operator to run `ssh bastion ssh-keyscan` and paste the output.
+        Ok(_) => {
+            eprintln!(
+                "{}",
+                tf(
+                    "op.login.no_meta_keys",
+                    &[("path", &up.known_hosts.display().to_string())]
+                )
+            );
+            login_upstream_key_via_bastion(&r, &up, &audit)?;
+        }
+        Err(e) => {
+            eprintln!(
+                "{}",
+                tf(
+                    "op.login.meta_failed",
+                    &[
+                        ("error", &e.to_string()),
+                        ("path", &up.known_hosts.display().to_string())
+                    ]
+                )
+            );
+            login_upstream_key_via_bastion(&r, &up, &audit)?;
+        }
     }
     match gh.whoami().await {
         Ok(login) => println!("{}", tf("op.login.identity", &[("login", &login)])),
         Err(e) => eprintln!(
             "{}",
             tf("op.login.user_failed", &[("error", &e.to_string())])
+        ),
+    }
+    Ok(())
+}
+
+/// Asks the operator to approve host keys before they are written (#221).
+///
+/// Answered on the terminal, and only there. `login` is also run with stdin redirected (the
+/// `--stdin` style of passing a passphrase in, or from a script), and a prompt nobody can see
+/// would either hang or read whatever the script had queued up as a `yes`. Not a terminal means
+/// not asked and not saved, with a line saying which command to run by hand.
+fn confirm_host_keys(what: &str) -> anyhow::Result<bool> {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        eprintln!("{}", tf("op.login.keys_not_interactive", &[("what", what)]));
+        return Ok(false);
+    }
+    print!("{} ", tf("op.login.keys_confirm", &[("what", what)]));
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .context("cannot read the answer from the terminal")?;
+    let a = line.trim().to_ascii_lowercase();
+    Ok(a == "yes" || a == "y")
+}
+
+/// Shows the fingerprints, asks, and merges on a yes. Returns whether anything was written.
+fn offer_host_keys(
+    known_hosts: &Path,
+    host: &str,
+    port: u16,
+    keys: &[String],
+    audit: &Audit,
+    domain: &str,
+) -> anyhow::Result<bool> {
+    print_fingerprints(host, port, keys);
+    if !confirm_host_keys(&format!("{host}:{port}"))? {
+        println!("{}", t("op.login.keys_declined"));
+        return Ok(false);
+    }
+    if let Some(dir) = known_hosts.parent() {
+        ensure_dir_0700(dir).with_context(|| format!("state dir {}", dir.display()))?;
+    }
+    let n = merge_known_hosts(known_hosts, host, port, keys)?;
+    println!(
+        "{}",
+        tf(
+            "op.keyscan.result",
+            &[
+                ("n", &keys.len().to_string()),
+                ("host", host),
+                ("port", &port.to_string()),
+                ("new", &n.to_string()),
+                ("path", &known_hosts.display().to_string()),
+                ("domain", domain),
+            ]
+        )
+    );
+    audit.log(
+        "known_hosts_added",
+        Actor::Operator,
+        &[
+            ("host", host),
+            ("port", &port.to_string()),
+            ("upstream", domain),
+            ("added", &n.to_string()),
+        ],
+    );
+    Ok(true)
+}
+
+/// #221 (a): before anything else, fill in the ProxyJump bastions' keys.
+///
+/// A bastion is reachable from the gateway directly — that is what makes it a bastion — so the
+/// plain `ssh-keyscan` gets its key. Without it every later hop fails closed (#220), so this runs
+/// before the device flow rather than after.
+fn login_bastion_keys(r: &Resolved, up: &Upstream, audit: &Audit) -> anyhow::Result<()> {
+    let ssh = ssh_for(r, up);
+    for (bhost, bport) in ssh.bastions() {
+        match ssh.known_hosts_has(&bhost, bport) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    tf(
+                        "op.login.bastion_check_failed",
+                        &[
+                            ("host", &bhost),
+                            ("port", &bport.to_string()),
+                            ("error", &e.to_string()),
+                        ]
+                    )
+                );
+                continue;
+            }
+        }
+        println!(
+            "{}",
+            tf(
+                "op.login.bastion_scan",
+                &[("host", &bhost), ("port", &bport.to_string())]
+            )
+        );
+        match keyscan_direct(&bhost, bport) {
+            Ok(keys) => {
+                offer_host_keys(&up.known_hosts, &bhost, bport, &keys, audit, &up.domain)?;
+            }
+            // Not fatal: the operator may still want the token, and `check` names the gap.
+            Err(e) => eprintln!(
+                "{}",
+                tf(
+                    "op.login.bastion_scan_failed",
+                    &[
+                        ("host", &bhost),
+                        ("port", &bport.to_string()),
+                        ("error", &format!("{e:#}")),
+                    ]
+                )
+            ),
+        }
+    }
+    Ok(())
+}
+
+/// #221 (b): `/meta` gave nothing, so take the upstream's key through the bastion instead.
+///
+/// Nothing to do without a ProxyJump — a direct `ssh-keyscan` is what the existing message
+/// already tells the operator to run, and doing it unasked would trust a key without being asked.
+fn login_upstream_key_via_bastion(
+    r: &Resolved,
+    up: &Upstream,
+    audit: &Audit,
+) -> anyhow::Result<()> {
+    let ssh = ssh_for(r, up);
+    if ssh.bastions().is_empty() {
+        return Ok(());
+    }
+    if ssh.known_hosts_has_upstream().unwrap_or(false) {
+        return Ok(());
+    }
+    println!(
+        "{}",
+        tf(
+            "op.keyscan.via_bastion",
+            &[
+                ("host", &up.host),
+                ("port", &up.upstream_ssh_port.to_string()),
+                (
+                    "bastions",
+                    &ssh.bastions()
+                        .iter()
+                        .map(|(h, p)| format!("{h}:{p}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ]
+        )
+    );
+    match keyscan_via_bastion(&ssh, &up.host, up.upstream_ssh_port) {
+        Ok(keys) => {
+            offer_host_keys(
+                &up.known_hosts,
+                &up.host,
+                up.upstream_ssh_port,
+                &keys,
+                audit,
+                &up.domain,
+            )?;
+        }
+        // The token is already stored; failing the whole login over this would only send the
+        // operator back through the device flow for no gain.
+        Err(e) => eprintln!(
+            "{}",
+            tf(
+                "op.login.via_bastion_failed",
+                &[("error", &format!("{e:#}"))]
+            )
         ),
     }
     Ok(())
@@ -322,16 +514,202 @@ pub fn parse_keyscan(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// 0.2.1: fetches the host key of an upstream or a bastion (ProxyJump target) and appends it to that upstream's known_hosts.
-/// The fingerprint is printed so the operator can compare it against the published value before trusting it (TOFU).
-pub fn keyscan(path: &Path, host: &str, port: u16, upstream: Option<&str>) -> anyhow::Result<()> {
-    let r = resolve(path)?;
-    let up = pick_upstream(&r, upstream)?;
-    let audit = open_audit(&r)?;
-    let host = host.trim().trim_end_matches('.');
-    if host.is_empty() || host.contains(['/', ' ', ',']) {
-        bail!("host must be a bare hostname or IP");
+/// How `keyscan` reaches the host it is asked about (#221).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanRoute {
+    /// `ssh-keyscan` straight out of the gateway: no ProxyJump, or the host *is* a bastion,
+    /// which is by definition reachable without one.
+    Direct,
+    /// `ssh -J …` through the upstream's ProxyJump bastions, because the gateway has no other
+    /// way to the upstream host.
+    ViaBastion,
+}
+
+/// Decides the route for `keyscan <host> --port <port> --upstream X` (#221).
+///
+/// Through the bastion only when there is one **and** the host asked about is the upstream host
+/// itself. A bastion is scanned directly — it has to be, since jumping through it is what we are
+/// trying to make possible. Any other host (an operator checking a third machine) is direct too:
+/// the upstream's route says nothing about it.
+pub fn scan_route(up: &OpenSshUpstream, host: &str, port: u16) -> ScanRoute {
+    if up.bastions().is_empty() {
+        return ScanRoute::Direct;
     }
+    if up
+        .bastions()
+        .iter()
+        .any(|(bh, bp)| bh.eq_ignore_ascii_case(host) && *bp == port)
+    {
+        return ScanRoute::Direct;
+    }
+    if up.host.eq_ignore_ascii_case(host) && up.port == port {
+        ScanRoute::ViaBastion
+    } else {
+        ScanRoute::Direct
+    }
+}
+
+/// Reads back the keys `ssh` recorded in a scratch `UserKnownHostsFile` (#221).
+///
+/// The file is in known_hosts form, so `parse_keyscan` does the parsing; what is added here is
+/// keeping only the lines that belong to `host:port` (a jump hop must never be mistaken for the
+/// target) and one key per type, in the order the file lists them.
+pub fn keys_from_scratch(text: &str, host: &str, port: u16) -> Vec<String> {
+    // Exactly the spelling ssh writes for this host and port, and no other. A bare name is what
+    // port 22 gets; `[host]:port` otherwise. Accepting the bare name on a non-default port too
+    // would let a hop on the same name but a different port pass for the target.
+    let want = if port == 22 {
+        host.to_string()
+    } else {
+        format!("[{host}]:{port}")
+    };
+    let mut out: Vec<String> = Vec::new();
+    for (hosts, key) in parse_keyscan(text) {
+        if !hosts.split(',').any(|h| h.eq_ignore_ascii_case(&want)) {
+            continue;
+        }
+        let kind = key.split_whitespace().next().unwrap_or("").to_string();
+        if out
+            .iter()
+            .any(|k| k.split_whitespace().next().unwrap_or("") == kind)
+        {
+            continue;
+        }
+        out.push(key);
+    }
+    out
+}
+
+/// Removes the scratch known_hosts files when the scan is done, however it ends (#221).
+///
+/// A leftover file would sit in the state dir looking like a known_hosts the relay honours, which
+/// it is not: it holds keys nobody has approved yet.
+#[derive(Default)]
+struct ScratchFiles {
+    paths: std::cell::RefCell<Vec<PathBuf>>,
+}
+
+impl ScratchFiles {
+    fn watch(&self, path: &Path) {
+        self.paths.borrow_mut().push(path.to_path_buf());
+    }
+}
+
+impl Drop for ScratchFiles {
+    fn drop(&mut self) {
+        for p in self.paths.borrow().iter() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// Takes `host:port`'s host keys through the upstream's ProxyJump bastions (#221).
+///
+/// `ssh-keyscan` has no `-J`, so this connects once per key type with the relay's own ssh: the
+/// enforced `-F` config holds every hop to the upstream's known_hosts (so a bastion whose key is
+/// missing fails here, with the same remedy as a real connection), while the target hop alone
+/// gets `StrictHostKeyChecking=accept-new` and a scratch file to write into. Authentication is
+/// expected to fail; the host key is recorded before that.
+fn keyscan_via_bastion(up: &OpenSshUpstream, host: &str, port: u16) -> anyhow::Result<Vec<String>> {
+    let cfg = up.ensure_ssh_config().with_context(|| {
+        format!(
+            "cannot write the enforced ssh_config {}",
+            up.ssh_config_path().display()
+        )
+    })?;
+    // The scratch file lives in the upstream's own 0700 state dir, not /tmp: it holds a key that
+    // has not been trusted yet, and nothing else on the box has any business reading or writing it.
+    let dir = up
+        .known_hosts
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    ensure_dir_0700(&dir).with_context(|| format!("state dir {}", dir.display()))?;
+    let scratch_guard = ScratchFiles::default();
+    let mut keys: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for key_type in OpenSshUpstream::KEYSCAN_KEY_TYPES {
+        let scratch = dir.join(format!("known_hosts.scan.{key_type}"));
+        scratch_guard.watch(&scratch);
+        let _ = std::fs::remove_file(&scratch);
+        let args = up.keyscan_via_bastion_args(&cfg, &scratch, host, port, key_type);
+        let out = std::process::Command::new("ssh")
+            .args(&args)
+            .env_remove("SSH_ASKPASS")
+            .output()
+            .context("run ssh (openssh-client)")?;
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let text = std::fs::read_to_string(&scratch).unwrap_or_default();
+        let found = keys_from_scratch(&text, host, port);
+        if found.is_empty() {
+            if !stderr.is_empty() {
+                errors.push(format!("{key_type}: {stderr}"));
+            }
+            continue;
+        }
+        for k in found {
+            let kind = k.split_whitespace().next().unwrap_or("").to_string();
+            if !keys
+                .iter()
+                .any(|e| e.split_whitespace().next().unwrap_or("") == kind)
+            {
+                keys.push(k);
+            }
+        }
+    }
+    if keys.is_empty() {
+        // Nothing came back at all. The usual cause is the bastion hop failing closed because its
+        // own key is not in this upstream's known_hosts, so lead with that.
+        let missing: Vec<String> = up
+            .bastions()
+            .into_iter()
+            .filter(|(bh, bp)| !up.known_hosts_has(bh, *bp).unwrap_or(false))
+            .map(|(bh, bp)| format!("{bh}:{bp}"))
+            .collect();
+        if !missing.is_empty() {
+            bail!(tf(
+                "op.keyscan.bastion_missing",
+                &[
+                    ("bastions", &missing.join(", ")),
+                    ("remedy", &up.known_hosts_remedy()),
+                ]
+            ));
+        }
+        bail!(tf(
+            "op.keyscan.via_bastion_none",
+            &[
+                ("host", host),
+                ("port", &port.to_string()),
+                ("stderr", &errors.join("; ")),
+            ]
+        ));
+    }
+    Ok(keys)
+}
+
+/// Prints the fingerprints of freshly scanned keys — the operator compares them out of band (TOFU).
+fn print_fingerprints(host: &str, port: u16, keys: &[String]) {
+    println!(
+        "{}",
+        tf(
+            "op.keyscan.header",
+            &[("host", host), ("port", &port.to_string())]
+        )
+    );
+    for k in keys {
+        let kind = k.split_whitespace().next().unwrap_or("");
+        match PublicKey::from_openssh(k) {
+            Ok(pk) => println!("  {kind:<20} {}", fingerprint(&pk)),
+            Err(e) => println!(
+                "  {kind:<20} {}",
+                tf("op.keyscan.unparseable", &[("error", &e.to_string())])
+            ),
+        }
+    }
+}
+
+/// `ssh-keyscan` straight out of the gateway (the 0.2.1 path).
+fn keyscan_direct(host: &str, port: u16) -> anyhow::Result<Vec<String>> {
     let out = std::process::Command::new("ssh-keyscan")
         .args([
             "-T",
@@ -356,23 +734,61 @@ pub fn keyscan(path: &Path, host: &str, port: u16, upstream: Option<&str>) -> an
             ]
         ));
     }
-    println!(
-        "{}",
-        tf(
-            "op.keyscan.header",
-            &[("host", host), ("port", &port.to_string())]
-        )
-    );
-    for k in &keys {
-        let kind = k.split_whitespace().next().unwrap_or("");
-        match PublicKey::from_openssh(k) {
-            Ok(pk) => println!("  {kind:<20} {}", fingerprint(&pk)),
-            Err(e) => println!(
-                "  {kind:<20} {}",
-                tf("op.keyscan.unparseable", &[("error", &e.to_string())])
-            ),
-        }
+    Ok(keys)
+}
+
+/// Builds the `OpenSshUpstream` that describes how the relay reaches this upstream.
+fn ssh_for(r: &Resolved, up: &Upstream) -> OpenSshUpstream {
+    OpenSshUpstream::new(
+        &up.host,
+        up.upstream_ssh_port,
+        &up.known_hosts,
+        r.relay.ssh_config.as_deref(),
+    )
+    .with_options(up.ssh_options.clone())
+}
+
+/// 0.2.1: fetches the host key of an upstream or a bastion (ProxyJump target) and appends it to that upstream's known_hosts.
+/// The fingerprint is printed so the operator can compare it against the published value before trusting it (TOFU).
+///
+/// #221: when the upstream sits behind a ProxyJump bastion, the gateway cannot reach it directly
+/// at all, so the scan of the upstream host itself goes through the bastion. A bastion is still
+/// scanned directly — that is how its key gets into known_hosts in the first place.
+pub fn keyscan(path: &Path, host: &str, port: u16, upstream: Option<&str>) -> anyhow::Result<()> {
+    let r = resolve(path)?;
+    let up = pick_upstream(&r, upstream)?;
+    let audit = open_audit(&r)?;
+    let host = host.trim().trim_end_matches('.');
+    if host.is_empty() || host.contains(['/', ' ', ',']) {
+        bail!("host must be a bare hostname or IP");
     }
+    let ssh = ssh_for(&r, up);
+    let route = scan_route(&ssh, host, port);
+    let keys = match route {
+        ScanRoute::Direct => keyscan_direct(host, port)?,
+        ScanRoute::ViaBastion => {
+            println!(
+                "{}",
+                tf(
+                    "op.keyscan.via_bastion",
+                    &[
+                        ("host", host),
+                        ("port", &port.to_string()),
+                        (
+                            "bastions",
+                            &ssh.bastions()
+                                .iter()
+                                .map(|(h, p)| format!("{h}:{p}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    ]
+                )
+            );
+            keyscan_via_bastion(&ssh, host, port)?
+        }
+    };
+    print_fingerprints(host, port, &keys);
     if let Some(dir) = up.known_hosts.parent() {
         ensure_dir_0700(dir).with_context(|| format!("state dir {}", dir.display()))?;
     }
@@ -1647,6 +2063,87 @@ pub async fn change_passphrase(path: &Path, kdf: Option<&str>) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #221: which way `keyscan` goes. Through the bastion only for the upstream host itself —
+    /// a bastion is scanned directly (that is how its key gets in), and so is anything else.
+    #[test]
+    fn the_route_is_the_bastion_only_for_the_upstream_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        let jumped = OpenSshUpstream::new("ghe.example.com", 2222, &kh, None)
+            .with_options(vec!["ProxyJump=user@bastion.example.net:2222".into()]);
+        assert_eq!(
+            scan_route(&jumped, "ghe.example.com", 2222),
+            ScanRoute::ViaBastion
+        );
+        assert_eq!(
+            scan_route(&jumped, "GHE.Example.COM", 2222),
+            ScanRoute::ViaBastion,
+            "hostnames are case-insensitive"
+        );
+        // the bastion itself, which has to be reachable directly or nothing works
+        assert_eq!(
+            scan_route(&jumped, "bastion.example.net", 2222),
+            ScanRoute::Direct
+        );
+        // the same name on another port is not this upstream
+        assert_eq!(
+            scan_route(&jumped, "ghe.example.com", 22),
+            ScanRoute::Direct
+        );
+        // some third machine the operator is checking
+        assert_eq!(
+            scan_route(&jumped, "other.example.com", 22),
+            ScanRoute::Direct
+        );
+        // no ProxyJump at all
+        let plain = OpenSshUpstream::new("github.com", 22, &kh, None);
+        assert_eq!(scan_route(&plain, "github.com", 22), ScanRoute::Direct);
+    }
+
+    /// #221: the scratch file ssh wrote holds the target's key — and, when a hop was recorded
+    /// there too, keys that are not the target's. Only the target's count, one per type.
+    #[test]
+    fn only_the_targets_keys_come_out_of_the_scratch_file() {
+        let text = "\
+[bastion.example.net]:2222 ssh-ed25519 AAAAbastion\n\
+[ghe.example.com]:2222 ssh-ed25519 AAAAghe\n\
+[ghe.example.com]:2222 ecdsa-sha2-nistp256 AAAAghe2\n\
+[ghe.example.com]:2222 ssh-ed25519 AAAAduplicate\n";
+        let got = keys_from_scratch(text, "ghe.example.com", 2222);
+        assert_eq!(
+            got,
+            vec![
+                "ssh-ed25519 AAAAghe".to_string(),
+                "ecdsa-sha2-nistp256 AAAAghe2".to_string(),
+            ],
+            "the bastion's key is not the upstream's, and one key per type"
+        );
+        // port 22 is written bare
+        let plain = "github.com ssh-ed25519 AAAAgh\ngitlab.com ssh-ed25519 AAAAgl\n";
+        assert_eq!(
+            keys_from_scratch(plain, "github.com", 22),
+            vec!["ssh-ed25519 AAAAgh".to_string()]
+        );
+        assert!(keys_from_scratch(plain, "example.org", 22).is_empty());
+        // the same name on another port is another host key entry, not this one
+        assert!(
+            keys_from_scratch(
+                "ghe.example.com ssh-ed25519 AAAAport22\n",
+                "ghe.example.com",
+                2222
+            )
+            .is_empty(),
+            "a bare name is port 22 and nothing else"
+        );
+        // comment lines and `# host:port SSH-2.0-…` banners are not keys
+        assert!(keys_from_scratch(
+            "# ghe.example.com:2222 SSH-2.0-OpenSSH_9.6\n",
+            "ghe.example.com",
+            2222
+        )
+        .is_empty());
+    }
 
     /// The adversarial case for `--stdin`: a passphrase nobody confirmed becoming the one the
     /// store is created with. Nothing would look wrong at the time — the store opens with it —
