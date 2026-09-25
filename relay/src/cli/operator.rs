@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, bail, Context};
 
-use super::color::{paint, Tone};
+use super::color::{paint, paint_err, Tone};
 use super::BootstrapAction;
 use russh::keys::PublicKey;
 
@@ -1267,10 +1267,13 @@ pub async fn proxy_credential_set(path: &Path) -> anyhow::Result<()> {
     })
     .to_string();
     let (ok, message) = store::control::call(&sock, &body).await?;
-    println!("{message}");
     if !ok {
+        // #213: the store's refusal ("the secret store is locked; ask a human to run: …") is
+        // the operator's error, on stderr and in red like the line that follows it
+        eprintln!("{}", paint_err(Tone::Bad, &message));
         bail!("the credential was not stored");
     }
+    println!("{message}");
     println!(
         "The relay picks it up within seconds of the store being unlocked. Squid does too, when \
          it is unlocked; if it is unlocked already, `mise run gw:restart` applies it to Squid now."

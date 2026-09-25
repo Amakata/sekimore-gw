@@ -141,6 +141,9 @@ pub enum BootstrapAction {
 
 /// Runs the command and returns the exit code.
 pub async fn run(cli: Cli) -> i32 {
+    // #213: the operator's error lines are red on a terminal. The agent's are not: `sekimore`
+    // runs `agent`, and what it prints is read by agents and scripts, never painted.
+    let operator_side = !matches!(cli.cmd, Command::Agent { .. });
     let result: anyhow::Result<i32> = match cli.cmd {
         Command::NeedsRelay => operator::needs_relay(&cli.config),
         Command::Serve => serve::serve(&cli.config).await.map(|_| 0),
@@ -196,7 +199,12 @@ pub async fn run(cli: Cli) -> i32 {
     match result {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("sekimore-relay: {e:#}");
+            let line = format!("sekimore-relay: {e:#}");
+            if operator_side {
+                eprintln!("{}", color::paint_err(color::Tone::Bad, &line));
+            } else {
+                eprintln!("{line}");
+            }
             1
         }
     }

@@ -79,6 +79,31 @@ pub fn paint(tone: Tone, s: &str) -> String {
     format!("{}{s}{RESET}", tone.escape())
 }
 
+/// `enabled`, decided on stderr instead of stdout: the operator's error lines go there, and
+/// `2>/dev/null` or a pipe on stdout alone must not decide for them (#213).
+pub fn enabled_on_stderr() -> bool {
+    #[cfg(test)]
+    if let Some(forced) = test_override() {
+        return forced;
+    }
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        decide(
+            std::env::var("SEKIMORE_COLOR").ok(),
+            std::env::var_os("NO_COLOR").is_some(),
+            std::io::stderr().is_terminal(),
+        )
+    })
+}
+
+/// `paint` for a line that goes to stderr (#213).
+pub fn paint_err(tone: Tone, s: &str) -> String {
+    if !enabled_on_stderr() {
+        return s.to_string();
+    }
+    format!("{}{s}{RESET}", tone.escape())
+}
+
 #[cfg(test)]
 mod force {
     use std::cell::Cell;
