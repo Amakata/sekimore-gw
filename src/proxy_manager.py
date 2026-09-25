@@ -101,9 +101,15 @@ class ProxyManager:
             # placeholders. str.format would drop the deny rule silently and leave the relay
             # reachable through the proxy, so put it in ourselves when the template lacks it.
             template = self._ensure_relay_placeholders(template)
+            # Before the destination backfill: that one inserts above the relay's allow when
+            # the allow is already there, which is how #178 keeps outranking it (#205).
+            template = self._ensure_relay_localhost_placeholders(template)
             template = self._ensure_destination_placeholders(template)
 
             denied_acls, denied_rule = self._generate_denied_destinations()
+
+            # #205: the relay's own way out through Squid, when an upstream proxy is configured
+            localhost_acl, localhost_rule = self._generate_relay_localhost_allow()
 
             # Fill in the template
             config = template.format(
@@ -111,12 +117,25 @@ class ProxyManager:
                 ALLOWED_DOMAINS_ACL=domain_acls,
                 RELAYED_DOMAINS_ACL=relayed_acls,
                 RELAYED_DOMAINS_RULE=relayed_rule,
+                RELAY_LOCALHOST_ACL=localhost_acl,
+                RELAY_LOCALHOST_RULE=localhost_rule,
                 DENIED_DESTINATIONS_ACL=denied_acls,
                 DENIED_DESTINATIONS_RULE=denied_rule,
                 CACHE_CONFIG=cache_config,
                 UPSTREAM_PROXY_CONFIG=upstream_config,
                 DNS_NAMESERVERS=self.upstream_dns,
             )
+
+            # #205: an allow below the deny is one Squid never reaches, so a config with it in
+            # the wrong place would look right and leave the relay's HTTPS dead — and one that
+            # outranks #178 would let the relay reach IMDS through the proxy. Refuse either.
+            if localhost_rule and not self._relay_localhost_allow_is_placed(config):
+                log_error(
+                    ComponentType.PROXY,
+                    "Squid config would not let the relay out (the localhost allow is missing "
+                    "or misplaced); refusing to write it",
+                )
+                return False
 
             # Belt and braces: never write a config that serves what the relay owns.
             if relayed_domains and "http_access deny relayed_domains" not in config:
@@ -213,12 +232,15 @@ class ProxyManager:
         log_system_event(
             "Squid template predates the denied-destination rule; inserting it",
         )
+        block = "{DENIED_DESTINATIONS_ACL}\n{DENIED_DESTINATIONS_RULE}\n\n"
+        # #205: above the relay's allow when that is present. The relay hands the *name* to the
+        # proxy and never resolves it, so Squid's `dst` deny is the only thing that sees the
+        # address the request would reach; an allow above it would serve IMDS to the relay.
+        relay_acl = "{RELAY_LOCALHOST_ACL}"
+        if relay_acl in template:
+            return template.replace(relay_acl, block + relay_acl, 1)
         # Both go in above the allowlist: Squid takes the first rule that matches
-        return template.replace(
-            allow_rule,
-            "{DENIED_DESTINATIONS_ACL}\n{DENIED_DESTINATIONS_RULE}\n\n" + allow_rule,
-            1,
-        )
+        return template.replace(allow_rule, block + allow_rule, 1)
 
     def _generate_domain_acls(self, domains: list[str]) -> str:
         """Build the domain ACLs.
@@ -286,6 +308,99 @@ class ProxyManager:
             "http_access deny relayed_domains"
         )
         return acl, rule
+
+    @staticmethod
+    def _ensure_relay_localhost_placeholders(template: str) -> str:
+        """Add the #205 placeholders to a template written before they existed.
+
+        Same reasoning as the two above: the template is bind-mounted by the deployment, so a
+        gateway can run this code against a template from an older release. The failure here is
+        the opposite one — not a hole, but the relay's HTTPS staying dead with
+        `upstream_proxy_tls: true`, and `str.format` raising KeyError rather than dropping it
+        quietly, which would leave Squid unconfigured altogether.
+
+        The allow goes directly above `{RELAYED_DOMAINS_RULE}`, because those domains are
+        exactly what the relay asks for. `_ensure_destination_placeholders` runs after this and
+        puts #178's block above it, so the allow ends up below the one deny it must not outrank.
+
+        A template that already carries the placeholders is returned untouched.
+        """
+        if "{RELAY_LOCALHOST_RULE}" in template:
+            return template
+
+        relayed_rule = "{RELAYED_DOMAINS_RULE}"
+        if relayed_rule not in template:
+            # `_ensure_relay_placeholders` runs first and puts it there, so this is a template
+            # of a shape we do not recognise. generate_config's check below catches it.
+            log_error(
+                ComponentType.PROXY,
+                "Squid template has neither the localhost placeholders nor the relayed-domain "
+                "rule; cannot place the relay's allow",
+            )
+            return template
+
+        log_system_event(
+            "Squid template predates the relay's localhost allow; inserting it",
+        )
+        return template.replace(
+            relayed_rule,
+            "{RELAY_LOCALHOST_ACL}\n{RELAY_LOCALHOST_RULE}\n\n" + relayed_rule,
+            1,
+        )
+
+    def _generate_relay_localhost_allow(self) -> tuple[str, str]:
+        """Build the ACL and the rule that let the relay out through Squid (#205).
+
+        Returns a (acl, rule) pair, both empty when there is no upstream proxy: with none there
+        is nothing for the relay to go through Squid for, and the generated file stays what it
+        was before this existed.
+
+        The relay's TLS is rustls, which implements no RSA key exchange. An upstream proxy
+        offering only TLS 1.2 with RSA — a Squid `https_port` without `tls-dh=`, which is the
+        default — shares no cipher suite with it, so every relayed HTTPS path dies in the
+        handshake. Squid is in the same container, speaks OpenSSL and already reaches that proxy
+        with `cache_peer ... tls`, so the relay sends its CONNECT here instead.
+
+        This sits above the relayed-domain deny, because the relayed domains are exactly what
+        the relay asks for, and below #178's destination deny, which is the only thing that sees
+        the address a name resolves to on this path. It widens nothing for the agent: the source
+        is 127.0.0.1, the gateway's INPUT policy is DROP with accepts on lan_if only
+        (src/firewall.py), and loopback is not routable from dev. The only thing that can match
+        it is a process in the gateway container.
+        """
+        if not self.upstream_proxy:
+            return "", ""
+        acl = "acl relay_localhost src 127.0.0.1/32"
+        rule = (
+            "# The relay's own requests (#205). It reaches the upstream proxy through Squid\n"
+            "# when that proxy speaks TLS, because Squid's OpenSSL has key exchanges rustls\n"
+            "# has not. Above the deny below: the relayed domains are what the relay asks for.\n"
+            "# Nothing in dev can match this -- INPUT is DROP except on lan_if, and 127.0.0.1\n"
+            "# is not routable from there -- and the relay asks only for hosts its own policy\n"
+            "# already allowed\n"
+            "http_access allow relay_localhost"
+        )
+        return acl, rule
+
+    @staticmethod
+    def _relay_localhost_allow_is_placed(config: str) -> bool:
+        """True when the relay's allow is present and ordered correctly (#205).
+
+        Squid takes the first `http_access` rule that matches, so the allow has to be above
+        every deny it must outrank (the relayed domains, and the catch-all) and below the one it
+        must not (#178's destinations: the relay never resolves the name on the proxy path, so
+        that rule is the only thing that sees where the request goes).
+        """
+        allow = config.find("http_access allow relay_localhost")
+        if allow < 0:
+            return False
+        for deny in ("http_access deny relayed_domains", "http_access deny all"):
+            at = config.find(deny)
+            if 0 <= at < allow:
+                return False
+        # `find` gives -1 when there is no destination deny at all, which is below `allow`
+        # and so passes, as it should.
+        return config.find("http_access deny denied_destinations") < allow
 
     def _generate_denied_destinations(self) -> tuple[str, str]:
         """Build the ACL and the access rule that refuse a destination by address (#178).

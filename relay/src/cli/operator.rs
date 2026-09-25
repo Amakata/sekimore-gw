@@ -596,10 +596,21 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 &[("url", &px.url), ("source", &credential_status(&state, px))]
             )
         );
+        // #205: which of the two routes this relay is on, before anything is tried. The line
+        // under it means a different thing on each.
+        println!(
+            "{}{}",
+            pad_label(&t("op.check.proxy_route"), 14),
+            t(if px.via_squid.is_some() {
+                "op.check.proxy_route_squid"
+            } else {
+                "op.check.proxy_route_direct"
+            })
+        );
         // #206: until now nothing in `check` ever touched the upstream proxy, so a proxy the
         // relay could not speak TLS to passed every check and surfaced only when real work
         // started. Connect, handshake, say what came back.
-        print_proxy_reach(px).await;
+        print_proxy_reach(px, &squid_probe_target(&r.https_targets, px)).await;
     }
     println!("\n{}", t("op.check.permissions"));
     let granted = r.project.granted();
@@ -1361,7 +1372,21 @@ fn credential_status(state: &str, spec: &ProxySpec) -> String {
 ///
 /// `store-status` does not get this: it answers a question about the secret store, and a network
 /// round trip does not belong in it. `check` is the place that is meant to try things.
-async fn print_proxy_reach(px: &ProxySpec) {
+async fn print_proxy_reach(px: &ProxySpec, target: &str) {
+    // #205: on the via-Squid route the relay never speaks TLS to the upstream, so a rustls
+    // handshake here would report a HandshakeFailure that no longer matters — and would call a
+    // working path UNREACHABLE. Probe what the relay actually does: one CONNECT to the local
+    // Squid, end to end through it.
+    if let Some(sq) = px.via_squid {
+        let outcome = crate::netutil::probe_via_squid(sq, target).await;
+        println!("{}", squid_reach_line(&outcome));
+        // Only when the path is broken is what the upstream offers worth the five seconds: a
+        // working route has already proved the question moot.
+        if squid_probe_failed(&outcome) {
+            print_openssl_offers(px).await;
+        }
+        return;
+    }
     let outcome = crate::netutil::probe_proxy(px).await;
     println!("{}", proxy_reach_line(&outcome));
     // #205: the bare alert says only "no". Say what the "no" means and how to get out of it, then
@@ -1373,6 +1398,77 @@ async fn print_proxy_reach(px: &ProxySpec) {
             print_openssl_offers(px).await;
         }
     }
+}
+
+/// The host the via-Squid probe sends its CONNECT to (#205).
+///
+/// The point is to walk the path real traffic walks, so it has to be a host the relay would
+/// actually ask for: `api.github.com` when it is one of the passthrough's targets (it is the one
+/// the GitHub API client uses, and the first thing an operator misses when this breaks),
+/// otherwise the first target there is. With no targets at all, the upstream proxy's own host —
+/// Squid will still try, and its answer still tells us whether the peer is reachable.
+fn squid_probe_target(targets: &[crate::config::HttpsTarget], px: &ProxySpec) -> String {
+    const PREFERRED: &str = "api.github.com";
+    if targets.iter().any(|t| t.host == PREFERRED) {
+        return PREFERRED.to_string();
+    }
+    if let Some(first) = targets.first() {
+        return first.host.clone();
+    }
+    url::Url::parse(&px.url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_else(|| PREFERRED.to_string())
+}
+
+/// Whether the via-Squid probe says the path is broken, i.e. anything but an open tunnel (#205).
+fn squid_probe_failed(outcome: &Result<crate::netutil::SquidProbe, String>) -> bool {
+    !matches!(outcome, Ok(p) if p.status == "200")
+}
+
+/// The `reach:` line on the via-Squid route (#205), apart from the socket so it can be tested.
+fn squid_reach_line(outcome: &Result<crate::netutil::SquidProbe, String>) -> String {
+    let label = pad_label(&t("op.check.proxy_reach"), 14);
+    let body = match outcome {
+        Ok(p) if p.status == "200" => {
+            let word = paint(Tone::Good, &t("op.check.word.proxy_reachable"));
+            tf(
+                "op.check.proxy_reach_squid",
+                &[
+                    ("state", word.as_str()),
+                    ("endpoint", &p.endpoint),
+                    ("target", &p.target),
+                ],
+            )
+        }
+        Ok(p) => {
+            let word = paint(Tone::Bad, &t("op.check.word.proxy_unreachable"));
+            // 502 / 503 is Squid saying it could not reach its peer — a different fault from
+            // "Squid refused this request", and a different place to look.
+            let key = if p.status.starts_with('5') {
+                "op.check.proxy_reach_squid_peer"
+            } else {
+                "op.check.proxy_reach_squid_refused"
+            };
+            tf(
+                key,
+                &[
+                    ("state", word.as_str()),
+                    ("endpoint", &p.endpoint),
+                    ("target", &p.target),
+                    ("status", &p.status_line),
+                ],
+            )
+        }
+        Err(e) => {
+            let word = paint(Tone::Bad, &t("op.check.word.proxy_unreachable"));
+            tf(
+                "op.check.proxy_reach_squid_down",
+                &[("state", word.as_str()), ("error", e)],
+            )
+        }
+    };
+    format!("{label}{body}")
 }
 
 /// The `reach:` line itself, apart from the socket, so its wording can be tested (#206).
@@ -1429,36 +1525,8 @@ async fn print_openssl_offers(px: &ProxySpec) {
     let Some(host) = url.host_str() else { return };
     let port = url.port_or_known_default().unwrap_or(3128);
     let endpoint = format!("{host}:{port}");
-    let out = tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio::process::Command::new("openssl")
-            .args([
-                "s_client",
-                "-connect",
-                &endpoint,
-                "-servername",
-                host,
-                "-brief",
-            ])
-            .stdin(std::process::Stdio::null())
-            .output(),
-    )
-    .await;
-    // `-brief` writes its summary to stderr; take both and keep only the two lines that matter.
-    let lines: Vec<String> = match out {
-        Ok(Ok(o)) => [
-            String::from_utf8_lossy(&o.stdout).into_owned(),
-            String::from_utf8_lossy(&o.stderr).into_owned(),
-        ]
-        .concat()
-        .lines()
-        .map(str::trim)
-        .filter(|l| l.starts_with("Protocol version:") || l.starts_with("Ciphersuite:"))
-        .map(str::to_string)
-        .collect(),
-        // Not installed, or it hung: say where to look instead.
-        _ => Vec::new(),
-    };
+    // Not installed, or it hung: `openssl_brief` gives nothing, and we say where to look instead.
+    let lines = crate::netutil::openssl_brief(host, port).await;
     if lines.is_empty() {
         println!(
             "{}",
@@ -1565,6 +1633,7 @@ garbage line\n";
             username: user.map(str::to_string),
             password: None,
             stored: Default::default(),
+            via_squid: None,
         };
 
         let locked = credential_status("locked", &bare(None));
@@ -1626,6 +1695,7 @@ garbage line\n";
             username: user.map(str::to_string),
             password: None,
             stored: Default::default(),
+            via_squid: None,
         };
         // The store is where the credential belongs; the environment works but is not advised.
         let from_store = bare(None);
@@ -1716,6 +1786,121 @@ garbage line\n";
         );
 
         set_for_tests(None);
+    }
+
+    /// #205: the via-Squid route's own `reach:` line. A 200 is green; a 5xx says Squid could not
+    /// reach its peer, which sends the operator somewhere else entirely than a refusal does.
+    #[test]
+    fn the_squid_reach_line_says_which_hop_failed() {
+        use super::super::color::set_for_tests;
+        use crate::netutil::SquidProbe;
+        set_for_tests(Some(false));
+
+        let ok_word = t("op.check.word.proxy_reachable");
+        let bad_word = t("op.check.word.proxy_unreachable");
+        let probe = |status: &str, line: &str| SquidProbe {
+            endpoint: "127.0.0.1:3128".into(),
+            target: "api.github.com".into(),
+            status: status.into(),
+            status_line: line.into(),
+        };
+
+        let open = Ok(probe("200", "HTTP/1.1 200 Connection established"));
+        let line = squid_reach_line(&open);
+        assert!(line.starts_with("  reach:      "), "{line}");
+        assert!(line.contains(&ok_word), "{line}");
+        assert!(line.contains("127.0.0.1:3128"), "{line}");
+        assert!(line.contains("api.github.com:443"), "{line}");
+        assert!(!squid_probe_failed(&open));
+        // No rustls handshake is reported: on this route the relay never takes one, and saying
+        // TLS 1.2 / TLS 1.3 here would name a hop the relay does not make.
+        assert!(!line.contains("TLS 1."), "{line}");
+
+        // Squid answered, but could not reach the upstream proxy.
+        let peer = Ok(probe("503", "HTTP/1.1 503 Service Unavailable"));
+        let line = squid_reach_line(&peer);
+        assert!(line.contains(&bad_word), "{line}");
+        assert!(line.contains("503 Service Unavailable"), "{line}");
+        assert!(squid_probe_failed(&peer));
+
+        // Squid refused the request itself: a different remedy, so a different sentence. The
+        // wording is the locale's, and only that the two differ is ours to pin down.
+        let refused = Ok(probe("403", "HTTP/1.1 403 Forbidden"));
+        let other = squid_reach_line(&refused);
+        assert!(other.contains("403 Forbidden"), "{other}");
+        assert_ne!(
+            line.replace("503 Service Unavailable", ""),
+            other.replace("403 Forbidden", ""),
+            "a 5xx is Squid's peer, a 4xx is Squid itself; say which"
+        );
+        assert!(squid_probe_failed(&refused));
+
+        // Nothing listening on the loopback port: the error itself, and not a status line.
+        let down: Result<SquidProbe, String> = Err("Connection refused (os error 111)".into());
+        let line = squid_reach_line(&down);
+        assert!(line.contains("Connection refused"), "{line}");
+        assert!(line.contains(&bad_word), "{line}");
+        assert!(squid_probe_failed(&down));
+
+        // The English wording each case is meant to produce, since the assertions above are
+        // deliberately locale-independent and would pass on a sentence that says nothing.
+        let en = |k: &str| crate::i18n::t_in("en", k);
+        assert!(en("op.check.proxy_reach_squid").contains("via Squid"));
+        assert!(
+            en("op.check.proxy_reach_squid_peer").contains("could not reach the upstream proxy")
+        );
+        assert!(en("op.check.proxy_reach_squid_down").contains("Squid is not listening"));
+        assert!(en("op.check.proxy_route_squid").contains("via the local Squid"));
+        assert!(en("op.check.proxy_route_direct").contains("rustls"));
+
+        // Only the state word carries colour, as on the direct route.
+        set_for_tests(Some(true));
+        let line = squid_reach_line(&open);
+        assert!(
+            line.starts_with(&format!("  reach:      \u{1b}[32m{ok_word}\u{1b}[0m")),
+            "{line}"
+        );
+        assert!(!line.trim_end().ends_with("\u{1b}[0m"), "{line}");
+
+        set_for_tests(None);
+    }
+
+    /// #205: the probe has to ask for a host the relay would really ask for, or it proves nothing
+    /// about the path real traffic takes.
+    #[test]
+    fn the_squid_probe_prefers_the_github_api_host() {
+        use crate::config::{HandlerKind, HttpsTarget};
+        let target = |domain: &str, host: &str| HttpsTarget {
+            domain: domain.into(),
+            host: host.into(),
+            max_upload: None,
+            kind: HandlerKind::Github,
+        };
+        let px = ProxySpec {
+            url: "https://gw.example.net:3129".into(),
+            username: None,
+            password: None,
+            stored: Default::default(),
+            via_squid: Some(3128),
+        };
+        let with = |targets: Vec<HttpsTarget>| squid_probe_target(&targets, &px);
+
+        // The one the GitHub API client uses, wherever it sits in the list.
+        assert_eq!(
+            with(vec![
+                target("registry.npmjs.org", "registry.npmjs.org"),
+                target("github.com", "api.github.com"),
+            ]),
+            "api.github.com"
+        );
+        // Otherwise the first target there is.
+        assert_eq!(
+            with(vec![target("registry.npmjs.org", "registry.npmjs.org")]),
+            "registry.npmjs.org"
+        );
+        // Nothing relayed at all: ask for the upstream proxy's own host, so Squid still has to
+        // reach its peer to answer.
+        assert_eq!(with(Vec::new()), "gw.example.net");
     }
 
     #[test]

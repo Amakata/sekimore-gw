@@ -510,6 +510,8 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
 - `407` と `Proxy-Authenticate` が返るなら、上流には届いており、認証だけが失敗しています。
 - 関所が扱う HTTPS ドメインに接続した直後の `curl: (35) SSL_ERROR_SYSCALL` と、監査ログの `https_failed … proxy closed during CONNECT` は、関所が上流プロキシに届いていない状態です。同時に Squid の経路は通ることがあります。`https://` の上流プロキシ（`upstream_proxy_tls: true`）にはゲートウェイ 0.2.39 以降が必要です（#192）。
 
+`upstream_proxy_tls: true` で Squid が有効なとき、関所は上流プロキシへ TLS を話しません。CONNECT をローカルの Squid に送り、Squid が OpenSSL で TLS を話し、保管した資格情報も Squid が提示します（`cache_peer … login=`）。これにより、TLS 1.2 の RSA 鍵交換しか提示しない上流（`tls-dh=` のない Squid の `https_port`）にも届きます。関所の rustls はこれを話せません（#205）。Squid が無効なときは関所自身が TLS を話し、TLS 1.3 か ECDHE のみです。どちらの経路かは `sekimore-relay check` の `route:` に出ます。`reach:` はその経路を実際に試します。
+
 ## 開発
 
 ```bash

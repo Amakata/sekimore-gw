@@ -126,8 +126,11 @@ fn proxy_tls() -> anyhow::Result<Arc<rustls::ClientConfig>> {
 /// An `https://` proxy URL (`proxy.upstream_proxy_tls: true`) means TLS to the proxy first, and
 /// the CONNECT inside it — what Squid does with `cache_peer … tls`. Before #192 the request went
 /// out in plain text regardless, and a TLS proxy closed the connection at the first byte.
+///
+/// #205: on the via-Squid route `connect_url()` is the local Squid, so this dials loopback in
+/// plain text and Squid takes the TLS hop with OpenSSL.
 pub async fn http_connect_tunnel(proxy: &ProxySpec, host: &str, port: u16) -> io::Result<Upstream> {
-    let tls = match Url::parse(&proxy.url)
+    let tls = match Url::parse(&proxy.connect_url())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("proxy url: {e}")))?
         .scheme()
     {
@@ -144,7 +147,7 @@ async fn http_connect_tunnel_with(
     port: u16,
     tls: Option<Arc<rustls::ClientConfig>>,
 ) -> io::Result<Upstream> {
-    let url = Url::parse(&proxy.url)
+    let url = Url::parse(&proxy.connect_url())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("proxy url: {e}")))?;
     let phost = url
         .host_str()
@@ -230,7 +233,7 @@ pub fn with_handshake_hint(msg: String) -> String {
 /// real work starts. No CONNECT is sent — the point is reachability and the handshake, not a
 /// tunnel — and the connection is dropped as soon as the report is in hand.
 pub async fn probe_proxy(proxy: &ProxySpec) -> Result<ProbeReport, String> {
-    let url = Url::parse(&proxy.url).map_err(|e| format!("proxy url: {e}"))?;
+    let url = Url::parse(&proxy.connect_url()).map_err(|e| format!("proxy url: {e}"))?;
     let phost = url
         .host_str()
         .ok_or_else(|| "proxy url without host".to_string())?
@@ -314,6 +317,157 @@ async fn probe_inner(
     })
 }
 
+/// What `probe_via_squid` got back: Squid's own status line for the CONNECT (#205).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SquidProbe {
+    /// The Squid endpoint that was dialled, e.g. `127.0.0.1:3128`.
+    pub endpoint: String,
+    /// The host the CONNECT named, e.g. `api.github.com`.
+    pub target: String,
+    /// Squid's status code: `200` when the tunnel is open.
+    pub status: String,
+    /// Squid's whole status line, for a failure worth quoting.
+    pub status_line: String,
+}
+
+/// Sends one `CONNECT <target>:443` to the local Squid and reports its status line (#205).
+///
+/// This is the actual path the relay takes on the via-Squid route, end to end: loopback to Squid,
+/// Squid's `cache_peer … tls` to the upstream proxy, the upstream's CONNECT to the target. A
+/// rustls handshake with the upstream would tell `check` nothing here — it is exactly the
+/// handshake this route exists to avoid.
+pub async fn probe_via_squid(port: u16, target: &str) -> Result<SquidProbe, String> {
+    let endpoint = format!("127.0.0.1:{port}");
+    tokio::time::timeout(PROBE_TIMEOUT, probe_via_squid_at(&endpoint, target))
+        .await
+        .unwrap_or_else(|_| {
+            Err(format!(
+                "no answer from Squid at {endpoint} within {}s",
+                PROBE_TIMEOUT.as_secs_f32()
+            ))
+        })
+}
+
+/// `probe_via_squid` against a given endpoint, so a test can point it at a listener of its own.
+pub async fn probe_via_squid_at(endpoint: &str, target: &str) -> Result<SquidProbe, String> {
+    let mut s = TcpStream::connect(endpoint)
+        .await
+        .map_err(|e| e.to_string())?;
+    // No Proxy-Authorization: the local Squid asks for none, and the upstream's credential is
+    // Squid's to present (`cache_peer … login=`), not ours to put on this hop (#205).
+    let req = format!(
+        "CONNECT {target}:443 HTTP/1.1\r\nHost: {target}:443\r\nProxy-Connection: close\r\n\r\n"
+    );
+    s.write_all(req.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    let line = read_status_line(&mut s).await?;
+    let status = line.split_whitespace().nth(1).unwrap_or("").to_string();
+    Ok(SquidProbe {
+        endpoint: endpoint.to_string(),
+        target: target.to_string(),
+        status,
+        status_line: line,
+    })
+}
+
+/// Reads up to the end of the response head and hands back its first line.
+async fn read_status_line<S: AsyncRead + Unpin>(s: &mut S) -> Result<String, String> {
+    let mut buf = Vec::with_capacity(256);
+    let mut byte = [0u8; 1];
+    loop {
+        let n = s.read(&mut byte).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            if buf.is_empty() {
+                return Err("Squid closed the connection without answering".into());
+            }
+            break;
+        }
+        buf.push(byte[0]);
+        if buf.ends_with(b"\r\n\r\n") || buf.ends_with(b"\n\n") {
+            break;
+        }
+        if buf.len() > 16 * 1024 {
+            return Err("Squid's CONNECT response is too large".into());
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string())
+}
+
+/// Asks the `openssl` CLI what an endpoint negotiates with it, as `Protocol version:` /
+/// `Ciphersuite:` lines (#206, #205).
+///
+/// OpenSSL implements the RSA key exchange rustls does not, so where the relay gets
+/// `HandshakeFailure` this still completes and names what the upstream chose. Best effort: no
+/// openssl in PATH, a timeout or a non-zero exit all give an empty vector, and every caller has
+/// something sensible to do with that.
+pub async fn openssl_brief(host: &str, port: u16) -> Vec<String> {
+    let endpoint = format!("{host}:{port}");
+    let out = tokio::time::timeout(
+        OPENSSL_TIMEOUT,
+        tokio::process::Command::new("openssl")
+            .args([
+                "s_client",
+                "-connect",
+                &endpoint,
+                "-servername",
+                host,
+                "-brief",
+            ])
+            .stdin(std::process::Stdio::null())
+            .output(),
+    )
+    .await;
+    // `-brief` writes its summary to stderr; take both and keep only the two lines that matter.
+    match out {
+        Ok(Ok(o)) => [
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        ]
+        .concat()
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("Protocol version:") || l.starts_with("Ciphersuite:"))
+        .map(str::to_string)
+        .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// How long `openssl_brief` waits. Long enough for a slow corporate link, short enough that a
+/// silent endpoint does not hold up `serve`'s startup or `check`'s output.
+const OPENSSL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Whether `openssl_brief`'s reading is a suite with no forward secrecy (#205).
+///
+/// TLS 1.3 has ephemeral key agreement in every suite it defines, so its `Ciphersuite:` line needs
+/// no ECDHE in the name. Under TLS 1.2 the key exchange is spelled out: `ECDHE-RSA-…` and
+/// `DHE-…` are ephemeral, a bare `AES256-GCM-SHA384` is the static RSA key exchange — the
+/// reporter's upstream, and the one rustls will not speak.
+pub fn is_rsa_key_exchange(lines: &[String]) -> bool {
+    let cipher = lines
+        .iter()
+        .find_map(|l| l.strip_prefix("Ciphersuite:"))
+        .map(str::trim);
+    let Some(cipher) = cipher else {
+        return false;
+    };
+    // Reading nothing at all is not a finding.
+    if cipher.is_empty() {
+        return false;
+    }
+    if cipher.starts_with("TLS_") {
+        // TLS 1.3 spells its suites `TLS_AES_256_GCM_SHA384`: always ephemeral.
+        return false;
+    }
+    !(cipher.contains("ECDHE") || cipher.contains("DHE"))
+}
+
 /// The CONNECT exchange itself, on whatever stream reaches the proxy.
 async fn connect_through<S: AsyncRead + AsyncWrite + Unpin>(
     s: &mut S,
@@ -359,12 +513,22 @@ async fn connect_through<S: AsyncRead + AsyncWrite + Unpin>(
     let head = String::from_utf8_lossy(&buf);
     let status = head.split_whitespace().nth(1).unwrap_or("");
     if status == "407" {
+        let line = head.lines().next().unwrap_or("");
+        // #205: on the via-Squid route the relay presents nothing, by design — the credential is
+        // Squid's to present to the upstream (`cache_peer … login=`). Telling the operator "the
+        // relay presented X" would send them to the wrong half of the path.
+        if proxy.via_squid.is_some() {
+            return Err(io::Error::other(format!(
+                "proxy refused CONNECT {host}:{port}: {line} — the relay went through the local \
+                 Squid, which presents the stored credential to the upstream itself. Set it with \
+                 mise run gw:proxy-credential, and unlock the store (mise run gw:unlock)"
+            )));
+        }
         // #151: say which credential was refused. Squid and the relay can read different ones, and
         // "407" alone left the operator comparing the two by hand
         return Err(io::Error::other(format!(
-            "proxy refused CONNECT {host}:{port}: {} — the relay presented the credential from {}. \
+            "proxy refused CONNECT {host}:{port}: {line} — the relay presented the credential from {}. \
              Set it with mise run gw:proxy-credential, and unlock the store (mise run gw:unlock)",
-            head.lines().next().unwrap_or(""),
             proxy.credential_source()
         )));
     }
@@ -495,6 +659,7 @@ mod tests {
             username: Some("user".into()),
             password: Some("pass".into()),
             stored: Default::default(),
+            via_squid: None,
         }
     }
 
@@ -507,6 +672,7 @@ mod tests {
             username: Some("env-user".into()),
             password: Some("env-pass".into()),
             stored: Default::default(),
+            via_squid: None,
         };
         spec.stored
             .set(Some(("store-user".into(), "store-pass".into())));
@@ -527,6 +693,7 @@ mod tests {
             username: Some("env-user".into()),
             password: None,
             stored: Default::default(),
+            via_squid: None,
         };
         let err = http_connect_tunnel(&spec, "example.com", 443)
             .await
@@ -538,6 +705,148 @@ mod tests {
             "{err}"
         );
         assert!(err.contains("gw:proxy-credential"), "{err}");
+    }
+
+    /// #205: the reporter's upstream offers only TLS 1.2 with RSA key exchange, which rustls
+    /// cannot speak. On that route the tunnel must go to the local Squid in plain text, and
+    /// present nothing of the upstream's credential there.
+    #[tokio::test]
+    async fn the_via_squid_route_tunnels_through_the_local_squid_with_no_credential() {
+        let (url, seen) = one_connect("200 Connection established").await;
+        let squid_port = Url::parse(&url).unwrap().port().unwrap();
+        let spec = ProxySpec {
+            // The configured proxy is somewhere else entirely, and speaks TLS the relay cannot.
+            url: "https://gw.example.net:3129".into(),
+            username: Some("env-user".into()),
+            password: Some("env-pass".into()),
+            stored: Default::default(),
+            via_squid: Some(squid_port),
+        };
+        spec.stored
+            .set(Some(("store-user".into(), "store-pass".into())));
+        // No TLS is attempted towards gw.example.net — the listener above is plain HTTP on
+        // loopback, and a rustls handshake against it would fail here rather than connect.
+        http_connect_tunnel(&spec, "api.github.com", 443)
+            .await
+            .unwrap();
+        assert_eq!(
+            seen.await.unwrap(),
+            "-",
+            "the local Squid gets no credential"
+        );
+    }
+
+    /// #205: a 407 on the via-Squid route is not the relay's credential being refused — it
+    /// presented none. #151's wording would send the operator to compare a credential the relay
+    /// never sent.
+    #[tokio::test]
+    async fn a_407_through_squid_does_not_blame_the_relays_credential() {
+        let (url, _) = one_connect("407 Proxy Authentication Required").await;
+        let squid_port = Url::parse(&url).unwrap().port().unwrap();
+        let spec = ProxySpec {
+            url: "https://gw.example.net:3129".into(),
+            username: Some("env-user".into()),
+            password: Some("env-pass".into()),
+            stored: Default::default(),
+            via_squid: Some(squid_port),
+        };
+        let err = http_connect_tunnel(&spec, "api.github.com", 443)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("407"), "{err}");
+        assert!(err.contains("the local Squid"), "name the hop: {err}");
+        assert!(
+            !err.contains("the relay presented"),
+            "the relay presented nothing on this route: {err}"
+        );
+        // The remedy is still the same command, because the credential Squid presents is the
+        // one in the store.
+        assert!(err.contains("gw:proxy-credential"), "{err}");
+    }
+
+    /// #205: `check`'s probe on the via-Squid route walks the real path, so what it reports is
+    /// Squid's own answer to a CONNECT.
+    #[tokio::test]
+    async fn the_squid_probe_reports_squids_status_line() {
+        async fn squid(status: &'static str) -> String {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                let (mut s, _) = listener.accept().await.unwrap();
+                let mut buf = vec![0u8; 1024];
+                let n = s.read(&mut buf).await.unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+                assert!(
+                    req.starts_with("CONNECT api.github.com:443 HTTP/1.1\r\n"),
+                    "{req}"
+                );
+                assert!(
+                    !req.contains("Proxy-Authorization"),
+                    "nothing of the upstream's goes on this hop: {req}"
+                );
+                let _ = s
+                    .write_all(format!("HTTP/1.1 {status}\r\n\r\n").as_bytes())
+                    .await;
+            });
+            addr.to_string()
+        }
+
+        let open = probe_via_squid_at(&squid("200 Connection established").await, "api.github.com")
+            .await
+            .unwrap();
+        assert_eq!(open.status, "200");
+        assert_eq!(open.target, "api.github.com");
+
+        // Squid could not reach its peer: a 5xx, and the status line is what says so.
+        let peer = probe_via_squid_at(&squid("503 Service Unavailable").await, "api.github.com")
+            .await
+            .unwrap();
+        assert_eq!(peer.status, "503");
+        assert!(
+            peer.status_line.contains("503 Service Unavailable"),
+            "{peer:?}"
+        );
+
+        // Squid refused the request itself.
+        let refused = probe_via_squid_at(&squid("403 Forbidden").await, "api.github.com")
+            .await
+            .unwrap();
+        assert_eq!(refused.status, "403");
+
+        // Nothing listening at all: an error, not a status.
+        let dead = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = dead.local_addr().unwrap().to_string();
+        drop(dead);
+        assert!(probe_via_squid_at(&addr, "api.github.com").await.is_err());
+    }
+
+    /// #205: the WARN is about the key exchange, which only a TLS 1.2 suite name spells out.
+    #[test]
+    fn rsa_key_exchange_is_read_off_the_cipher_name() {
+        let brief = |c: &str| {
+            vec![
+                "Protocol version: TLSv1.2".to_string(),
+                format!("Ciphersuite: {c}"),
+            ]
+        };
+        // The reporter's proxy: no ECDHE in the name, so the key exchange is static RSA.
+        assert!(is_rsa_key_exchange(&brief("AES256-GCM-SHA384")));
+        assert!(is_rsa_key_exchange(&brief("AES128-SHA")));
+        // Ephemeral, either spelling.
+        assert!(!is_rsa_key_exchange(&brief("ECDHE-RSA-AES256-GCM-SHA384")));
+        assert!(!is_rsa_key_exchange(&brief("DHE-RSA-AES256-GCM-SHA384")));
+        // TLS 1.3 names no key exchange because every suite it defines is ephemeral.
+        assert!(!is_rsa_key_exchange(&[
+            "Protocol version: TLSv1.3".to_string(),
+            "Ciphersuite: TLS_AES_256_GCM_SHA384".to_string(),
+        ]));
+        // No reading is not a finding: openssl missing, or the endpoint silent.
+        assert!(!is_rsa_key_exchange(&[]));
+        assert!(!is_rsa_key_exchange(&brief("")));
+        assert!(!is_rsa_key_exchange(&[
+            "Protocol version: TLSv1.2".to_string()
+        ]));
     }
 
     #[tokio::test]

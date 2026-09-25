@@ -32,6 +32,33 @@ use crate::tokens::TokenStore;
 
 pub const MAX_AUTHORIZED_KEYS: usize = 64;
 
+/// #205: one WARN at start when the upstream proxy negotiates a TLS 1.2 suite with no forward
+/// secrecy.
+///
+/// Worth saying on both routes. On the via-Squid route it is the whole reason the detour exists,
+/// and the operator should know their proxy traffic is not forward secret; on the direct route the
+/// relay would not have got this far, but a proxy that *can* do ECDHE and merely prefers RSA is
+/// still a finding. Best effort throughout: `openssl_brief` gives nothing when openssl is missing
+/// or the endpoint is silent, and nothing is not a finding.
+async fn warn_if_no_forward_secrecy(px: &crate::config::ProxySpec) {
+    let Ok(url) = url::Url::parse(&px.url) else {
+        return;
+    };
+    let Some(host) = url.host_str() else { return };
+    if url.scheme() != "https" {
+        return;
+    }
+    let port = url.port_or_known_default().unwrap_or(3128);
+    let lines = crate::netutil::openssl_brief(host, port).await;
+    if crate::netutil::is_rsa_key_exchange(&lines) {
+        log::warn!(
+            "upstream proxy {} negotiates RSA key exchange: no forward secrecy ({})",
+            px.url,
+            lines.join("; ")
+        );
+    }
+}
+
 /// Open the secret store and unlock it if the deployment said to. Returns where the rest of the
 /// process should read secrets from, and the store itself when there is one to serve.
 ///
@@ -138,15 +165,29 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     // same roots as the GitHub client (platform, SSL_CERT_FILE, relay.ca_file)
     crate::netutil::init_proxy_tls(r.relay.ca_file.as_deref()).context("proxy TLS roots")?;
     if let Some(px) = &r.proxy {
-        log::info!(
-            "upstream proxy {} ({})",
-            px.url,
-            if px.url.starts_with("https://") {
-                "TLS to the proxy, then CONNECT"
-            } else {
-                "plain CONNECT"
-            }
-        );
+        // #205: which of the two routes this relay is on. The operator reads this line when a
+        // relayed HTTPS path fails, and "through Squid" against "by myself" is the first thing
+        // that has to be clear.
+        match px.via_squid {
+            Some(sq) => log::info!(
+                "upstream proxy {} via the local Squid (127.0.0.1:{sq}): Squid speaks TLS to it",
+                px.url
+            ),
+            None => log::info!(
+                "upstream proxy {} ({})",
+                px.url,
+                if px.url.starts_with("https://") {
+                    "TLS to the proxy, then CONNECT"
+                } else {
+                    "plain CONNECT"
+                }
+            ),
+        }
+        // #205: whichever route is taken, say so once when the upstream negotiates a cipher
+        // suite with no forward secrecy. Detached: it shells out to openssl with a five-second
+        // bound, and a silent upstream must not hold up the listeners coming up.
+        let px = px.clone();
+        tokio::spawn(async move { warn_if_no_forward_secrecy(&px).await });
     }
     let mut token_caches: Vec<Arc<crate::github::upstream_token::UpstreamTokenStore>> = Vec::new();
 

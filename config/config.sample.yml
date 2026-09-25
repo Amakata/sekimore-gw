@@ -108,6 +108,12 @@ proxy:
   upstream_proxy: null                    # corporate proxy, e.g. "proxy.example.com:8080". Leave null when there is none
   upstream_proxy_tls: false               # TLS to the upstream proxy. Squid (cache_peer … tls) and, from 0.2.39 (#192), the relay's
                                           #   443 passthrough and GitHub API calls all speak TLS to it
+                                          # With Squid enabled (the line above), the relay does not take the TLS hop itself: it sends
+                                          #   its CONNECT to the local Squid, which speaks TLS to the upstream with OpenSSL. That works
+                                          #   with a proxy offering only TLS 1.2 RSA key exchange (a Squid https_port without tls-dh=).
+                                          # With Squid disabled, the relay speaks TLS itself, with rustls: TLS 1.3 or ECDHE only. An
+                                          #   upstream offering neither fails with HandshakeFailure (#205).
+                                          # `sekimore-relay check` prints which of the two routes is in use.
 
   # Upstream proxy authentication (Basic Auth)
   # Environment variables: SEKIMORE_UPSTREAM_PROXY_USERNAME, SEKIMORE_UPSTREAM_PROXY_PASSWORD
