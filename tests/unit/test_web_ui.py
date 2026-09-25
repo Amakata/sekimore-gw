@@ -18,6 +18,7 @@ from src.web_ui.app import (
     ProxyConfigResponse,
     SquidConfigResponse,
     StatsResponse,
+    redact_squid_config,
 )
 
 
@@ -1931,3 +1932,59 @@ def describe_proxy_env_endpoint():
             "domain_handlers:\n  github.com:\n    handler: git-relay\n"
         )
         assert "github.com" in data["no_proxy"]
+
+
+def describe_upstream_credential_redaction():
+    """#217: /api/config is readable from dev; the generated squid.conf must not hand out the
+    upstream proxy password that the secret store exists to keep from the agent."""
+
+    squid_conf = (
+        "http_port 3128\n"
+        "cache_peer proxy.example.net parent 3129 0 no-query default tls login=alice:s3cret-pw\n"
+        "never_direct allow all\n"
+    )
+
+    def it_blanks_the_password_and_keeps_the_user():
+        out = redact_squid_config(squid_conf)
+        assert "s3cret-pw" not in out
+        assert "login=alice:***" in out
+        assert "http_port 3128" in out
+
+    def it_leaves_squids_other_login_forms_alone():
+        for form in ("login=PASS", "login=PASSTHRU", "login=NEGOTIATE", "login=PROXYPASS"):
+            line = f"cache_peer p parent 3128 0 {form}\n"
+            assert redact_squid_config(line) == line
+
+    def it_handles_a_password_with_a_colon_in_it():
+        out = redact_squid_config("cache_peer p parent 3128 0 login=bob:pa:ss:word\n")
+        assert "pa:ss:word" not in out
+        assert "login=bob:***" in out
+
+    def it_never_returns_the_password_from_the_api(tmp_path):
+        conf = tmp_path / "squid.conf"
+        conf.write_text(squid_conf, encoding="utf-8")
+        with (
+            patch("src.web_ui.app.constants.SQUID_CONFIG_PATH", str(conf)),
+            patch(
+                "src.web_ui.app.load_config",
+                return_value={
+                    "proxy": {"enabled": True, "upstream_proxy": "proxy.example.net:3129"}
+                },
+            ),
+            patch("src.web_ui.app._upstream_auth_state", return_value="set"),
+        ):
+            from src.web_ui.app import app
+
+            client = TestClient(app)
+            response = client.get("/api/config")
+        assert response.status_code == 200
+        assert "s3cret-pw" not in response.text
+        assert "login=alice:***" in response.json()["squid"]["config_text"]
+
+    def it_has_no_write_endpoints_for_the_domain_lists():
+        from src.web_ui.app import app
+
+        client = TestClient(app)
+        assert client.post("/api/domains/allow", json={"domain": "x.example"}).status_code == 404
+        assert client.delete("/api/domains/allow/x.example").status_code == 404
+        assert client.post("/api/domains/block", json={"domain": "x.example"}).status_code == 404

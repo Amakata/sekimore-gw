@@ -5,6 +5,7 @@
 
 import contextlib
 import os
+import re
 import subprocess
 import time
 from importlib.metadata import PackageNotFoundError
@@ -346,14 +347,29 @@ async def get_proxy_env() -> ProxyEnvResponse:
     return _proxy_env_of(load_config())
 
 
+# `cache_peer … login=user:password` — the one place the generated config carries a secret.
+# Squid's other `login=` forms (PASS, PASSTHRU, NEGOTIATE, PROXYPASS) have no colon and are left.
+_SQUID_LOGIN = re.compile(r"(login=[^:\s]+:)\S+")
+
+
+def redact_squid_config(text: str) -> str:
+    """The generated squid.conf with the upstream proxy password blanked (#217).
+
+    `/api/config` is readable from the dev container, and `config_text` returned the file
+    whole — with the credential that the secret store exists to keep from the agent. The
+    username stays: it is what the operator needs to see to know which credential is in force.
+    """
+    return _SQUID_LOGIN.sub(r"\1***", text)
+
+
 def _read_squid_config() -> SquidConfigResponse:
-    """Read the Squid configuration file."""
+    """Read the Squid configuration file, with its secret redacted."""
     squid_path = Path(constants.SQUID_CONFIG_PATH)
     if squid_path.exists():
         try:
             return SquidConfigResponse(
                 available=True,
-                config_text=squid_path.read_text(encoding="utf-8"),
+                config_text=redact_squid_config(squid_path.read_text(encoding="utf-8")),
             )
         except Exception:
             return SquidConfigResponse(available=False)
@@ -1182,52 +1198,6 @@ async def get_ignored_domains() -> list[DomainInfo]:
 
     finally:
         await db.close()
-
-
-@app.post("/api/domains/allow")
-async def add_allowed_domain(request: DomainRequest) -> dict:
-    """Add an allowed domain by updating the configuration file.
-
-    Args:
-        request: The domain request
-
-    Returns:
-        A success response
-    """
-    # When implemented, this updates the config file and notifies the orchestrator
-    log_system_event("Domain whitelist add request", domain=request.domain)
-
-    return {"success": True, "domain": request.domain}
-
-
-@app.delete("/api/domains/allow/{domain}")
-async def remove_allowed_domain(domain: str) -> dict:
-    """Remove an allowed domain.
-
-    Args:
-        domain: The domain name
-
-    Returns:
-        A success response
-    """
-    log_system_event("Domain whitelist remove request", domain=domain)
-
-    return {"success": True, "domain": domain}
-
-
-@app.post("/api/domains/block")
-async def add_blocked_domain(request: DomainRequest) -> dict:
-    """Add a denied domain.
-
-    Args:
-        request: The domain request
-
-    Returns:
-        A success response
-    """
-    log_system_event("Domain blocklist add request", domain=request.domain)
-
-    return {"success": True, "domain": request.domain}
 
 
 # ---- Relay tab: read-only over /data/relay; changes go through the sekimore-relay CLI ----
