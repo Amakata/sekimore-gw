@@ -40,33 +40,10 @@ sekimore: denied: pr:merge is not allowed by policy
 
 ## はじめかた
 
-### A. dev コンテナ（推奨）
-
 [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) の `examples/sgw-sample/` テンプレートを使います。
 その README が clone から関所の動作確認までを案内します。
 
-### B. ゲートウェイだけ
-
-DNS の許可リスト、ファイアウォール、Squid、ダッシュボードが動きます。関所は含みません。
-
-```bash
-git clone https://github.com/Amakata/sekimore-gw.git && cd sekimore-gw
-cp config/config.sample.yml config/config.yml    # allow_domains: エージェントに許可するドメイン
-docker compose up -d                             # ダッシュボード: http://localhost:8080
-```
-
-関所を足すには:
-
-- `config.yml` に `domain_handlers` と `relay` を設定する。テンプレートは `config.sample.yml` の末尾。詳細は [relay/README.ja.md](relay/README.ja.md)
-- エージェントのコンテナに `agent-setup.sh`、`sekimore-relay` CLI、`sekimore` ラッパーを入れる。`docker-compose.yml` の `ai-agent` サービスが最小の例
-
-認証の必要なプロキシの内側で、ゲートウェイ単体の場合:
-
-```bash
-cp .env.example .env    # SEKIMORE_UPSTREAM_PROXY_USERNAME / _PASSWORD
-```
-
-dev コンテナの構成の場合（`.devcontainer/.env` はエージェントが読めるので、秘密ストアを使う）:
+認証の必要なプロキシの内側では、パスワードを秘密ストアに入れます（`.devcontainer/.env` はエージェントが読めるため）:
 
 ```bash
 mise run gw:proxy-credential -- set

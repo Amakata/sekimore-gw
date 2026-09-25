@@ -40,33 +40,11 @@ sekimore: denied: pr:merge is not allowed by policy
 
 ## Get started
 
-### A. Dev container (recommended)
-
 Use the `examples/sgw-sample/` template in [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base).
 Its README goes from clone to a verified relay.
 
-### B. Gateway only
-
-DNS allowlist, firewall, Squid and the dashboard. No relay.
-
-```bash
-git clone https://github.com/Amakata/sekimore-gw.git && cd sekimore-gw
-cp config/config.sample.yml config/config.yml    # allow_domains: what the agent may reach
-docker compose up -d                             # dashboard: http://localhost:8080
-```
-
-To add the relay:
-
-- Set `domain_handlers` and `relay` in `config.yml`. The template is at the end of `config.sample.yml`. See [relay/README.md](relay/README.md).
-- Give the agent container `agent-setup.sh`, the `sekimore-relay` CLI and the `sekimore` wrapper. The `ai-agent` service in `docker-compose.yml` is a minimal example.
-
-Behind a proxy that requires credentials, standalone gateway:
-
-```bash
-cp .env.example .env    # SEKIMORE_UPSTREAM_PROXY_USERNAME / _PASSWORD
-```
-
-Dev-container setup (`.devcontainer/.env` is readable by the agent, so use the secret store):
+Behind a proxy that requires credentials, put the password in the secret store
+(`.devcontainer/.env` is readable by the agent):
 
 ```bash
 mise run gw:proxy-credential -- set
