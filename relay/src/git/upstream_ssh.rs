@@ -205,6 +205,11 @@ impl OpenSshUpstream {
             format!("UserKnownHostsFile={}", scratch.display()),
             "-o".into(),
             "StrictHostKeyChecking=accept-new".into(),
+            // The gateway image is Debian, whose /etc/ssh/ssh_config says `HashKnownHosts yes`,
+            // and ssh still reads that file after `-F`. A hashed line names no host, so the
+            // scratch file could not be read back. Command-line options win over both files.
+            "-o".into(),
+            "HashKnownHosts=no".into(),
             "-o".into(),
             format!("HostKeyAlgorithms={key_type}"),
             "-o".into(),
@@ -585,6 +590,9 @@ mod tests {
         assert!(pos(&format!("UserKnownHostsFile={}", scratch.display())).is_some());
         assert!(pos("StrictHostKeyChecking=accept-new").is_some());
         assert!(pos("HostKeyAlgorithms=ssh-ed25519").is_some());
+        // Debian's system ssh_config hashes new entries; a hashed line cannot be matched to the
+        // target host when the scratch file is read back
+        assert!(pos("HashKnownHosts=no").is_some(), "{args:?}");
         assert!(pos("BatchMode=yes").is_some());
         // ...but the real known_hosts is never named on the command line
         assert!(
