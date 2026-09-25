@@ -12,6 +12,15 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.45（2026-09-25）
+
+### Enhancement
+
+- relay: login が device flow の前に必要なホスト鍵（まず踏み台、次にそれ越しの上流）を取り、保存できなかったときは非ゼロで終了するようにした。yes/no はバイト列として読み、その文字で判定する (#230)
+- `gw:login` と `gw:logout` を `gw:unlock` と同じく `sgw.sh gw-tty` 上の `raw = true` のタスクにした。端末が無いと、答えが文字でないバイト列として届いていた (#230)
+- relay: 接続を記録する監査の各行が `docs/paths.yml` の `edge=<id>` を持つようにした。`paths::AUDIT_EVENTS` が組を並べ、経路台帳のテストが検査し、relay タブが id を表示する (#228)
+- `relay/README` に、`keyscan` が fingerprint を表示してから保存する理由と、`login` が先に尋ねる理由を書いた (#230)
+
 ## 0.2.44（2026-09-25）
 
 ### Enhancement

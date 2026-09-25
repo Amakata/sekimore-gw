@@ -5,6 +5,14 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.45（2026-09-25）
+
+### Enhancement
+
+- login が device flow の前に必要なホスト鍵（まず踏み台、次にそれ越しの上流）を取り、保存できなかったときは非ゼロで終了するようにした。yes/no はバイト列として読み、その文字で判定する (#230)
+- 接続を記録する監査の各行が `docs/paths.yml` の `edge=<id>` を持つようにした。`paths::AUDIT_EVENTS` が組を並べ、経路台帳のテストが検査し、relay タブが id を表示する (#228)
+- `relay/README` に、`keyscan` が fingerprint を表示してから保存する理由と、`login` が先に尋ねる理由を書いた (#230)
+
 ## 0.2.44（2026-09-25）
 
 ### Security
