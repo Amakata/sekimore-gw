@@ -263,8 +263,7 @@ edges:
   - id: relay.github.api
     from: gateway.relay.github
     to: upstream.api
-    via: [upstream_proxy]
-    proto: https
+    proto: https (end to end; the hop to a proxy is relay.github.via_proxy or relay.github.via_squid)
     resolves: reqwest, or the proxy
     verifies_peer: rustls — platform roots, SSL_CERT_FILE, relay.ca_file
     tls_impl: rustls
