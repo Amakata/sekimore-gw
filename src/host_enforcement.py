@@ -1,4 +1,4 @@
-"""Host-side FORWARD enforcement (#186).
+"""Host-side enforcement: FORWARD rules in DOCKER-USER (#186) and INPUT rules (#190).
 
 The container firewall sees only the traffic an agent routes through the gateway. A root
 process in an agent container can point its default route at Docker's own bridge gateway and
@@ -11,6 +11,15 @@ Two rules per internal bridge, inserted at the top of DOCKER-USER:
     -i br-X -o br-X -j RETURN   # dev <-> gateway on the same bridge. br_netfilter sends bridged
                                 # frames through FORWARD too, so this has to be explicit
     -i br-X         -j DROP     # anything else that came in from the internal bridge
+
+Traffic to the bridge's own address is delivered to the host and never forwarded, so it
+passes INPUT instead (#190). Through it, dev reached every port any container on the machine
+publishes (docker-proxy listens on the host) and the host's own services. Two more rules at
+the top of INPUT:
+
+    -i br-X --ctstate RELATED,ESTABLISHED -j ACCEPT   # replies to connections the host opened,
+                                                      # e.g. docker-proxy to a port dev publishes
+    -i br-X                                -j DROP    # dev never needs the host itself
 
 The gateway reaches the host's network namespace through PID 1 (`pid: host` on the gateway
 service) with nsenter. The host's own iptables is preferred, so the rules land in the backend
@@ -31,7 +40,9 @@ from collections.abc import Callable
 
 from .logger import ComponentType, log_error, log_system_event
 
-CHAIN = "DOCKER-USER"
+FORWARD_CHAIN = "DOCKER-USER"
+INPUT_CHAIN = "INPUT"
+CHAINS = (FORWARD_CHAIN, INPUT_CHAIN)
 _NSENTER = ["nsenter", "-t", "1"]
 # In order of preference. The first one whose `-S DOCKER-USER` succeeds is used.
 _IPTABLES_CANDIDATES: list[tuple[list[str], str]] = [
@@ -68,16 +79,35 @@ def bridge_name_from_inspect(inspect_json: str) -> str | None:
     return f"br-{network_id[:12]}" if len(network_id) >= 12 else None
 
 
-def rules_for(bridge: str, tag: str) -> list[list[str]]:
-    """The rule bodies, in evaluation order. Index + 1 is the position in DOCKER-USER."""
+def rules_for(bridge: str, tag: str) -> list[tuple[str, list[str]]]:
+    """(chain, rule body) pairs in evaluation order.
+
+    Within a chain, the index among that chain's rules plus one is the position to insert at.
+    """
+    comment = ["-m", "comment", "--comment", tag]
     return [
-        ["-i", bridge, "-o", bridge, "-m", "comment", "--comment", tag, "-j", "RETURN"],
-        ["-i", bridge, "-m", "comment", "--comment", tag, "-j", "DROP"],
+        (FORWARD_CHAIN, ["-i", bridge, "-o", bridge, *comment, "-j", "RETURN"]),
+        (FORWARD_CHAIN, ["-i", bridge, *comment, "-j", "DROP"]),
+        (
+            INPUT_CHAIN,
+            [
+                "-i",
+                bridge,
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "RELATED,ESTABLISHED",
+                *comment,
+                "-j",
+                "ACCEPT",
+            ],
+        ),
+        (INPUT_CHAIN, ["-i", bridge, *comment, "-j", "DROP"]),
     ]
 
 
-def stale_rules(listing: str, tag: str) -> list[list[str]]:
-    """The delete commands for our tagged rules in an `iptables -S DOCKER-USER` listing.
+def stale_rules(listing: str, tag: str, chain: str) -> list[list[str]]:
+    """The delete commands for our tagged rules in an `iptables -S <chain>` listing.
 
     Only a rule whose comment is exactly our tag is ours: another project's rules carry
     another tag, and Docker Desktop's own rules carry none.
@@ -85,7 +115,7 @@ def stale_rules(listing: str, tag: str) -> list[list[str]]:
     deletes: list[list[str]] = []
     for line in listing.splitlines():
         parts = shlex.split(line)
-        if len(parts) < 3 or parts[0] != "-A" or parts[1] != CHAIN:
+        if len(parts) < 3 or parts[0] != "-A" or parts[1] != chain:
             continue
         if "--comment" in parts and parts[parts.index("--comment") + 1] == tag:
             deletes.append(["-D", *parts[1:]])
@@ -93,7 +123,7 @@ def stale_rules(listing: str, tag: str) -> list[list[str]]:
 
 
 class HostEnforcement:
-    """Keeps the two DOCKER-USER rules for one project's internal bridge in place."""
+    """Keeps the DOCKER-USER and INPUT rules for one project's internal bridge in place."""
 
     def __init__(
         self,
@@ -130,7 +160,7 @@ class HostEnforcement:
             return self._iptables
         for cmd, label in _IPTABLES_CANDIDATES:
             try:
-                result = self._exec([*cmd, "-S", CHAIN])
+                result = self._exec([*cmd, "-S", FORWARD_CHAIN])
             except (OSError, subprocess.TimeoutExpired):
                 continue
             if result.returncode == 0:
@@ -158,7 +188,7 @@ class HostEnforcement:
             return None
 
     def apply(self) -> bool:
-        """Remove our old rules and insert the current ones at the top of DOCKER-USER."""
+        """Remove our old rules and insert the current ones at the top of each chain."""
         self.in_place = False
         if not self.host_netns_reachable():
             log_error(
@@ -173,7 +203,7 @@ class HostEnforcement:
             log_error(
                 ComponentType.FIREWALL,
                 f"Host-side FORWARD enforcement is not in place: no iptables reaches the host's "
-                f"{CHAIN} chain through nsenter",
+                f"{FORWARD_CHAIN} chain through nsenter",
             )
             return False
         bridge = self.bridge_name()
@@ -182,15 +212,18 @@ class HostEnforcement:
         self.bridge = bridge
 
         try:
-            listing = self._exec([*iptables, "-S", CHAIN])
-            for delete in stale_rules(listing.stdout, self.tag):
-                self._exec([*iptables, *delete])
-            for position, body in enumerate(rules_for(bridge, self.tag), start=1):
-                result = self._exec([*iptables, "-I", CHAIN, str(position), *body])
+            for chain in CHAINS:
+                listing = self._exec([*iptables, "-S", chain])
+                for delete in stale_rules(listing.stdout, self.tag, chain):
+                    self._exec([*iptables, *delete])
+            position = dict.fromkeys(CHAINS, 0)
+            for chain, body in rules_for(bridge, self.tag):
+                position[chain] += 1
+                result = self._exec([*iptables, "-I", chain, str(position[chain]), *body])
                 if result.returncode != 0:
                     log_error(
                         ComponentType.FIREWALL,
-                        f"Host-side FORWARD enforcement: {CHAIN} insert failed: "
+                        f"Host-side FORWARD enforcement: {chain} insert failed: "
                         f"{result.stderr.strip()}",
                     )
                     return False
@@ -200,16 +233,20 @@ class HostEnforcement:
             log_error(ComponentType.FIREWALL, f"Host-side FORWARD enforcement: {e}")
             return False
         self.in_place = True
-        log_system_event("Host-side FORWARD enforcement in place", bridge=bridge, chain=CHAIN)
+        log_system_event(
+            "Host-side FORWARD enforcement in place",
+            bridge=bridge,
+            chains=" ".join(CHAINS),
+        )
         return True
 
     def verify(self) -> bool:
-        """True while both rules are present for the bridge we applied them to."""
+        """True while every rule is present for the bridge we applied them to."""
         if not (self._iptables and self.bridge):
             return False
-        for body in rules_for(self.bridge, self.tag):
+        for chain, body in rules_for(self.bridge, self.tag):
             try:
-                result = self._exec([*self._iptables, "-C", CHAIN, *body])
+                result = self._exec([*self._iptables, "-C", chain, *body])
             except (OSError, subprocess.TimeoutExpired):
                 return False
             if result.returncode != 0:

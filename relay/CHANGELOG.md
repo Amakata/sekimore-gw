@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.38 (2026-09-25)
+
+### Enhancement
+
+- no change to the relay; 0.2.37 and 0.2.38 are the same binary. The release closes the host itself to dev with INPUT rules beside the DOCKER-USER ones (#191)
+
 ## 0.2.37 (2026-09-25)
 
 ### Enhancement

@@ -13,6 +13,13 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.38 (2026-09-25)
+
+### Security
+
+- dropped what dev sends to the host itself: two INPUT rules on the host beside the DOCKER-USER ones, so the bridge's own address no longer answers ping, the ports other containers publish, or the VM's services (#191)
+- kept replies to connections the host opens, so a port a dev container publishes still works (#191)
+
 ## 0.2.37 (2026-09-25)
 
 ### Security
