@@ -32,7 +32,6 @@ from .secret_store import (
     NotFound,
     SecretStoreError,
     get_secret,
-    is_unlocked,
 )
 
 # How long the watcher thread waits for a reload it handed to the main loop. Bounded so a reload
@@ -753,12 +752,20 @@ class SecurityGatewayOrchestrator:
         self.host_enforcement: HostEnforcement | None = None
 
         # Proxy manager (Squid)
-        # 0.2.22 (#53): set when the credential is in the store but the store was locked, so the
-        # Squid config has to be redone once someone unlocks.
-        self._proxy_credential_pending = False
+        # #193: what the store last said (`unreachable` / `locked` / `none` / `set`), and the
+        # credential Squid's config was last written with. The watcher compares against both so it
+        # logs and reloads on a change, not on every tick.
+        self._proxy_credential_state = "unknown"
+        self._proxy_credential_applied: tuple[str, str] | None = None
+        self._proxy_credential_unusable_logged = False
         self.proxy_manager: ProxyManager | None = None
         if self.config.proxy.enabled:
-            username, password, _ = self._upstream_proxy_credential()
+            username, password, from_store = self._upstream_proxy_credential()
+            if from_store and username and password:
+                # Squid starts with this, so the watcher's first tick must not count it as a
+                # change and reload for nothing.
+                self._proxy_credential_state = "set"
+                self._proxy_credential_applied = (username, password)
             self.proxy_manager = ProxyManager(
                 cache_enabled=self.config.proxy.cache_enabled,
                 cache_size_mb=self.config.proxy.cache_size_mb,
@@ -792,9 +799,9 @@ class SecurityGatewayOrchestrator:
         self.config_observer: Observer | None = None  # type: ignore[valid-type]
         # Task checking that the relay is listening (only when git-relay is configured)
         self._relay_check_task: asyncio.Task[bool] | None = None
-        # 0.2.22 (#53): waits for the secret store to open, then puts the upstream proxy
-        # credential into Squid's config. Kept so shutdown can cancel it.
-        self._proxy_credential_task: asyncio.Task[bool] | None = None
+        # 0.2.22 (#53), #193: watches the secret store for the whole run and puts the upstream
+        # proxy credential into Squid's config whenever it changes. Kept so shutdown can cancel it.
+        self._proxy_credential_task: asyncio.Task[None] | None = None
         # The loop reload_config runs on. Set when start() is running; the watcher thread reads it
         self._main_loop: asyncio.AbstractEventLoop | None = None
         if self.config_path:
@@ -921,7 +928,7 @@ class SecurityGatewayOrchestrator:
 
         A locked store is the normal answer at start-up, not a failure: nobody has typed a
         passphrase yet. Squid comes up without upstream authentication and
-        `_apply_proxy_credential_when_unlocked` redoes this once someone unlocks.
+        `_watch_proxy_credential` puts the stored credential in whenever it becomes readable.
         """
         configured = (
             self.config.proxy.upstream_proxy_username,
@@ -937,7 +944,6 @@ class SecurityGatewayOrchestrator:
             # the socket may simply not be bound yet. The two are indistinguishable from here, so
             # whether to come back and look again is decided by the config, not by this error.
             log_system_event(f"Secret store not reachable ({e}); using the configured credential")
-            self._proxy_credential_pending = bool(_relay_ports_of(self.config))
             return configured
         if isinstance(secret, str):
             try:
@@ -960,65 +966,115 @@ class SecurityGatewayOrchestrator:
                 log_system_event(
                     "Secret store locked; using the configured upstream proxy credential for now"
                 )
-            self._proxy_credential_pending = True
-        elif isinstance(secret, NotFound):
-            # Nothing stored. Only worth a word when the alternative is the readable one.
-            if self.config.proxy.upstream_proxy_password:
-                log_system_event(
-                    "The upstream proxy password comes from config.yml, which the dev container "
-                    "can read. `sekimore-relay proxy-credential set` moves it into the store"
-                )
+        # Nothing stored. Only worth a word when the alternative is the readable one.
+        elif isinstance(secret, NotFound) and self.config.proxy.upstream_proxy_password:
+            log_system_event(
+                "The upstream proxy password comes from config.yml, which the dev container "
+                "can read. `sekimore-relay proxy-credential set` moves it into the store"
+            )
         return configured
 
-    async def _apply_proxy_credential_when_unlocked(
-        self, poll_seconds: float = 30.0, give_up_after: float = 86400.0
-    ) -> bool:
-        """Wait for the store to open, then put the credential into Squid's config.
+    async def _watch_proxy_credential(self, poll_seconds: float = 5.0) -> None:
+        """Keep Squid's upstream credential in step with the secret store, for the whole run.
 
-        The gateway starts before anyone unlocks, so at start-up the credential is unreadable and
-        Squid runs without upstream authentication. Polling rather than being told: the control
-        socket answers questions, it does not push, and a person unlocking is not a frequent
-        event — thirty seconds of latency on something that happens once per gateway is cheap
-        next to a notification path that would have to exist on both sides.
+        0.2.x (#193): this used to be a one-shot. It polled for `is_unlocked()`, read the store
+        once, and returned for good — including when that single read found nothing. A store that
+        answers `not_found` at that instant (what the reporter's gateway did, 65 s after start)
+        left Squid without `login=` until someone restarted the gateway, while `store-status` said
+        unlocked and nothing in the log pointed at it.
 
-        Gives up after a day so a gateway nobody intends to unlock does not poll forever.
+        So: no exit. The store's state is not a one-time question — it is locked at start-up,
+        unlocked later, and `gw:proxy-credential set` can put a new value in at any time. The relay
+        side already got this right (`relay/src/proxy_credential.rs::spawn_refresher`); this is the
+        same thing on the Python side, at the same 5 s.
+
+        A failed read is a retry on the next tick, never an exit, and a locked or empty store never
+        removes a credential Squid already has: a lock is transient and the proxy is the only way
+        out, so availability wins over tracking the store exactly.
         """
-        waited = 0.0
-        while waited < give_up_after:
+        while True:
             await asyncio.sleep(poll_seconds)
-            waited += poll_seconds
-            if not is_unlocked():
-                continue
-            username, password, from_store = self._upstream_proxy_credential()
-            if not from_store:
-                # Unlocked and the store holds nothing: whatever Squid already has is all there
-                # is, and rewriting the same values would report an apply that did not happen.
-                log_system_event(
-                    "Secret store unlocked but holds no upstream proxy credential; "
-                    "Squid keeps what it started with"
+            try:
+                self._proxy_credential_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — the watcher must outlive any single failure
+                log_error(ComponentType.PROXY, f"upstream proxy credential watcher: {e}")
+
+    def _proxy_credential_tick(self) -> None:
+        """One look at the store: classify it, and apply the credential when it changed."""
+        state, credential = self._read_proxy_credential_state()
+        if state != self._proxy_credential_state:
+            # Once per transition, not once per tick: at 5 s the log would be unreadable.
+            log_system_event(
+                f"Upstream proxy credential: {self._proxy_credential_state} -> {state}"
+            )
+            self._proxy_credential_state = state
+        if state != "set" or credential is None:
+            # `locked` and `none` say nothing about what Squid should present. Leaving the
+            # running config alone is deliberate — see the docstring.
+            return
+        if credential == self._proxy_credential_applied:
+            return
+        if not self._apply_proxy_credential(credential):
+            return
+        self._proxy_credential_applied = credential
+        log_system_event("Upstream proxy credential applied to Squid")
+
+    def _read_proxy_credential_state(
+        self,
+    ) -> tuple[str, tuple[str, str] | None]:
+        """The store's state now: `unreachable` / `locked` / `none` / `set`, and the credential.
+
+        Four states rather than a bool because the operator's next step differs for each
+        (#194): unlock, `gw:proxy-credential set`, or nothing at all.
+        """
+        try:
+            secret = get_secret(PROXY_NAMESPACE, PROXY_NAME)
+        except SecretStoreError:
+            # The relay may not have finished starting, or may have been restarted under us.
+            # Either way the answer next tick may differ, so this is not worth a log line.
+            return "unreachable", None
+        if isinstance(secret, Locked):
+            return "locked", None
+        if isinstance(secret, NotFound):
+            return "none", None
+        try:
+            parsed = json.loads(secret)
+            username, password = parsed["username"], parsed["password"]
+        except (ValueError, KeyError, TypeError) as e:
+            # Its own flag rather than a state: the state it reports is `none`, so tracking it
+            # there would flap between the two and say this on every tick.
+            if not self._proxy_credential_unusable_logged:
+                log_error(
+                    ComponentType.PROXY,
+                    f"the stored upstream proxy credential is not usable ({e}); "
+                    "re-run `sekimore-relay proxy-credential set`",
                 )
-                return False
-            if not (username and password):
-                return False
-            if self.proxy_manager is None:
-                return False
-            self.proxy_manager.upstream_proxy_username = username
-            self.proxy_manager.upstream_proxy_password = password
-            if not self.proxy_manager.generate_config(
-                self.config.proxy_allow_domains(), self.config.proxy_denied_domains()
-            ):
-                log_error(ComponentType.PROXY, "could not regenerate Squid's config after unlock")
-                return False
-            if not self.proxy_manager.reload_config():
-                log_error(ComponentType.PROXY, "Squid did not reload after unlock")
-                return False
-            log_system_event("Upstream proxy credential applied after the store was unlocked")
-            return True
-        log_system_event(
-            "Gave up waiting for the secret store; Squid keeps running without upstream "
-            "authentication"
-        )
-        return False
+                self._proxy_credential_unusable_logged = True
+            # Unusable is not a credential. Treated as `none`, so Squid keeps what it has.
+            return "none", None
+        self._proxy_credential_unusable_logged = False
+        if not (username and password):
+            return "none", None
+        return "set", (username, password)
+
+    def _apply_proxy_credential(self, credential: tuple[str, str]) -> bool:
+        """Write the credential into Squid's config and reload it. True when Squid took it."""
+        if self.proxy_manager is None:
+            return False
+        username, password = credential
+        self.proxy_manager.upstream_proxy_username = username
+        self.proxy_manager.upstream_proxy_password = password
+        if not self.proxy_manager.generate_config(
+            self.config.proxy_allow_domains(), self.config.proxy_denied_domains()
+        ):
+            log_error(ComponentType.PROXY, "could not regenerate Squid's config")
+            return False
+        if not self.proxy_manager.reload_config():
+            log_error(ComponentType.PROXY, "Squid did not reload")
+            return False
+        return True
 
     def _warn_if_upstream_proxy_is_shadowed(self) -> str | None:
         """Warn when proxy.upstream_proxy sits inside one of our own Docker subnets.
@@ -1187,10 +1243,13 @@ class SecurityGatewayOrchestrator:
         # 6b. 0.2.22 (#53): the upstream proxy credential lives in the secret store, which is
         # locked at start-up, so Squid came up without upstream authentication. Redo it when
         # someone unlocks rather than making them restart the gateway.
-        if self._proxy_credential_pending and self.proxy_manager:
-            self._proxy_credential_task = asyncio.create_task(
-                self._apply_proxy_credential_when_unlocked()
-            )
+        #
+        # #193: started whenever there could be a store at all, not only when the first read said
+        # "pending". A store that opens later, or gets its credential later, has to be caught too,
+        # and the first read cannot tell that case from a settled one. No relay in `config.yml`
+        # means no store will ever appear, and then polling for one is waste.
+        if self.proxy_manager and _relay_ports_of(self.config):
+            self._proxy_credential_task = asyncio.create_task(self._watch_proxy_credential())
 
         # 7. The relay: log an ERROR when git-relay is configured but nothing is listening
         relay_ports = _relay_ports_of(self.config)
@@ -1279,8 +1338,8 @@ class SecurityGatewayOrchestrator:
         """Release resources."""
         log_system_event("Cleaning up...")
 
-        # It sleeps for up to a day waiting for the store, so shutdown has to cancel it or the
-        # process hangs on a task that is doing nothing.
+        # It runs for the life of the gateway, so shutdown has to cancel it or the process hangs
+        # on a task that is doing nothing.
         if self._proxy_credential_task:
             self._proxy_credential_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

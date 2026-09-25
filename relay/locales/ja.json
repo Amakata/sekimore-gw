@@ -201,6 +201,8 @@
   "op.check.bootstrap_disabled": " (kill-switch で停止中)",
   "op.check.proxy": "proxy:",
   "op.check.proxy_credential": "{url} (資格情報: {source})",
+  "op.check.proxy_credential_locked": "なし — 保管庫が施錠中です。mise run gw:unlock を実行してください",
+  "op.check.proxy_credential_unset": "なし — mise run gw:proxy-credential -- set を実行してください",
   "op.check.permissions": "権限 (既定は拒否):",
   "op.check.deny_note": "  ([-] = 案件の deny。どの allow より優先)",
   "op.check.upstreams": "上流の層 (案件既定と repo の間):",

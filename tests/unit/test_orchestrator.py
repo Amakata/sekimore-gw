@@ -1,5 +1,7 @@
 """Unit tests for orchestrator module."""
 
+import asyncio
+import contextlib
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
@@ -2019,7 +2021,9 @@ database_path: /tmp/test.db
         with patch("src.orchestrator.get_secret", side_effect=boom):
             orch = _orch(tmp_path)
         assert orch._upstream_proxy_credential() == ("configured", "from-config-yml", False)
-        assert orch._proxy_credential_pending is False, (
+        from src.orchestrator import _relay_ports_of
+
+        assert _relay_ports_of(orch.config) == [], (
             "no git-relay handler means no store will ever appear; polling for one is waste"
         )
 
@@ -2058,7 +2062,11 @@ relay:
             m.return_value = Mock(returncode=0, stdout="", stderr="")
             with patch("src.orchestrator.get_secret", side_effect=boom):
                 orch = SecurityGatewayOrchestrator(config_path=config_file)
-        assert orch._proxy_credential_pending is True
+        from src.orchestrator import _relay_ports_of
+
+        assert _relay_ports_of(orch.config) != [], (
+            "a relay is configured, so the watcher has to be started and keep looking"
+        )
 
     def it_falls_back_while_the_store_is_locked_and_asks_to_be_revisited(tmp_path):
         from src.secret_store import Locked
@@ -2066,9 +2074,8 @@ relay:
         with patch("src.orchestrator.get_secret", return_value=Locked()):
             orch = _orch(tmp_path)
             assert orch._upstream_proxy_credential() == ("configured", "from-config-yml", False)
-        assert orch._proxy_credential_pending is True, (
-            "a locked store has to be revisited after unlock, or the stored credential never "
-            "reaches Squid without restarting the gateway"
+        assert orch._proxy_credential_applied is None, (
+            "a locked store gives nothing to apply; the watcher is what revisits it"
         )
 
     def it_prefers_the_stored_credential_over_the_configured_one(tmp_path):
@@ -2085,3 +2092,196 @@ relay:
             with patch("src.orchestrator.log_error") as mock_err:
                 assert orch._upstream_proxy_credential() == ("configured", "from-config-yml", False)
         assert mock_err.called
+
+
+def describe_the_proxy_credential_watcher():
+    """#193: the store is watched for the whole run, not read once after an unlock.
+
+    The one-shot version polled for `is_unlocked()`, read the store once and returned for good.
+    The reporter's gateway got `not_found` at that one read, 65 s after start, and Squid was left
+    without `login=` until a restart — while `store-status` said unlocked. Every test here is a
+    way that read can go wrong on one tick and be right on the next.
+    """
+
+    def _orch(tmp_path, *, proxy_manager=True):
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+domain_handlers:
+  github.com:
+    handler: git-relay
+proxy:
+  enabled: true
+  upstream_proxy: proxy.example:8080
+network:
+  lan_subnets: []
+database_path: /tmp/test.db
+relay:
+  project:
+    name: t
+    repos:
+      - name: Org/Repo
+        mode: read-write
+""")
+        from src.secret_store import SecretStoreError
+
+        def boom(*_a, **_k):
+            raise SecretStoreError("not up yet")
+
+        with patch("subprocess.run") as m:
+            m.return_value = Mock(returncode=0, stdout="", stderr="")
+            with patch("src.orchestrator.get_secret", side_effect=boom):
+                orch = SecurityGatewayOrchestrator(config_path=config_file)
+        if proxy_manager:
+            orch.proxy_manager = Mock()
+            orch.proxy_manager.generate_config.return_value = True
+            orch.proxy_manager.reload_config.return_value = True
+        else:
+            orch.proxy_manager = None
+        return orch
+
+    async def _run_ticks(orch, answers):
+        """Drive the watcher through one tick per entry in `answers`, then stop it.
+
+        The sleep is what ends the run: a fake that raises once the answers are used up, so the
+        loop is exercised exactly as written rather than by calling the tick directly.
+        """
+        calls = iter(answers)
+
+        def next_answer(*_a, **_k):
+            try:
+                answer = next(calls)
+            except StopIteration:
+                raise asyncio.CancelledError from None
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        async def no_sleep(_seconds):
+            return None
+
+        with (
+            patch("src.orchestrator.get_secret", side_effect=next_answer),
+            patch("asyncio.sleep", new=no_sleep),
+            contextlib.suppress(asyncio.CancelledError),
+        ):
+            await orch._watch_proxy_credential(poll_seconds=0)
+
+    stored_json = '{"username": "stored", "password": "sekret"}'
+
+    @pytest.mark.asyncio
+    async def it_applies_once_when_a_locked_store_opens(tmp_path):
+        from src.secret_store import Locked
+
+        orch = _orch(tmp_path)
+        with patch("src.orchestrator.log_system_event") as mock_log:
+            await _run_ticks(orch, [Locked(), Locked(), stored_json, stored_json, stored_json])
+
+        assert orch.proxy_manager.upstream_proxy_username == "stored"
+        assert orch.proxy_manager.upstream_proxy_password == "sekret"
+        # The credential did not change over the last three ticks, so Squid is reloaded once.
+        assert orch.proxy_manager.reload_config.call_count == 1
+        applied = [c for c in mock_log.call_args_list if "applied to Squid" in str(c.args)]
+        assert len(applied) == 1, f"once, not per tick: {mock_log.call_args_list}"
+        # and the transitions are logged once each, not five times
+        transitions = [c for c in mock_log.call_args_list if "->" in str(c.args)]
+        assert len(transitions) == 2, transitions
+
+    @pytest.mark.asyncio
+    async def it_keeps_going_after_a_failed_read(tmp_path):
+        """A single unreachable socket is a retry, not an exit. This is the #193 bug itself."""
+        from src.secret_store import SecretStoreError
+
+        orch = _orch(tmp_path)
+        await _run_ticks(orch, [SecretStoreError("relay restarting"), stored_json])
+
+        assert orch.proxy_manager.reload_config.call_count == 1
+        assert orch._proxy_credential_applied == ("stored", "sekret")
+
+    @pytest.mark.asyncio
+    async def it_picks_up_a_credential_added_later(tmp_path):
+        """`not_found` then a value: what the reporter's gateway hit and never recovered from."""
+        from src.secret_store import NotFound
+
+        orch = _orch(tmp_path)
+        await _run_ticks(orch, [NotFound(), NotFound(), stored_json])
+
+        assert orch.proxy_manager.reload_config.call_count == 1
+        assert orch._proxy_credential_applied == ("stored", "sekret")
+
+    @pytest.mark.asyncio
+    async def it_reapplies_when_the_credential_changes(tmp_path):
+        """`gw:proxy-credential set` while the gateway runs has to reach Squid."""
+        orch = _orch(tmp_path)
+        rotated = '{"username": "stored", "password": "rotated"}'
+        await _run_ticks(orch, [stored_json, stored_json, rotated])
+
+        assert orch.proxy_manager.reload_config.call_count == 2
+        assert orch._proxy_credential_applied == ("stored", "rotated")
+
+    @pytest.mark.asyncio
+    async def it_keeps_squids_credential_when_the_store_locks_again(tmp_path):
+        """A lock is transient and `never_direct allow all` leaves no way round Squid.
+
+        Removing the credential to track the store would turn every request into a 407 for as
+        long as nobody is at the keyboard. Availability wins.
+        """
+        from src.secret_store import Locked
+
+        orch = _orch(tmp_path)
+        await _run_ticks(orch, [stored_json, Locked(), Locked()])
+
+        assert orch._proxy_credential_applied == ("stored", "sekret")
+        assert orch.proxy_manager.upstream_proxy_username == "stored"
+        # one apply, and nothing undone afterwards
+        assert orch.proxy_manager.reload_config.call_count == 1
+        assert orch._proxy_credential_state == "locked"
+
+    @pytest.mark.asyncio
+    async def it_survives_an_exception_from_the_proxy_manager(tmp_path):
+        """One bad tick must not kill the watcher; the next one applies."""
+        orch = _orch(tmp_path)
+        orch.proxy_manager.generate_config.side_effect = [RuntimeError("squid is busy"), True]
+
+        with patch("src.orchestrator.log_error") as mock_err:
+            await _run_ticks(orch, [stored_json, stored_json])
+
+        assert mock_err.called
+        assert orch._proxy_credential_applied == ("stored", "sekret")
+
+    @pytest.mark.asyncio
+    async def it_treats_an_unusable_stored_value_as_none(tmp_path):
+        """Not a credential, and not worth a log line on every tick either."""
+        orch = _orch(tmp_path)
+        with patch("src.orchestrator.log_error") as mock_err:
+            await _run_ticks(orch, ["not json", "not json", "not json"])
+
+        assert orch._proxy_credential_applied is None
+        assert not orch.proxy_manager.reload_config.called
+        assert mock_err.call_count == 1, "said once, not per tick"
+
+    def it_is_not_started_without_a_relay(tmp_path):
+        """No git-relay handler means no store will ever appear; polling for one is waste."""
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("""
+allow_domains:
+  - github.com
+proxy:
+  enabled: true
+  upstream_proxy: proxy.example:8080
+network:
+  lan_subnets: []
+database_path: /tmp/test.db
+""")
+        from src.orchestrator import _relay_ports_of
+        from src.secret_store import SecretStoreError
+
+        def boom(*_a, **_k):
+            raise SecretStoreError("no socket")
+
+        with patch("subprocess.run") as m:
+            m.return_value = Mock(returncode=0, stdout="", stderr="")
+            with patch("src.orchestrator.get_secret", side_effect=boom):
+                orch = SecurityGatewayOrchestrator(config_path=config_file)
+        assert _relay_ports_of(orch.config) == []

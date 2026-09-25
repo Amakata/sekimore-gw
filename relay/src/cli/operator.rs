@@ -10,7 +10,7 @@ use super::BootstrapAction;
 use russh::keys::PublicKey;
 
 use crate::audit::{Actor, Audit};
-use crate::config::{self, ConfigError, HandlerKind, Resolved, Upstream};
+use crate::config::{self, ConfigError, HandlerKind, ProxySpec, Resolved, Upstream};
 use crate::fsutil::{atomic_write, ensure_dir_0700, read_optional};
 use crate::git::agent_check::{auth_sock_from_env, preflight_agent};
 use crate::git::upstream_ssh::OpenSshUpstream;
@@ -583,12 +583,16 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
         // #151: which credential the relay presents — the store's, or the environment's — since
         // Squid reads the store and the two can disagree
         crate::proxy_credential::prime(Some(px), &secret_source_via_socket(&r)).await;
+        // #194: `credential_source()` says "none" both for a locked store and an empty one, and
+        // the operator's next step differs — `gw:unlock` against `gw:proxy-credential set`. Ask
+        // the store which it is, over the same control socket.
+        let state = store_state(&r.paths.control_sock).await;
         println!(
             "{}{}",
             pad_label(&t("op.check.proxy"), 14),
             tf(
                 "op.check.proxy_credential",
-                &[("url", &px.url), ("source", px.credential_source())]
+                &[("url", &px.url), ("source", &credential_status(&state, px))]
             )
         );
     }
@@ -1217,10 +1221,59 @@ pub async fn store_control(path: &Path, op: &str) -> anyhow::Result<()> {
     let paths = store_paths(path)?;
     let (ok, message) = store::control::call(&paths, &format!(r#"{{"op":"{op}"}}"#)).await?;
     println!("{message}");
+    // #194: "unlocked" alone did not say whether the upstream proxy credential was in there, and
+    // the reporter's gateway said unlocked while Squid had none at all.
+    if op == "status" {
+        if let Ok(r) = resolve(path) {
+            if let Some(px) = &r.proxy {
+                crate::proxy_credential::prime(Some(px), &secret_source_via_socket(&r)).await;
+                println!(
+                    "{}{}",
+                    pad_label(&t("op.check.proxy"), 14),
+                    tf(
+                        "op.check.proxy_credential",
+                        &[
+                            ("url", &px.url),
+                            ("source", &credential_status(&message, px))
+                        ]
+                    )
+                );
+            }
+        }
+    }
     if ok {
         Ok(())
     } else {
         anyhow::bail!("{message}")
+    }
+}
+
+/// The store's state as `{"op":"status"}` words it: "unlocked" / "locked" / "not initialised".
+/// A socket that cannot be reached is not a state — the caller gets the empty string and the
+/// wording falls back to what the spec itself knows.
+async fn store_state(sock: &Path) -> String {
+    match store::control::call(sock, r#"{"op":"status"}"#).await {
+        Ok((_, message)) => message,
+        Err(_) => String::new(),
+    }
+}
+
+/// What to print for `credential:` (#194).
+///
+/// `ProxySpec::credential_source()` cannot tell a locked store from an empty one — both leave the
+/// cell `None` — and those need opposite next steps. The store's own state decides, and only when
+/// nothing was actually read: a credential already in hand is what the relay will present,
+/// whatever the store says a moment later.
+fn credential_status(state: &str, spec: &ProxySpec) -> String {
+    let source = spec.credential_source();
+    if source != "none" {
+        return source.to_string();
+    }
+    match state {
+        "locked" | "not initialised" => t("op.check.proxy_credential_locked"),
+        "unlocked" => t("op.check.proxy_credential_unset"),
+        // No answer from the socket: no relay running, so there is no store to advise about.
+        _ => source.to_string(),
     }
 }
 
@@ -1301,6 +1354,47 @@ garbage line\n";
                 "[ghe.example.com]:2222".to_string(),
                 "ecdsa-sha2-nistp256 AAAAE2VjZHNh".to_string()
             )
+        );
+    }
+
+    /// #194: the reporter's `check` said "credential: none" while the store held one and was
+    /// merely locked, which reads as "nothing registered" and sends the operator to the wrong
+    /// command. The store's state is what tells the two apart.
+    #[test]
+    fn a_locked_store_and_an_empty_one_do_not_read_the_same() {
+        let bare = |user: Option<&str>| ProxySpec {
+            url: "http://proxy.example:8080".into(),
+            username: user.map(str::to_string),
+            password: None,
+            stored: Default::default(),
+        };
+
+        let locked = credential_status("locked", &bare(None));
+        let unset = credential_status("unlocked", &bare(None));
+        assert_ne!(locked, unset);
+        assert!(locked.contains("gw:unlock"), "say what to run: {locked}");
+        assert!(
+            unset.contains("gw:proxy-credential"),
+            "say what to run: {unset}"
+        );
+        // A store that was never created is as unreadable as a locked one, and the way out is
+        // the same command.
+        assert_eq!(credential_status("not initialised", &bare(None)), locked);
+
+        // No relay answering at all: there is no store to advise about, so the old wording.
+        assert_eq!(credential_status("", &bare(None)), "none");
+
+        // A credential in hand is what gets presented, whatever the store says a moment later.
+        let from_env = bare(Some("alice"));
+        assert_eq!(
+            credential_status("locked", &from_env),
+            from_env.credential_source()
+        );
+        let from_store = bare(None);
+        from_store.stored.set(Some(("bob".into(), "sekret".into())));
+        assert_eq!(
+            credential_status("unlocked", &from_store),
+            "the secret store (gw:proxy-credential)"
         );
     }
 }
