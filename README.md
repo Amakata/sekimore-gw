@@ -40,33 +40,11 @@ sekimore: denied: pr:merge is not allowed by policy
 
 ## Get started
 
-### A. Dev container (recommended)
-
 Use the `examples/sgw-sample/` template in [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base).
 Its README goes from clone to a verified relay.
 
-### B. Gateway only
-
-DNS allowlist, firewall, Squid and the dashboard. No relay.
-
-```bash
-git clone https://github.com/Amakata/sekimore-gw.git && cd sekimore-gw
-cp config/config.sample.yml config/config.yml    # allow_domains: what the agent may reach
-docker compose up -d                             # dashboard: http://localhost:8080
-```
-
-To add the relay:
-
-- Set `domain_handlers` and `relay` in `config.yml`. The template is at the end of `config.sample.yml`. See [relay/README.md](relay/README.md).
-- Give the agent container `agent-setup.sh`, the `sekimore-relay` CLI and the `sekimore` wrapper. The `ai-agent` service in `docker-compose.yml` is a minimal example.
-
-Behind a proxy that requires credentials, standalone gateway:
-
-```bash
-cp .env.example .env    # SEKIMORE_UPSTREAM_PROXY_USERNAME / _PASSWORD
-```
-
-Dev-container setup (`.devcontainer/.env` is readable by the agent, so use the secret store):
+Behind a proxy that requires credentials, put the password in the secret store
+(`.devcontainer/.env` is readable by the agent):
 
 ```bash
 mise run gw:proxy-credential -- set
@@ -91,7 +69,6 @@ The relay:
 - caps uploads through the 443 passthrough
 - logs allowed and refused operations
 
-The relay is optional. Without `domain_handlers`, the first three layers run alone.
 Details: [relay/README.md](relay/README.md).
 
 With `proxy.upstream_proxy` set, only the relay's own paths and clients that name Squid
@@ -124,8 +101,8 @@ Does not fit:
 
 - Docker 20.10 or later, Docker Compose 2.0 or later
 - A Linux host, or Docker Desktop on macOS (the layers run inside the Docker VM)
-- The gateway runs with `NET_ADMIN`, `privileged: true` and `pid: host` (see `docker-compose.yml`). `pid: host` lets it place the FORWARD rules that confine the agent in the host's DOCKER-USER chain.
-- Agent containers: `dns: [127.0.0.1]`, and `agent-setup.sh` to find the gateway and set the default route
+- The gateway runs with `NET_ADMIN`, `privileged: true` and `pid: host`. `pid: host` lets it place the FORWARD rules that confine the agent in the host's DOCKER-USER chain. The template's `docker-compose.yml` sets all three.
+- The agent container uses `dns: [127.0.0.1]` and runs `agent-setup.sh` at start to find the gateway and set the default route. The dev-container image does both.
 - `network.allowed_ports` is unset by default, so every port is open. Set `[80, 443]` unless the agent needs more. A change requires a restart.
 
 ## Names

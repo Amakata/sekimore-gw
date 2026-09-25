@@ -40,33 +40,10 @@ sekimore: denied: pr:merge is not allowed by policy
 
 ## はじめかた
 
-### A. dev コンテナ（推奨）
-
 [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) の `examples/sgw-sample/` テンプレートを使います。
 その README が clone から関所の動作確認までを案内します。
 
-### B. ゲートウェイだけ
-
-DNS の許可リスト、ファイアウォール、Squid、ダッシュボードが動きます。関所は含みません。
-
-```bash
-git clone https://github.com/Amakata/sekimore-gw.git && cd sekimore-gw
-cp config/config.sample.yml config/config.yml    # allow_domains: エージェントに許可するドメイン
-docker compose up -d                             # ダッシュボード: http://localhost:8080
-```
-
-関所を足すには:
-
-- `config.yml` に `domain_handlers` と `relay` を設定する。テンプレートは `config.sample.yml` の末尾。詳細は [relay/README.ja.md](relay/README.ja.md)
-- エージェントのコンテナに `agent-setup.sh`、`sekimore-relay` CLI、`sekimore` ラッパーを入れる。`docker-compose.yml` の `ai-agent` サービスが最小の例
-
-認証の必要なプロキシの内側で、ゲートウェイ単体の場合:
-
-```bash
-cp .env.example .env    # SEKIMORE_UPSTREAM_PROXY_USERNAME / _PASSWORD
-```
-
-dev コンテナの構成の場合（`.devcontainer/.env` はエージェントが読めるので、秘密ストアを使う）:
+認証の必要なプロキシの内側では、パスワードを秘密ストアに入れます（`.devcontainer/.env` はエージェントが読めるため）:
 
 ```bash
 mise run gw:proxy-credential -- set
@@ -91,7 +68,6 @@ mise run gw:proxy-credential -- set
 - 443 の通過に送信量の上限をかける
 - 許可した操作と拒否した操作を監査ログに記録する
 
-関所は任意です。`domain_handlers` がなければ、最初の 3 層だけが動きます。
 詳細は [relay/README.ja.md](relay/README.ja.md) を参照してください。
 
 `proxy.upstream_proxy` を設定しても、上流を通るのは関所自身の経路と、Squid を明示したクライアントだけです。
@@ -123,8 +99,8 @@ dev コンテナは起動時にゲートウェイから `HTTP_PROXY` と `NO_PRO
 
 - Docker 20.10 以降、Docker Compose 2.0 以降
 - Linux ホスト、または macOS の Docker Desktop（各層は Docker の VM の中で動く）
-- ゲートウェイは `NET_ADMIN`、`privileged: true`、`pid: host` で動く（`docker-compose.yml`）。`pid: host` は、エージェントを閉じ込める FORWARD 規則をホストの DOCKER-USER チェーンに置くために要る
-- エージェントのコンテナ: `dns: [127.0.0.1]` と `agent-setup.sh`（ゲートウェイを見つけ、デフォルトルートを設定する）
+- ゲートウェイは `NET_ADMIN`、`privileged: true`、`pid: host` で動く。`pid: host` は、エージェントを閉じ込める FORWARD 規則をホストの DOCKER-USER チェーンに置くために要る。テンプレートの `docker-compose.yml` が 3 つとも設定する
+- エージェントのコンテナは `dns: [127.0.0.1]` で動き、起動時に `agent-setup.sh` がゲートウェイを見つけてデフォルトルートを設定する。dev コンテナのイメージが両方を行う
 - `network.allowed_ports` は既定で未設定 = 全ポート。必要がなければ `[80, 443]` に絞る。変更には再起動が必要
 
 ## 名前
