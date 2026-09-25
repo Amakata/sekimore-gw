@@ -68,7 +68,6 @@ mise run gw:proxy-credential -- set
 - 443 の通過に送信量の上限をかける
 - 許可した操作と拒否した操作を監査ログに記録する
 
-関所は任意です。`domain_handlers` がなければ、最初の 3 層だけが動きます。
 詳細は [relay/README.ja.md](relay/README.ja.md) を参照してください。
 
 `proxy.upstream_proxy` を設定しても、上流を通るのは関所自身の経路と、Squid を明示したクライアントだけです。
@@ -100,8 +99,8 @@ dev コンテナは起動時にゲートウェイから `HTTP_PROXY` と `NO_PRO
 
 - Docker 20.10 以降、Docker Compose 2.0 以降
 - Linux ホスト、または macOS の Docker Desktop（各層は Docker の VM の中で動く）
-- ゲートウェイは `NET_ADMIN`、`privileged: true`、`pid: host` で動く（`docker-compose.yml`）。`pid: host` は、エージェントを閉じ込める FORWARD 規則をホストの DOCKER-USER チェーンに置くために要る
-- エージェントのコンテナ: `dns: [127.0.0.1]` と `agent-setup.sh`（ゲートウェイを見つけ、デフォルトルートを設定する）
+- ゲートウェイは `NET_ADMIN`、`privileged: true`、`pid: host` で動く。`pid: host` は、エージェントを閉じ込める FORWARD 規則をホストの DOCKER-USER チェーンに置くために要る。テンプレートの `docker-compose.yml` が 3 つとも設定する
+- エージェントのコンテナは `dns: [127.0.0.1]` で動き、起動時に `agent-setup.sh` がゲートウェイを見つけてデフォルトルートを設定する。dev コンテナのイメージが両方を行う
 - `network.allowed_ports` は既定で未設定 = 全ポート。必要がなければ `[80, 443]` に絞る。変更には再起動が必要
 
 ## 名前

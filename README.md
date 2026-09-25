@@ -69,7 +69,6 @@ The relay:
 - caps uploads through the 443 passthrough
 - logs allowed and refused operations
 
-The relay is optional. Without `domain_handlers`, the first three layers run alone.
 Details: [relay/README.md](relay/README.md).
 
 With `proxy.upstream_proxy` set, only the relay's own paths and clients that name Squid
@@ -102,8 +101,8 @@ Does not fit:
 
 - Docker 20.10 or later, Docker Compose 2.0 or later
 - A Linux host, or Docker Desktop on macOS (the layers run inside the Docker VM)
-- The gateway runs with `NET_ADMIN`, `privileged: true` and `pid: host` (see `docker-compose.yml`). `pid: host` lets it place the FORWARD rules that confine the agent in the host's DOCKER-USER chain.
-- Agent containers: `dns: [127.0.0.1]`, and `agent-setup.sh` to find the gateway and set the default route
+- The gateway runs with `NET_ADMIN`, `privileged: true` and `pid: host`. `pid: host` lets it place the FORWARD rules that confine the agent in the host's DOCKER-USER chain. The template's `docker-compose.yml` sets all three.
+- The agent container uses `dns: [127.0.0.1]` and runs `agent-setup.sh` at start to find the gateway and set the default route. The dev-container image does both.
 - `network.allowed_ports` is unset by default, so every port is open. Set `[80, 443]` unless the agent needs more. A change requires a restart.
 
 ## Names
