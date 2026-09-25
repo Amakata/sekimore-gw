@@ -5,6 +5,12 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.40（2026-09-25）
+
+### Enhancement
+
+- 端末では `check` と `store-status` の状態語に色を付ける。ok は緑、locked / missing / none は赤、環境変数由来の資格情報は黄。`NO_COLOR` と `SEKIMORE_COLOR` で切り替えられる (#203)
+
 ## 0.2.39（2026-09-25）
 
 ### Fix

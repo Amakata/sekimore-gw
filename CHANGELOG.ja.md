@@ -12,6 +12,12 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.40（2026-09-25）
+
+### Enhancement
+
+- gateway 自体の変更は無い。0.2.39 と 0.2.40 は同じ Python。この版は関所の `check` と `store-status` を、端末で見る運用者向けに色付けする (#203)
+
 ## 0.2.39（2026-09-25）
 
 ### Fix

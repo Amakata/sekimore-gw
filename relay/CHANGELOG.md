@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.40 (2026-09-25)
+
+### Enhancement
+
+- colored the state words of `check` and `store-status` at a terminal: green for ok, red for locked / missing / none, yellow for a credential out of the environment; `NO_COLOR` and `SEKIMORE_COLOR` decide otherwise (#203)
+
 ## 0.2.39 (2026-09-25)
 
 ### Fix
