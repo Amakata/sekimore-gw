@@ -5,6 +5,18 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.41（2026-09-25）
+
+### Fix
+
+- 上流プロキシが TLS のとき、通過と API クライアントの CONNECT を同じコンテナの Squid に送るようにした。資格情報は載せない。TLS は OpenSSL を持つ Squid が張るので、rustls に無い RSA 鍵交換でも通る (#210)
+- `store-status` は状態語だけを出すように戻した。資格情報の行は `check` に残す (#209)
+
+### Enhancement
+
+- `check` に経路（`via the local Squid` / `direct`）と `reach:` 行を足した。Squid 経由なら最初の 443 宛先への CONNECT、直接なら関所自身の TLS handshake を試し、`HandshakeFailure` のときは `openssl s_client` が見たプロキシの提示内容を添える (#207)
+- 上流プロキシが RSA 鍵交換で繋がるとき、前方秘匿性が無いと起動時に 1 回 WARN を出す (#210)
+
 ## 0.2.40（2026-09-25）
 
 ### Enhancement

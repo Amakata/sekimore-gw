@@ -6,6 +6,18 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.41 (2026-09-25)
+
+### Fix
+
+- sent the passthrough's and the API client's CONNECT to the local Squid when the upstream proxy speaks TLS, with no credential of their own; Squid takes the TLS hop with OpenSSL, which has the RSA key exchange rustls has not (#210)
+- printed only the state word from `store-status` again; `check` keeps the credential line (#209)
+
+### Enhancement
+
+- `check` shows the route (`via the local Squid` / `direct`) and a `reach:` line — a CONNECT through Squid to the first 443 target, or the relay's own TLS handshake — and explains a `HandshakeFailure` with what the proxy offers (#207)
+- warned once at start when the upstream proxy negotiates RSA key exchange, since that traffic has no forward secrecy (#210)
+
 ## 0.2.40 (2026-09-25)
 
 ### Enhancement
