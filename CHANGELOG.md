@@ -13,6 +13,17 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.41 (2026-09-25)
+
+### Fix
+
+- routed the relay's HTTPS through the local Squid when the upstream proxy speaks TLS, so a proxy offering only RSA key exchange works; Squid gets a `relay_localhost` allow below the destination deny and above the relayed-domain deny (#210)
+- kept `store-status` to its one state word again; the credential line 0.2.39 added under it made `relay:verify` fail an unlocked store (#209)
+
+### Enhancement
+
+- `check` probes the upstream proxy and prints the route and the result, and a `HandshakeFailure` says what the proxy must offer; the image gains the `openssl` CLI for that diagnosis (#207)
+
 ## 0.2.40 (2026-09-25)
 
 ### Enhancement

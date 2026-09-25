@@ -12,6 +12,17 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.41（2026-09-25）
+
+### Fix
+
+- 上流プロキシが TLS のとき、関所の HTTPS を同じコンテナの Squid 経由にした。rustls に無い RSA 鍵交換しか出さないプロキシでも通る。Squid には `relay_localhost` の許可を、宛先の拒否より下、関所ドメインの拒否より上に入れる (#210)
+- `store-status` を状態語 1 つに戻した。0.2.39 でその下に足した資格情報の行が、解錠済みのストアで `relay:verify` を落としていた (#209)
+
+### Enhancement
+
+- `check` が上流プロキシに実際に接続して経路と結果を出すようにした。`HandshakeFailure` のときはプロキシが出すべきものを言う。診断用に `openssl` CLI をイメージに入れた (#207)
+
 ## 0.2.40（2026-09-25）
 
 ### Enhancement
