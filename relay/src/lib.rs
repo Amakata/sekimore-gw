@@ -12,6 +12,7 @@ pub mod github;
 pub mod i18n;
 pub mod netutil;
 pub mod passthrough;
+pub mod paths;
 pub mod pktline;
 pub mod policy;
 pub mod proxy_credential;
