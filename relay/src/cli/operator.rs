@@ -596,6 +596,10 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 &[("url", &px.url), ("source", &credential_status(&state, px))]
             )
         );
+        // #206: until now nothing in `check` ever touched the upstream proxy, so a proxy the
+        // relay could not speak TLS to passed every check and surfaced only when real work
+        // started. Connect, handshake, say what came back.
+        print_proxy_reach(px).await;
     }
     println!("\n{}", t("op.check.permissions"));
     let granted = r.project.granted();
@@ -1370,6 +1374,124 @@ fn credential_status(state: &str, spec: &ProxySpec) -> String {
     }
 }
 
+/// The `reach:` line under `proxy:` in `check` (#206).
+///
+/// `store-status` does not get this: it answers a question about the secret store, and a network
+/// round trip does not belong in it. `check` is the place that is meant to try things.
+async fn print_proxy_reach(px: &ProxySpec) {
+    let outcome = crate::netutil::probe_proxy(px).await;
+    println!("{}", proxy_reach_line(&outcome));
+    // #205: the bare alert says only "no". Say what the "no" means and how to get out of it, then
+    // let OpenSSL — which does have the RSA key exchange — report what the upstream actually
+    // negotiates, so the operator need not run s_client by hand.
+    if let Err(e) = &outcome {
+        if crate::netutil::is_handshake_failure(e) {
+            println!("{}", t("op.check.proxy_handshake_hint"));
+            print_openssl_offers(px).await;
+        }
+    }
+}
+
+/// The `reach:` line itself, apart from the socket, so its wording can be tested (#206).
+fn proxy_reach_line(outcome: &Result<crate::netutil::ProbeReport, String>) -> String {
+    let label = pad_label(&t("op.check.proxy_reach"), 14);
+    let body = match outcome {
+        Ok(report) => {
+            // #202: paint the state word alone, never the values after it.
+            let word = paint(Tone::Good, &t("op.check.word.proxy_reachable"));
+            if report.tls {
+                tf(
+                    "op.check.proxy_reach_tls",
+                    &[
+                        ("state", word.as_str()),
+                        ("protocol", &tls_version_name(report.protocol.as_deref())),
+                        ("cipher", report.cipher.as_deref().unwrap_or("?")),
+                    ],
+                )
+            } else {
+                tf("op.check.proxy_reach_plain", &[("state", word.as_str())])
+            }
+        }
+        Err(e) => {
+            let word = paint(Tone::Bad, &t("op.check.word.proxy_unreachable"));
+            tf(
+                "op.check.proxy_reach_failed",
+                &[("state", word.as_str()), ("error", e)],
+            )
+        }
+    };
+    format!("{label}{body}")
+}
+
+/// `rustls::ProtocolVersion`'s `Debug` spells TLS 1.3 `TLSv1_3`; the operator reads `TLS 1.3`.
+fn tls_version_name(v: Option<&str>) -> String {
+    match v {
+        Some("TLSv1_3") => "TLS 1.3".into(),
+        Some("TLSv1_2") => "TLS 1.2".into(),
+        Some(other) => other.into(),
+        None => "?".into(),
+    }
+}
+
+/// Asks the `openssl` CLI what the upstream proxy negotiates with it (#206).
+///
+/// OpenSSL implements the RSA key exchange rustls does not, so where the relay gets
+/// `HandshakeFailure` this still completes and names the protocol and cipher the proxy chose —
+/// exactly the two lines the reporter got by hand. Best effort: no openssl, a timeout or a
+/// non-zero exit all just leave the section out with a note.
+async fn print_openssl_offers(px: &ProxySpec) {
+    let Ok(url) = url::Url::parse(&px.url) else {
+        return;
+    };
+    let Some(host) = url.host_str() else { return };
+    let port = url.port_or_known_default().unwrap_or(3128);
+    let endpoint = format!("{host}:{port}");
+    let out = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::process::Command::new("openssl")
+            .args([
+                "s_client",
+                "-connect",
+                &endpoint,
+                "-servername",
+                host,
+                "-brief",
+            ])
+            .stdin(std::process::Stdio::null())
+            .output(),
+    )
+    .await;
+    // `-brief` writes its summary to stderr; take both and keep only the two lines that matter.
+    let lines: Vec<String> = match out {
+        Ok(Ok(o)) => [
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        ]
+        .concat()
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("Protocol version:") || l.starts_with("Ciphersuite:"))
+        .map(str::to_string)
+        .collect(),
+        // Not installed, or it hung: say where to look instead.
+        _ => Vec::new(),
+    };
+    if lines.is_empty() {
+        println!(
+            "{}",
+            tf(
+                "op.check.proxy_offers_none",
+                &[("endpoint", &endpoint), ("host", host)]
+            )
+        );
+        return;
+    }
+    println!("{}", t("op.check.proxy_offers"));
+    for l in lines {
+        println!("    {l}");
+    }
+}
+
 fn store_paths(config: &Path) -> anyhow::Result<PathBuf> {
     Ok(resolve(config)?.paths.control_sock)
 }
@@ -1542,5 +1664,83 @@ garbage line\n";
         assert!(!locked.trim_end().ends_with("\x1b[0m"), "{locked:?}");
 
         set_for_tests(None);
+    }
+
+    /// #206: `check` used never to touch the upstream proxy. The line it prints now.
+    #[test]
+    fn the_reach_line_says_what_the_handshake_got() {
+        use super::super::color::set_for_tests;
+        use crate::netutil::ProbeReport;
+        set_for_tests(Some(true));
+
+        // The state word is whatever the locale calls it; the shape around it is what is fixed.
+        let ok_word = t("op.check.word.proxy_reachable");
+        let bad_word = t("op.check.word.proxy_unreachable");
+
+        let good = Ok(ProbeReport {
+            endpoint: "gw.example:3129".into(),
+            tls: true,
+            protocol: Some("TLSv1_3".into()),
+            cipher: Some("TLS13_AES_256_GCM_SHA384".into()),
+        });
+        let line = proxy_reach_line(&good);
+        assert_eq!(
+            line,
+            format!(
+                "  reach:      \u{1b}[32m{ok_word}\u{1b}[0m (TLS 1.3, TLS13_AES_256_GCM_SHA384)"
+            )
+        );
+
+        // An `http://` proxy: TCP only, and the line says so rather than inventing a version.
+        let plain = Ok(ProbeReport {
+            endpoint: "gw.example:3128".into(),
+            tls: false,
+            protocol: None,
+            cipher: None,
+        });
+        let line = proxy_reach_line(&plain);
+        assert!(
+            line.contains(&format!("\u{1b}[32m{ok_word}\u{1b}[0m (")),
+            "{line}"
+        );
+        assert!(line.contains("TCP"), "{line}");
+        assert!(
+            !line.contains("TLS 1."),
+            "a plain proxy has no version: {line}"
+        );
+
+        // The failure the reporter hit: red word, plain error after it.
+        let bad: Result<ProbeReport, String> =
+            Err("TLS to the proxy failed: received fatal alert: HandshakeFailure".into());
+        let line = proxy_reach_line(&bad);
+        assert!(
+            line.starts_with(&format!("  reach:      \u{1b}[31m{bad_word}\u{1b}[0m — ")),
+            "{line}"
+        );
+        assert!(line.contains("HandshakeFailure"), "{line}");
+        // Only the state word is painted, so the layout is the same without colour.
+        assert!(!line.trim_end().ends_with("\u{1b}[0m"), "{line}");
+
+        set_for_tests(Some(false));
+        assert_eq!(
+            proxy_reach_line(&good),
+            format!("  reach:      {ok_word} (TLS 1.3, TLS13_AES_256_GCM_SHA384)")
+        );
+        // `proxy:` and `reach:` line up: both labels are padded to the same width.
+        assert_eq!(
+            pad_label(&t("op.check.proxy"), 14).len(),
+            pad_label(&t("op.check.proxy_reach"), 14).len()
+        );
+
+        set_for_tests(None);
+    }
+
+    #[test]
+    fn rustls_version_names_are_spelled_for_a_person() {
+        assert_eq!(tls_version_name(Some("TLSv1_3")), "TLS 1.3");
+        assert_eq!(tls_version_name(Some("TLSv1_2")), "TLS 1.2");
+        // Anything rustls starts reporting later goes through as it is, rather than becoming "?".
+        assert_eq!(tls_version_name(Some("TLSv1_4")), "TLSv1_4");
+        assert_eq!(tls_version_name(None), "?");
     }
 }
