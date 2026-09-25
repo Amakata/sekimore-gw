@@ -1288,26 +1288,9 @@ pub async fn store_control(path: &Path, op: &str) -> anyhow::Result<()> {
     let paths = store_paths(path)?;
     let (ok, message) = store::control::call(&paths, &format!(r#"{{"op":"{op}"}}"#)).await?;
     println!("{}", paint_store_state(&message));
-    // #194: "unlocked" alone did not say whether the upstream proxy credential was in there, and
-    // the reporter's gateway said unlocked while Squid had none at all.
-    if op == "status" {
-        if let Ok(r) = resolve(path) {
-            if let Some(px) = &r.proxy {
-                crate::proxy_credential::prime(Some(px), &secret_source_via_socket(&r)).await;
-                println!(
-                    "{}{}",
-                    pad_label(&t("op.check.proxy"), 14),
-                    tf(
-                        "op.check.proxy_credential",
-                        &[
-                            ("url", &px.url),
-                            ("source", &credential_status(&message, px))
-                        ]
-                    )
-                );
-            }
-        }
-    }
+    // #208: one word, and only one. relay:verify and upgrade.sh read this output as the store's
+    // state; the proxy credential line that 0.2.39 added here broke both. `check` is the command
+    // for people, and it says the credential's state.
     if ok {
         Ok(())
     } else {
