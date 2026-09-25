@@ -13,6 +13,19 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.39 (2026-09-25)
+
+### Fix
+
+- spoke TLS to an `https://` upstream proxy before the CONNECT, so a relayed HTTPS domain behind `upstream_proxy_tls: true` reaches the upstream instead of failing with `SSL_ERROR_SYSCALL`; Squid already did (#199)
+- kept watching the secret store for the upstream proxy credential for the whole run, so `login=` reaches `squid.conf` after `gw:unlock-auto` and after a later `gw:proxy-credential set`, not only when one read at unlock time succeeded (#200)
+
+### Enhancement
+
+- reported the upstream proxy credential as `none` / `locked` / `set` / `config` / `unavailable` in `/api/config` and the dashboard, with the command to run next (#200)
+- showed the destination of HTTPS audit rows in the Relay tab, and mirrored a denied row's reason into `detail` (#198)
+- documented how to triage the upstream proxy path from inside dev, in relay/README (#197)
+
 ## 0.2.38 (2026-09-25)
 
 ### Security
