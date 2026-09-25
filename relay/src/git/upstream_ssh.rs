@@ -46,12 +46,19 @@ impl OpenSshUpstream {
 
     /// Whether known_hosts has a line for the upstream host. Hashed lines (`|1|…`) cannot be matched, so we assume they do.
     pub fn known_hosts_has_upstream(&self) -> Result<bool, std::io::Error> {
+        self.known_hosts_has(&self.host, self.port)
+    }
+
+    /// Whether `known_hosts` names `host` on `port`, as `host` (port 22) or `[host]:port`.
+    /// Hashed lines cannot be checked and count as present. Used for the upstream itself and,
+    /// since #220, for every ProxyJump bastion in front of it.
+    pub fn known_hosts_has(&self, host: &str, port: u16) -> Result<bool, std::io::Error> {
         let text = match std::fs::read_to_string(&self.known_hosts) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(e),
         };
-        let bracketed = format!("[{}]:{}", self.host, self.port);
+        let bracketed = format!("[{host}]:{port}");
         let mut hashed = false;
         for line in text.lines() {
             let line = line.trim();
@@ -68,12 +75,103 @@ impl OpenSshUpstream {
                 continue;
             }
             for h in hosts.split(',') {
-                if h.eq_ignore_ascii_case(&self.host) || h.eq_ignore_ascii_case(&bracketed) {
+                if (port == 22 && h.eq_ignore_ascii_case(host))
+                    || h.eq_ignore_ascii_case(&bracketed)
+                {
                     return Ok(true);
                 }
             }
         }
         Ok(hashed)
+    }
+
+    /// The ProxyJump bastions in front of this upstream, in hop order: (host, port).
+    ///
+    /// `ProxyJump=[user@]host[:port][,[user@]host2[:port2]…]` from the extra options; `none`
+    /// means no jump. The user part is not the relay's concern — the known_hosts entry is
+    /// keyed by host and port.
+    pub fn bastions(&self) -> Vec<(String, u16)> {
+        let mut out = Vec::new();
+        for opt in &self.extra_options {
+            let Some((key, value)) = opt.split_once('=') else {
+                continue;
+            };
+            if !key.trim().eq_ignore_ascii_case("ProxyJump") {
+                continue;
+            }
+            for hop in value.split(',') {
+                let hop = hop.trim();
+                if hop.is_empty() || hop.eq_ignore_ascii_case("none") {
+                    continue;
+                }
+                let hop = hop.rsplit_once('@').map(|(_, h)| h).unwrap_or(hop);
+                let (host, port) = match hop.rsplit_once(':') {
+                    Some((h, p)) if !h.contains(':') || h.starts_with('[') => {
+                        (h.trim_matches(['[', ']']), p.parse().unwrap_or(22))
+                    }
+                    _ => (hop.trim_matches(['[', ']']), 22),
+                };
+                if !host.is_empty() {
+                    out.push((host.to_string(), port));
+                }
+            }
+        }
+        out
+    }
+
+    /// Where the enforced ssh_config for this upstream lives: next to its known_hosts.
+    pub fn ssh_config_path(&self) -> PathBuf {
+        self.known_hosts.with_file_name("ssh_config")
+    }
+
+    /// The ssh_config the relay writes and passes with `-F` (#220).
+    ///
+    /// The enforced options used to travel only as `-o` flags. OpenSSH runs a ProxyJump bastion
+    /// as a separate `ssh -W`, and that ssh receives the `-F` file but not the command line — so
+    /// the bastion hop was verified against `~/.ssh/known_hosts` with `StrictHostKeyChecking=ask`,
+    /// outside the relay's control. In a file, the same options reach every hop. The operator's
+    /// own file (`relay.ssh_config`) is included after ours: ssh keeps the first value it sees,
+    /// so nothing in it can loosen these.
+    pub fn enforced_ssh_config(&self) -> String {
+        let mut cfg = String::from(
+            "# Written by sekimore-relay. Every hop, ProxyJump bastions included, is held to these.\n\
+             # Do not edit: it is rewritten on every connection.\n\
+             Host *\n\
+             \x20 BatchMode yes\n\
+             \x20 StrictHostKeyChecking yes\n\
+             \x20 GlobalKnownHostsFile /dev/null\n",
+        );
+        cfg.push_str(&format!(
+            "  UserKnownHostsFile {}\n",
+            self.known_hosts.display()
+        ));
+        cfg.push_str(
+            "  UpdateHostKeys no\n\
+             \x20 ConnectTimeout 20\n\
+             \x20 ServerAliveInterval 30\n\
+             \x20 ServerAliveCountMax 3\n\
+             \x20 LogLevel ERROR\n",
+        );
+        if let Some(op) = &self.ssh_config {
+            cfg.push_str(&format!("  Include {}\n", op.display()));
+        }
+        cfg
+    }
+
+    /// Writes the enforced ssh_config when it differs from what is on disk, and returns its path.
+    pub fn ensure_ssh_config(&self) -> std::io::Result<PathBuf> {
+        let path = self.ssh_config_path();
+        let want = self.enforced_ssh_config();
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(want.as_str()) {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            // Written whole, then renamed: a concurrent connection must never read half a file.
+            let tmp = path.with_extension("tmp");
+            std::fs::write(&tmp, &want)?;
+            std::fs::rename(&tmp, &path)?;
+        }
+        Ok(path)
     }
 
     /// What to do about a missing host key, written for whoever reads it on stderr.
@@ -103,8 +201,21 @@ impl OpenSshUpstream {
     fn command(&self, remote: &str) -> Command {
         let mut cmd = Command::new(&self.ssh_bin);
         cmd.arg("-T").arg("-x").arg("-a");
-        cmd.arg("-F")
-            .arg(self.ssh_config.as_deref().unwrap_or(Path::new("/dev/null")));
+        // #220: the enforced options in a file, because a ProxyJump hop gets `-F` and not `-o`.
+        // The `-o` flags below stay for the first hop; the first value wins either way.
+        match self.ensure_ssh_config() {
+            Ok(cfg) => {
+                cmd.arg("-F").arg(cfg);
+            }
+            Err(e) => {
+                log::warn!(
+                    "cannot write {}: {e}; a ProxyJump bastion will not be held to the relay's known_hosts",
+                    self.ssh_config_path().display()
+                );
+                cmd.arg("-F")
+                    .arg(self.ssh_config.as_deref().unwrap_or(Path::new("/dev/null")));
+            }
+        }
         for opt in [
             "BatchMode=yes",
             "StrictHostKeyChecking=yes",
@@ -269,6 +380,109 @@ mod tests {
         assert!(args.contains(&"StrictHostKeyChecking=yes".to_string()));
         assert_eq!(args.last().unwrap(), "git-upload-pack 'Org/Repo.git'");
         assert!(args.iter().any(|a| a.starts_with("UserKnownHostsFile=")));
+    }
+
+    /// #220: the bastion hop is a separate ssh that gets `-F` and not `-o`, so the enforced
+    /// options have to be in the file.
+    #[test]
+    fn the_enforced_options_are_in_the_config_file_every_hop_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        let up = OpenSshUpstream::new("ghe.example.com", 2222, &kh, None)
+            .with_options(vec!["ProxyJump=user@bastion.example.net:2222".into()]);
+        let cmd = up.command("git-upload-pack 'Org/Repo.git'");
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let f = args.iter().position(|a| a == "-F").unwrap();
+        let cfg = std::path::PathBuf::from(&args[f + 1]);
+        assert_eq!(cfg, dir.path().join("ssh_config"));
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        assert!(text.contains("Host *\n"), "{text}");
+        for line in [
+            "  BatchMode yes",
+            "  StrictHostKeyChecking yes",
+            "  GlobalKnownHostsFile /dev/null",
+            "  UpdateHostKeys no",
+        ] {
+            assert!(text.contains(line), "{line} missing from:\n{text}");
+        }
+        assert!(
+            text.contains(&format!("  UserKnownHostsFile {}\n", kh.display())),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Include"),
+            "no operator file, no Include: {text}"
+        );
+    }
+
+    #[test]
+    fn the_operators_ssh_config_is_included_after_the_enforced_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let theirs = dir.path().join("operator.conf");
+        std::fs::write(&theirs, "Host bastion.example.net\n  User alice\n").unwrap();
+        let up = OpenSshUpstream::new(
+            "ghe.example.com",
+            22,
+            &dir.path().join("known_hosts"),
+            Some(&theirs),
+        );
+        let text = up.enforced_ssh_config();
+        let strict = text.find("StrictHostKeyChecking yes").unwrap();
+        let include = text.find("Include ").unwrap();
+        assert!(
+            strict < include,
+            "ours first, so the first value wins: {text}"
+        );
+        assert!(text.contains(&format!("Include {}", theirs.display())));
+        // written to disk, and rewritten only when it changes
+        let path = up.ensure_ssh_config().unwrap();
+        let m1 = std::fs::metadata(&path).unwrap().modified().unwrap();
+        up.ensure_ssh_config().unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), m1);
+    }
+
+    #[test]
+    fn bastions_come_out_of_proxyjump_in_hop_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let up = |opts: &[&str]| {
+            OpenSshUpstream::new("ghe.example.com", 22, &dir.path().join("kh"), None)
+                .with_options(opts.iter().map(|s| s.to_string()).collect())
+        };
+        assert_eq!(
+            up(&["ProxyJump=user@bastion.example.net:2222"]).bastions(),
+            vec![("bastion.example.net".to_string(), 2222)]
+        );
+        assert_eq!(
+            up(&["ProxyJump=a.example.net,bob@b.example.net:2200"]).bastions(),
+            vec![
+                ("a.example.net".to_string(), 22),
+                ("b.example.net".to_string(), 2200)
+            ]
+        );
+        assert!(up(&["ProxyJump=none"]).bastions().is_empty());
+        assert!(up(&["HostKeyAlias=x"]).bastions().is_empty());
+        assert_eq!(
+            up(&["proxyjump=[2001:db8::1]:2222"]).bastions(),
+            vec![("2001:db8::1".to_string(), 2222)]
+        );
+    }
+
+    #[test]
+    fn a_bastion_is_looked_up_by_host_and_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        let up = OpenSshUpstream::new("ghe.example.com", 2222, &kh, None);
+        std::fs::write(&kh, "[bastion.example.net]:2222 ssh-ed25519 AAAA\n").unwrap();
+        assert!(up.known_hosts_has("bastion.example.net", 2222).unwrap());
+        assert!(!up.known_hosts_has("bastion.example.net", 22).unwrap());
+        assert!(!up.known_hosts_has("ghe.example.com", 2222).unwrap());
+        std::fs::write(&kh, "bastion.example.net ssh-ed25519 AAAA\n").unwrap();
+        assert!(up.known_hosts_has("bastion.example.net", 22).unwrap());
+        assert!(!up.known_hosts_has("bastion.example.net", 2222).unwrap());
     }
 
     #[test]

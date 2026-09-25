@@ -813,6 +813,44 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 )
             ),
         }
+        // #220: every ProxyJump hop is verified against the same known_hosts as the upstream
+        // (the enforced options travel in the -F file now), so each bastion's key has to be in
+        // it too. One line per hop, so a missing one is not mistaken for a missing upstream key.
+        for (bhost, bport) in up.bastions() {
+            let port = bport.to_string();
+            let line = match up.known_hosts_has(&bhost, bport) {
+                Ok(true) => tf(
+                    "op.check.bastion_ok",
+                    &[
+                        ("host", bhost.as_str()),
+                        ("port", port.as_str()),
+                        ("state", &paint(Tone::Good, &t("op.check.word.ok"))),
+                    ],
+                ),
+                Ok(false) => tf(
+                    "op.check.bastion_missing",
+                    &[
+                        ("host", bhost.as_str()),
+                        ("port", port.as_str()),
+                        (
+                            "state",
+                            &paint(Tone::Bad, &t("op.check.word.known_hosts_missing")),
+                        ),
+                        ("domain", &u.domain),
+                    ],
+                ),
+                Err(e) => tf(
+                    "op.check.bastion_error",
+                    &[
+                        ("host", bhost.as_str()),
+                        ("port", port.as_str()),
+                        ("state", &paint(Tone::Bad, &t("op.check.word.error"))),
+                        ("error", &e.to_string()),
+                    ],
+                ),
+            };
+            println!("{line}");
+        }
         let store = UpstreamTokenStore::new(
             &u.host,
             &u.upstream_token,
