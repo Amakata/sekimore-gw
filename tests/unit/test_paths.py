@@ -115,7 +115,8 @@ def describe_the_ids_in_the_code():
 
     def _rust_ids() -> set[str]:
         text = (ROOT / "relay" / "src" / "paths.rs").read_text(encoding="utf-8")
-        return set(re.findall(r'^pub const [A-Z_]+: &str = "([a-z_.]+)";', text, re.M))
+        ids = re.findall(r'^pub const ([A-Z_]+): &str = "([a-z_.]+)";', text, re.M)
+        return {value for name, value in ids if name != "EDGE_FIELD"}
 
     def it_matches_the_ledger_exactly(edges):
         in_code = _python_ids() | _rust_ids()
@@ -129,11 +130,56 @@ def describe_the_ids_in_the_code():
 
     def it_lists_in_rust_every_constant_it_declares():
         text = (ROOT / "relay" / "src" / "paths.rs").read_text(encoding="utf-8")
-        declared = set(re.findall(r"^pub const ([A-Z_]+): &str", text, re.M)) - {"EDGES"}
-        listed = set(re.findall(r"^\s+([A-Z_]+),$", text.split("pub const EDGES")[1], re.M))
+        declared = set(re.findall(r"^pub const ([A-Z_]+): &str", text, re.M)) - {
+            "EDGES",
+            "EDGE_FIELD",
+        }
+        table = text.split("pub const EDGES")[1].split("];")[0]
+        listed = set(re.findall(r"^\s+([A-Z_]+),$", table, re.M))
         assert declared == listed, (
             f"declared but not in EDGES: {declared - listed}; listed but not declared: {listed - declared}"
         )
+
+
+def describe_the_audit_events_on_each_edge():
+    """#228: the relay writes `edge=<id>` on every audit entry that records a connection, and
+    refuses a pair `paths::AUDIT_EVENTS` does not list. The ledger's `audit` attribute names
+    the same events, so a row can be read from an entry and an entry found from a row."""
+
+    audit_pair = re.compile(r"^\s+\(([A-Z_]+), \"([a-z_]+)\"\),", re.M)
+    const_re = re.compile(r'^pub const ([A-Z_]+): &str = "([a-z_.]+)";', re.M)
+
+    def _registry() -> set[tuple[str, str]]:
+        text = (ROOT / "relay" / "src" / "paths.rs").read_text(encoding="utf-8")
+        consts = dict(const_re.findall(text))
+        table = text.split("pub const AUDIT_EVENTS")[1].split("];")[0]
+        return {(consts[c], ev) for c, ev in audit_pair.findall(table)}
+
+    def _ledger(edges: dict[str, dict]) -> set[tuple[str, str]]:
+        pairs = set()
+        for i, e in edges.items():
+            audit = str(e["audit"])
+            if not audit.startswith("audit.jsonl"):
+                continue
+            events = audit[len("audit.jsonl") :].split(";")[0].split("(")[0]
+            pairs |= {(i, ev.strip()) for ev in events.split("/") if ev.strip()}
+        return pairs
+
+    def it_names_in_the_ledger_exactly_the_events_the_relay_writes_on_each_edge(edges):
+        code, ledger = _registry(), _ledger(edges)
+        assert code - ledger == set(), (
+            f"written by the relay, missing from the ledger: {sorted(code - ledger)}"
+        )
+        assert ledger - code == set(), f"in the ledger, written by no code: {sorted(ledger - code)}"
+
+    def it_writes_every_registered_pair_with_log_edge_or_deny_edge():
+        """An event in the table but reached through the plain `log` would carry no edge."""
+        src = ROOT / "relay" / "src"
+        text = "\n".join(p.read_text(encoding="utf-8") for p in src.rglob("*.rs"))
+        plain = re.findall(r'audit\.(?:log|deny)\(\s*"([a-z_]+)"', text)
+        registered = {ev for _, ev in _registry()}
+        leaked = sorted(set(plain) & registered)
+        assert leaked == [], f"registered events written without an edge: {leaked}"
 
 
 def describe_rule_ssh_hops_are_verified_by_the_relay():

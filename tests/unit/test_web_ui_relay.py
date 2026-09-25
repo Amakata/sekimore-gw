@@ -654,3 +654,36 @@ def describe_https_destination():
             Path(__file__).resolve().parents[2] / "src" / "web_ui" / "templates" / "dashboard.html"
         ).read_text(encoding="utf-8")
         assert "e.destination" in html and "relay.to_destination" in html
+
+
+def describe_the_edge_of_an_audit_row():
+    """#228: the relay writes `edge=<id>` (docs/paths.yml) on every entry that records a
+    connection; the API passes it through and the relay tab shows it."""
+
+    def it_passes_the_edge_through():
+        from src.web_ui.relay_view import to_entry
+
+        e = to_entry(
+            {
+                "ts": "2026-09-25T09:00:00Z",
+                "event": "relay_ok",
+                "actor": "agent-via-gateway",
+                "edge": "relay.ssh.upstream",
+                "repo": "Org/App",
+                "verb": "git-receive-pack",
+            }
+        )
+        assert e is not None and e.edge == "relay.ssh.upstream"
+        assert e.detail is None or "edge" not in e.detail, "the edge is a field, not a detail"
+
+    def it_leaves_rows_without_an_edge_alone():
+        from src.web_ui.relay_view import to_entry
+
+        e = to_entry({"ts": "2026-09-25T09:00:00Z", "event": "token_issued", "actor": "operator"})
+        assert e is not None and e.edge is None
+
+    def it_renders_the_edge_in_the_relay_tab():
+        html = (
+            Path(__file__).resolve().parents[2] / "src" / "web_ui" / "templates" / "dashboard.html"
+        ).read_text(encoding="utf-8")
+        assert "e.edge" in html

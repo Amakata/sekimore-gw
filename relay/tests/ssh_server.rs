@@ -192,6 +192,14 @@ async fn authorized_key_connects_unknown_key_rejected() {
     assert!(audit.contains("ssh_auth_ok"));
     assert!(audit.contains("ssh_auth_denied"));
     assert!(audit.contains("\"fingerprint\":\"SHA256:"));
+    // #228: the accepted and the refused key are both the agent's edge to the relay
+    for event in ["ssh_auth_ok", "ssh_auth_denied"] {
+        let line = audit
+            .lines()
+            .find(|l| l.contains(&format!("\"event\":\"{event}\"")))
+            .unwrap();
+        assert!(line.contains("\"edge\":\"dev.relay.ssh\""), "{line}");
+    }
 }
 
 #[tokio::test]

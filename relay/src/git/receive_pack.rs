@@ -26,6 +26,7 @@ use super::{
 use crate::audit::Actor;
 use crate::config::OnExists;
 use crate::github::GhError;
+use crate::paths;
 use crate::pktline::{
     caps_contain, encode_commands, encode_into, parse_receive_pack, validate_ref_name, CommandLine,
     CommandSection, Frame, PktReader, RefUpdate,
@@ -884,7 +885,8 @@ pub async fn relay_receive_pack(
             let _ = proc.child.start_kill();
             let msg = format!("cannot parse push commands: {e}");
             say_err(&mut io.stderr, &msg).await;
-            ctx.audit.deny(
+            ctx.audit.deny_edge(
+                paths::DEV_RELAY_SSH,
                 "push_rejected",
                 Actor::Agent,
                 &msg,
@@ -954,7 +956,8 @@ pub async fn relay_receive_pack(
         return fail("upstream_write");
     }
     for pr in &plan.prs {
-        ctx.audit.log(
+        ctx.audit.log_edge(
+            paths::DEV_RELAY_SSH,
             "refs_for_rewritten",
             Actor::Agent,
             &[
@@ -1283,7 +1286,8 @@ async fn create_pr(
     {
         Ok(r) => {
             say(io, &format!("created PR #{} {}", r.number, r.html_url)).await;
-            ctx.audit.log(
+            ctx.audit.log_edge(
+                paths::RELAY_GITHUB_API,
                 "pr_created",
                 Actor::Agent,
                 &[
@@ -1308,7 +1312,8 @@ async fn create_pr(
                     ),
                 )
                 .await;
-                ctx.audit.log(
+                ctx.audit.log_edge(
+                    paths::RELAY_GITHUB_API,
                     "pr_exists",
                     Actor::Agent,
                     &[
@@ -1321,7 +1326,8 @@ async fn create_pr(
             }
             Ok(None) => {
                 say(io, "push ok but PR creation failed: upstream returned 422 and no matching open PR was found").await;
-                ctx.audit.deny(
+                ctx.audit.deny_edge(
+                    paths::RELAY_GITHUB_API,
                     "pr_failed",
                     Actor::Agent,
                     "422 without existing PR",
@@ -1331,7 +1337,8 @@ async fn create_pr(
             }
             Err(e) => {
                 say(io, &format!("push ok but PR lookup failed: {e}")).await;
-                ctx.audit.deny(
+                ctx.audit.deny_edge(
+                    paths::RELAY_GITHUB_API,
                     "pr_failed",
                     Actor::Agent,
                     &e.to_string(),
@@ -1342,7 +1349,8 @@ async fn create_pr(
         },
         Err(e) => {
             say(io, &format!("push ok but PR creation failed: {e}")).await;
-            ctx.audit.deny(
+            ctx.audit.deny_edge(
+                paths::RELAY_GITHUB_API,
                 "pr_failed",
                 Actor::Agent,
                 &e.to_string(),

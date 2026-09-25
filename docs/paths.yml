@@ -213,7 +213,7 @@ edges:
     resolves: gateway.dns (the relayed domain resolves to the gateway)
     verifies_peer: dev's ~/.ssh/known_hosts, written by agent-setup with the relay's host key
     presents: disposable_ssh_key
-    audit: audit.jsonl ssh_auth_*, git_*
+    audit: "audit.jsonl ssh_rejected / ssh_auth_ok / ssh_auth_denied / ssh_channel_rejected / ssh_exec_rejected / ssh_request_rejected / cmd_rejected / repo_denied / push_rejected / refs_for_rewritten"
     impl: [relay/src/ssh, agent-setup.sh]
     tests: [relay/tests/ssh_server.rs, relay/tests/e2e_git.rs]
     verify: "git ls-remote through the relay"
@@ -225,7 +225,7 @@ edges:
     resolves: the gateway's resolver
     verifies_peer: the upstream's known_hosts, through the -F ssh_config the relay writes (#220)
     presents: operator_ssh_agent
-    audit: none of its own; the git event covers the connection
+    audit: audit.jsonl known_hosts_added (the operator taking its key); the git session is on relay.ssh.upstream
     switches: {ProxyJump: set}
     hops: true
     impl: [relay/src/git/upstream_ssh.rs]
@@ -240,7 +240,7 @@ edges:
     resolves: the gateway's resolver, or the last bastion
     verifies_peer: the upstream's known_hosts (/data/relay/…/known_hosts), -o and -F
     presents: operator_ssh_agent
-    audit: audit.jsonl git_push / git_fetch
+    audit: audit.jsonl relay_ok / relay_failed / upstream_preflight_failed / upstream_spawn_failed / known_hosts_added
     switches: {ProxyJump: any}
     impl: [relay/src/git/upstream_ssh.rs]
     tests: [relay/src/git/upstream_ssh.rs, relay/tests/e2e_git.rs]
@@ -255,7 +255,7 @@ edges:
     resolves: gateway.dns
     verifies_peer: none (plain, inside the gateway's network)
     presents: project_token
-    audit: audit.jsonl api_*
+    audit: audit.jsonl api_ok / api_error / token_denied / token_wrong_project / repo_denied / security_alert_dismissed / security_alert_reopened / bootstrap_ok / bootstrap_denied
     impl: [relay/src/api]
     tests: [relay/tests/api_server.rs]
     verify: "one GitHub API call through the relay"
@@ -268,7 +268,7 @@ edges:
     verifies_peer: rustls — platform roots, SSL_CERT_FILE, relay.ca_file
     tls_impl: rustls
     presents: upstream_token
-    audit: audit.jsonl api_call
+    audit: audit.jsonl api_call / pr_created / pr_exists / pr_failed
     switches: {upstream_proxy: any, upstream_proxy_tls: any}
     impl: [relay/src/github/http.rs, relay/src/github/mod.rs]
     tests: [relay/src/github/http.rs, relay/tests/api_server.rs]
@@ -282,7 +282,7 @@ edges:
     verifies_peer: rustls (TLS proxy only)
     tls_impl: rustls
     presents: upstream_proxy_password (Proxy-Authorization, from the store)
-    audit: audit.jsonl api_call (the failure reason names the proxy)
+    audit: audit.jsonl api_call (edge names the hop; the failure reason names the proxy)
     switches: {upstream_proxy: set, upstream_proxy_tls: false-or-squid-disabled}
     impl: [relay/src/github/http.rs, relay/src/config.rs]
     tests: [relay/src/github/http.rs]
@@ -308,7 +308,7 @@ edges:
     resolves: gateway.dns (the relayed domain resolves to the gateway)
     verifies_peer: dev's own TLS, end to end
     presents: none
-    audit: audit.jsonl https_passthrough / https_failed / https_upload_capped
+    audit: audit.jsonl https_rejected / https_upload_capped (what dev asked for; the hop taken is on passthrough.*)
     impl: [relay/src/passthrough.rs]
     tests: [relay/src/passthrough.rs]
     verify: "HTTPS to a relayed domain must reach the upstream"
@@ -320,7 +320,7 @@ edges:
     resolves: the relay, with the #178 destination deny
     verifies_peer: dev's own TLS, end to end
     presents: none
-    audit: audit.jsonl https_passthrough
+    audit: audit.jsonl https_passthrough / https_failed / resolved_address_refused
     switches: {upstream_proxy: unset}
     impl: [relay/src/passthrough.rs]
     tests: [relay/src/passthrough.rs]
@@ -333,7 +333,7 @@ edges:
     verifies_peer: rustls (TLS proxy only)
     tls_impl: rustls
     presents: upstream_proxy_password (Proxy-Authorization, from the store)
-    audit: audit.jsonl https_failed names the proxy
+    audit: audit.jsonl https_passthrough / https_failed (the failure reason names the proxy)
     switches: {upstream_proxy: set, upstream_proxy_tls: false-or-squid-disabled}
     impl: [relay/src/netutil.rs]
     tests: [relay/src/netutil.rs]
@@ -346,7 +346,7 @@ edges:
     resolves: n/a (loopback)
     verifies_peer: none (loopback)
     presents: none (Squid presents login= to the upstream)
-    audit: audit.jsonl https_passthrough; squid access.log
+    audit: audit.jsonl https_passthrough / https_failed; squid access.log
     switches: {upstream_proxy: set, upstream_proxy_tls: true}
     impl: [relay/src/netutil.rs, relay/src/config.rs, src/proxy_manager.py]
     tests: [relay/src/netutil.rs, relay/src/config.rs, tests/unit/test_proxy_manager.py]
@@ -383,7 +383,7 @@ edges:
     resolves: n/a
     verifies_peer: n/a (socket permissions, uid)
     presents: none (sign requests only)
-    audit: audit.jsonl signing events
+    audit: audit.jsonl signing_agent_started / signing_agent_signed / signing_agent_refused
     impl: [relay/src/git/agent_proxy.rs]
     tests: [relay/tests/signing_agent.rs]
     verify: "only the gateway's filtered signing key may be reachable"

@@ -12,6 +12,7 @@ use crate::audit::Actor;
 use crate::config::BootstrapMode;
 use crate::github::GitHub;
 use crate::github::SecurityAlert;
+use crate::paths;
 use crate::policy::SigningMode;
 use crate::policy::{Action, Authorized, Mode, Resource};
 use crate::ssh::authorized_keys::Added;
@@ -1362,7 +1363,8 @@ async fn security_dismiss(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespo
         .security_alert_dismiss(&auth, req.number, &req.reason, &req.body)
         .await?;
     // The generic api_ok line has the path; the reason is what a reader of the audit wants
-    ctx.audit.log(
+    ctx.audit.log_edge(
+        paths::DEV_RELAY_API,
         "security_alert_dismissed",
         Actor::Agent,
         &[
@@ -1384,7 +1386,8 @@ async fn security_dismiss(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespo
 async fn security_reopen(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     let (auth, client) = numbered_scope(ctx, req, Resource::Security, Action::Dismiss)?;
     client.security_alert_reopen(&auth, req.number).await?;
-    ctx.audit.log(
+    ctx.audit.log_edge(
+        paths::DEV_RELAY_API,
         "security_alert_reopened",
         Actor::Agent,
         &[("repo", auth.repo()), ("number", &req.number.to_string())],
@@ -1812,7 +1815,8 @@ pub async fn bootstrap(
     peer_ip: &str,
 ) -> Result<BootstrapResponse, ApiError> {
     if ctx.bootstrap == BootstrapMode::Manual {
-        ctx.audit.deny(
+        ctx.audit.deny_edge(
+            paths::DEV_RELAY_API,
             "bootstrap_denied",
             Actor::Agent,
             "bootstrap is manual",
@@ -1821,7 +1825,8 @@ pub async fn bootstrap(
         return Err(ApiError { status: StatusCode::NOT_FOUND, message: "bootstrap is disabled (relay.bootstrap: manual); ask the operator to run `docker compose exec sekimore-gw sekimore-relay add-key` and `... token` on the host running docker".into() });
     }
     if ctx.bootstrap_disabled_path.exists() {
-        ctx.audit.deny(
+        ctx.audit.deny_edge(
+            paths::DEV_RELAY_API,
             "bootstrap_denied",
             Actor::Agent,
             "kill-switch",
@@ -1832,7 +1837,8 @@ pub async fn bootstrap(
         ));
     }
     if !ctx.bootstrap_rate_ok() {
-        ctx.audit.deny(
+        ctx.audit.deny_edge(
+            paths::DEV_RELAY_API,
             "bootstrap_denied",
             Actor::Agent,
             "rate limited",
@@ -1845,7 +1851,8 @@ pub async fn bootstrap(
     }
     let body = read_body(req, ctx.body_cap).await?;
     let breq: BootstrapRequest = serde_json::from_slice(&body).map_err(|e| {
-        ctx.audit.deny(
+        ctx.audit.deny_edge(
+            paths::DEV_RELAY_API,
             "bootstrap_denied",
             Actor::Agent,
             &format!("invalid JSON: {e}"),
@@ -1854,7 +1861,8 @@ pub async fn bootstrap(
         ApiError::bad_request(format!("invalid JSON: {e}"))
     })?;
     let added = ctx.keys.add(&breq.public_key).map_err(|e| {
-        ctx.audit.deny(
+        ctx.audit.deny_edge(
+            paths::DEV_RELAY_API,
             "bootstrap_denied",
             Actor::Agent,
             &e.to_string(),
@@ -1876,7 +1884,8 @@ pub async fn bootstrap(
             message: format!("cannot issue token: {e}"),
         })?;
     let label = breq.label.unwrap_or_default();
-    ctx.audit.log(
+    ctx.audit.log_edge(
+        paths::DEV_RELAY_API,
         "bootstrap_ok",
         Actor::Agent,
         &[

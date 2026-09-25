@@ -306,6 +306,39 @@ async fn bootstrap_manual_and_kill_switch() {
     assert!(resp.error.unwrap().contains("disabled"));
 }
 
+/// #228: every API entry — the bootstrap, an allowed call, a refused one and an unknown token —
+/// names the agent's edge to the relay's API, so the row in docs/paths.yml can be found from it.
+#[tokio::test]
+async fn audit_names_the_edge_of_every_api_entry() {
+    let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;
+    let (_, resp) = post_bootstrap(f.addr, &gen_pubkey()).await;
+    let token = resp.token.unwrap();
+    let _ = post(f.addr, "/whoami", Some(&token), &ApiRequest::default()).await;
+    let _ = post(
+        f.addr,
+        "/pr/merge",
+        Some(&token),
+        &ApiRequest {
+            number: 1,
+            ..req("LibOrg/awesome-lib")
+        },
+    )
+    .await;
+    let _ = post(f.addr, "/whoami", Some("skm_bogus"), &ApiRequest::default()).await;
+    let text = std::fs::read_to_string(&f.audit_path).unwrap();
+    for event in ["bootstrap_ok", "api_ok", "api_error", "token_denied"] {
+        let line = text
+            .lines()
+            .find(|l| l.contains(&format!("\"event\":\"{event}\"")))
+            .unwrap_or_else(|| panic!("no {event} in {text}"));
+        assert!(line.contains("\"edge\":\"dev.relay.api\""), "{line}");
+    }
+    // and the operator's own entries carry none
+    assert!(!text
+        .lines()
+        .any(|l| l.contains("token_issued") && l.contains("\"edge\"")));
+}
+
 #[tokio::test]
 async fn audit_has_no_plaintext_token() {
     let f = start_api(project_case_a(&["pr:create"]), BootstrapMode::Auto, true).await;

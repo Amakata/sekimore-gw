@@ -38,6 +38,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::audit::{Actor, Audit};
 use crate::config::SigningKeyConfig;
+use crate::paths;
 
 // Message numbers from PROTOCOL.agent.
 const SSH_AGENT_FAILURE: u8 = 5;
@@ -328,7 +329,8 @@ impl SigningAgent {
                     // Success and refusal are both recorded: the audit is how anyone finds out
                     // afterwards which commits this key was asked to sign.
                     if reply.first() == Some(&SSH_AGENT_FAILURE) {
-                        self.audit.deny(
+                        self.audit.deny_edge(
+                            paths::DEV_SIGNING,
                             "signing_agent_refused",
                             Actor::Agent,
                             "the host agent refused the signature",
@@ -338,7 +340,8 @@ impl SigningAgent {
                             ],
                         );
                     } else {
-                        self.audit.log(
+                        self.audit.log_edge(
+                            paths::DEV_SIGNING,
                             "signing_agent_signed",
                             Actor::Agent,
                             &[
@@ -350,7 +353,8 @@ impl SigningAgent {
                     reply
                 }
                 Verdict::Refuse(why) => {
-                    self.audit.deny(
+                    self.audit.deny_edge(
+                        paths::DEV_SIGNING,
                         "signing_agent_refused",
                         Actor::Agent,
                         &why,
@@ -379,7 +383,8 @@ impl SigningAgent {
                 // that names the key instead of "communication with agent failed".
                 let why = "the host ssh-agent does not hold the configured signing key (ssh-add it on the host)";
                 if self.missing_key_audit_due() {
-                    self.audit.deny(
+                    self.audit.deny_edge(
+                        paths::DEV_SIGNING,
                         "signing_agent_refused",
                         Actor::Agent,
                         why,

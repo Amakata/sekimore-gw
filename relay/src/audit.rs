@@ -98,6 +98,36 @@ impl Audit {
         }
     }
 
+    /// Records an event on a path-ledger edge (#228): the entry carries `edge=<id>`, so it can be
+    /// traced to the row in docs/paths.yml that says who resolved the name, who verified the peer
+    /// and what was presented. A pair that `paths::AUDIT_EVENTS` does not list is a bug in a
+    /// debug build and is written anyway in a release build.
+    pub fn log_edge(&self, edge: &'static str, event: &str, actor: Actor, fields: &[(&str, &str)]) {
+        debug_assert!(
+            crate::paths::is_audited(edge, event),
+            "audit: {event} is not registered on {edge} in paths::AUDIT_EVENTS"
+        );
+        let mut v: Vec<(&str, &str)> = Vec::with_capacity(fields.len() + 1);
+        v.push((crate::paths::EDGE_FIELD, edge));
+        v.extend_from_slice(fields);
+        self.log(event, actor, &v);
+    }
+
+    /// `deny`, on an edge.
+    pub fn deny_edge(
+        &self,
+        edge: &'static str,
+        event: &str,
+        actor: Actor,
+        reason: &str,
+        fields: &[(&str, &str)],
+    ) {
+        let mut v: Vec<(&str, &str)> = Vec::with_capacity(fields.len() + 1);
+        v.push(("reason", reason));
+        v.extend_from_slice(fields);
+        self.log_edge(edge, event, actor, &v);
+    }
+
     /// Records a denial. Always carries a `reason`.
     pub fn deny(&self, event: &str, actor: Actor, reason: &str, fields: &[(&str, &str)]) {
         let mut v: Vec<(&str, &str)> = Vec::with_capacity(fields.len() + 1);
@@ -110,6 +140,54 @@ impl Audit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #228: an entry on an edge names it, a denial on an edge names both the edge and the
+    /// reason, and a pair the registry does not know is refused before it is written.
+    #[test]
+    fn an_entry_on_an_edge_carries_the_edge_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("audit.jsonl");
+        let a = Audit::new(Some(&p), false).unwrap();
+        a.log_edge(
+            crate::paths::DEV_RELAY_SSH,
+            "ssh_auth_ok",
+            Actor::Agent,
+            &[("peer", "10.0.0.2:4444")],
+        );
+        a.deny_edge(
+            crate::paths::DEV_RELAY_API,
+            "token_denied",
+            Actor::Agent,
+            "unknown token",
+            &[("peer", "10.0.0.2:4445")],
+        );
+        a.log("token_issued", Actor::Operator, &[("label", "x")]);
+        let lines: Vec<Value> = std::fs::read_to_string(&p)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines[0]["edge"], "dev.relay.ssh");
+        assert_eq!(lines[0]["peer"], "10.0.0.2:4444");
+        assert_eq!(lines[1]["edge"], "dev.relay.api");
+        assert_eq!(lines[1]["reason"], "unknown token");
+        assert!(
+            lines[2].get("edge").is_none(),
+            "an operator event is on no edge"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "not registered")]
+    fn an_unregistered_pair_is_refused_in_a_debug_build() {
+        let a = Audit::disabled();
+        a.log_edge(
+            crate::paths::DEV_RELAY_SSH,
+            "token_issued",
+            Actor::Agent,
+            &[],
+        );
+    }
 
     #[test]
     fn writes_jsonl_with_required_fields() {

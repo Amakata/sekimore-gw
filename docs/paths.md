@@ -37,6 +37,15 @@ attribute; the ledger makes that a test failure.
 - No secret the gateway holds is readable over an edge that starts in `dev` (#217)
 - Two TLS implementations towards one peer need an `interop` reference (#205)
 
+## Audit entries name their edge
+
+Every audit.jsonl entry that records a connection carries `edge=<id>`, written through
+`Audit::log_edge` / `deny_edge`. The pairs the relay may write are listed in
+`relay/src/paths.rs` (`AUDIT_EVENTS`); a pair not listed there fails a debug build, and the
+test checks that each edge's `audit` attribute names exactly those events. The relay tab of
+the Web UI shows the id on each row. Entries that record no connection (a token issued, the
+store unlocked) carry no edge.
+
 ## Asking it questions
 
 ```

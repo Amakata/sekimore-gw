@@ -26,6 +26,7 @@ use tokio::net::TcpListener;
 use crate::audit::{Actor, Audit};
 use crate::config::BootstrapMode;
 use crate::github::{GhError, GitHub};
+use crate::paths;
 use crate::policy::Project;
 use crate::ssh::authorized_keys::AuthorizedKeys;
 use crate::tokens::{TokenRecord, TokenStore, VerifyError};
@@ -327,7 +328,8 @@ pub async fn handle(
 
     // ---- Authentication ----
     let Some(token) = bearer_token(&req) else {
-        ctx.audit.deny(
+        ctx.audit.deny_edge(
+            paths::DEV_RELAY_API,
             "token_denied",
             Actor::Agent,
             "missing token",
@@ -342,7 +344,8 @@ pub async fn handle(
         Ok(r) => r,
         Err(e) => {
             let reason = e.to_string();
-            ctx.audit.deny(
+            ctx.audit.deny_edge(
+                paths::DEV_RELAY_API,
                 "token_denied",
                 Actor::Agent,
                 &reason,
@@ -357,7 +360,8 @@ pub async fn handle(
     };
     // A project token can only touch its own project
     if rec.project != ctx.project.name {
-        ctx.audit.deny(
+        ctx.audit.deny_edge(
+            paths::DEV_RELAY_API,
             "token_wrong_project",
             Actor::Agent,
             "token belongs to another project",
@@ -389,7 +393,8 @@ pub async fn handle(
     // Check the repository belongs to the project (Projects may omit the repo)
     if !apireq.repo.is_empty() {
         if let Err(d) = ctx.project.find_repo(&apireq.repo) {
-            ctx.audit.deny(
+            ctx.audit.deny_edge(
+                paths::DEV_RELAY_API,
                 "repo_denied",
                 Actor::Agent,
                 &d.to_string(),
@@ -406,7 +411,8 @@ pub async fn handle(
     match handlers::dispatch(&ctx, &path, &apireq, &rec).await {
         Ok(mut resp) => {
             resp.ok = true;
-            ctx.audit.log(
+            ctx.audit.log_edge(
+                paths::DEV_RELAY_API,
                 "api_ok",
                 Actor::Agent,
                 &[
@@ -419,7 +425,8 @@ pub async fn handle(
             json_response(StatusCode::OK, &resp)
         }
         Err(e) => {
-            ctx.audit.deny(
+            ctx.audit.deny_edge(
+                paths::DEV_RELAY_API,
                 "api_error",
                 Actor::Agent,
                 &e.message,

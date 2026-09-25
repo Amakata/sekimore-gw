@@ -35,6 +35,7 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use crate::audit::{Actor, Audit};
 use crate::config::Limits;
 use crate::github::GitHub;
+use crate::paths;
 pub use crate::policy::GitVerb;
 use crate::policy::{Denied, GitAuthorized, Project};
 
@@ -244,7 +245,8 @@ pub async fn handle_exec(mut io: GitIo<'_>, cmdline: &str, ctx: &GitContext, pee
         Ok(v) => v,
         Err(d) => {
             say(&mut *io.stderr, &d.to_string()).await;
-            ctx.audit.deny(
+            ctx.audit.deny_edge(
+                paths::DEV_RELAY_SSH,
                 "cmd_rejected",
                 Actor::Agent,
                 &d.to_string(),
@@ -258,7 +260,8 @@ pub async fn handle_exec(mut io: GitIo<'_>, cmdline: &str, ctx: &GitContext, pee
         Ok(a) => a,
         Err(d) => {
             say(&mut *io.stderr, &d.to_string()).await;
-            ctx.audit.deny(
+            ctx.audit.deny_edge(
+                paths::DEV_RELAY_SSH,
                 "repo_denied",
                 Actor::Agent,
                 &d.to_string(),
@@ -276,7 +279,8 @@ pub async fn handle_exec(mut io: GitIo<'_>, cmdline: &str, ctx: &GitContext, pee
     // P2
     if let Err(e) = ctx.upstream.preflight().await {
         say(&mut *io.stderr, &e.message).await;
-        ctx.audit.deny(
+        ctx.audit.deny_edge(
+            paths::RELAY_SSH_UPSTREAM,
             "upstream_preflight_failed",
             Actor::Agent,
             &e.message,
@@ -289,7 +293,8 @@ pub async fn handle_exec(mut io: GitIo<'_>, cmdline: &str, ctx: &GitContext, pee
         Ok(p) => p,
         Err(e) => {
             say(&mut *io.stderr, &e.message).await;
-            ctx.audit.deny(
+            ctx.audit.deny_edge(
+                paths::RELAY_SSH_UPSTREAM,
                 "upstream_spawn_failed",
                 Actor::Agent,
                 &e.message,
@@ -353,7 +358,8 @@ pub async fn handle_exec(mut io: GitIo<'_>, cmdline: &str, ctx: &GitContext, pee
     if let Some(n) = &outcome.note {
         fields.push(("note", n));
     }
-    ctx.audit.log(event, Actor::Agent, &fields);
+    ctx.audit
+        .log_edge(paths::RELAY_SSH_UPSTREAM, event, Actor::Agent, &fields);
     outcome.status
 }
 

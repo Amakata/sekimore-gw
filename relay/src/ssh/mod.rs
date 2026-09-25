@@ -22,6 +22,7 @@ use tokio::sync::Semaphore;
 use crate::audit::{Actor, Audit};
 use crate::fsutil::atomic_write;
 use crate::git::{handle_exec, GitContext, GitIo};
+use crate::paths;
 use authorized_keys::{fingerprint, AuthorizedKeys};
 
 pub const GIT_USER: &str = "git";
@@ -118,7 +119,8 @@ impl SshServer {
                 Ok(p) => p,
                 Err(_) => {
                     log::warn!("ssh: too many sessions, dropping {peer}");
-                    self.audit.deny(
+                    self.audit.deny_edge(
+                        paths::DEV_RELAY_SSH,
                         "ssh_rejected",
                         Actor::Agent,
                         "too many sessions",
@@ -184,7 +186,8 @@ impl Handler for ClientHandler {
             } else {
                 "public key not registered"
             };
-            self.server.audit.deny(
+            self.server.audit.deny_edge(
+                paths::DEV_RELAY_SSH,
                 "ssh_auth_denied",
                 Actor::Agent,
                 reason,
@@ -201,7 +204,8 @@ impl Handler for ClientHandler {
     async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
         let fp = fingerprint(key);
         if self.accepts(user, key) {
-            self.server.audit.log(
+            self.server.audit.log_edge(
+                paths::DEV_RELAY_SSH,
                 "ssh_auth_ok",
                 Actor::Agent,
                 &[("fingerprint", &fp), ("peer", &self.peer)],
@@ -213,7 +217,8 @@ impl Handler for ClientHandler {
             } else {
                 "public key not registered"
             };
-            self.server.audit.deny(
+            self.server.audit.deny_edge(
+                paths::DEV_RELAY_SSH,
                 "ssh_auth_denied",
                 Actor::Agent,
                 reason,
@@ -278,7 +283,8 @@ impl Handler for ClientHandler {
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.server.audit.deny(
+        self.server.audit.deny_edge(
+            paths::DEV_RELAY_SSH,
             "ssh_channel_rejected",
             Actor::Agent,
             "direct-tcpip not allowed",
@@ -345,7 +351,8 @@ impl Handler for ClientHandler {
             return Ok(());
         };
         if self.exec_started {
-            self.server.audit.deny(
+            self.server.audit.deny_edge(
+                paths::DEV_RELAY_SSH,
                 "ssh_exec_rejected",
                 Actor::Agent,
                 "second exec on one connection",
@@ -395,7 +402,8 @@ impl Handler for ClientHandler {
         id: ChannelId,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.server.audit.deny(
+        self.server.audit.deny_edge(
+            paths::DEV_RELAY_SSH,
             "ssh_request_rejected",
             Actor::Agent,
             "shell",
@@ -426,7 +434,8 @@ impl Handler for ClientHandler {
         name: &str,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.server.audit.deny(
+        self.server.audit.deny_edge(
+            paths::DEV_RELAY_SSH,
             "ssh_request_rejected",
             Actor::Agent,
             "subsystem",
@@ -478,7 +487,8 @@ impl Handler for ClientHandler {
         _session: &mut Session,
     ) -> Result<bool, Self::Error> {
         // Remote port forwarding (-R) is not accepted either. The denial is audited
-        self.server.audit.deny(
+        self.server.audit.deny_edge(
+            paths::DEV_RELAY_SSH,
             "ssh_request_rejected",
             Actor::Agent,
             "tcpip-forward (remote port forwarding) not allowed",
