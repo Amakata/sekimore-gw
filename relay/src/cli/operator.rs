@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, bail, Context};
 
+use super::color::{paint, Tone};
 use super::BootstrapAction;
 use russh::keys::PublicKey;
 
@@ -684,6 +685,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             tf(
                 "op.check.agent_ok",
                 &[
+                    ("state", &paint(Tone::Good, &t("op.check.word.ok"))),
                     ("n", &n.to_string()),
                     (
                         "sock",
@@ -695,7 +697,16 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 ]
             )
         ),
-        Err(e) => println!("{}", tf("op.check.agent_bad", &[("error", &e.to_string())])),
+        Err(e) => println!(
+            "{}",
+            tf(
+                "op.check.agent_bad",
+                &[
+                    ("state", &paint(Tone::Bad, &t("op.check.word.agent_bad"))),
+                    ("error", &e.to_string()),
+                ]
+            )
+        ),
     }
     // Whether the configured signing key is actually in that agent. The fingerprint alone says
     // nothing: the observation in #59 was a key that nobody noticed had gone
@@ -706,13 +717,28 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
         match agent.identity().await {
             Some(id) => println!(
                 "{}",
-                tf("op.check.signing_key_ok", &[("key", &id.public_key)])
+                tf(
+                    "op.check.signing_key_ok",
+                    &[
+                        (
+                            "state",
+                            &paint(Tone::Good, &t("op.check.word.signing_key_ok"))
+                        ),
+                        ("key", &id.public_key),
+                    ]
+                )
             ),
             None => println!(
                 "{}",
                 tf(
                     "op.check.signing_key_missing",
-                    &[("fingerprint", &sk.fingerprint)]
+                    &[
+                        (
+                            "state",
+                            &paint(Tone::Bad, &t("op.check.word.signing_key_missing"))
+                        ),
+                        ("fingerprint", &sk.fingerprint),
+                    ]
                 )
             ),
         }
@@ -736,19 +762,34 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 "{}",
                 tf(
                     "op.check.known_hosts_ok",
-                    &[("path", &u.known_hosts.display().to_string())]
+                    &[
+                        ("state", &paint(Tone::Good, &t("op.check.word.ok"))),
+                        ("path", &u.known_hosts.display().to_string()),
+                    ]
                 )
             ),
             Ok(false) => println!(
                 "{}",
                 tf(
                     "op.check.known_hosts_missing",
-                    &[("remedy", &up.known_hosts_remedy())]
+                    &[
+                        (
+                            "state",
+                            &paint(Tone::Bad, &t("op.check.word.known_hosts_missing"))
+                        ),
+                        ("remedy", &up.known_hosts_remedy()),
+                    ]
                 )
             ),
             Err(e) => println!(
                 "{}",
-                tf("op.check.known_hosts_error", &[("error", &e.to_string())])
+                tf(
+                    "op.check.known_hosts_error",
+                    &[
+                        ("state", &paint(Tone::Bad, &t("op.check.word.error"))),
+                        ("error", &e.to_string()),
+                    ]
+                )
             ),
         }
         let store = UpstreamTokenStore::new(
@@ -768,6 +809,10 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 tf(
                     "op.check.token_present",
                     &[
+                        (
+                            "state",
+                            &paint(Tone::Good, &t("op.check.word.token_present"))
+                        ),
                         ("scope", &tok.scope),
                         (
                             "when",
@@ -776,10 +821,28 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                     ]
                 )
             ),
-            Ok(None) => println!("{}", tf("op.check.token_missing", &[("hint", &login_hint)])),
+            Ok(None) => println!(
+                "{}",
+                tf(
+                    "op.check.token_missing",
+                    &[
+                        (
+                            "state",
+                            &paint(Tone::Bad, &t("op.check.word.token_missing"))
+                        ),
+                        ("hint", &login_hint),
+                    ]
+                )
+            ),
             Err(e) => println!(
                 "{}",
-                tf("op.check.token_error", &[("error", &e.to_string())])
+                tf(
+                    "op.check.token_error",
+                    &[
+                        ("state", &paint(Tone::Bad, &t("op.check.word.error"))),
+                        ("error", &e.to_string()),
+                    ]
+                )
             ),
         }
     }
@@ -1220,7 +1283,7 @@ pub async fn proxy_credential_clear(path: &Path) -> anyhow::Result<()> {
 pub async fn store_control(path: &Path, op: &str) -> anyhow::Result<()> {
     let paths = store_paths(path)?;
     let (ok, message) = store::control::call(&paths, &format!(r#"{{"op":"{op}"}}"#)).await?;
-    println!("{message}");
+    println!("{}", paint_store_state(&message));
     // #194: "unlocked" alone did not say whether the upstream proxy credential was in there, and
     // the reporter's gateway said unlocked while Squid had none at all.
     if op == "status" {
@@ -1258,6 +1321,20 @@ async fn store_state(sock: &Path) -> String {
     }
 }
 
+/// #202: colours the store's own state word, and leaves anything else the socket says alone.
+///
+/// `lock` and `status` answer with one of three words; every other reply (an error, a message
+/// from a future version) is a sentence we do not want to paint a random colour.
+fn paint_store_state(message: &str) -> String {
+    let tone = match message {
+        "unlocked" => Tone::Good,
+        "locked" => Tone::Bad,
+        "not initialised" => Tone::Warn,
+        _ => return message.to_string(),
+    };
+    paint(tone, message)
+}
+
 /// What to print for `credential:` (#194).
 ///
 /// `ProxySpec::credential_source()` cannot tell a locked store from an empty one — both leave the
@@ -1267,13 +1344,29 @@ async fn store_state(sock: &Path) -> String {
 fn credential_status(state: &str, spec: &ProxySpec) -> String {
     let source = spec.credential_source();
     if source != "none" {
-        return source.to_string();
+        // #202: the store is where it belongs (green); the environment and config.yml work but
+        // are not what we would recommend (yellow). Ask the spec, not its wording — that is what
+        // `credential_source()` itself branches on, and it can be reworded without notice.
+        let tone = if spec.stored.get().is_some() {
+            Tone::Good
+        } else {
+            Tone::Warn
+        };
+        return paint(tone, source);
     }
+    // #202: only the leading word is painted — the remedy after the dash stays plain so it reads.
+    let none = paint(Tone::Bad, &t("op.check.word.credential_none"));
     match state {
-        "locked" | "not initialised" => t("op.check.proxy_credential_locked"),
-        "unlocked" => t("op.check.proxy_credential_unset"),
+        "locked" | "not initialised" => tf(
+            "op.check.proxy_credential_locked",
+            &[("state", none.as_str())],
+        ),
+        "unlocked" => tf(
+            "op.check.proxy_credential_unset",
+            &[("state", none.as_str())],
+        ),
         // No answer from the socket: no relay running, so there is no store to advise about.
-        _ => source.to_string(),
+        _ => none,
     }
 }
 
@@ -1381,8 +1474,12 @@ garbage line\n";
         // the same command.
         assert_eq!(credential_status("not initialised", &bare(None)), locked);
 
-        // No relay answering at all: there is no store to advise about, so the old wording.
-        assert_eq!(credential_status("", &bare(None)), "none");
+        // No relay answering at all: there is no store to advise about, so the bare word and no
+        // remedy. #202 took the word out of the locale, so read it from there too.
+        assert_eq!(
+            credential_status("", &bare(None)),
+            t("op.check.word.credential_none")
+        );
 
         // A credential in hand is what gets presented, whatever the store says a moment later.
         let from_env = bare(Some("alice"));
@@ -1396,5 +1493,54 @@ garbage line\n";
             credential_status("unlocked", &from_store),
             "the secret store (gw:proxy-credential)"
         );
+    }
+
+    /// #202: the state words carry a colour when stdout is a terminal, and the line is
+    /// byte-identical without one. `check` and `store-status` are read by scripts too.
+    #[test]
+    fn the_state_words_are_coloured_only_when_colour_is_on() {
+        use super::super::color::set_for_tests;
+
+        set_for_tests(Some(false));
+        assert_eq!(paint_store_state("unlocked"), "unlocked");
+        assert_eq!(paint_store_state("locked"), "locked");
+        assert_eq!(paint_store_state("not initialised"), "not initialised");
+
+        set_for_tests(Some(true));
+        assert_eq!(paint_store_state("unlocked"), "\x1b[32munlocked\x1b[0m");
+        assert_eq!(paint_store_state("locked"), "\x1b[31mlocked\x1b[0m");
+        assert_eq!(
+            paint_store_state("not initialised"),
+            "\x1b[33mnot initialised\x1b[0m"
+        );
+        // Anything the socket says that is not one of the three states stays plain.
+        assert_eq!(paint_store_state("no such op"), "no such op");
+
+        let bare = |user: Option<&str>| ProxySpec {
+            url: "http://proxy.example:8080".into(),
+            username: user.map(str::to_string),
+            password: None,
+            stored: Default::default(),
+        };
+        // The store is where the credential belongs; the environment works but is not advised.
+        let from_store = bare(None);
+        from_store.stored.set(Some(("bob".into(), "sekret".into())));
+        assert_eq!(
+            credential_status("unlocked", &from_store),
+            "\x1b[32mthe secret store (gw:proxy-credential)\x1b[0m"
+        );
+        assert_eq!(
+            credential_status("unlocked", &bare(Some("alice"))),
+            "\x1b[33mSEKIMORE_UPSTREAM_PROXY_* or config.yml\x1b[0m"
+        );
+        // Only the leading word is painted; the remedy after the dash stays plain.
+        let locked = credential_status("locked", &bare(None));
+        assert!(
+            locked.starts_with("\x1b[31m") && locked.contains("\x1b[0m — "),
+            "paint the word, not the remedy: {locked:?}"
+        );
+        assert!(!locked.trim_end().ends_with("\x1b[0m"), "{locked:?}");
+
+        set_for_tests(None);
     }
 }
