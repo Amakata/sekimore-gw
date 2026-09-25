@@ -507,6 +507,25 @@ Token records are deleted automatically 7 days after they expire. `audit.jsonl` 
 | `could not read Username` on HTTPS git | HTTPS authentication is blocked intentionally, so that the operator's credentials cannot bypass the relay. | Use SSH (`git@github.com:`). |
 | The post-create message that the ssh-agent is being forwarded does not go away | `code` on macOS inherits the launchd environment. | Quit VS Code completely and run `mise run vscode`. |
 
+### Troubleshooting the upstream proxy path from inside dev
+
+All of this runs from the dev container. There is no need to go to the host.
+
+```bash
+# the running configuration, and the generated squid.conf
+curl -s http://sekimore-gw:8080/api/config | jq '.proxy, .squid.config_text'
+# the relay's refusal reasons
+curl -s http://sekimore-gw:8080/api/relay/audit | jq '.[0:5]'
+# Squid's path: dev has no HTTP_PROXY, so name Squid with -x
+curl -x http://sekimore-gw:3128 -sSI http://deb.debian.org/debian/dists/stable/Release | grep -i via
+# the relay's own path: 443 goes to the relay, with no proxy named
+curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
+```
+
+- Two `Via` hops (the upstream Squid and the gateway's Squid) prove the request went through the upstream.
+- `407` with `Proxy-Authenticate` means the upstream was reached and only the authentication failed.
+- `curl: (35) SSL_ERROR_SYSCALL` right after connecting to a relayed HTTPS domain, with `https_failed … proxy closed during CONNECT` in the audit, is the relay failing to reach the upstream proxy — Squid's path can still work at the same time. An `https://` upstream proxy (`upstream_proxy_tls: true`) needs gateway 0.2.39 or later (#192).
+
 ## Development
 
 ```bash
