@@ -13,6 +13,38 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from .domains import domain_matches
 from .resolved_ips import DEFAULT_DENY_CIDRS
 
+# #212: the handler kinds Squid refuses to serve (see `Config.proxy_denied_domains`). A dev
+# container pointed at Squid must list these in NO_PROXY, or the GitHub API and npm break with a
+# 403 from the proxy. Kept here so `proxy_denied_domains()` and `/api/proxy-env` cannot drift.
+PROXY_DENIED_HANDLERS: tuple[str, ...] = ("github", "https-relay", "deny")
+
+# The names a dev container must never send to the proxy whatever the config says: the gateway
+# itself and the loopback. Appended last, after the handler targets and the operator's own entries.
+NO_PROXY_ALWAYS: tuple[str, ...] = ("localhost", "127.0.0.1", "sekimore-gw")
+
+
+def normalize_no_proxy_entry(entry: str) -> str:
+    """One `NO_PROXY` entry in the spelling the tools understand.
+
+    Written like `allow_domains`: a leading dot is the suffix (`.test` is every host under
+    .test), a bare name is that host, a CIDR passes through. `*.test` is accepted too and read
+    as `.test`, because that is how a shell glob gets written by habit — curl, Go and Python
+    only understand the dotted form, so that is what is emitted.
+    """
+    entry = entry.strip()
+    return entry[1:] if entry.startswith("*.") else entry
+
+
+def merge_no_proxy(*groups: list[str] | tuple[str, ...]) -> list[str]:
+    """Normalize, concatenate and dedupe, keeping the first occurrence's position."""
+    out: list[str] = []
+    for group in groups:
+        for entry in group:
+            e = normalize_no_proxy_entry(str(entry))
+            if e and e not in out:
+                out.append(e)
+    return out
+
 
 class DNSConfig(BaseModel):
     """DNS settings.
@@ -49,6 +81,60 @@ class ProxyConfig(BaseModel):
         default=None,
         description="Password for the upstream proxy (overridden by SEKIMORE_UPSTREAM_PROXY_PASSWORD)",
     )
+    # #212: with an upstream proxy set, dev's ordinary traffic to `allow_domains` is
+    # admitted into the firewall's ipset by the DNS answer and NATed straight out, so it never
+    # reaches Squid and never reaches the upstream. `deny` stops admitting those addresses:
+    # DNS still answers, so names resolve, but the only way out is the proxy.
+    direct_egress: Literal["allow", "deny"] = Field(
+        default="allow",
+        description=(
+            "allow = dev's traffic to allow_domains may leave directly, bypassing the upstream "
+            "proxy / deny = only Squid gets out (needs upstream_proxy)"
+        ),
+    )
+    # Extra `NO_PROXY` entries handed to the dev container alongside the handler targets.
+    no_proxy: list[str] = Field(
+        default_factory=list,
+        description="Extra NO_PROXY entries for the dev container (e.g. '*.test', '.internal', a CIDR)",
+    )
+
+    @field_validator("no_proxy")
+    @classmethod
+    def validate_no_proxy(cls, v: list[str]) -> list[str]:
+        """Drop blanks and whitespace; the shape is checked when the list is normalized."""
+        out: list[str] = []
+        for entry in v:
+            e = str(entry).strip()
+            if not e:
+                continue
+            if any(c.isspace() for c in e) or "," in e:
+                raise ValueError(
+                    f"proxy.no_proxy: {entry!r} must be a single entry "
+                    "(no spaces or commas); use one list item per host"
+                )
+            out.append(e)
+        return out
+
+    def normalized_no_proxy(self) -> list[str]:
+        """`no_proxy` as `NO_PROXY` wants it: `*.x` becomes `.x`, the rest is kept verbatim.
+
+        `*.test` and `.test` both mean "this suffix", and curl, Go and Python only understand
+        the second spelling. A bare host means that host, and a CIDR passes through untouched.
+        Order is kept and duplicates are dropped.
+        """
+        return merge_no_proxy(self.no_proxy)
+
+    def uses_upstream(self) -> bool:
+        """Whether dev's traffic has an upstream proxy to go through at all."""
+        return bool(self.enabled and self.upstream_proxy)
+
+    def direct_egress_denied(self) -> bool:
+        """Whether `allow_domains` addresses are kept out of the firewall (Squid is the only way out).
+
+        Only in force with an upstream proxy: without one, denying the direct path would cut dev
+        off from everything, which is why the config refuses the combination.
+        """
+        return self.direct_egress == "deny" and self.uses_upstream()
 
     def model_post_init(self, __context) -> None:
         """Read credentials from the environment."""
@@ -376,6 +462,25 @@ class Config(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_direct_egress(self) -> "Config":
+        """`proxy.direct_egress: deny` needs somewhere for the traffic to go (#212).
+
+        Denying the direct path keeps `allow_domains` addresses out of the firewall's ipset, so
+        the only remaining way out is Squid's upstream. Without `proxy.enabled` and
+        `upstream_proxy` there is no upstream, and the setting would simply cut dev off from
+        every allowed domain — with DNS still answering, so it would look like the network
+        failing rather than a setting. Refused here instead.
+        """
+        if self.proxy.direct_egress == "deny" and not self.proxy.uses_upstream():
+            raise ValueError(
+                "proxy.direct_egress: 'deny' needs proxy.enabled: true and proxy.upstream_proxy "
+                "set — it keeps allow_domains addresses out of the firewall so that the upstream "
+                "proxy is the only way out, and without one dev would reach nothing at all. "
+                "Set an upstream proxy, or leave direct_egress: allow"
+            )
+        return self
+
     @field_validator("reload")
     @classmethod
     def _validate_reload(cls, v: str) -> str:
@@ -404,11 +509,7 @@ class Config(BaseModel):
         reachable by pointing a client at the proxy explicitly, which skips the relay's
         policy entirely. `splice` is not included: it is meant to go out directly.
         """
-        return [
-            d
-            for d, h in self.domain_handlers.items()
-            if h.handler in ("github", "https-relay", "deny")
-        ]
+        return [d for d, h in self.domain_handlers.items() if h.handler in PROXY_DENIED_HANDLERS]
 
     def proxy_allow_domains(self) -> list[str]:
         """`allow_domains` minus the exact names another component owns.

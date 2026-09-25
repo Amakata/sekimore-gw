@@ -94,6 +94,11 @@ mise run gw:proxy-credential -- set
 関所は任意です。`domain_handlers` がなければ、最初の 3 層だけが動きます。
 詳細は [relay/README.ja.md](relay/README.ja.md) を参照してください。
 
+`proxy.upstream_proxy` を設定しても、上流を通るのは関所自身の経路と、Squid を明示したクライアントだけです。
+それ以外はゲートウェイから直接出ていきます。`proxy.direct_egress: deny` でその経路を塞ぐと、出口は Squid だけになります。
+dev コンテナは起動時にゲートウェイから `HTTP_PROXY` と `NO_PROXY` を受け取ります（`GET /api/proxy-env`。
+`NO_PROXY` は `domain_handlers` と `proxy.no_proxy` から組み立てられます）。
+
 ## 向くとき、向かないとき
 
 エージェントに次をさせたいときに向きます。

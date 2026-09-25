@@ -500,7 +500,7 @@ Dev Containers 構成では、`mise run gw:tokens` / `gw:revoke-project` / `gw:a
 curl -s http://sekimore-gw:8080/api/config | jq '.proxy, .squid.config_text'
 # 関所が拒否した理由
 curl -s http://sekimore-gw:8080/api/relay/audit | jq '.[0:5]'
-# Squid の経路: dev に HTTP_PROXY は無いので、-x で Squid を指定します
+# Squid の経路（dev はゲートウェイから HTTP_PROXY を受け取ります。-x は環境によらず Squid を指定します）
 curl -x http://sekimore-gw:3128 -sSI http://deb.debian.org/debian/dists/stable/Release | grep -i via
 # 関所自身の経路: 443 はプロキシを指定しなくても関所に向きます
 curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
@@ -509,6 +509,14 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
 - `Via` が 2 段（上流の Squid と、ゲートウェイの Squid）なら、上流を通ったことの証拠です。
 - `407` と `Proxy-Authenticate` が返るなら、上流には届いており、認証だけが失敗しています。
 - 関所が扱う HTTPS ドメインに接続した直後の `curl: (35) SSL_ERROR_SYSCALL` と、監査ログの `https_failed … proxy closed during CONNECT` は、関所が上流プロキシに届いていない状態です。同時に Squid の経路は通ることがあります。`https://` の上流プロキシ（`upstream_proxy_tls: true`）にはゲートウェイ 0.2.39 以降が必要です（#192）。
+
+### どの通信が上流プロキシを通るか
+
+- 関所自身の経路（SSH の git、GitHub API、443 の通過）は常に通ります。Squid を明示したクライアント（`curl -x http://sekimore-gw:3128`）も通ります。
+- dev から `allow_domains` にしかない宛先への通常の通信は通りません。DNS の応答でアドレスがファイアウォールに登録され、そのまま NAT で出ていくため、Squid の access.log に行が残りません（#212）。
+- `proxy.direct_egress: deny` はその登録をやめ、出口を Squid だけにします。DNS は応答を返すので名前は解決でき、`HTTP_PROXY` を無視するクライアントは黙って外へ出るかわりに失敗します。`allow_ips` は影響を受けません。`upstream_proxy` が必要で、なければゲートウェイは起動を拒否します。
+- dev コンテナは起動時に `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` を受け取ります。`agent-setup.sh` が `GET /api/proxy-env` を読み、`/etc/profile.d/sekimore-proxy.sh` と `/etc/environment` の印つきブロックを書きます。`NO_PROXY` には `domain_handlers` の宛先すべて（Squid は意図的に CONNECT を拒否します）と `proxy.no_proxy` が入ります。dev のイメージが `/etc/profile.d` を読む必要があり、sgw-devcontainer-base はこれを同梱する版から読みます。
+- 現在のモードは `sekimore-relay check` の `proxy:` の下に `egress:` として出ます。直接送出が許可されている間は黄色です。
 
 `upstream_proxy_tls: true` で Squid が有効なとき、関所は上流プロキシへ TLS を話しません。CONNECT をローカルの Squid に送り、Squid が OpenSSL で TLS を話し、保管した資格情報も Squid が提示します（`cache_peer … login=`）。これにより、TLS 1.2 の RSA 鍵交換しか提示しない上流（`tls-dh=` のない Squid の `https_port`）にも届きます。関所の rustls はこれを話せません（#205）。Squid が無効なときは関所自身が TLS を話し、TLS 1.3 か ECDHE のみです。どちらの経路かは `sekimore-relay check` の `route:` に出ます。`reach:` はその経路を実際に試します。
 

@@ -660,6 +660,7 @@ mod tests {
             password: Some("pass".into()),
             stored: Default::default(),
             via_squid: None,
+            direct_egress: crate::config::DirectEgress::Allow,
         }
     }
 
@@ -673,6 +674,7 @@ mod tests {
             password: Some("env-pass".into()),
             stored: Default::default(),
             via_squid: None,
+            direct_egress: crate::config::DirectEgress::Allow,
         };
         spec.stored
             .set(Some(("store-user".into(), "store-pass".into())));
@@ -694,6 +696,7 @@ mod tests {
             password: None,
             stored: Default::default(),
             via_squid: None,
+            direct_egress: crate::config::DirectEgress::Allow,
         };
         let err = http_connect_tunnel(&spec, "example.com", 443)
             .await
@@ -721,6 +724,7 @@ mod tests {
             password: Some("env-pass".into()),
             stored: Default::default(),
             via_squid: Some(squid_port),
+            direct_egress: crate::config::DirectEgress::Allow,
         };
         spec.stored
             .set(Some(("store-user".into(), "store-pass".into())));
@@ -749,6 +753,7 @@ mod tests {
             password: Some("env-pass".into()),
             stored: Default::default(),
             via_squid: Some(squid_port),
+            direct_egress: crate::config::DirectEgress::Allow,
         };
         let err = http_connect_tunnel(&spec, "api.github.com", 443)
             .await

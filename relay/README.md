@@ -516,7 +516,7 @@ All of this runs from the dev container. There is no need to go to the host.
 curl -s http://sekimore-gw:8080/api/config | jq '.proxy, .squid.config_text'
 # the relay's refusal reasons
 curl -s http://sekimore-gw:8080/api/relay/audit | jq '.[0:5]'
-# Squid's path: dev has no HTTP_PROXY, so name Squid with -x
+# Squid's path (dev gets HTTP_PROXY from the gateway; -x names Squid whatever the environment says)
 curl -x http://sekimore-gw:3128 -sSI http://deb.debian.org/debian/dists/stable/Release | grep -i via
 # the relay's own path: 443 goes to the relay, with no proxy named
 curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
@@ -525,6 +525,14 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
 - Two `Via` hops (the upstream Squid and the gateway's Squid) prove the request went through the upstream.
 - `407` with `Proxy-Authenticate` means the upstream was reached and only the authentication failed.
 - `curl: (35) SSL_ERROR_SYSCALL` right after connecting to a relayed HTTPS domain, with `https_failed … proxy closed during CONNECT` in the audit, is the relay failing to reach the upstream proxy — Squid's path can still work at the same time. An `https://` upstream proxy (`upstream_proxy_tls: true`) needs gateway 0.2.39 or later (#192).
+
+### Which traffic uses the upstream proxy
+
+- The relay's own paths (git over SSH, the GitHub API, the 443 passthrough) always do, and so does a client that names Squid explicitly (`curl -x http://sekimore-gw:3128`).
+- Dev's ordinary traffic to a destination that is only in `allow_domains` does not: its DNS answer admits the address into the firewall and the packet is NATed straight out, leaving no line in Squid's access.log (#212).
+- `proxy.direct_egress: deny` stops admitting those addresses, so Squid is the only way out. DNS still answers, so names resolve; a client that ignores `HTTP_PROXY` then fails instead of leaving silently. `allow_ips` is unaffected. It needs an `upstream_proxy`, or the gateway refuses to start.
+- The dev container gets `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` at start: `agent-setup.sh` reads `GET /api/proxy-env` and writes `/etc/profile.d/sekimore-proxy.sh` plus a marked block in `/etc/environment`. `NO_PROXY` carries every `domain_handlers` target — Squid refuses CONNECT to them on purpose — plus `proxy.no_proxy`. The dev image has to source `/etc/profile.d`, which sgw-devcontainer-base does from the version that ships this.
+- `sekimore-relay check` prints the mode under `proxy:` as `egress:`, in yellow while direct egress is allowed.
 
 With `upstream_proxy_tls: true` and Squid enabled, the relay does not speak TLS to the upstream proxy at all: it sends its CONNECT to the local Squid, which takes the TLS hop with OpenSSL and presents the stored credential itself (`cache_peer … login=`). That works with a proxy offering only TLS 1.2 RSA key exchange — a Squid `https_port` without `tls-dh=` — which the relay's rustls cannot speak (#205). With Squid disabled the relay speaks TLS itself: TLS 1.3 or ECDHE only. `sekimore-relay check` prints which route is in use, under `route:`, and its `reach:` line probes that route.
 

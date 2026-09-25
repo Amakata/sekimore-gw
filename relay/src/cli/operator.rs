@@ -607,6 +607,12 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 "op.check.proxy_route_direct"
             })
         );
+        // #212: which of dev's traffic actually uses this proxy. With direct egress allowed —
+        // the default, and how every version before this one behaved — only the relay's handler
+        // paths and clients that name Squid explicitly do; everything else is NATed straight out.
+        // Nothing said so, and a 200 through Squid proves nothing, so it took comparing egress
+        // IPs to find. Yellow, because it is legitimate and probably not what was wanted.
+        println!("{}", proxy_egress_line(px.direct_egress));
         // #206: until now nothing in `check` ever touched the upstream proxy, so a proxy the
         // relay could not speak TLS to passed every check and surfaced only when real work
         // started. Connect, handshake, say what came back.
@@ -1371,6 +1377,24 @@ fn credential_status(state: &str, spec: &ProxySpec) -> String {
     }
 }
 
+/// The `egress:` line under `proxy:` in `check` (#212).
+///
+/// It answers "does dev's ordinary traffic go through this proxy?", which is not what any other
+/// line here answers: `reach:` says the proxy is usable, and it is usable either way.
+fn proxy_egress_line(mode: crate::config::DirectEgress) -> String {
+    let label = pad_label(&t("op.check.proxy_egress"), 14);
+    match mode {
+        crate::config::DirectEgress::Allow => format!(
+            "{label}{}",
+            paint(Tone::Warn, &t("op.check.proxy_egress_direct"))
+        ),
+        crate::config::DirectEgress::Deny => format!(
+            "{label}{}",
+            paint(Tone::Good, &t("op.check.proxy_egress_squid"))
+        ),
+    }
+}
+
 /// The `reach:` line under `proxy:` in `check` (#206).
 ///
 /// `store-status` does not get this: it answers a question about the secret store, and a network
@@ -1637,6 +1661,7 @@ garbage line\n";
             password: None,
             stored: Default::default(),
             via_squid: None,
+            direct_egress: crate::config::DirectEgress::Allow,
         };
 
         let locked = credential_status("locked", &bare(None));
@@ -1699,6 +1724,7 @@ garbage line\n";
             password: None,
             stored: Default::default(),
             via_squid: None,
+            direct_egress: crate::config::DirectEgress::Allow,
         };
         // The store is where the credential belongs; the environment works but is not advised.
         let from_store = bare(None);
@@ -1718,6 +1744,54 @@ garbage line\n";
             "paint the word, not the remedy: {locked:?}"
         );
         assert!(!locked.trim_end().ends_with("\x1b[0m"), "{locked:?}");
+
+        set_for_tests(None);
+    }
+
+    /// #212: `check` used to say nothing about whether dev's ordinary traffic goes through the
+    /// upstream proxy at all. A 200 through Squid proves nothing -- a direct request gets one too.
+    #[test]
+    fn the_egress_line_says_which_traffic_uses_the_proxy() {
+        use super::super::color::set_for_tests;
+        use crate::config::DirectEgress;
+        set_for_tests(Some(true));
+
+        // Allowed: legitimate, and probably not what was wanted, so yellow with the remedy.
+        let allow = proxy_egress_line(DirectEgress::Allow);
+        assert!(
+            allow.starts_with("  egress:     \u{1b}[33m"),
+            "the warning is yellow: {allow}"
+        );
+        assert!(
+            allow.contains(&t("op.check.proxy_egress_direct")),
+            "{allow}"
+        );
+        // Whatever the locale, the warning names the setting that closes the hole -- the whole
+        // point is that the operator can act on the line without looking anything up.
+        assert!(
+            allow.contains("proxy.direct_egress: deny"),
+            "name the setting that fixes it: {allow}"
+        );
+
+        // Denied: green, and it says what is in force rather than what to do.
+        let deny = proxy_egress_line(DirectEgress::Deny);
+        assert!(deny.starts_with("  egress:     \u{1b}[32m"), "{deny}");
+        assert!(deny.contains(&t("op.check.proxy_egress_squid")), "{deny}");
+        assert!(
+            !deny.contains("direct_egress: deny"),
+            "nothing to fix: {deny}"
+        );
+
+        set_for_tests(Some(false));
+        assert_eq!(
+            proxy_egress_line(DirectEgress::Deny),
+            format!("  egress:     {}", t("op.check.proxy_egress_squid"))
+        );
+        // `proxy:`, `route:`, `egress:` and `reach:` all line up.
+        assert_eq!(
+            pad_label(&t("op.check.proxy_egress"), 14).len(),
+            pad_label(&t("op.check.proxy_reach"), 14).len()
+        );
 
         set_for_tests(None);
     }
@@ -1885,6 +1959,7 @@ garbage line\n";
             password: None,
             stored: Default::default(),
             via_squid: Some(3128),
+            direct_egress: crate::config::DirectEgress::Allow,
         };
         let with = |targets: Vec<HttpsTarget>| squid_probe_target(&targets, &px);
 

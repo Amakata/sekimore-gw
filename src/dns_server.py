@@ -331,6 +331,7 @@ class DNSServer:
         domain_handlers: dict[str, str] | None = None,
         resolve_deny_cidrs: list[str] | None = None,
         resolve_allow_cidrs: list[str] | None = None,
+        direct_egress_denied: bool = False,
     ):
         """Initialize the server.
 
@@ -353,6 +354,10 @@ class DNSServer:
             lan_subnets: LAN-side subnets, used to detect the bind IP
             ignored_domains: Domains to ignore (hidden in the UI, but resolved normally)
             domain_handlers: Per-domain handler (git-relay / deny / splice); exact FQDN -> handler name
+            direct_egress_denied: #212. True when `proxy.direct_egress: deny` is in force, i.e.
+                an upstream proxy is configured and dev has to reach it through Squid. The
+                answer is still returned so names resolve, but the addresses are not admitted
+                into the firewall, so the only way out is the proxy.
         """
         self.upstream_dns = upstream_dns or constants.DEFAULT_UPSTREAM_DNS
         self.port = port or constants.DEFAULT_DNS_PORT
@@ -376,6 +381,10 @@ class DNSServer:
         )
         # The relay: git-relay domains resolve to the relay's own IP (see relay/README.md)
         self.domain_handlers: dict[str, str] = dict(domain_handlers or {})
+        # #212: when set, an allowed domain's addresses are never admitted into the firewall.
+        # DNS answers as usual, so a client resolves the name and then has only Squid to go
+        # through; one that ignores HTTP_PROXY fails instead of leaving directly and silently.
+        self.direct_egress_denied = direct_egress_denied
         self._relay_ip_warned = False
 
         # DNS cache
@@ -817,14 +826,26 @@ class DNSServer:
                     query_type=query_type,
                 )
 
-                # For an allowlisted domain, register the IPs with the firewall
+                # For an allowlisted domain, register the IPs with the firewall.
+                # #212: not under `proxy.direct_egress: deny` — the answer above still goes back,
+                # so the client resolves the name, but with no ipset entry the only route out is
+                # the proxy. `allow_ips` is untouched: an address named explicitly stays admitted.
                 if self._is_allowed(query_name) and self.firewall_manager:
-                    self.firewall_manager.setup_domain(query_name, ips)
-                    log_system_event(
-                        "Firewall rule dynamically added",
-                        domain=query_name,
-                        ip_count=str(len(ips)),
-                    )
+                    # getattr: the unit tests build the server with __new__ and set attributes
+                    # one by one, as they do for domain_handlers
+                    if getattr(self, "direct_egress_denied", False):
+                        log_system_event(
+                            "Firewall rule skipped (direct egress denied)",
+                            domain=query_name,
+                            ip_count=str(len(ips)),
+                        )
+                    else:
+                        self.firewall_manager.setup_domain(query_name, ips)
+                        log_system_event(
+                            "Firewall rule dynamically added",
+                            domain=query_name,
+                            ip_count=str(len(ips)),
+                        )
 
                 # Log the query, using the real TTL
                 log_dns_query(
@@ -913,8 +934,13 @@ class DNSServer:
                                     new_ips=",".join(sorted(new_ips_set)),
                                 )
 
-                                # Update the firewall rules
-                                if self.firewall_manager and self._is_allowed(entry.domain):
+                                # Update the firewall rules. #212: nothing was admitted under
+                                # `direct_egress: deny`, so there is nothing to update either.
+                                if (
+                                    self.firewall_manager
+                                    and self._is_allowed(entry.domain)
+                                    and not getattr(self, "direct_egress_denied", False)
+                                ):
                                     # Drop the rules for the old IPs and add the new ones
                                     self.firewall_manager.setup_domain(entry.domain, new_ips)
                                     log_system_event(

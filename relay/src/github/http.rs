@@ -260,6 +260,7 @@ mod proxy_tests {
             password: None,
             stored: Default::default(),
             via_squid: None,
+            direct_egress: crate::config::DirectEgress::Allow,
         };
         let client = build_client(&HttpOptions {
             proxy: Some(&spec),
@@ -289,6 +290,7 @@ mod proxy_tests {
             password: Some("env-pass".into()),
             stored: Default::default(),
             via_squid: None,
+            direct_egress: crate::config::DirectEgress::Allow,
         };
         let client = build_client(&HttpOptions {
             proxy: Some(&spec),
@@ -335,6 +337,7 @@ mod proxy_tests {
             password: None,
             stored: Default::default(),
             via_squid: None,
+            direct_egress: crate::config::DirectEgress::Allow,
         };
         let client = build_client(&HttpOptions {
             proxy: Some(&spec),
