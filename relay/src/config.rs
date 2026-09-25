@@ -122,6 +122,37 @@ pub struct ProxyConfig {
     pub upstream_proxy_tls: bool,
     pub upstream_proxy_username: Option<String>,
     pub upstream_proxy_password: Option<String>,
+    /// #212: whether dev's ordinary traffic to `allow_domains` may leave the gateway directly.
+    /// `allow` (the default) is what every version before this one did: the DNS answer admits the
+    /// address into the firewall's ipset and the packet is NATed straight out, so it never reaches
+    /// Squid and never reaches the upstream proxy. `deny` stops admitting those addresses, leaving
+    /// Squid as the only way out. The Python gateway owns the behaviour; the relay reads the key so
+    /// `check` can say which mode is in force. Mirrors `ProxyConfig.direct_egress` in src/config.py.
+    #[serde(default = "default_direct_egress")]
+    pub direct_egress: DirectEgress,
+    /// #212: extra `NO_PROXY` entries the gateway hands the dev container. Read here only so an
+    /// unknown-key check does not trip over it; the list itself is served by `/api/proxy-env`.
+    #[serde(default)]
+    pub no_proxy: Vec<String>,
+}
+
+/// `proxy.direct_egress`. Mirrors the Literal in src/config.py.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DirectEgress {
+    Allow,
+    Deny,
+}
+
+impl Default for DirectEgress {
+    fn default() -> Self {
+        Self::Allow
+    }
+}
+
+/// `proxy.direct_egress`'s default: `allow`, i.e. what every version before #212 did.
+fn default_direct_egress() -> DirectEgress {
+    DirectEgress::Allow
 }
 
 /// `proxy.port`'s default, matching Python's `ProxyConfig.port` (src/config.py).
@@ -1398,6 +1429,9 @@ pub struct ProxySpec {
     /// `cache_peer ... tls`. So the relay sends its CONNECT to `http://127.0.0.1:<port>` in plain
     /// text over loopback and lets Squid take the TLS hop.
     pub via_squid: Option<u16>,
+    /// #212: whether dev's ordinary traffic may still leave the gateway directly, bypassing this
+    /// proxy. Carried here so `check` can print it next to the proxy it concerns.
+    pub direct_egress: DirectEgress,
 }
 
 impl ProxySpec {
@@ -1477,6 +1511,7 @@ fn resolve_proxy(p: &ProxyConfig) -> Result<Option<ProxySpec>, ConfigError> {
         password,
         stored: Default::default(),
         via_squid,
+        direct_egress: p.direct_egress,
     }))
 }
 
@@ -1590,6 +1625,43 @@ mod tests {
     const WITH: &str = include_str!("../../tests/fixtures/config_with_relay.yml");
     const WITHOUT: &str = include_str!("../../tests/fixtures/config_without_relay.yml");
     const SAMPLE: &str = include_str!("../../config/config.sample.yml");
+
+    /// #212: the relay reads `proxy.direct_egress` so `check` can say which traffic uses the
+    /// upstream. The Python gateway owns the behaviour; this only has to agree on the spelling.
+    #[test]
+    fn direct_egress_mirrors_the_python_side() {
+        let base = "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n";
+
+        // Absent: allow, which is what every version before this one did.
+        let d = p(base).unwrap();
+        assert_eq!(d.gateway.proxy.direct_egress, DirectEgress::Allow);
+        assert_eq!(
+            resolve_proxy(&d.gateway.proxy)
+                .unwrap()
+                .unwrap()
+                .direct_egress,
+            DirectEgress::Allow
+        );
+
+        let d = p(&format!("{base}  direct_egress: deny\n")).unwrap();
+        assert_eq!(d.gateway.proxy.direct_egress, DirectEgress::Deny);
+        assert_eq!(
+            resolve_proxy(&d.gateway.proxy)
+                .unwrap()
+                .unwrap()
+                .direct_egress,
+            DirectEgress::Deny
+        );
+
+        // An unknown word is refused rather than read as allow: a typo must not quietly
+        // reopen the direct path.
+        assert!(p(&format!("{base}  direct_egress: sometimes\n")).is_err());
+
+        // `no_proxy` is read here only so nothing trips over it; the list itself is the Web
+        // UI's to serve.
+        let d = p(&format!("{base}  no_proxy: ['.test']\n")).unwrap();
+        assert_eq!(d.gateway.proxy.no_proxy, vec![".test".to_string()]);
+    }
 
     fn p(text: &str) -> Result<Loaded, ConfigError> {
         parse(Path::new("test.yml"), text)

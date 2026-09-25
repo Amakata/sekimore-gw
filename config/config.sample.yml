@@ -115,6 +115,35 @@ proxy:
                                           #   upstream offering neither fails with HandshakeFailure (#205).
                                           # `sekimore-relay check` prints which of the two routes is in use.
 
+  # Which of dev's traffic actually uses the upstream proxy, and how to make it all of it (#212).
+  #
+  # Today, with `upstream_proxy` set, only two things go through it: the relay's own handler
+  # paths (git, the GitHub API, the 443 passthrough), and a client that names Squid explicitly
+  # (`curl -x http://sekimore-gw:3128`). Dev's ordinary traffic to a destination that is only in
+  # `allow_domains` — nodejs.org, pypi.org — is admitted into the firewall by its DNS answer and
+  # NATed straight out. It never reaches Squid, leaves no line in its access.log, and whatever
+  # the upstream fixes (the egress IP, the logging, the filtering) does not apply to it.
+  #
+  # `deny` closes that path: the addresses behind `allow_domains` are no longer added to the
+  # firewall, so Squid is the only way out. DNS still answers, so names resolve as before and a
+  # client that honours HTTP_PROXY works unchanged — but one that ignores it now fails, instead
+  # of leaving silently. `allow_ips` is unaffected: an address named there stays admitted, which
+  # is how a destination that must not go through the proxy is kept reachable. The relay's own
+  # egress comes from the gateway itself and is unaffected either way.
+  #
+  # `deny` needs `enabled: true` and an `upstream_proxy`; without one it would only cut dev off,
+  # so the gateway refuses to start. With `allow` and an upstream proxy set, the gateway logs a
+  # WARN at start and `sekimore-relay check` prints the same thing under `proxy:`.
+  direct_egress: allow                    # allow (default) | deny
+
+  # Extra NO_PROXY entries for the dev container. The gateway hands dev HTTP_PROXY and NO_PROXY
+  # at start (agent-setup.sh reads GET /api/proxy-env), and builds NO_PROXY from `domain_handlers`
+  # by itself: Squid refuses CONNECT to the relay's targets on purpose, so without them the
+  # GitHub API and npm would break. Add here only what this project must not send to the proxy.
+  # Written like allow_domains: a leading dot is the suffix, a bare name is that host, a CIDR
+  # passes through. `*.test` is read as `.test`.
+  no_proxy: []                            # e.g. [".test", "internal.example.com", "10.20.0.0/16"]
+
   # Upstream proxy authentication (Basic Auth)
   # Environment variables: SEKIMORE_UPSTREAM_PROXY_USERNAME, SEKIMORE_UPSTREAM_PROXY_PASSWORD
   # If environment variables are set, the following values will be overridden

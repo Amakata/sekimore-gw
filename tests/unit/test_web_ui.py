@@ -1829,3 +1829,105 @@ def describe_the_upstream_auth_state():
             key = f"config.upstream_auth_{state}"
             assert key in en, key
             assert key in ja, key
+
+
+def describe_proxy_env_endpoint():
+    """#212: what a dev container needs to send its traffic through the gateway's proxy."""
+
+    config_yaml = (
+        "allow_domains: []\nblock_domains: []\n"
+        "proxy:\n  enabled: true\n  port: 3128\n  upstream_proxy: proxy.corp:8080\n"
+        "  direct_egress: deny\n  no_proxy:\n    - '*.test'\n    - mirror.example.com\n"
+        "    - 10.20.0.0/16\n"
+        "domain_handlers:\n"
+        "  github.com:\n    handler: github\n"
+        "  api.github.com:\n    handler: https-relay\n"
+        "  telemetry.example.com:\n    handler: deny\n"
+        "  cdn.example.com:\n    handler: splice\n"
+    )
+
+    def _get(read_data):
+        from unittest.mock import mock_open, patch
+
+        from fastapi.testclient import TestClient
+
+        from src.web_ui.app import app
+
+        with patch("builtins.open", new_callable=mock_open, read_data=read_data):
+            response = TestClient(app).get("/api/proxy-env")
+        assert response.status_code == 200
+        return response.json()
+
+    def it_reports_the_proxy_and_its_port():
+        data = _get(config_yaml)
+        assert data["configured"] is True
+        assert data["port"] == 3128
+        assert data["direct_egress"] == "deny"
+
+    def it_lists_every_handler_target_squid_refuses():
+        # Squid refuses CONNECT to these on purpose, so HTTP_PROXY without them would break
+        # the GitHub API and npm. `splice` is not among them: it is meant to go through.
+        data = _get(config_yaml)
+        assert "github.com" in data["no_proxy"]
+        assert "api.github.com" in data["no_proxy"]
+        assert "telemetry.example.com" in data["no_proxy"]
+        assert "cdn.example.com" not in data["no_proxy"]
+
+    def it_normalizes_the_operators_own_entries():
+        data = _get(config_yaml)
+        assert ".test" in data["no_proxy"]
+        assert "*.test" not in data["no_proxy"]
+        assert "mirror.example.com" in data["no_proxy"]
+        assert "10.20.0.0/16" in data["no_proxy"]
+
+    def it_always_ends_with_the_gateway_and_loopback():
+        data = _get(config_yaml)
+        assert data["no_proxy"][-3:] == ["localhost", "127.0.0.1", "sekimore-gw"]
+
+    def it_dedupes_and_keeps_the_first_position():
+        data = _get(
+            "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n"
+            "  no_proxy: ['.test', '*.test', 'localhost']\n"
+            "domain_handlers:\n  api.github.com:\n    handler: github\n"
+        )
+        assert data["no_proxy"] == [
+            "api.github.com",
+            ".test",
+            "localhost",
+            "127.0.0.1",
+            "sekimore-gw",
+        ]
+
+    def it_is_not_configured_without_an_upstream_proxy():
+        # Squid alone adds a hop and fixes nothing, so dev is left as it was.
+        data = _get("proxy:\n  enabled: true\n  port: 3128\n")
+        assert data["configured"] is False
+        assert data["direct_egress"] == "allow"
+
+    def it_is_not_configured_when_squid_is_off():
+        data = _get("proxy:\n  enabled: false\n  upstream_proxy: proxy.corp:8080\n")
+        assert data["configured"] is False
+
+    def it_answers_for_a_config_with_no_proxy_section_at_all():
+        data = _get("allow_domains: []\nblock_domains: []\n")
+        assert data["configured"] is False
+        assert data["port"] == 3128
+        assert data["no_proxy"] == ["localhost", "127.0.0.1", "sekimore-gw"]
+
+    def it_reads_no_proxy_written_as_one_string():
+        # Config would have refused the file at start-up, so the gateway would not be serving
+        # this -- but dropping it silently is the worse failure of the two.
+        data = _get(
+            "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n"
+            "  no_proxy: '.test,*.local'\n"
+        )
+        assert data["no_proxy"][:2] == [".test", ".local"]
+
+    def it_reads_the_original_spelling_of_the_github_handler():
+        # `git-relay` is what `github` used to be called; config.py normalizes, the raw file
+        # this endpoint reads may still carry either.
+        data = _get(
+            "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n"
+            "domain_handlers:\n  github.com:\n    handler: git-relay\n"
+        )
+        assert "github.com" in data["no_proxy"]

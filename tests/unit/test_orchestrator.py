@@ -2285,3 +2285,105 @@ database_path: /tmp/test.db
             with patch("src.orchestrator.get_secret", side_effect=boom):
                 orch = SecurityGatewayOrchestrator(config_path=config_file)
         assert _relay_ports_of(orch.config) == []
+
+
+def describe_direct_egress():
+    """#212: the start-up loop and apply_domain_rule under `proxy.direct_egress: deny`."""
+
+    def _config(tmp_path, sample_config_data, **proxy):
+        import yaml
+
+        data = dict(sample_config_data)
+        data["proxy"] = {
+            "enabled": True,
+            "port": 3128,
+            "upstream_proxy": "proxy.corp:8080",
+            **proxy,
+        }
+        config_file = tmp_path / "test_config.yml"
+        with open(config_file, "w", encoding="utf-8") as f:
+            yaml.dump(data, f)
+        return Path(config_file)
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def it_admits_nothing_under_deny(mock_run, tmp_path, sample_config_data):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        orch = SecurityGatewayOrchestrator(
+            config_path=_config(tmp_path, sample_config_data, direct_egress="deny")
+        )
+        orch.dns_server._resolve_domain = AsyncMock(return_value=(["93.184.216.34"], 300))
+        orch.firewall.setup_domain = Mock(return_value=True)
+
+        # True, not False: the rule *is* in force, expressed as "no ipset entry". Returning
+        # False would make initialize() log it as a failure on every allowed domain.
+        assert await orch.apply_domain_rule("example.com", action="allow") is True
+        orch.firewall.setup_domain.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("subprocess.run")
+    async def it_admits_as_before_under_allow(mock_run, tmp_path, sample_config_data):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        orch = SecurityGatewayOrchestrator(
+            config_path=_config(tmp_path, sample_config_data, direct_egress="allow")
+        )
+        orch.dns_server._resolve_domain = AsyncMock(return_value=(["93.184.216.34"], 300))
+        orch.firewall.setup_domain = Mock(return_value=True)
+
+        assert await orch.apply_domain_rule("example.com", action="allow") is True
+        orch.firewall.setup_domain.assert_called_once_with("example.com", ["93.184.216.34"])
+
+    @patch("subprocess.run")
+    def it_passes_the_mode_to_the_dns_server(mock_run, tmp_path, sample_config_data):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        orch = SecurityGatewayOrchestrator(
+            config_path=_config(tmp_path, sample_config_data, direct_egress="deny")
+        )
+        # The dynamic path (a DNS query for a wildcard) has to skip the ipset too.
+        assert orch.dns_server.direct_egress_denied is True
+
+    @patch("src.orchestrator.log_warning")
+    @patch("subprocess.run")
+    def it_warns_when_direct_egress_is_allowed_with_an_upstream(
+        mock_run, mock_warn, tmp_path, sample_config_data
+    ):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        orch = SecurityGatewayOrchestrator(config_path=_config(tmp_path, sample_config_data))
+        orch._log_egress_mode()
+        assert mock_warn.call_count == 1
+        assert "bypasses the upstream proxy" in mock_warn.call_args[0][1]
+
+    @patch("src.orchestrator.log_warning")
+    @patch("subprocess.run")
+    def it_says_nothing_without_an_upstream_proxy(
+        mock_run, mock_warn, tmp_path, sample_config_data
+    ):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        orch = SecurityGatewayOrchestrator(
+            config_path=_config(tmp_path, sample_config_data, upstream_proxy=None)
+        )
+        orch._log_egress_mode()
+        mock_warn.assert_not_called()
+
+    @patch("src.orchestrator.log_warning")
+    @patch("subprocess.run")
+    def it_does_not_warn_under_deny(mock_run, mock_warn, tmp_path, sample_config_data):
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        orch = SecurityGatewayOrchestrator(
+            config_path=_config(tmp_path, sample_config_data, direct_egress="deny")
+        )
+        orch._log_egress_mode()
+        mock_warn.assert_not_called()
+
+    @patch("subprocess.run")
+    def it_asks_for_a_restart_when_the_mode_changes(mock_run, tmp_path, sample_config_data):
+        # The ipset entries already made cannot be taken back by a reload.
+        old = Config(proxy={"enabled": True, "upstream_proxy": "p:8080"})
+        new = Config(proxy={"enabled": True, "upstream_proxy": "p:8080", "direct_egress": "deny"})
+        assert _relay_settings_changed(old, new) is True
+
+    @patch("subprocess.run")
+    def it_asks_for_a_restart_when_no_proxy_changes(mock_run, tmp_path, sample_config_data):
+        old = Config(proxy={"enabled": True, "upstream_proxy": "p:8080"})
+        new = Config(proxy={"enabled": True, "upstream_proxy": "p:8080", "no_proxy": [".test"]})
+        assert _relay_settings_changed(old, new) is True

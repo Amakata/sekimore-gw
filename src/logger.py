@@ -113,6 +113,16 @@ def log_system_event(event: str, **kwargs: str) -> None:
     logger.info(event, **kwargs)
 
 
+def log_warning(component: ComponentType, message: str, **kwargs: str) -> None:
+    """Log a warning.
+
+    For a state that is legitimate but not what the operator probably wants — a setting that
+    leaves a hole open. An ERROR would say something is broken; INFO would be read past.
+    """
+    logger = get_logger(component)
+    logger.warning(message, **kwargs)
+
+
 def log_error(component: ComponentType, error: str, **kwargs: str) -> None:
     """Log an error."""
     logger = get_logger(component)

@@ -1425,3 +1425,53 @@ def describe_domain_matching_stops_at_label_boundaries():
             assert d._is_allowed(name) is expected, name
             assert d._is_blocked(name) is expected, name
             assert d._is_ignored(name) is expected, name
+
+
+def describe_direct_egress_denied():
+    """#212: under `proxy.direct_egress: deny` an allowed name still resolves, but its address
+    is never admitted into the firewall -- so the only way out is the upstream proxy."""
+
+    import tempfile
+    from unittest.mock import AsyncMock, Mock
+
+    async def _server(denied):
+        from src.dns_server import DNSMapping, DNSServer
+
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            db_path = f.name
+        s = DNSServer.__new__(DNSServer)
+        s.allowed_domains = ["example.com"]
+        s.blocked_domains = set()
+        s.ignored_domains = []
+        s.mapping = DNSMapping(db_path=db_path)
+        await s.mapping.init_db()
+        s.cache_enabled = False
+        s.cache = None
+        s.firewall_manager = Mock()
+        s.firewall_manager.setup_domain = Mock()
+        s.gateway_hostname = "sekimore-gw"
+        s.gateway_ip = "172.22.0.2"
+        s.domain_handlers = {}
+        s.direct_egress_denied = denied
+        s._resolve_domain = AsyncMock(return_value=(["93.184.216.34"], 300))
+        return s
+
+    async def _query(s, name="example.com"):
+        from dnslib import DNSRecord
+
+        data = await s.handle_query(DNSRecord.question(name, "A").pack(), ("172.22.0.3", 53))
+        return DNSRecord.parse(data)
+
+    async def it_skips_the_ipset_under_deny():
+        s = await _server(True)
+        r = await _query(s)
+        # The answer is unchanged, so the client resolves the name and can use the proxy.
+        assert str(r.rr[0].rdata) == "93.184.216.34"
+        s.firewall_manager.setup_domain.assert_not_called()
+        await s.mapping.db.close()
+
+    async def it_still_admits_the_address_under_allow():
+        s = await _server(False)
+        await _query(s)
+        s.firewall_manager.setup_domain.assert_called_once_with("example.com", ["93.184.216.34"])
+        await s.mapping.db.close()

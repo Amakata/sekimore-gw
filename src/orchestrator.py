@@ -22,7 +22,7 @@ from .firewall import FirewallManager
 from .firewall_monitor import FirewallMonitor
 from .host_enforcement import HostEnforcement
 from .ip_manager import StaticIPManager
-from .logger import ComponentType, log_error, log_system_event, setup_logging
+from .logger import ComponentType, log_error, log_system_event, log_warning, setup_logging
 from .proxy_manager import ProxyManager
 from .proxy_monitor import ProxyMonitor
 from .secret_store import (
@@ -327,6 +327,11 @@ def _proxy_of(config: object) -> dict[str, object]:
         "upstream_proxy_tls",
         "upstream_proxy_username",
         "upstream_proxy_password",
+        # #212: direct_egress decides whether an allowed domain's addresses ever enter the
+        # ipset, and the entries already made cannot be taken back by a reload; no_proxy is
+        # read by the dev container at its own start. Both need a restart.
+        "direct_egress",
+        "no_proxy",
     )
     return {k: getattr(proxy, k, None) for k in keys}
 
@@ -743,6 +748,7 @@ class SecurityGatewayOrchestrator:
             domain_handlers=_domain_handlers_of(self.config),
             resolve_deny_cidrs=self.config.resolve_deny_cidrs,
             resolve_allow_cidrs=self.config.resolve_allow_cidrs,
+            direct_egress_denied=self.config.proxy.direct_egress_denied(),
         )
 
         # Firewall monitor, tailing the iptables log
@@ -843,6 +849,14 @@ class SecurityGatewayOrchestrator:
             d.lower().rstrip(".") for d in self.config.relay_domains()
         }:
             log_system_event("Domain rule refused: the relay answers for it", domain=domain)
+            return True
+
+        # #212: `proxy.direct_egress: deny` keeps every allow_domains address out of the ipset,
+        # so dev's only route out is Squid and its upstream. DNS still answers, so the name
+        # resolves and a client that honours HTTP_PROXY works unchanged. Nothing to resolve or
+        # program here, and success is the honest answer: the rule is in force, as "no entry".
+        if self.config.proxy.direct_egress_denied():
+            log_system_event("Domain rule skipped: direct egress denied", domain=domain)
             return True
 
         # Allowed domain
@@ -1164,6 +1178,34 @@ class SecurityGatewayOrchestrator:
                 "container can route past the gateway (#186)",
             )
 
+    def _log_egress_mode(self) -> None:
+        """Say which egress mode is in force, once, at start-up (#212).
+
+        Three cases:
+          - no upstream proxy: nothing to bypass, nothing to say.
+          - upstream proxy + `direct_egress: allow` (the default): WARN. Only the relay's
+            handler paths and clients that name Squid explicitly use the upstream; everything
+            else leaves directly, and no log anywhere records that it did.
+          - upstream proxy + `direct_egress: deny`: INFO. allow_domains addresses stay out of
+            the firewall, so Squid is the only way out.
+        """
+        proxy = self.config.proxy
+        if not proxy.uses_upstream():
+            return
+        if proxy.direct_egress == "deny":
+            log_system_event(
+                "Egress: direct egress denied; dev reaches allow_domains only through the "
+                "upstream proxy",
+                upstream_proxy=str(proxy.upstream_proxy),
+            )
+            return
+        log_warning(
+            ComponentType.ORCHESTRATOR,
+            "direct egress is allowed: dev's traffic to allow_domains bypasses the upstream "
+            "proxy; set proxy.direct_egress: deny to force it through Squid",
+            upstream_proxy=str(proxy.upstream_proxy),
+        )
+
     async def initialize(self) -> bool:
         """Initialize the security gateway.
 
@@ -1202,6 +1244,13 @@ class SecurityGatewayOrchestrator:
         ):
             log_error(ComponentType.ORCHESTRATOR, "Static IP firewall rules setup failed")
             return False
+
+        # 3b. #212: say once which egress mode is in force. With an upstream proxy configured
+        # and direct egress allowed, dev's ordinary traffic to allow_domains never reaches Squid
+        # — it is admitted into the ipset by its DNS answer and NATed straight out — so whatever
+        # the upstream fixes (egress IP, logging, filtering) does not apply to it. Nothing used
+        # to say so; it took comparing egress IPs to notice.
+        self._log_egress_mode()
 
         # 4. Apply the rules for allowed domains (only those not starting with ".")
         relayed = {d.lower().rstrip(".") for d in self.config.relay_domains()}

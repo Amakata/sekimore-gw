@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from .. import __version__ as core_version
 from .. import constants, i18n
+from ..config import NO_PROXY_ALWAYS, PROXY_DENIED_HANDLERS, merge_no_proxy
 from ..logger import ComponentType, log_error, log_system_event
 from ..secret_store import PROXY_NAME, PROXY_NAMESPACE, Locked, SecretStoreError, get_secret
 from . import __version__ as webui_version
@@ -289,6 +290,60 @@ async def get_gateway_info() -> dict:
         "name": config.get("name"),
         "description": config.get("description"),
     }
+
+
+class ProxyEnvResponse(BaseModel):
+    """What a dev container needs to send its traffic through the gateway's proxy (#212)."""
+
+    configured: bool
+    port: int
+    no_proxy: list[str]
+    direct_egress: str
+
+
+def _proxy_env_of(config: dict) -> ProxyEnvResponse:
+    """Build the answer from the raw config (the Web UI reads config.yml itself)."""
+    proxy_cfg = config.get("proxy") or {}
+    handlers = config.get("domain_handlers") or {}
+
+    # The domains Squid refuses (`Config.proxy_denied_domains`): pointed at the proxy without
+    # these in NO_PROXY, the GitHub API and npm get a 403 from Squid instead of the relay.
+    # `splice` is deliberately not among them — it is meant to go out through the proxy.
+    denied: list[str] = []
+    if isinstance(handlers, dict):
+        for domain, spec in handlers.items():
+            handler = (spec or {}).get("handler", "splice") if isinstance(spec, dict) else "splice"
+            if handler == "git-relay":  # the original spelling of `github`
+                handler = "github"
+            if handler in PROXY_DENIED_HANDLERS:
+                denied.append(str(domain).strip().rstrip(".").lower())
+
+    # Written as one string rather than a list, `Config` would have refused the file at start-up
+    # and the gateway would not be serving this. Read it anyway rather than dropping it silently.
+    operator = proxy_cfg.get("no_proxy") or []
+    if isinstance(operator, str):
+        operator = [e for e in operator.split(",") if e.strip()]
+    elif not isinstance(operator, list):
+        operator = []
+
+    return ProxyEnvResponse(
+        configured=bool(proxy_cfg.get("enabled", False) and proxy_cfg.get("upstream_proxy")),
+        port=int(proxy_cfg.get("port", 3128)),
+        no_proxy=merge_no_proxy(denied, [str(e) for e in operator], NO_PROXY_ALWAYS),
+        direct_egress=str(proxy_cfg.get("direct_egress", "allow")),
+    )
+
+
+@app.get("/api/proxy-env", response_model=ProxyEnvResponse)
+async def get_proxy_env() -> ProxyEnvResponse:
+    """The proxy environment for a dev container (#212).
+
+    `agent-setup.sh` asks for this once the default route is up and writes HTTP_PROXY /
+    NO_PROXY from it. `configured` is false unless Squid is running *and* an upstream proxy is
+    set: without an upstream there is nothing for dev to gain by going through Squid, and
+    pointing it there anyway would only add a hop.
+    """
+    return _proxy_env_of(load_config())
 
 
 def _read_squid_config() -> SquidConfigResponse:

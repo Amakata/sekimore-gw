@@ -94,6 +94,12 @@ The relay:
 The relay is optional. Without `domain_handlers`, the first three layers run alone.
 Details: [relay/README.md](relay/README.md).
 
+With `proxy.upstream_proxy` set, only the relay's own paths and clients that name Squid
+explicitly use the upstream; everything else leaves the gateway directly. `proxy.direct_egress:
+deny` closes that path, so Squid is the only way out. The dev container gets `HTTP_PROXY` and
+`NO_PROXY` from the gateway at start (`GET /api/proxy-env`; `NO_PROXY` is built from
+`domain_handlers`, plus anything in `proxy.no_proxy`).
+
 ## When to use it
 
 Fits when the agent should:

@@ -17,6 +17,9 @@ set -ex
 #   - known_hosts          the relay's host key registered under <git_domain>
 #   - ~/.ssh/config        Host <git_domain> pointing at the disposable key (a marked block, replaced in place)
 #   - git config       gpg.format ssh / user.signingkey / commit.gpgsign / gpg.ssh.allowedSignersFile
+#   - proxy env        /etc/profile.d/sekimore-proxy.sh and a marked block in /etc/environment, from
+#                      GET /api/proxy-env (#212). Only when the gateway has an upstream proxy; removed again
+#                      when it stops having one. Runs whether or not the gateway has a relay
 #
 # Optional environment variables:
 #   SEKIMORE_AGENT_USER      owner of the keys and settings (default vscode, else the current user)
@@ -24,6 +27,8 @@ set -ex
 #   SEKIMORE_KEY_DIR         where the keys live (default <home>/.ssh/sekimore; a volume keeps them across rebuilds)
 #   SEKIMORE_AGENT_ENV_FILE  the env file (default /etc/sekimore-agent/env)
 #   SEKIMORE_BOOTSTRAP       auto (default) | manual — manual registers no key and fetches no token; the operator does it
+#   SEKIMORE_WEBUI_PORT      the gateway's Web UI port, where /api/proxy-env lives (default 8080)
+#   SEKIMORE_PROXY_ENV_ROOT  prefix for the two proxy env files (default none, i.e. /etc/...). For tests
 #   SEKIMORE_GIT_DOMAIN      the domain pointed at the relay (default: from the /bootstrap response, else github.com)
 #   SEKIMORE_RELAY_API_PORT / SEKIMORE_RELAY_SSH_PORT  (default 8420 / 22)
 #   SEKIMORE_SIGNING_KEY_COMMENT  comment on the *generated* signing key (the title shown in GitHub). Default: "sekimore-agent-signing: <SEKIMORE_PROJECT> / <git user.name> <user.email>"
@@ -209,6 +214,130 @@ sekimore_git_signing() {
   HOME=$home git config --global --unset-all include.path "^$re\$" 2>/dev/null || true
   printf '[include]\n\tpath = %s\n' "$file" >> "$home/.gitconfig"
   chown "$own" "$home/.gitconfig"
+}
+
+# ---------------------------------------------------------------------------
+# Proxy environment (#212)
+#
+# With `proxy.upstream_proxy` set, dev's ordinary traffic used to leave the gateway directly:
+# the DNS answer admitted the address into the firewall's ipset and the packet was NATed
+# straight out, so it never reached Squid and never reached the upstream. Nothing told this
+# container that a proxy existed. The gateway now says so at GET /api/proxy-env, and these
+# functions turn that answer into HTTP_PROXY / NO_PROXY for every shell here.
+#
+# NO_PROXY is not optional: Squid refuses CONNECT to the relay's handler targets
+# (api.github.com, registry.npmjs.org, …) on purpose, so HTTP_PROXY alone would break the
+# GitHub API and npm. The gateway builds the list from `domain_handlers`, so a handler added
+# later is covered without editing anything here.
+#
+# SEKIMORE_PROXY_ENV_ROOT prefixes both files; it exists so a test can write into a temp dir.
+# ---------------------------------------------------------------------------
+SEKIMORE_PROXY_MARK_BEGIN='# sekimore-proxy begin'
+SEKIMORE_PROXY_MARK_END='# sekimore-proxy end'
+
+# Ask the gateway. $1 = gateway IP. Retries for ~10 s: postStartCommand can run before the Web
+# UI is listening. Prints the JSON body, or nothing when it never answered.
+sekimore_proxy_env_fetch() {
+  local gw=$1 port=${SEKIMORE_WEBUI_PORT:-8080} i body
+  command -v curl >/dev/null 2>&1 || return 1
+  for i in 1 2 3 4 5; do
+    body=$(curl -fsS -m 3 "http://$gw:$port/api/proxy-env" 2>/dev/null) || body=""
+    if [ -n "$body" ]; then
+      printf '%s' "$body"
+      return 0
+    fi
+    [ "$i" = 5 ] || sleep 2
+  done
+  return 1
+}
+
+# One JSON string or number field, without jq (the agent image may not have it).
+# $1 = body, $2 = key.
+sekimore_json_field() {
+  printf '%s' "$1" | tr ',{}' '\n\n\n' | sed -n "s/^[[:space:]]*\"$2\"[[:space:]]*:[[:space:]]*//p" \
+    | head -1 | sed 's/^"//; s/"$//; s/[[:space:]]*$//'
+}
+
+# The "no_proxy" array, joined with commas. Takes the body on $1.
+sekimore_json_no_proxy() {
+  printf '%s' "$1" | sed -n 's/.*"no_proxy"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' \
+    | tr -d ' "' | sed 's/^,//; s/,$//'
+}
+
+# Remove the marked block from a file, in place. $1 = path.
+sekimore_proxy_block_remove() {
+  local f=$1
+  [ -f "$f" ] || return 0
+  sed -i "/^${SEKIMORE_PROXY_MARK_BEGIN}\$/,/^${SEKIMORE_PROXY_MARK_END}\$/d" "$f"
+}
+
+# Write /etc/profile.d/sekimore-proxy.sh and the marked block in /etc/environment, or take both
+# out again. $1 = the JSON body from the gateway, $2 = the gateway IP.
+sekimore_proxy_env_apply() {
+  local body=$1 gw=$2
+  local root=${SEKIMORE_PROXY_ENV_ROOT:-}
+  local profile="$root/etc/profile.d/sekimore-proxy.sh"
+  local envfile="$root/etc/environment"
+  local configured port no_proxy url
+
+  configured=$(sekimore_json_field "$body" configured)
+  if [ "$configured" != "true" ]; then
+    # No upstream proxy (or Squid is off): leave nothing behind from a previous start, so a
+    # container that had a proxy and no longer does stops sending its traffic to a dead one.
+    rm -f "$profile"
+    sekimore_proxy_block_remove "$envfile"
+    echo "[agent] proxy: no upstream proxy configured; HTTP_PROXY not set"
+    return 0
+  fi
+
+  port=$(sekimore_json_field "$body" port)
+  [ -n "$port" ] || port=3128
+  no_proxy=$(sekimore_json_no_proxy "$body")
+  url="http://$gw:$port"
+
+  install -d -m 755 "$root/etc/profile.d"
+  cat > "$profile" <<EOF
+$SEKIMORE_PROXY_MARK_BEGIN
+# Written by sekimore agent-setup. Edits are lost on the next container start;
+# change proxy.upstream_proxy / proxy.no_proxy in the gateway's config.yml instead.
+export HTTP_PROXY="$url"
+export HTTPS_PROXY="$url"
+export http_proxy="$url"
+export https_proxy="$url"
+export NO_PROXY="$no_proxy"
+export no_proxy="$no_proxy"
+$SEKIMORE_PROXY_MARK_END
+EOF
+  chmod 644 "$profile"
+
+  # /etc/environment is read by PAM and by anything that is not a login shell, so the same six
+  # assignments go there too (no `export`; it is not a script). Replaced, never appended twice.
+  touch "$envfile"
+  sekimore_proxy_block_remove "$envfile"
+  cat >> "$envfile" <<EOF
+$SEKIMORE_PROXY_MARK_BEGIN
+HTTP_PROXY="$url"
+HTTPS_PROXY="$url"
+http_proxy="$url"
+https_proxy="$url"
+NO_PROXY="$no_proxy"
+no_proxy="$no_proxy"
+$SEKIMORE_PROXY_MARK_END
+EOF
+
+  local egress
+  egress=$(sekimore_json_field "$body" direct_egress)
+  echo "[agent] proxy: HTTP_PROXY=$url, NO_PROXY=$no_proxy (direct_egress: ${egress:-allow})"
+}
+
+# Fetch and apply. A gateway without the endpoint (an older one) leaves everything as it was.
+sekimore_proxy_env_setup() {
+  local gw=$1 body
+  if ! body=$(sekimore_proxy_env_fetch "$gw"); then
+    echo "[agent] proxy: /api/proxy-env did not answer; leaving the proxy environment alone"
+    return 0
+  fi
+  sekimore_proxy_env_apply "$body" "$gw"
 }
 
 sekimore_relay_setup() {
@@ -832,6 +961,11 @@ if nslookup google.com $SEKIMORE_IP > /dev/null 2>&1; then
 else
   echo "[agent] WARNING: DNS resolution via sekimore-gw failed"
 fi
+
+# The proxy environment (#212). Asks the gateway which traffic should go through Squid and
+# writes HTTP_PROXY / NO_PROXY. A gateway too old to answer, or one with no upstream proxy,
+# leaves this container as it was.
+sekimore_proxy_env_setup "$SEKIMORE_IP" || echo "[agent] WARNING: proxy environment setup failed"
 
 # sekimore-relay (the relay for git and the GitHub API). Does nothing when the gateway has no relay; a failure still leaves DNS and routes in place
 sekimore_relay_setup "$SEKIMORE_IP" || echo "[agent] WARNING: relay setup failed; git through the relay will not work until it is fixed"

@@ -666,3 +666,85 @@ def describe_reload_mode():
         for bad in ("sometimes", "0m", "-5m", "30", "m", "", "30x"):
             with pytest.raises(ValidationError, match="reload"):
                 Config(reload=bad)
+
+
+def describe_direct_egress():
+    """#212: whether dev's ordinary traffic may leave the gateway without the upstream proxy."""
+
+    def the_default_is_allow_so_existing_deployments_do_not_change():
+        assert Config().proxy.direct_egress == "allow"
+        assert Config().proxy.direct_egress_denied() is False
+
+    def deny_needs_an_upstream_proxy():
+        from pydantic import ValidationError
+
+        # Without one it would only cut dev off from every allowed domain, with DNS still
+        # answering -- which reads as the network failing, not as a setting.
+        with pytest.raises(ValidationError, match="direct_egress"):
+            Config(proxy=ProxyConfig(enabled=True, direct_egress="deny"))
+
+    def deny_needs_squid_running_too():
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="direct_egress"):
+            Config(
+                proxy=ProxyConfig(
+                    enabled=False, upstream_proxy="proxy.corp:8080", direct_egress="deny"
+                )
+            )
+
+    def deny_with_an_upstream_proxy_is_accepted_and_in_force():
+        cfg = Config(
+            proxy=ProxyConfig(enabled=True, upstream_proxy="proxy.corp:8080", direct_egress="deny")
+        )
+        assert cfg.proxy.direct_egress_denied() is True
+
+    def allow_is_never_in_force_whatever_the_proxy_says():
+        cfg = Config(proxy=ProxyConfig(enabled=True, upstream_proxy="proxy.corp:8080"))
+        assert cfg.proxy.uses_upstream() is True
+        assert cfg.proxy.direct_egress_denied() is False
+
+    def an_unknown_mode_is_refused():
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            ProxyConfig(direct_egress="sometimes")
+
+
+def describe_no_proxy():
+    """#212: the extra NO_PROXY entries handed to the dev container."""
+
+    def the_default_is_empty():
+        assert ProxyConfig().no_proxy == []
+        assert ProxyConfig().normalized_no_proxy() == []
+
+    def a_glob_is_read_as_the_suffix_form_the_tools_understand():
+        # curl, Go and Python only know `.test`; `*.test` is how a shell habit writes it.
+        assert ProxyConfig(no_proxy=["*.test"]).normalized_no_proxy() == [".test"]
+
+    def the_dotted_form_and_a_bare_host_pass_through():
+        cfg = ProxyConfig(no_proxy=[".internal", "mirror.example.com"])
+        assert cfg.normalized_no_proxy() == [".internal", "mirror.example.com"]
+
+    def a_cidr_passes_through_untouched():
+        assert ProxyConfig(no_proxy=["10.20.0.0/16"]).normalized_no_proxy() == ["10.20.0.0/16"]
+
+    def the_two_spellings_of_one_suffix_collapse_and_order_is_kept():
+        cfg = ProxyConfig(no_proxy=["*.test", "a.example.com", ".test", "b.example.com"])
+        assert cfg.normalized_no_proxy() == [".test", "a.example.com", "b.example.com"]
+
+    def blanks_are_dropped():
+        assert ProxyConfig(no_proxy=["  ", "", ".test"]).normalized_no_proxy() == [".test"]
+
+    def a_comma_separated_string_is_refused():
+        from pydantic import ValidationError
+
+        # Written as one item it would land in NO_PROXY as a single entry and match nothing.
+        with pytest.raises(ValidationError, match="no_proxy"):
+            ProxyConfig(no_proxy=["a.test,b.test"])
+
+    def an_entry_with_a_space_is_refused():
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="no_proxy"):
+            ProxyConfig(no_proxy=["a.test b.test"])
