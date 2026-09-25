@@ -13,6 +13,16 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.42 (2026-09-25)
+
+### Security
+
+- added `proxy.direct_egress: deny`, which keeps `allow_domains` addresses out of the firewall so Squid is the only way out; until now only the relay's paths and explicit-proxy clients used the upstream, and `allow` (default) now warns (#215)
+
+### Enhancement
+
+- handed the dev container `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` through `GET /api/proxy-env` and agent-setup, with `NO_PROXY` built from `domain_handlers` and the operator's `proxy.no_proxy` (#215)
+
 ## 0.2.41 (2026-09-25)
 
 ### Fix

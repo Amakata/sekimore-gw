@@ -12,6 +12,16 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.42（2026-09-25）
+
+### Security
+
+- dev の通信のうち上流プロキシを通るのは関所の handler 経路と明示プロキシのクライアントだけだった。`proxy.direct_egress: deny` を足し、`allow_domains` のアドレスをファイアウォールに入れず Squid だけを出口にできるようにした。既定の `allow` は起動時に WARN を出す (#215)
+
+### Enhancement
+
+- dev コンテナに `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` を渡すようにした。`GET /api/proxy-env` と agent-setup 経由で、`NO_PROXY` は `domain_handlers` と運用者の `proxy.no_proxy` から組み立てる (#215)
+
 ## 0.2.41（2026-09-25）
 
 ### Fix

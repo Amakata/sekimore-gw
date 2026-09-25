@@ -6,6 +6,13 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.42 (2026-09-25)
+
+### Enhancement
+
+- `check` prints an `egress:` line under `proxy:`: yellow when direct egress is allowed beside an upstream proxy, green when Squid is the only way out (#215)
+- the operator commands' error lines are red on a terminal, including the store's refusal that `proxy-credential set` prints; the agent subcommands stay plain (#214)
+
 ## 0.2.41 (2026-09-25)
 
 ### Fix
