@@ -1183,6 +1183,7 @@
                         ${e.destination ? `<span class="log-domain">${tr('relay.to_destination')} ${escapeHtml(e.destination)}</span>` : ''}
                         ${what ? `<span class="log-domain">${escapeHtml(what)}</span>` : ''}
                         ${e.label ? `<span class="log-ip">${escapeHtml(e.label)}</span>` : ''}
+                        ${e.edge ? `<span class="log-ip" style="font-family: monospace; font-size: 11px;" title="docs/paths.yml">${escapeHtml(e.edge)}</span>` : ''}
                         ${e.reason ? `<span style="color: #f85149; margin-left: 8px;">(${escapeHtml(e.reason)})</span>` : ''}
                         ${e.flag === 'large_upload' ? `<span class="badge badge-blocked" style="margin-left: 8px;">${tr('relay.large_upload_badge')}</span>` : ''}
                         ${e.detail && e.detail !== e.reason ? `<span style="color: #8b949e; margin-left: 8px; font-size: 11px;">${escapeHtml(e.detail)}</span>` : ''}

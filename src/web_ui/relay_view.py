@@ -158,6 +158,9 @@ class RelayAuditEntry(BaseModel):
     detail: str | None = None  # extras such as bytes / ms / cmdline
     # 0.2.2: "large_upload" = passthrough upload of at least LARGE_UPLOAD_BYTES
     flag: str | None = None
+    # #228: the path-ledger edge (docs/paths.yml) the relay wrote the entry on, e.g.
+    # relay.ssh.upstream; rows the relay writes on no connection (tokens, the store) have none
+    edge: str | None = None
 
 
 class RelayStatsResponse(BaseModel):
@@ -601,6 +604,7 @@ def to_entry(obj: dict) -> RelayAuditEntry | None:
         reason=reason,
         detail=detail,
         flag=flag,
+        edge=_field(obj, "edge"),
     )
 
 

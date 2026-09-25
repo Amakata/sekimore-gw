@@ -20,6 +20,7 @@ use crate::github::http::{build_client, HttpOptions};
 use crate::github::upstream_token::{SecretSource, UpstreamTokenStore};
 use crate::github::GitHub;
 use crate::i18n::{t, tf};
+use crate::paths;
 use crate::policy::all_permission_keys;
 use crate::ssh::authorized_keys::{fingerprint, Added, AuthorizedKeys};
 use crate::store;
@@ -113,13 +114,16 @@ pub fn build_github_for(
         secrets,
         r.relay.upstream_token_cache_ttl,
     ));
-    let gh = Arc::new(GitHub::new(
-        up.api_base.clone(),
-        up.graphql_base.clone(),
-        http.clone(),
-        store.clone(),
-        audit,
-    ));
+    let gh = Arc::new(
+        GitHub::new(
+            up.api_base.clone(),
+            up.graphql_base.clone(),
+            http.clone(),
+            store.clone(),
+            audit,
+        )
+        .with_route(paths::github_route(r.proxy.as_ref())),
+    );
     Ok((gh, store, http))
 }
 
@@ -342,6 +346,7 @@ fn offer_host_keys(
     keys: &[String],
     audit: &Audit,
     domain: &str,
+    edge: &'static str,
 ) -> anyhow::Result<bool> {
     print_fingerprints(host, port, keys);
     if !confirm_host_keys(&format!("{host}:{port}"))? {
@@ -366,7 +371,8 @@ fn offer_host_keys(
             ]
         )
     );
-    audit.log(
+    audit.log_edge(
+        edge,
         "known_hosts_added",
         Actor::Operator,
         &[
@@ -421,7 +427,15 @@ fn login_bastion_keys(r: &Resolved, up: &Upstream, audit: &Audit) -> anyhow::Res
                 ]
             ))
         })?;
-        let saved = offer_host_keys(&up.known_hosts, &bhost, bport, &keys, audit, &up.domain)?;
+        let saved = offer_host_keys(
+            &up.known_hosts,
+            &bhost,
+            bport,
+            &keys,
+            audit,
+            &up.domain,
+            paths::RELAY_SSH_BASTION,
+        )?;
         require_saved(saved, &bhost, bport, &up.domain)?;
     }
     Ok(())
@@ -494,6 +508,7 @@ fn login_upstream_key_via_bastion(
         &keys,
         audit,
         &up.domain,
+        paths::RELAY_SSH_UPSTREAM,
     )?;
     require_saved(saved, &up.host, up.upstream_ssh_port, &up.domain)
 }
@@ -843,7 +858,19 @@ pub fn keyscan(path: &Path, host: &str, port: u16, upstream: Option<&str>) -> an
             ]
         )
     );
-    audit.log(
+    // #228: a bastion's key is the bastion hop's; anything else scanned for this upstream is
+    // written on the upstream hop (the operator checking a third machine included)
+    let edge = if ssh
+        .bastions()
+        .iter()
+        .any(|(bh, bp)| bh.eq_ignore_ascii_case(host) && *bp == port)
+    {
+        paths::RELAY_SSH_BASTION
+    } else {
+        paths::RELAY_SSH_UPSTREAM
+    };
+    audit.log_edge(
+        edge,
         "known_hosts_added",
         Actor::Operator,
         &[

@@ -19,6 +19,7 @@ use crate::audit::{Actor, Audit};
 use crate::config::{HttpsMode, ProxySpec};
 use crate::git::{copy_touch, Watchdog};
 use crate::netutil::{http_connect_tunnel, Upstream};
+use crate::paths;
 
 /// One upstream selectable by SNI. `domain` is the name DNS points at the relay (i.e. the name that arrives in the SNI); `host` is the real upstream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,6 +218,11 @@ impl Passthrough {
             .min()
     }
 
+    /// The ledger edge the upstream hop is (#228): direct, the upstream proxy, or the local Squid.
+    fn route(&self) -> &'static str {
+        paths::passthrough_route(self.proxy.as_ref())
+    }
+
     /// Connects to the default upstream (0.1.x compatible).
     pub async fn connect_upstream(&self) -> std::io::Result<Upstream> {
         self.connect_upstream_to(&self.upstream, self.port).await
@@ -266,7 +272,8 @@ impl Passthrough {
             }
         }
         if !refused.is_empty() {
-            self.audit.deny(
+            self.audit.deny_edge(
+                self.route(),
                 "resolved_address_refused",
                 Actor::System,
                 "an allowed name may not resolve into this range",
@@ -296,7 +303,8 @@ impl Passthrough {
             let (stream, peer) = listener.accept().await.context("https accept")?;
             let peer_s = peer.to_string();
             if self.mode == HttpsMode::Reject {
-                self.audit.deny(
+                self.audit.deny_edge(
+                    paths::DEV_PASSTHROUGH,
                     "https_rejected",
                     Actor::Agent,
                     "relay.https is reject; use the API route for GitHub operations",
@@ -308,7 +316,8 @@ impl Passthrough {
             let this = self.clone();
             tokio::spawn(async move {
                 let Ok(_permit) = this.conns.try_acquire() else {
-                    this.audit.deny(
+                    this.audit.deny_edge(
+                        paths::DEV_PASSTHROUGH,
                         "https_rejected",
                         Actor::Agent,
                         "too many passthrough connections",
@@ -333,7 +342,8 @@ impl Passthrough {
                     Ok(mut up) => {
                         // If the peeked ClientHello alone exceeds the cap, close without sending anything upstream
                         if cap.is_some_and(|c| prefix.len() as u64 > c) {
-                            this.audit.deny(
+                            this.audit.deny_edge(
+                                paths::DEV_PASSTHROUGH,
                                 "https_upload_capped",
                                 Actor::Agent,
                                 "upload exceeded max_upload_bytes; connection closed",
@@ -349,7 +359,8 @@ impl Passthrough {
                         }
                         if !prefix.is_empty() {
                             if let Err(e) = up.write_all(&prefix).await {
-                                this.audit.deny(
+                                this.audit.deny_edge(
+                                    this.route(),
                                     "https_failed",
                                     Actor::Agent,
                                     &e.to_string(),
@@ -362,7 +373,8 @@ impl Passthrough {
                         let (bi, bo, capped) = this.pump(stream, up, already, cap).await;
                         let bytes_in = (bi + already).to_string();
                         if capped {
-                            this.audit.deny(
+                            this.audit.deny_edge(
+                                paths::DEV_PASSTHROUGH,
                                 "https_upload_capped",
                                 Actor::Agent,
                                 "upload exceeded max_upload_bytes; connection closed",
@@ -379,7 +391,8 @@ impl Passthrough {
                             );
                             return;
                         }
-                        this.audit.log(
+                        this.audit.log_edge(
+                            this.route(),
                             "https_passthrough",
                             Actor::Agent,
                             &[
@@ -392,7 +405,8 @@ impl Passthrough {
                         );
                     }
                     Err(e) => {
-                        this.audit.deny(
+                        this.audit.deny_edge(
+                            this.route(),
                             "https_failed",
                             Actor::Agent,
                             &e.to_string(),

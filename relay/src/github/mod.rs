@@ -24,6 +24,7 @@ use serde_json::{json, Value};
 use url::Url;
 
 use crate::audit::{Actor, Audit};
+use crate::paths;
 use crate::policy::{Action, Authorized, Denied, Resource};
 use http::{read_limited, truncate};
 use upstream_token::{TokenError, UpstreamTokenStore};
@@ -322,6 +323,9 @@ pub struct GitHub {
     /// 0.2.34 (#172): who the token belongs to, read once. It cannot change without the token
     /// changing, and checking a comment's author on every edit would otherwise pay for it twice
     viewer: std::sync::OnceLock<String>,
+    /// #228: the ledger edge every `api_call` is written on — direct, via the upstream proxy,
+    /// or via the local Squid — decided once from the proxy config (`paths::github_route`).
+    route: &'static str,
 }
 
 impl GitHub {
@@ -339,7 +343,14 @@ impl GitHub {
             tokens,
             audit,
             viewer: std::sync::OnceLock::new(),
+            route: paths::RELAY_GITHUB_API,
         }
+    }
+
+    /// Names the hop this client's calls take (see `paths::github_route`).
+    pub fn with_route(mut self, route: &'static str) -> Self {
+        self.route = route;
+        self
     }
 
     // ---- Pull Request ----
@@ -2189,7 +2200,8 @@ query($project:ID!,$first:Int!,$fields:Int!){
         let status = resp.status().as_u16();
         let body = read_limited(resp, CI_LOG_CAP).await?;
         let audit_path = path.split('?').next().unwrap_or(path);
-        self.audit.log(
+        self.audit.log_edge(
+            self.route,
             "api_call",
             Actor::System,
             &[
@@ -2242,7 +2254,8 @@ query($project:ID!,$first:Int!,$fields:Int!){
         let body = read_limited(resp, RESPONSE_CAP).await?;
         // The query string is not worth auditing (the values are long).
         let audit_path = path.split('?').next().unwrap_or(path);
-        self.audit.log(
+        self.audit.log_edge(
+            self.route,
             "api_call",
             Actor::System,
             &[

@@ -25,6 +25,7 @@ use crate::git::{GitContext, UpstreamGit};
 use crate::github::upstream_token::SecretSource;
 use crate::github::GitHub;
 use crate::passthrough::{Passthrough, SniTarget};
+use crate::paths;
 use crate::ssh::authorized_keys::AuthorizedKeys;
 use crate::ssh::{load_or_create_host_key, server_config, SshServer};
 use crate::store;
@@ -438,7 +439,8 @@ async fn start_signing_agent(
             cfg.fingerprint
         ),
     }
-    audit.log(
+    audit.log_edge(
+        paths::DEV_SIGNING,
         "signing_agent_started",
         Actor::System,
         &[

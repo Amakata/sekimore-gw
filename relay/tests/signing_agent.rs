@@ -368,6 +368,13 @@ async fn the_proxy_signs_for_git_and_for_nothing_else() {
         "{audit}"
     );
     assert!(audit.contains("\"namespace\":\"git\""), "{audit}");
+    // #228: every signing entry is on the filtered socket's edge
+    for line in audit
+        .lines()
+        .filter(|l| l.contains("\"event\":\"signing_agent_"))
+    {
+        assert!(line.contains("\"edge\":\"dev.signing\""), "{line}");
+    }
     let refusals: Vec<&str> = audit
         .lines()
         .filter(|l| l.contains("signing_agent_refused"))

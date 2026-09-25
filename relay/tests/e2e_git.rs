@@ -494,6 +494,31 @@ async fn clone_then_refs_for_push_creates_branch_and_pr() {
     assert!(audit.contains("\"event\":\"refs_for_rewritten\""));
     assert!(audit.contains("\"event\":\"pr_created\""));
     assert!(audit.contains("\"event\":\"relay_ok\""));
+    // #228: each entry names the path-ledger edge it records — the agent's session with the
+    // relay, the relay's connection to the upstream, and the relay's call to the API
+    let on = |event: &str| {
+        audit
+            .lines()
+            .find(|l| l.contains(&format!("\"event\":\"{event}\"")))
+            .unwrap_or_else(|| panic!("no {event} in {audit}"))
+            .to_string()
+    };
+    assert!(
+        on("refs_for_rewritten").contains("\"edge\":\"dev.relay.ssh\""),
+        "{audit}"
+    );
+    assert!(
+        on("relay_ok").contains("\"edge\":\"relay.ssh.upstream\""),
+        "{audit}"
+    );
+    assert!(
+        on("pr_created").contains("\"edge\":\"relay.github.api\""),
+        "{audit}"
+    );
+    assert!(
+        on("api_call").contains("\"edge\":\"relay.github.api\""),
+        "{audit}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
