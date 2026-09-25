@@ -12,6 +12,13 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.43（2026-09-25）
+
+### Security
+
+- `/api/config` の上流プロキシのパスワードを伏せた。`squid.config_text` が生成後の squid.conf を `login=<user>:<password>` ごと dev に返していた。今は `***`。更新後にパスワードを変えること (#218)
+- `/api/domains` の認証の無い `POST` / `DELETE` のスタブを消した。何も変えないもので、呼ぶものも無かった (#218)
+
 ## 0.2.42（2026-09-25）
 
 ### Security

@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.43 (2026-09-25)
+
+### Enhancement
+
+- no change to the relay; 0.2.42 and 0.2.43 are the same binary. The release redacts the upstream proxy password in the gateway's `/api/config` (#218)
+
 ## 0.2.42 (2026-09-25)
 
 ### Enhancement
