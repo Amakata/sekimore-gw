@@ -5,6 +5,7 @@
 //! are not used because they would be baked in at compile time.
 
 pub mod agent;
+pub mod color;
 pub mod operator;
 pub mod serve;
 
