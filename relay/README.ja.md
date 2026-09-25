@@ -491,6 +491,25 @@ Dev Containers 構成では、`mise run gw:tokens` / `gw:revoke-project` / `gw:a
 | HTTPS の git で `could not read Username` | 運用者の資格情報が関所を迂回しないよう、HTTPS 認証を意図的に塞いでいます。 | SSH（`git@github.com:`）を使います。 |
 | post-create の「ssh-agent が転送されています」という表示が消えない | macOS の `code` は launchd の環境を引き継ぎます。 | VS Code を完全に終了してから `mise run vscode` を実行します。 |
 
+### dev から上流プロキシの経路を切り分ける
+
+すべて dev コンテナから実行できます。ホストに行く必要はありません。
+
+```bash
+# 動作中の設定と、生成された squid.conf
+curl -s http://sekimore-gw:8080/api/config | jq '.proxy, .squid.config_text'
+# 関所が拒否した理由
+curl -s http://sekimore-gw:8080/api/relay/audit | jq '.[0:5]'
+# Squid の経路: dev に HTTP_PROXY は無いので、-x で Squid を指定します
+curl -x http://sekimore-gw:3128 -sSI http://deb.debian.org/debian/dists/stable/Release | grep -i via
+# 関所自身の経路: 443 はプロキシを指定しなくても関所に向きます
+curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
+```
+
+- `Via` が 2 段（上流の Squid と、ゲートウェイの Squid）なら、上流を通ったことの証拠です。
+- `407` と `Proxy-Authenticate` が返るなら、上流には届いており、認証だけが失敗しています。
+- 関所が扱う HTTPS ドメインに接続した直後の `curl: (35) SSL_ERROR_SYSCALL` と、監査ログの `https_failed … proxy closed during CONNECT` は、関所が上流プロキシに届いていない状態です。同時に Squid の経路は通ることがあります。`https://` の上流プロキシ（`upstream_proxy_tls: true`）にはゲートウェイ 0.2.39 以降が必要です（#192）。
+
 ## 開発
 
 ```bash

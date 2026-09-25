@@ -103,6 +103,8 @@ proxy:
   port: 3128                              # Proxy port
   cache_enabled: true                     # Enable cache
   cache_size_mb: 1000                     # Cache size (MB)
+  # To see which path a request took, and why, from dev:
+  # relay/README.md -> Troubleshooting -> "Troubleshooting the upstream proxy path from inside dev"
   upstream_proxy: null                    # corporate proxy, e.g. "proxy.example.com:8080". Leave null when there is none
   upstream_proxy_tls: false               # Use TLS for upstream proxy connection
 
