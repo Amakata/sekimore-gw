@@ -13,6 +13,15 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.45 (2026-09-25)
+
+### Enhancement
+
+- relay: login takes the host keys it needs (the bastions, then the upstream through them) before the device flow and stops with a non-zero exit when one was not saved; the yes/no is read as bytes and judged by its letters (#230)
+- `gw:login` and `gw:logout` are `raw = true` tasks on `sgw.sh gw-tty`, like `gw:unlock`; without a terminal the answer arrived as bytes that were not text (#230)
+- relay: every audit entry that records a connection carries `edge=<id>` from `docs/paths.yml`; `paths::AUDIT_EVENTS` lists the pairs, the ledger test checks them, and the relay tab shows the id (#228)
+- `relay/README` says why `keyscan` saves after printing the fingerprints and `login` asks first (#230)
+
 ## 0.2.44 (2026-09-25)
 
 ### Enhancement

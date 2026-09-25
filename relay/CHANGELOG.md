@@ -6,6 +6,14 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.45 (2026-09-25)
+
+### Enhancement
+
+- login takes the host keys it needs (the bastions, then the upstream through them) before the device flow and stops with a non-zero exit when one was not saved; the yes/no is read as bytes and judged by its letters (#230)
+- every audit entry that records a connection carries `edge=<id>` from `docs/paths.yml`; `paths::AUDIT_EVENTS` lists the pairs, the ledger test checks them, and the relay tab shows the id (#228)
+- `relay/README` says why `keyscan` saves after printing the fingerprints and `login` asks first (#230)
+
 ## 0.2.44 (2026-09-25)
 
 ### Security
