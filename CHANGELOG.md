@@ -13,6 +13,12 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.40 (2026-09-25)
+
+### Enhancement
+
+- no change to the gateway; 0.2.39 and 0.2.40 are the same Python. The release colors the relay's `check` and `store-status` for an operator at a terminal (#203)
+
 ## 0.2.39 (2026-09-25)
 
 ### Fix

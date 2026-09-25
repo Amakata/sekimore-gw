@@ -5,6 +5,12 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.40（2026-09-25）
+
+### Enhancement
+
+- `check` と `store-status` の状態語に色を付けた。ok は緑、locked / missing / none は赤、環境変数由来の資格情報は黄。stdout が端末のときだけで、`NO_COLOR` と `SEKIMORE_COLOR=always|never` で切り替えられる。エージェントが読む出力は変わらない (#203)
+
 ## 0.2.39（2026-09-25）
 
 ### Fix
