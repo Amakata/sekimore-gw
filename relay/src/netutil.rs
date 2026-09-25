@@ -167,11 +167,151 @@ async fn http_connect_tunnel_with(
             let mut s = tokio_rustls::TlsConnector::from(cfg)
                 .connect(name, tcp)
                 .await
-                .map_err(|e| io::Error::new(e.kind(), format!("TLS to the proxy failed: {e}")))?;
+                .map_err(|e| {
+                    io::Error::new(
+                        e.kind(),
+                        with_handshake_hint(format!("TLS to the proxy failed: {e}")),
+                    )
+                })?;
             connect_through(&mut s, proxy, host, port).await?;
             Ok(Box::new(s))
         }
     }
+}
+
+/// What `probe_proxy` found out about the upstream proxy (#206).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeReport {
+    /// The proxy `host:port` that was dialled.
+    pub endpoint: String,
+    /// `true` when the probe did a TLS handshake — an `https://` proxy.
+    pub tls: bool,
+    /// The negotiated protocol version, e.g. `TLSv1_3`. `None` for a plain `http://` proxy.
+    pub protocol: Option<String>,
+    /// The negotiated cipher suite, e.g. `TLS13_AES_256_GCM_SHA384`. `None` for `http://`.
+    pub cipher: Option<String>,
+}
+
+/// The sentence appended to a `HandshakeFailure`, in one place so the passthrough and the GitHub
+/// API client say the same thing (#205, #206).
+pub const HANDSHAKE_HINT: &str = " — the proxy accepted none of the relay's cipher suites \
+(it must offer TLS 1.3 or ECDHE; a Squid https_port needs tls-dh=); see `sekimore-relay check`";
+
+/// Whether an error text is the alert a proxy sends when it shares no cipher suite with the
+/// relay (#205).
+///
+/// rustls words it `received fatal alert: HandshakeFailure`; that is the string the reporter saw
+/// in `gw:logs`. reqwest wraps its own chain, so the lower-case spellings are matched too.
+pub fn is_handshake_failure(err: &str) -> bool {
+    // Only the alert's own names. A bare "handshake failed" is any TLS error at all — an expired
+    // certificate, a reset — and those want a different remedy than "offer another cipher suite".
+    err.contains("HandshakeFailure")
+        || err.contains("handshake_failure")
+        || err.contains("alert handshake failure")
+}
+
+/// Appends the diagnosis to a TLS error that was a `HandshakeFailure`, and hands anything else
+/// back untouched (#205, #206).
+///
+/// The bare alert says only "no", and learning what the "no" meant cost the reporter an afternoon
+/// of `openssl s_client`: rustls implements no RSA key exchange, so a proxy offering only TLS 1.2
+/// with RSA — a Squid `https_port` without `tls-dh=` — has no suite in common with it.
+pub fn with_handshake_hint(msg: String) -> String {
+    if !is_handshake_failure(&msg) {
+        return msg;
+    }
+    format!("{msg}{HANDSHAKE_HINT}")
+}
+
+/// Connects to the upstream proxy the way the passthrough would, and reports what it found (#206).
+///
+/// For an `https://` proxy this is a full rustls handshake with the same client configuration the
+/// CONNECT tunnel uses, so a proxy the relay cannot speak TLS to fails here too, and not only when
+/// real work starts. No CONNECT is sent — the point is reachability and the handshake, not a
+/// tunnel — and the connection is dropped as soon as the report is in hand.
+pub async fn probe_proxy(proxy: &ProxySpec) -> Result<ProbeReport, String> {
+    let url = Url::parse(&proxy.url).map_err(|e| format!("proxy url: {e}"))?;
+    let phost = url
+        .host_str()
+        .ok_or_else(|| "proxy url without host".to_string())?
+        .to_string();
+    let pport = url.port_or_known_default().unwrap_or(3128);
+    let tls = match url.scheme() {
+        "https" => Some(proxy_tls().map_err(|e| format!("proxy TLS: {e}"))?),
+        _ => None,
+    };
+    probe_proxy_with(&phost, pport, tls).await
+}
+
+/// How long the probe waits. A proxy that accepts the TCP connection and then says nothing is one
+/// of the shapes this is meant to catch, and without a bound it would hang `check` rather than
+/// report it. Generous: a handshake over a slow corporate link is still a working proxy.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// `probe_proxy` with the host, port and TLS configuration chosen by the caller (`None` = plain).
+async fn probe_proxy_with(
+    phost: &str,
+    pport: u16,
+    tls: Option<Arc<rustls::ClientConfig>>,
+) -> Result<ProbeReport, String> {
+    probe_proxy_within(phost, pport, tls, PROBE_TIMEOUT).await
+}
+
+/// `probe_proxy_with` with the bound chosen by the caller, so a test need not wait ten seconds.
+async fn probe_proxy_within(
+    phost: &str,
+    pport: u16,
+    tls: Option<Arc<rustls::ClientConfig>>,
+    limit: std::time::Duration,
+) -> Result<ProbeReport, String> {
+    let endpoint = format!("{phost}:{pport}");
+    tokio::time::timeout(limit, probe_inner(phost, pport, tls, &endpoint))
+        .await
+        .unwrap_or_else(|_| {
+            Err(format!(
+                "no answer from {endpoint} within {}s",
+                limit.as_secs_f32()
+            ))
+        })
+}
+
+async fn probe_inner(
+    phost: &str,
+    pport: u16,
+    tls: Option<Arc<rustls::ClientConfig>>,
+    endpoint: &str,
+) -> Result<ProbeReport, String> {
+    let tcp = TcpStream::connect((phost, pport))
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(cfg) = tls else {
+        return Ok(ProbeReport {
+            endpoint: endpoint.to_string(),
+            tls: false,
+            protocol: None,
+            cipher: None,
+        });
+    };
+    let name = rustls::pki_types::ServerName::try_from(phost.to_string())
+        .map_err(|e| format!("proxy host {phost}: {e}"))?;
+    // No `with_handshake_hint` here: that one-line hint is for a log, where there is no room for
+    // more. `check` has room, and prints the fuller diagnosis and the openssl reading under the
+    // line instead — appending both would say the same thing twice.
+    let conn = tokio_rustls::TlsConnector::from(cfg)
+        .connect(name, tcp)
+        .await
+        .map_err(|e| format!("TLS to the proxy failed: {e}"))?;
+    let session = &conn.get_ref().1;
+    let protocol = session.protocol_version().map(|v| format!("{v:?}"));
+    let cipher = session
+        .negotiated_cipher_suite()
+        .map(|c| format!("{:?}", c.suite()));
+    Ok(ProbeReport {
+        endpoint: endpoint.to_string(),
+        tls: true,
+        protocol,
+        cipher,
+    })
 }
 
 /// The CONNECT exchange itself, on whatever stream reaches the proxy.
@@ -500,6 +640,162 @@ mod tests {
             seen.await.is_err(),
             "no CONNECT must have reached the proxy"
         );
+    }
+
+    /// A listener that does the TLS handshake and then says nothing — the shape `probe_proxy`
+    /// expects of a healthy `https://` proxy, minus the CONNECT it never sends.
+    async fn tls_listener() -> (u16, tokio::task::JoinHandle<bool>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let acceptor = test_tls::acceptor();
+        let h = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let Ok(mut s) = acceptor.accept(tcp).await else {
+                return false;
+            };
+            // Whatever the client does next: the probe must not send a CONNECT.
+            let mut buf = vec![0u8; 64];
+            let n = tokio::time::timeout(std::time::Duration::from_millis(200), s.read(&mut buf))
+                .await
+                .unwrap_or(Ok(0))
+                .unwrap_or(0);
+            n == 0
+        });
+        (port, h)
+    }
+
+    #[tokio::test]
+    async fn the_probe_handshakes_with_an_https_proxy_and_reports_what_it_got() {
+        let (port, served) = tls_listener().await;
+        let r = probe_proxy_with("localhost", port, Some(test_tls::client_config()))
+            .await
+            .unwrap();
+        assert!(r.tls);
+        assert_eq!(r.endpoint, format!("localhost:{port}"));
+        // rustls' defaults negotiate TLS 1.3 against a rustls server; whatever it picks, both
+        // fields must be filled in, because that is what `check` prints.
+        assert!(r.protocol.is_some(), "{r:?}");
+        assert!(r.cipher.is_some(), "{r:?}");
+        assert!(
+            r.cipher.as_deref().unwrap().contains("TLS13"),
+            "{:?}",
+            r.cipher
+        );
+        assert!(
+            served.await.unwrap(),
+            "the probe must send no CONNECT after the handshake"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_probe_of_a_plain_proxy_only_connects() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+        let r = probe_proxy_with("127.0.0.1", port, None).await.unwrap();
+        assert!(!r.tls);
+        assert_eq!(r.protocol, None);
+        assert_eq!(r.cipher, None);
+    }
+
+    #[tokio::test]
+    async fn a_listener_that_closes_is_reported_as_an_error() {
+        // A port nothing listens on: bind one, learn the number, drop it.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let err = probe_proxy_with("127.0.0.1", port, None)
+            .await
+            .unwrap_err()
+            .to_lowercase();
+        assert!(err.contains("refused") || err.contains("connect"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_proxy_whose_certificate_is_not_trusted_fails_the_probe() {
+        let (port, _served) = tls_listener().await;
+        let empty = Arc::new(client_config_with_roots(rustls::RootCertStore::empty()).unwrap());
+        let err = probe_proxy_with("localhost", port, Some(empty))
+            .await
+            .unwrap_err();
+        assert!(err.contains("TLS to the proxy failed"), "{err}");
+        // Not a HandshakeFailure, so no cipher-suite advice: that would be the wrong remedy.
+        assert!(!err.contains("cipher suites"), "{err}");
+    }
+
+    /// A TLS server that refuses the client's suites cannot be built with rustls (it implements
+    /// no RSA key exchange either), so the alert is synthesised — the hint is a pure function of
+    /// the error text (#205).
+    #[test]
+    fn a_handshake_failure_gets_the_cipher_suite_diagnosis() {
+        let msg = with_handshake_hint(
+            "TLS to the proxy failed: received fatal alert: HandshakeFailure".into(),
+        );
+        // The prefix a test elsewhere asserts on must survive.
+        assert!(msg.starts_with("TLS to the proxy failed"), "{msg}");
+        assert!(
+            msg.contains("accepted none of the relay's cipher suites"),
+            "{msg}"
+        );
+        assert!(msg.contains("TLS 1.3 or ECDHE"), "{msg}");
+        assert!(msg.contains("tls-dh="), "{msg}");
+        assert!(msg.contains("sekimore-relay check"), "{msg}");
+    }
+
+    #[test]
+    fn other_tls_errors_get_no_diagnosis() {
+        for msg in [
+            "TLS to the proxy failed: invalid peer certificate: UnknownIssuer",
+            "proxy closed during CONNECT",
+            "TLS to the proxy failed: received fatal alert: BadCertificate",
+        ] {
+            assert_eq!(with_handshake_hint(msg.to_string()), msg);
+            assert!(!is_handshake_failure(msg), "{msg}");
+        }
+    }
+
+    #[test]
+    fn the_alert_is_recognised_however_it_is_spelled() {
+        // rustls, a raw alert name, and what OpenSSL prints.
+        assert!(is_handshake_failure(
+            "received fatal alert: HandshakeFailure"
+        ));
+        assert!(is_handshake_failure("tls handshake_failure (alert 40)"));
+        assert!(is_handshake_failure("ssl/tls alert handshake failure"));
+        // Just outside the boundary: a TLS error that is *not* this alert must not be told to go
+        // and change its cipher suites. That is a different fault with a different remedy.
+        assert!(!is_handshake_failure("TLS handshake failed: timed out"));
+        assert!(!is_handshake_failure("handshake timed out"));
+        assert!(!is_handshake_failure(
+            "invalid peer certificate: CertExpired"
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_proxy_that_accepts_and_then_says_nothing_is_not_waited_on_for_ever() {
+        // The shape `check` exists to catch: the TCP connection succeeds, and the handshake never
+        // finishes. Without the bound this hangs instead of reporting.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let held = tokio::spawn(async move {
+            let (s, _) = listener.accept().await.unwrap();
+            // Keep the connection open and send nothing.
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            drop(s);
+        });
+        let err = probe_proxy_within(
+            "localhost",
+            port,
+            Some(test_tls::client_config()),
+            std::time::Duration::from_millis(150),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("no answer from"), "{err}");
+        assert!(err.contains(&format!("localhost:{port}")), "{err}");
+        held.abort();
     }
 
     #[test]

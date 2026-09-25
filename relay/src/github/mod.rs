@@ -65,7 +65,10 @@ impl fmt::Display for GhError {
         match self {
             GhError::Denied(d) => write!(f, "{d}"),
             GhError::Token(e) => write!(f, "{e}"),
-            GhError::Http(e) => write!(f, "upstream request failed: {e}"),
+            // #206: reqwest prints only its own layer, so a `HandshakeFailure` from the upstream
+            // proxy arrived as "error sending request for url (…)" and said nothing. Walk the
+            // chain, and when the alert is in there say what the proxy must offer.
+            GhError::Http(e) => write!(f, "upstream request failed: {e}{}", handshake_hint(e)),
             GhError::Status {
                 method,
                 path,
@@ -80,6 +83,34 @@ impl fmt::Display for GhError {
 }
 
 impl std::error::Error for GhError {}
+
+/// The `HandshakeFailure` hint for a reqwest error, or the empty string (#205, #206).
+///
+/// `Display` on a reqwest error shows one layer; the alert rustls raised is further down the
+/// `source()` chain, so the whole chain is flattened before it is matched on.
+fn handshake_hint(e: &reqwest::Error) -> &'static str {
+    hint_for_chain(&error_chain(e))
+}
+
+/// Every layer of an error's `source()` chain, joined — what `Display` alone does not show.
+fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = e.to_string();
+    let mut src = e.source();
+    while let Some(s) = src {
+        out.push_str(": ");
+        out.push_str(&s.to_string());
+        src = s.source();
+    }
+    out
+}
+
+fn hint_for_chain(chain: &str) -> &'static str {
+    if crate::netutil::is_handshake_failure(chain) {
+        crate::netutil::HANDSHAKE_HINT
+    } else {
+        ""
+    }
+}
 
 impl From<Denied> for GhError {
     fn from(d: Denied) -> Self {
@@ -2974,5 +3005,49 @@ mod tests {
             url_escape("Org:sekimore/main-abc"),
             "Org%3Asekimore/main-abc"
         );
+    }
+
+    /// #206: "error sending request for url (…)" alone told the reporter nothing. reqwest keeps
+    /// the alert in its source chain, so the chain is what decides.
+    #[test]
+    fn a_handshake_failure_in_the_chain_earns_the_hint() {
+        let chain = "error sending request for url (https://api.github.com/user): \
+                     client error: received fatal alert: HandshakeFailure";
+        assert!(hint_for_chain(chain).contains("cipher suites"));
+        assert!(hint_for_chain(chain).contains("tls-dh="));
+        assert_eq!(
+            hint_for_chain("error sending request for url (…): operation timed out"),
+            ""
+        );
+    }
+
+    #[test]
+    fn the_chain_is_flattened_layer_by_layer() {
+        #[derive(Debug)]
+        struct Inner;
+        impl std::fmt::Display for Inner {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("received fatal alert: HandshakeFailure")
+            }
+        }
+        impl std::error::Error for Inner {}
+        #[derive(Debug)]
+        struct Outer(Inner);
+        impl std::fmt::Display for Outer {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("error sending request")
+            }
+        }
+        impl std::error::Error for Outer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        let chain = error_chain(&Outer(Inner));
+        assert_eq!(
+            chain,
+            "error sending request: received fatal alert: HandshakeFailure"
+        );
+        assert!(!hint_for_chain(&chain).is_empty());
     }
 }

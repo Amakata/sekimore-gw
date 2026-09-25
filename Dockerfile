@@ -59,6 +59,10 @@ ARG DEBIAN_SNAPSHOT=20260920T000000Z
 # System package installation
 # openssh-client: ssh / ssh-add / ssh-keyscan / ssh-keygen, used when the relay reaches out to the upstream git
 # bind9-dnsutils: what `dnsutils` resolved to — the latter is a virtual name trixie has no package for
+# openssl: the CLI, for `sekimore-relay check` (#206). Where rustls gets HandshakeFailure from a
+#   TLS upstream proxy, `openssl s_client -brief` still completes — OpenSSL has the RSA key
+#   exchange rustls does not — and names the protocol and cipher the proxy actually offers. The
+#   relay itself links no OpenSSL; this is a diagnostic binary, invoked only by `check`.
 RUN set -eu \
     # Fail here rather than inside apt if the base image ever stops shipping the keyring: the
     # snapshot is still signature-verified, and a missing key must not degrade to trusting less.
@@ -82,6 +86,7 @@ RUN set -eu \
         ulogd2=2.0.8-3 \
         docker.io=26.1.5+dfsg1-9+deb13u1 \
         openssh-client=1:10.0p1-7+deb13u4 \
+        openssl=3.5.7-1~deb13u2 \
     && rm -rf /var/lib/apt/lists/* \
     # Everything below records *that a build happened*, not anything the gateway reads. Left in,
     # they are the whole reason an unchanged 160 MB layer gets a new digest every release and
