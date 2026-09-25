@@ -6,6 +6,16 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.39 (2026-09-25)
+
+### Fix
+
+- spoke TLS to an `https://` upstream proxy before the CONNECT in the 443 passthrough, trusting the same CA bundle as the GitHub client; the API client already tunnelled through TLS proxies (#199)
+
+### Enhancement
+
+- `check` and `store-status` say whether the upstream proxy credential is in the store, locked away, or missing, with the command to run (#200)
+
 ## 0.2.38 (2026-09-25)
 
 ### Enhancement

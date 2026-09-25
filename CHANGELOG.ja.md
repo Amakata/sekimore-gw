@@ -12,6 +12,19 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.39（2026-09-25）
+
+### Fix
+
+- `https://` の上流プロキシには CONNECT の前に TLS で接続するようにした。`upstream_proxy_tls: true` の背後にある関所経由の HTTPS ドメインが、`SSL_ERROR_SYSCALL` で落ちずに上流へ届く。Squid は以前から届いていた (#199)
+- 上流プロキシの資格情報を秘密ストアから読み続けるようにした。`gw:unlock-auto` の後でも、後から `gw:proxy-credential set` した場合でも、`login=` が `squid.conf` に入る。解錠の瞬間の 1 回の読み取りに頼らない (#200)
+
+### Enhancement
+
+- 上流プロキシの資格情報の状態を `none` / `locked` / `set` / `config` / `unavailable` で `/api/config` とダッシュボードに出すようにした。次に打つコマンドも添える (#200)
+- Relay タブの HTTPS の行に宛先を出すようにした。拒否した行の理由は `detail` にも写す (#198)
+- dev の中から上流プロキシの経路を切り分ける手順を relay/README に書いた (#197)
+
 ## 0.2.38（2026-09-25）
 
 ### Security
