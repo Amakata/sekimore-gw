@@ -469,3 +469,166 @@ dns_nameservers {DNS_NAMESERVERS}
         broken = "{ALLOWED_DOMAINS_ACL}\n{CACHE_CONFIG}\n{UPSTREAM_PROXY_CONFIG}\n{DNS_NAMESERVERS}"
         ok, _ = _generate(tmp_path, broken, ["github.com"])
         assert ok is False
+
+
+def describe_the_relay_reaches_the_upstream_proxy_through_squid():
+    """#205: the relay's TLS is rustls, which has no RSA key exchange, so an upstream proxy
+    offering only TLS 1.2 with RSA is unreachable from the relay and reachable from Squid in the
+    same container. On that route the relay sends its CONNECT to 127.0.0.1 and Squid takes the
+    TLS hop, which needs an allow above the relayed-domain deny."""
+
+    template = Path("config/squid/squid.conf.template")
+
+    def _generate(tmp_path, *, upstream, relayed=("github.com",), tls=True, denied=()):
+        out = tmp_path / "squid.conf"
+        pm = ProxyManager(
+            config_template_path=str(template),
+            config_output_path=str(out),
+            cache_enabled=False,
+            upstream_proxy=upstream,
+            upstream_proxy_tls=tls,
+            denied_destinations=list(denied),
+        )
+        ok = pm.generate_config(["pypi.org", ".github.com"], list(relayed))
+        return ok, (out.read_text() if out.exists() else "")
+
+    def the_allow_precedes_the_relayed_domain_deny(tmp_path):
+        ok, content = _generate(tmp_path, upstream="gw.example.net:3129")
+        assert ok is True
+        assert "acl relay_localhost src 127.0.0.1/32" in content
+        # Order is the whole point: Squid takes the first matching http_access line, and what
+        # the relay asks for is exactly the domains denied below.
+        assert content.index("http_access allow relay_localhost") < content.index(
+            "http_access deny relayed_domains"
+        )
+        assert content.index("http_access allow relay_localhost") < content.index(
+            "http_access deny all"
+        )
+        # The ACL is defined before the rule that uses it.
+        assert content.index("acl relay_localhost") < content.index(
+            "http_access allow relay_localhost"
+        )
+
+    def no_upstream_proxy_means_no_allow(tmp_path):
+        # Nothing for the relay to go through Squid for, so the file stays what it was.
+        ok, content = _generate(tmp_path, upstream=None)
+        assert ok is True
+        assert "relay_localhost" not in content
+
+    def the_destination_deny_still_outranks_it(tmp_path):
+        # #178: on the proxy path the relay hands the name over without resolving it, so Squid's
+        # `dst` deny is the only thing that sees the address. An allow above it would serve IMDS
+        # to the relay through the upstream proxy.
+        ok, content = _generate(
+            tmp_path, upstream="gw.example.net:3129", denied=["169.254.169.254/32"]
+        )
+        assert ok is True
+        assert content.index("http_access deny denied_destinations") < content.index(
+            "http_access allow relay_localhost"
+        )
+
+    def a_plain_upstream_proxy_gets_it_too(tmp_path):
+        # The relay does not need the detour for an `http://` proxy, but the allow costs nothing
+        # and keeps the generated file the same shape whichever way upstream_proxy_tls is set.
+        ok, content = _generate(tmp_path, upstream="proxy.corp:3128", tls=False)
+        assert ok is True
+        assert "http_access allow relay_localhost" in content
+
+    def nothing_relayed_still_gets_the_allow(tmp_path):
+        # A deployment with no relay has nothing to deny, and the allow matches only loopback.
+        ok, content = _generate(tmp_path, upstream="gw.example.net:3129", relayed=())
+        assert ok is True
+        assert "http_access allow relay_localhost" in content
+        assert "relayed_domains" not in content
+
+    def squid_listens_where_the_relay_dials(tmp_path):
+        # The relay sends its CONNECT to 127.0.0.1:<proxy.port>; an http_port bound to the LAN
+        # address alone would refuse it.
+        out = tmp_path / "squid.conf"
+        pm = ProxyManager(
+            config_template_path=str(template),
+            config_output_path=str(out),
+            cache_enabled=False,
+            port=3128,
+            upstream_proxy="gw.example.net:3129",
+            upstream_proxy_tls=True,
+        )
+        assert pm.generate_config(["pypi.org"], ["github.com"]) is True
+        assert "\nhttp_port 3128\n" in out.read_text()
+
+    def the_peer_is_still_the_only_way_out(tmp_path):
+        # Squid must not go direct for the relay's requests either; `never_direct allow all`
+        # is what sends them to cache_peer, where the TLS and the login= live.
+        ok, content = _generate(tmp_path, upstream="gw.example.net:3129")
+        assert ok is True
+        assert "cache_peer gw.example.net parent 3129" in content
+        assert " tls" in content
+        assert "never_direct allow all" in content
+
+    def _from_template(tmp_path, text, denied=()):
+        tpl = tmp_path / "squid.conf.template"
+        tpl.write_text(text)
+        out = tmp_path / "squid.conf"
+        pm = ProxyManager(
+            config_template_path=str(tpl),
+            config_output_path=str(out),
+            cache_enabled=False,
+            upstream_proxy="gw.example.net:3129",
+            upstream_proxy_tls=True,
+            denied_destinations=list(denied),
+        )
+        ok = pm.generate_config(["pypi.org"], ["github.com"])
+        return ok, (out.read_text() if out.exists() else "")
+
+    # A template from before #178 and #205: the deployment bind-mounts it, so upgrading the
+    # image does not upgrade it, and both backfills have to land in the right order.
+    ancient = (
+        "{ALLOWED_DOMAINS_ACL}\n\n"
+        "http_access allow allowed_domains\nhttp_access deny all\n\n"
+        "http_port {PROXY_PORT}\n{CACHE_CONFIG}\n{UPSTREAM_PROXY_CONFIG}\n"
+        "dns_nameservers {DNS_NAMESERVERS}\n"
+    )
+
+    def both_backfills_land_in_the_right_order(tmp_path):
+        ok, content = _from_template(tmp_path, ancient, denied=["169.254.169.254/32"])
+        assert ok is True
+        assert content.index("http_access deny denied_destinations") < content.index(
+            "http_access allow relay_localhost"
+        )
+        assert content.index("http_access allow relay_localhost") < content.index(
+            "http_access deny relayed_domains"
+        )
+        assert content.index("acl relay_localhost") < content.index(
+            "http_access allow relay_localhost"
+        )
+
+    def a_config_with_the_allow_below_the_deny_is_refused(tmp_path):
+        # An allow Squid never reaches would leave the relay's HTTPS dead while everything
+        # looked configured. Better to leave Squid on its previous config.
+        wrong = (
+            "{ALLOWED_DOMAINS_ACL}\n{RELAYED_DOMAINS_ACL}\n\n"
+            "{RELAYED_DOMAINS_RULE}\n\n"
+            "{RELAY_LOCALHOST_ACL}\n{RELAY_LOCALHOST_RULE}\n\n"
+            "{DENIED_DESTINATIONS_ACL}\n{DENIED_DESTINATIONS_RULE}\n\n"
+            "http_access allow allowed_domains\nhttp_access deny all\n\n"
+            "http_port {PROXY_PORT}\n{CACHE_CONFIG}\n{UPSTREAM_PROXY_CONFIG}\n"
+            "dns_nameservers {DNS_NAMESERVERS}\n"
+        )
+        ok, _ = _from_template(tmp_path, wrong)
+        assert ok is False
+        assert not (tmp_path / "squid.conf").exists()
+
+    def a_config_whose_allow_outranks_the_destination_deny_is_refused(tmp_path):
+        # The other way round: an allow above #178 would serve IMDS to the relay through the
+        # upstream proxy, which is the hole that rule exists to close.
+        wrong = (
+            "{ALLOWED_DOMAINS_ACL}\n{RELAYED_DOMAINS_ACL}\n\n"
+            "{RELAY_LOCALHOST_ACL}\n{RELAY_LOCALHOST_RULE}\n\n"
+            "{DENIED_DESTINATIONS_ACL}\n{DENIED_DESTINATIONS_RULE}\n\n"
+            "{RELAYED_DOMAINS_RULE}\n\n"
+            "http_access allow allowed_domains\nhttp_access deny all\n\n"
+            "http_port {PROXY_PORT}\n{CACHE_CONFIG}\n{UPSTREAM_PROXY_CONFIG}\n"
+            "dns_nameservers {DNS_NAMESERVERS}\n"
+        )
+        ok, _ = _from_template(tmp_path, wrong, denied=["169.254.169.254/32"])
+        assert ok is False

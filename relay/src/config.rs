@@ -112,11 +112,21 @@ pub struct ProxyConfig {
     /// place with `enabled: false`)
     #[serde(default)]
     pub enabled: bool,
+    /// The port Squid listens on (`proxy.port`; Python's default is 3128). #205 needs it: when the
+    /// upstream proxy speaks TLS the relay sends its CONNECT to the local Squid instead of taking
+    /// the TLS hop itself, and this is where Squid is.
+    #[serde(default = "default_proxy_port")]
+    pub port: u16,
     pub upstream_proxy: Option<String>,
     #[serde(default)]
     pub upstream_proxy_tls: bool,
     pub upstream_proxy_username: Option<String>,
     pub upstream_proxy_password: Option<String>,
+}
+
+/// `proxy.port`'s default, matching Python's `ProxyConfig.port` (src/config.py).
+fn default_proxy_port() -> u16 {
+    3128
 }
 
 /// The top level. Keys owned by Python are skipped.
@@ -1369,18 +1379,48 @@ fn derive_api_bases(
 ///
 /// #151: the credential in the secret store wins over both when there is one; `stored` is where the
 /// running relay keeps it, and `credential()` is what a connection presents.
+///
+/// #205: `url` is the *configured* proxy, which is what the operator reads in a log line or in
+/// `check`. What a connection actually dials is `connect_url()`, and the two differ on the
+/// via-Squid route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxySpec {
     pub url: String,
     pub username: Option<String>,
     pub password: Option<String>,
     pub stored: crate::proxy_credential::StoredProxyCredential,
+    /// #205: Squid's port, when the relay reaches the upstream proxy *through* the local Squid
+    /// rather than by itself. Set when `upstream_proxy_tls` and `proxy.enabled` hold together.
+    ///
+    /// The relay's TLS is rustls, which implements no RSA key exchange; an upstream that offers
+    /// only TLS 1.2 with RSA shares no cipher suite with it and answers `handshake_failure`. Squid
+    /// is in the same container, speaks OpenSSL, and already reaches that upstream with
+    /// `cache_peer ... tls`. So the relay sends its CONNECT to `http://127.0.0.1:<port>` in plain
+    /// text over loopback and lets Squid take the TLS hop.
+    pub via_squid: Option<u16>,
 }
 
 impl ProxySpec {
+    /// Where a connection dials: the local Squid on the via-Squid route (#205), the configured
+    /// proxy otherwise.
+    pub fn connect_url(&self) -> String {
+        match self.via_squid {
+            Some(port) => format!("http://127.0.0.1:{port}"),
+            None => self.url.clone(),
+        }
+    }
+
     /// The credential to present to the proxy now: the secret store's, when it holds one; otherwise
     /// `SEKIMORE_UPSTREAM_PROXY_*` or `config.yml`, as before 0.2.22.
+    ///
+    /// #205: `None` on the via-Squid route. The credential belongs to the *upstream* proxy, and
+    /// Squid presents it there itself (`cache_peer ... login=`). Sending it to the local Squid,
+    /// which asks for no authentication, would only put the upstream's password on a hop that has
+    /// no use for it.
     pub fn credential(&self) -> Option<crate::proxy_credential::Credential> {
+        if self.via_squid.is_some() {
+            return None;
+        }
         self.stored.get().or_else(|| {
             self.username
                 .clone()
@@ -1426,11 +1466,17 @@ fn resolve_proxy(p: &ProxyConfig) -> Result<Option<ProxySpec>, ConfigError> {
     let password = std::env::var("SEKIMORE_UPSTREAM_PROXY_PASSWORD")
         .ok()
         .or_else(|| p.upstream_proxy_password.clone());
+    // #205: a TLS upstream proxy is reached through the local Squid, which speaks OpenSSL and has
+    // the RSA key exchange rustls does not. Only when Squid is actually running -- `p.enabled` is
+    // checked at the top of this function, and with it off there is nothing to go through, so the
+    // relay keeps taking the TLS hop itself. A plain `http://` proxy never needed the detour.
+    let via_squid = url.starts_with("https://").then_some(p.port);
     Ok(Some(ProxySpec {
         url,
         username,
         password,
         stored: Default::default(),
+        via_squid,
     }))
 }
 
@@ -2388,6 +2434,63 @@ relay:
         let px = r.proxy.unwrap();
         assert_eq!(px.url, "http://proxy.corp:3128");
         assert_eq!(px.username.as_deref(), Some("u"));
+        // A plain `http://` proxy has no TLS to get wrong, so the relay speaks to it itself.
+        assert_eq!(px.via_squid, None);
+        assert_eq!(px.connect_url(), "http://proxy.corp:3128");
+        assert_eq!(px.credential(), Some(("u".into(), String::new())));
+    }
+
+    /// #205: the relay's rustls has no RSA key exchange, so a TLS upstream that offers only that
+    /// is unreachable from the relay and reachable from Squid, in the same container. When both
+    /// flags hold, the CONNECT goes to Squid instead.
+    #[test]
+    fn a_tls_upstream_proxy_is_reached_through_the_local_squid() {
+        let cfg = |extra: &str| {
+            format!("domain_handlers:\n  github.com: {{ handler: git-relay }}\nproxy:\n  enabled: true\n  upstream_proxy: gw.example.net:3129\n  upstream_proxy_tls: true\n{extra}relay:\n  project: {{ name: x }}\n")
+        };
+
+        let px = p(&cfg("")).unwrap().resolve().unwrap().proxy.unwrap();
+        assert_eq!(px.via_squid, Some(3128), "proxy.port's default");
+        // The configured URL survives for the operator to read; the dialled one is Squid.
+        assert_eq!(px.url, "https://gw.example.net:3129");
+        assert_eq!(px.connect_url(), "http://127.0.0.1:3128");
+
+        // proxy.port is Python's key, and a deployment may have moved Squid.
+        let px = p(&cfg("  port: 3129\n"))
+            .unwrap()
+            .resolve()
+            .unwrap()
+            .proxy
+            .unwrap();
+        assert_eq!(px.via_squid, Some(3129));
+        assert_eq!(px.connect_url(), "http://127.0.0.1:3129");
+
+        // Squid off: `resolve_proxy` has no proxy to return at all, so there is no route to pick
+        // and nothing ever dials the local port.
+        let off = cfg("").replace("enabled: true", "enabled: false");
+        assert!(p(&off).unwrap().resolve().unwrap().proxy.is_none());
+    }
+
+    /// #205: the credential belongs to the *upstream* proxy. Squid presents it there itself
+    /// (`cache_peer ... login=`); putting it on the loopback hop would leak it to a peer that
+    /// never asked for it.
+    #[test]
+    fn the_via_squid_route_presents_no_credential() {
+        let text = "domain_handlers:\n  github.com: { handler: git-relay }\nproxy:\n  enabled: true\n  upstream_proxy: gw.example.net:3129\n  upstream_proxy_tls: true\n  upstream_proxy_username: u\n  upstream_proxy_password: pw\nrelay:\n  project: { name: x }\n";
+        let px = p(text).unwrap().resolve().unwrap().proxy.unwrap();
+        assert_eq!(px.via_squid, Some(3128));
+        // config.yml's is read — `check` reports where it came from — and not presented.
+        assert_eq!(px.username.as_deref(), Some("u"));
+        assert_eq!(px.credential(), None);
+        // The same once the secret store is unlocked and the refresher has filled the cell.
+        px.stored
+            .set(Some(("store-user".into(), "store-pass".into())));
+        assert_eq!(px.credential(), None);
+        // `credential_source()` still reports it: `check` says which credential Squid will use.
+        assert_eq!(
+            px.credential_source(),
+            "the secret store (gw:proxy-credential)"
+        );
     }
 }
 

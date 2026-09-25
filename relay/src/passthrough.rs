@@ -225,7 +225,16 @@ impl Passthrough {
     pub async fn connect_upstream_to(&self, host: &str, port: u16) -> std::io::Result<Upstream> {
         if let Some(px) = &self.proxy {
             return http_connect_tunnel(px, host, port).await.map_err(|e| {
-                std::io::Error::new(e.kind(), format!("via upstream proxy {}: {e}", px.url))
+                // #205: on the via-Squid route the failure is with the local Squid, not with the
+                // upstream's TLS. Name the hop so the operator looks in the right log.
+                let via = match px.via_squid {
+                    Some(sq) => format!(
+                        "via upstream proxy {} through the local Squid (127.0.0.1:{sq})",
+                        px.url
+                    ),
+                    None => format!("via upstream proxy {}", px.url),
+                };
+                std::io::Error::new(e.kind(), format!("{via}: {e}"))
             });
         }
         let addrs = tokio::net::lookup_host((host, port)).await?;

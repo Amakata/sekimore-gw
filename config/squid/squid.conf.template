@@ -22,14 +22,21 @@ http_access deny CONNECT !SSL_ports
 http_access allow localhost manager
 http_access deny manager
 
-# Refuse the relayed domains before the allowlist is consulted
-{RELAYED_DOMAINS_RULE}
-
 # #178: Squid resolves the name itself, so a destination the DNS path refused is still
 # reachable here. Refuse by address, before the allowlist is consulted: an allowed name is
-# not an allowed destination.
+# not an allowed destination. Above #205's allow too: on the proxy path the relay hands the
+# name over without resolving it, so this rule is the only thing that sees the address.
 {DENIED_DESTINATIONS_ACL}
 {DENIED_DESTINATIONS_RULE}
+
+# #205: the relay itself, when an upstream proxy is configured. Above the relayed-domain deny
+# below, because what the relay asks for is exactly those domains (dynamically generated;
+# empty when there is no upstream proxy)
+{RELAY_LOCALHOST_ACL}
+{RELAY_LOCALHOST_RULE}
+
+# Refuse the relayed domains before the allowlist is consulted
+{RELAYED_DOMAINS_RULE}
 
 # Allow whitelisted domains
 http_access allow allowed_domains
@@ -37,7 +44,9 @@ http_access allow allowed_domains
 # Deny all other access
 http_access deny all
 
-# Listening port
+# Listening port. Unqualified, so Squid listens on every interface including 127.0.0.1, which
+# is where the relay sends its CONNECT on the via-Squid route (#205). Nothing in dev can reach
+# the gateway's loopback: the INPUT policy is DROP with explicit accepts on lan_if only.
 http_port {PROXY_PORT}
 
 # Cache settings

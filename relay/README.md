@@ -526,6 +526,8 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
 - `407` with `Proxy-Authenticate` means the upstream was reached and only the authentication failed.
 - `curl: (35) SSL_ERROR_SYSCALL` right after connecting to a relayed HTTPS domain, with `https_failed … proxy closed during CONNECT` in the audit, is the relay failing to reach the upstream proxy — Squid's path can still work at the same time. An `https://` upstream proxy (`upstream_proxy_tls: true`) needs gateway 0.2.39 or later (#192).
 
+With `upstream_proxy_tls: true` and Squid enabled, the relay does not speak TLS to the upstream proxy at all: it sends its CONNECT to the local Squid, which takes the TLS hop with OpenSSL and presents the stored credential itself (`cache_peer … login=`). That works with a proxy offering only TLS 1.2 RSA key exchange — a Squid `https_port` without `tls-dh=` — which the relay's rustls cannot speak (#205). With Squid disabled the relay speaks TLS itself: TLS 1.3 or ECDHE only. `sekimore-relay check` prints which route is in use, under `route:`, and its `reach:` line probes that route.
+
 ## Development
 
 ```bash

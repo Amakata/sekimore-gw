@@ -60,7 +60,10 @@ pub fn build_client(opts: &HttpOptions<'_>) -> anyhow::Result<reqwest::Client> {
         // start, while the secret store is still locked; a static basic_auth would have kept the
         // environment's credential (or none) for the life of the process. The URL carries it as
         // userinfo, which reqwest turns into Proxy-Authorization; `url` percent-encodes it.
-        let base = url::Url::parse(&px.url).with_context(|| format!("proxy url {}", px.url))?;
+        // #205: `connect_url()`, not `url`: on the via-Squid route the requests go to the local
+        // Squid and `credential()` is None there, so nothing of the upstream's is put on the wire.
+        let dial = px.connect_url();
+        let base = url::Url::parse(&dial).with_context(|| format!("proxy url {dial}"))?;
         let px = px.clone();
         let proxy = reqwest::Proxy::custom(move |_| {
             let mut u = base.clone();
@@ -256,6 +259,7 @@ mod proxy_tests {
             username: None,
             password: None,
             stored: Default::default(),
+            via_squid: None,
         };
         let client = build_client(&HttpOptions {
             proxy: Some(&spec),
@@ -284,6 +288,7 @@ mod proxy_tests {
             username: Some("env-user".into()),
             password: Some("env-pass".into()),
             stored: Default::default(),
+            via_squid: None,
         };
         let client = build_client(&HttpOptions {
             proxy: Some(&spec),
@@ -329,6 +334,7 @@ mod proxy_tests {
             username: None,
             password: None,
             stored: Default::default(),
+            via_squid: None,
         };
         let client = build_client(&HttpOptions {
             proxy: Some(&spec),
