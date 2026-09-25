@@ -13,6 +13,13 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.43 (2026-09-25)
+
+### Security
+
+- redacted the upstream proxy password in `/api/config`: `squid.config_text` returned the generated squid.conf whole, `login=<user>:<password>` included, to anything in dev; it is `***` now. Rotate the password after upgrading (#218)
+- removed the unauthenticated `POST` / `DELETE` stubs under `/api/domains`; they changed nothing, and nothing called them (#218)
+
 ## 0.2.42 (2026-09-25)
 
 ### Security
