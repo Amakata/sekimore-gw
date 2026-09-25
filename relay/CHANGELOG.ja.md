@@ -9,7 +9,7 @@
 
 ### Enhancement
 
-- `check` と `store-status` の状態語に色を付けた。ok は緑、locked / missing / none は赤、環境変数由来の資格情報は黄。stdout が端末のときだけで、`NO_COLOR` と `SEKIMORE_COLOR=always|never` で切り替えられる。エージェントが読む出力は変わらない (#203)
+- 端末では `check` と `store-status` の状態語に色を付ける。ok は緑、locked / missing / none は赤、環境変数由来の資格情報は黄。`NO_COLOR` と `SEKIMORE_COLOR` で切り替えられる (#203)
 
 ## 0.2.39（2026-09-25）
 

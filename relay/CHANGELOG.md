@@ -10,7 +10,7 @@ the pull request.
 
 ### Enhancement
 
-- colored the state words of `check` and `store-status` — green for ok, red for locked / missing / none, yellow for a credential out of the environment — when stdout is a terminal; `NO_COLOR` and `SEKIMORE_COLOR=always|never` decide otherwise, and nothing an agent reads changes (#203)
+- colored the state words of `check` and `store-status` at a terminal: green for ok, red for locked / missing / none, yellow for a credential out of the environment; `NO_COLOR` and `SEKIMORE_COLOR` decide otherwise (#203)
 
 ## 0.2.39 (2026-09-25)
 
