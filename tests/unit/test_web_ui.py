@@ -1745,3 +1745,87 @@ def describe_get_unique_domains():
         finally:
             web_app_module.DB_PATH = original_db_path
             web_app_module.CONFIG_PATH = original_config_path
+
+
+def describe_the_upstream_auth_state():
+    """#194: `has_upstream_auth: false` read as "nothing registered" while Squid had a credential.
+
+    A locked store and an empty one both came out false, and the operator's next step differs:
+    `gw:unlock` against `gw:proxy-credential set`. Five values, one per next step.
+    """
+
+    def it_says_set_when_the_store_holds_one():
+        from src.web_ui.app import _upstream_auth_state
+
+        stored = '{"username": "stored", "password": "sekret"}'
+        with patch("src.web_ui.app.get_secret", return_value=stored):
+            # The store wins over config.yml, because it is what Squid ends up presenting.
+            assert _upstream_auth_state(True) == "set"
+            assert _upstream_auth_state(False) == "set"
+
+    def it_says_locked_rather_than_none_when_the_store_is_sealed():
+        from src.secret_store import Locked
+        from src.web_ui.app import _upstream_auth_state
+
+        with patch("src.web_ui.app.get_secret", return_value=Locked()):
+            # The news is the lock, whatever config.yml has meanwhile.
+            assert _upstream_auth_state(False) == "locked"
+            assert _upstream_auth_state(True) == "locked"
+
+    def it_says_none_when_the_store_is_open_and_empty():
+        from src.secret_store import NotFound
+        from src.web_ui.app import _upstream_auth_state
+
+        with patch("src.web_ui.app.get_secret", return_value=NotFound()):
+            assert _upstream_auth_state(False) == "none"
+
+    def it_says_config_when_the_store_is_empty_but_config_yml_has_one():
+        from src.secret_store import NotFound
+        from src.web_ui.app import _upstream_auth_state
+
+        with patch("src.web_ui.app.get_secret", return_value=NotFound()):
+            assert _upstream_auth_state(True) == "config"
+
+    def it_says_unavailable_when_the_store_cannot_be_reached_and_nothing_is_configured():
+        from src.secret_store import SecretStoreError
+        from src.web_ui.app import _upstream_auth_state
+
+        def boom(*_a, **_k):
+            raise SecretStoreError("no relay")
+
+        with patch("src.web_ui.app.get_secret", side_effect=boom):
+            assert _upstream_auth_state(False) == "unavailable"
+            # What is in force is the more useful answer when there is one
+            assert _upstream_auth_state(True) == "config"
+
+    def it_keeps_has_upstream_auth_true_for_set_and_config_only():
+        """The old flag stays truthful for anything still reading it."""
+        from src.web_ui.app import ProxyConfigResponse
+
+        for state, expected in (
+            ("set", True),
+            ("config", True),
+            ("locked", False),
+            ("none", False),
+            ("unavailable", False),
+        ):
+            assert (state in ("set", "config")) is expected
+        # and the model carries the state
+        proxy = ProxyConfigResponse(
+            enabled=True, port=3128, cache_enabled=True, cache_size_mb=1, upstream_auth="locked"
+        )
+        assert proxy.upstream_auth == "locked"
+        assert proxy.has_upstream_auth is False
+
+    def it_names_every_state_in_both_locales():
+        """A state the dashboard cannot name shows a raw key to the operator."""
+        import json
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2] / "src" / "locales"
+        en = json.loads((root / "en.json").read_text())
+        ja = json.loads((root / "ja.json").read_text())
+        for state in ("none", "locked", "set", "config", "unavailable"):
+            key = f"config.upstream_auth_{state}"
+            assert key in en, key
+            assert key in ja, key

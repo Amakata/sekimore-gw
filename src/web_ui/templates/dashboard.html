@@ -1057,6 +1057,18 @@
                 document.getElementById('config-version-webui').textContent = config.version_webui;
 
                 // Proxy settings
+                // #194: spelled out rather than built from the state name, so the key
+                // coverage test sees every key this can render.
+                function upstreamAuthLabel(proxy) {
+                    switch (proxy.upstream_auth || (proxy.has_upstream_auth ? 'config' : 'none')) {
+                        case 'set': return tr('config.upstream_auth_set');
+                        case 'locked': return tr('config.upstream_auth_locked');
+                        case 'config': return tr('config.upstream_auth_config');
+                        case 'unavailable': return tr('config.upstream_auth_unavailable');
+                        default: return tr('config.upstream_auth_none');
+                    }
+                }
+
                 const proxy = config.proxy;
                 const listDiv = document.getElementById('config-proxy-list');
 
@@ -1066,7 +1078,7 @@
                     { label: tr('config.cache'), value: proxy.cache_enabled ? `${tr('common.enabled')} (${proxy.cache_size_mb} MB)` : tr('common.disabled') },
                     { label: tr('config.upstream_proxy'), value: proxy.upstream_proxy || tr('config.none_direct') },
                     { label: tr('config.upstream_tls'), value: proxy.upstream_proxy_tls ? tr('common.enabled') : tr('common.disabled') },
-                    { label: tr('config.upstream_auth'), value: proxy.has_upstream_auth ? tr('config.configured') : tr('config.none') },
+                    { label: tr('config.upstream_auth'), value: upstreamAuthLabel(proxy) },
                 ];
 
                 listDiv.innerHTML = items.map(item => `

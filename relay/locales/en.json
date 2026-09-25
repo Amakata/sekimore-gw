@@ -201,6 +201,8 @@
   "op.check.bootstrap_disabled": " (DISABLED by kill-switch)",
   "op.check.proxy": "proxy:",
   "op.check.proxy_credential": "{url} (credential: {source})",
+  "op.check.proxy_credential_locked": "none — the secret store is locked; run: mise run gw:unlock",
+  "op.check.proxy_credential_unset": "none — run: mise run gw:proxy-credential -- set",
   "op.check.permissions": "permissions (default deny):",
   "op.check.deny_note": "  ([-] = project deny; wins over any allow)",
   "op.check.upstreams": "upstreams (layer between project defaults and repos):",
