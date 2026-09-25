@@ -131,6 +131,7 @@ src/
 - Aim for more than 80% code coverage.
 - Write unit tests for new functions and classes.
 - Add integration tests for complex workflows.
+- A new connection the gateway opens or governs needs a row in the path ledger, `docs/paths.yml`, and its id in `src/paths.py` or `relay/src/paths.rs`. `tests/unit/test_paths.py` checks the ledger as a graph. See [docs/paths.md](docs/paths.md).
 
 Example test structure:
 

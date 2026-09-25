@@ -120,7 +120,6 @@ Does not fit:
 - [relay/README.md](relay/README.md) — relay setup, agent-side steps, everyday use, configuration reference, permission catalog
 - [config/config.sample.yml](config/config.sample.yml) — every key, with its default and a comment
 - [docs/localization.md](docs/localization.md) — Web UI and CLI in English and Japanese
-- [docs/paths.md](docs/paths.md) — the path ledger: every connection edge, checked as a graph
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development, tests, images
 - [CHANGELOG.md](CHANGELOG.md), [relay/CHANGELOG.md](relay/CHANGELOG.md) — one image, one version number
 - [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) — the dev-container side
