@@ -159,6 +159,8 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     // through-the-bastion scan of the upstream itself, further down — and they are the only keys
     // here that can be taken without a token.
     login_bastion_keys(&r, &up, &audit)?;
+    // #230: and the upstream's own key, through them, while there is still no token to lose
+    login_upstream_key_via_bastion(&r, &up, &audit)?;
     if r.upstreams.len() > 1 {
         let mark = if up.is_default {
             t("op.login.default_mark")
@@ -249,28 +251,32 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
         // GHE's /api/v3/meta has no ssh_keys at all (#221). Behind a bastion there is still a way
         // to the key — the same route the relay uses for git — so take it rather than leaving the
         // operator to run `ssh bastion ssh-keyscan` and paste the output.
+        // The through-the-bastion scan ran before the flow (#230), so behind a bastion the key
+        // is already there and nothing needs saying.
         Ok(_) => {
-            eprintln!(
-                "{}",
-                tf(
-                    "op.login.no_meta_keys",
-                    &[("path", &up.known_hosts.display().to_string())]
-                )
-            );
-            login_upstream_key_via_bastion(&r, &up, &audit)?;
+            if !ssh_for(&r, &up).known_hosts_has_upstream().unwrap_or(false) {
+                eprintln!(
+                    "{}",
+                    tf(
+                        "op.login.no_meta_keys",
+                        &[("path", &up.known_hosts.display().to_string())]
+                    )
+                );
+            }
         }
         Err(e) => {
-            eprintln!(
-                "{}",
-                tf(
-                    "op.login.meta_failed",
-                    &[
-                        ("error", &e.to_string()),
-                        ("path", &up.known_hosts.display().to_string())
-                    ]
-                )
-            );
-            login_upstream_key_via_bastion(&r, &up, &audit)?;
+            if !ssh_for(&r, &up).known_hosts_has_upstream().unwrap_or(false) {
+                eprintln!(
+                    "{}",
+                    tf(
+                        "op.login.meta_failed",
+                        &[
+                            ("error", &e.to_string()),
+                            ("path", &up.known_hosts.display().to_string())
+                        ]
+                    )
+                );
+            }
         }
     }
     match gh.whoami().await {
@@ -297,12 +303,35 @@ fn confirm_host_keys(what: &str) -> anyhow::Result<bool> {
     }
     print!("{} ", tf("op.login.keys_confirm", &[("what", what)]));
     std::io::stdout().flush().ok();
-    let mut line = String::new();
-    std::io::stdin()
-        .read_line(&mut line)
-        .context("cannot read the answer from the terminal")?;
-    let a = line.trim().to_ascii_lowercase();
-    Ok(a == "yes" || a == "y")
+    // #230: a task runner between the terminal and us can hand over bytes that are not text
+    // (mise without `raw = true` did). That is no reason to lose the login: the keys stay
+    // unsaved, the line says so and names the command that asks again from a real terminal.
+    let mut line = Vec::new();
+    match std::io::BufRead::read_until(&mut std::io::stdin().lock(), b'\n', &mut line) {
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!(
+                "{}",
+                tf(
+                    "op.login.keys_unreadable",
+                    &[("what", what), ("error", &e.to_string())]
+                )
+            );
+            return Ok(false);
+        }
+    }
+    Ok(answer_is_yes(&line))
+}
+
+/// `yes` or `y`, in any case, judged by its letters alone: whatever a terminal or a task runner
+/// wrapped around them (a carriage return, spaces, bytes that are not text) is not the answer.
+fn answer_is_yes(line: &[u8]) -> bool {
+    let letters: String = line
+        .iter()
+        .filter(|b| b.is_ascii_alphabetic())
+        .map(|b| b.to_ascii_lowercase() as char)
+        .collect();
+    letters == "yes" || letters == "y"
 }
 
 /// Shows the fingerprints, asks, and merges on a yes. Returns whether anything was written.
@@ -361,20 +390,15 @@ fn login_bastion_keys(r: &Resolved, up: &Upstream, audit: &Audit) -> anyhow::Res
         match ssh.known_hosts_has(&bhost, bport) {
             Ok(true) => continue,
             Ok(false) => {}
-            Err(e) => {
-                eprintln!(
-                    "{}",
-                    tf(
-                        "op.login.bastion_check_failed",
-                        &[
-                            ("host", &bhost),
-                            ("port", &bport.to_string()),
-                            ("error", &e.to_string()),
-                        ]
-                    )
-                );
-                continue;
-            }
+            // #230: not knowing is not a reason to go on; the hop would fail closed anyway
+            Err(e) => bail!(tf(
+                "op.login.bastion_check_failed",
+                &[
+                    ("host", &bhost),
+                    ("port", &bport.to_string()),
+                    ("error", &e.to_string()),
+                ]
+            )),
         }
         println!(
             "{}",
@@ -383,31 +407,45 @@ fn login_bastion_keys(r: &Resolved, up: &Upstream, audit: &Audit) -> anyhow::Res
                 &[("host", &bhost), ("port", &bport.to_string())]
             )
         );
-        match keyscan_direct(&bhost, bport) {
-            Ok(keys) => {
-                offer_host_keys(&up.known_hosts, &bhost, bport, &keys, audit, &up.domain)?;
-            }
-            // Not fatal: the operator may still want the token, and `check` names the gap.
-            Err(e) => eprintln!(
-                "{}",
-                tf(
-                    "op.login.bastion_scan_failed",
-                    &[
-                        ("host", &bhost),
-                        ("port", &bport.to_string()),
-                        ("error", &format!("{e:#}")),
-                    ]
-                )
-            ),
-        }
+        // #230: a key step that ends without the key stops the login, before the device flow. A
+        // token without the key reads as "logged in" while git cannot work, and `keyscan` is the
+        // way to take the key without the question.
+        let keys = keyscan_direct(&bhost, bport).map_err(|e| {
+            anyhow::anyhow!(tf(
+                "op.login.bastion_scan_failed",
+                &[
+                    ("host", &bhost),
+                    ("port", &bport.to_string()),
+                    ("domain", &up.domain),
+                    ("error", &format!("{e:#}")),
+                ]
+            ))
+        })?;
+        let saved = offer_host_keys(&up.known_hosts, &bhost, bport, &keys, audit, &up.domain)?;
+        require_saved(saved, &bhost, bport, &up.domain)?;
     }
     Ok(())
 }
 
-/// #221 (b): `/meta` gave nothing, so take the upstream's key through the bastion instead.
-///
-/// Nothing to do without a ProxyJump — a direct `ssh-keyscan` is what the existing message
-/// already tells the operator to run, and doing it unasked would trust a key without being asked.
+/// #230: login stops when a key it needs was not saved — declined, not a terminal, unreadable.
+fn require_saved(saved: bool, host: &str, port: u16, domain: &str) -> anyhow::Result<()> {
+    if saved {
+        return Ok(());
+    }
+    bail!(tf(
+        "op.login.keys_required",
+        &[
+            ("host", host),
+            ("port", &port.to_string()),
+            ("domain", domain)
+        ]
+    ))
+}
+
+/// #221 (b), #230: behind a ProxyJump, take the upstream's key through the bastion — before the
+/// device flow, since it needs no token and a login without it is not one. Without a ProxyJump
+/// there is nothing to do here: `/meta` supplies the key after the flow, and a direct
+/// `ssh-keyscan` unasked would trust a host nobody named.
 fn login_upstream_key_via_bastion(
     r: &Resolved,
     up: &Upstream,
@@ -438,28 +476,26 @@ fn login_upstream_key_via_bastion(
             ]
         )
     );
-    match keyscan_via_bastion(&ssh, &up.host, up.upstream_ssh_port) {
-        Ok(keys) => {
-            offer_host_keys(
-                &up.known_hosts,
-                &up.host,
-                up.upstream_ssh_port,
-                &keys,
-                audit,
-                &up.domain,
-            )?;
-        }
-        // The token is already stored; failing the whole login over this would only send the
-        // operator back through the device flow for no gain.
-        Err(e) => eprintln!(
-            "{}",
-            tf(
-                "op.login.via_bastion_failed",
-                &[("error", &format!("{e:#}"))]
-            )
-        ),
-    }
-    Ok(())
+    let keys = keyscan_via_bastion(&ssh, &up.host, up.upstream_ssh_port).map_err(|e| {
+        anyhow::anyhow!(tf(
+            "op.login.via_bastion_failed",
+            &[
+                ("host", &up.host),
+                ("port", &up.upstream_ssh_port.to_string()),
+                ("domain", &up.domain),
+                ("error", &format!("{e:#}")),
+            ]
+        ))
+    })?;
+    let saved = offer_host_keys(
+        &up.known_hosts,
+        &up.host,
+        up.upstream_ssh_port,
+        &keys,
+        audit,
+        &up.domain,
+    )?;
+    require_saved(saved, &up.host, up.upstream_ssh_port, &up.domain)
 }
 
 /// Adds `<host> <key>` lines to known_hosts, skipping lines already present. Returns the number added.
@@ -2063,6 +2099,41 @@ pub async fn change_passphrase(path: &Path, kdf: Option<&str>) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #230: the yes/no is read as bytes and judged leniently — a task runner's carriage
+    /// return or stray bytes must not turn a `yes` into a `no`.
+    #[test]
+    fn a_yes_survives_what_a_terminal_wraps_around_it() {
+        assert!(answer_is_yes(b"yes\n"));
+        assert!(answer_is_yes(b"  Y\r\n"));
+        assert!(answer_is_yes(b"YES"));
+        assert!(!answer_is_yes(b"no\n"));
+        assert!(!answer_is_yes(b""));
+        assert!(!answer_is_yes(b"yes please\n"), "only the bare word");
+        assert!(!answer_is_yes(b"nyes\n"));
+        assert!(
+            answer_is_yes(b"yes\xff\n"),
+            "a stray byte after the word is not a no"
+        );
+        assert!(
+            answer_is_yes(b"\x1b[200~yes\x1b[201~\n"),
+            "bracketed paste around the word"
+        );
+    }
+
+    /// #230: a key step that saved nothing stops the login, and the error says how to take the
+    /// key without the question.
+    #[test]
+    fn login_stops_when_a_key_was_not_saved() {
+        assert!(require_saved(true, "bastion.example.net", 2222, "ghe.example.com").is_ok());
+        let e = require_saved(false, "bastion.example.net", 2222, "ghe.example.com").unwrap_err();
+        let m = e.to_string();
+        assert!(m.contains("bastion.example.net:2222"), "{m}");
+        assert!(
+            m.contains("keyscan bastion.example.net --port 2222 --upstream ghe.example.com"),
+            "{m}"
+        );
+    }
 
     /// #221: which way `keyscan` goes. Through the bastion only for the upstream host itself —
     /// a bastion is scanned directly (that is how its key gets in), and so is anything else.

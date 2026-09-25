@@ -42,11 +42,14 @@ run = 'bash "$SGW" gw sekimore-relay'
 
 ["gw:login"]
 description = "GitHub に device flow でログイン (上流トークンと known_hosts を /data/relay に保存。初回のみ)"
-run = 'bash "$SGW" gw sekimore-relay login'
+# raw: 0.2.44's login asks yes/no before it writes a host key, on the terminal (#230)
+raw = true
+run = 'bash "$SGW" gw-tty sekimore-relay login'
 
 ["gw:logout"]
 description = "上流トークンを削除"
-run = 'bash "$SGW" gw sekimore-relay logout'
+raw = true
+run = 'bash "$SGW" gw-tty sekimore-relay logout'
 
 ["gw:whoami"]
 description = "gateway がどの GitHub identity として動くか"

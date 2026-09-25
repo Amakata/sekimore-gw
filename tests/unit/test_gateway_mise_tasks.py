@@ -59,9 +59,12 @@ EXCLUDED = {
     ),
 }
 
-# The subcommands that read a passphrase from the terminal. `gw` decides on `-t` by looking at
-# stdout too, and mise makes stdout a pipe, so these need sgw.sh's unconditional `gw-tty`.
-NEEDS_TERMINAL = {"unlock", "passphrase"}
+# The subcommands that read from the terminal. `gw` decides on `-t` by looking at stdout too,
+# and mise makes stdout a pipe, so these need sgw.sh's unconditional `gw-tty` and `raw = true`.
+# unlock / passphrase type a passphrase; login (0.2.44) asks yes/no before it writes a host key,
+# and without `raw` the answer arrived as bytes that were not text (#230). logout is held to the
+# same shape so the pair stays symmetrical.
+NEEDS_TERMINAL = {"unlock", "passphrase", "login", "logout"}
 
 # The tasks that hand the relay a passphrase down a pipe instead (0.2.29). They run the same
 # subcommand as an interactive task and must not be held to `gw-tty`, which refuses a pipe. Named

@@ -449,6 +449,11 @@ agent-setup writes a `Host` and `Port` entry for each upstream to `~/.ssh/config
 On port 443, the relay selects the upstream by the TLS SNI. The relay's ssh does not read the host's `~/.ssh/config`, so configure bastions and proxies in `ssh_options`.
 Add a bastion's host key with `sekimore-relay keyscan bastion.example.com --upstream ghe.example.com`.
 
+`keyscan` and `login` both take host keys, with one difference on purpose:
+
+- `keyscan <host>` prints the fingerprints and saves. The operator named the host on the command line; that is the confirmation.
+- `login` asks yes/no first. It takes keys as a side effect of logging in, for hosts the operator did not name (the bastion, and the upstream through it), and a login must not quietly trust a host. A key step that ends without the key stops the login before the device flow, with a non-zero exit (0.2.45). To skip the question, run `keyscan` for each host first.
+
 ## Display language (0.2.4)
 
 The CLI's messages are stored in `relay/locales/en.json` and `relay/locales/ja.json` and embedded in the binary.
