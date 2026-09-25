@@ -204,6 +204,75 @@ mod proxy_tests {
         )
     }
 
+    /// `fake_proxy`, but behind TLS: what an `https://` upstream proxy looks like (#192).
+    async fn fake_tls_proxy() -> (String, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        use crate::netutil::test_tls;
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let acceptor = test_tls::acceptor();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            loop {
+                let Ok((tcp, _)) = l.accept().await else {
+                    return;
+                };
+                let tx = tx.clone();
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(mut s) = acceptor.accept(tcp).await else {
+                        return;
+                    };
+                    let mut buf = Vec::new();
+                    let mut b = [0u8; 1];
+                    while !buf.ends_with(b"\r\n\r\n") {
+                        if s.read(&mut b).await.unwrap_or(0) == 0 {
+                            return;
+                        }
+                        buf.push(b[0]);
+                    }
+                    let head = String::from_utf8_lossy(&buf).to_string();
+                    let _ = tx.send(head.lines().next().unwrap_or("").to_string());
+                    let _ = s
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        )
+                        .await;
+                    let _ = s.shutdown().await;
+                });
+            }
+        });
+        (format!("https://127.0.0.1:{}", addr.port()), rx)
+    }
+
+    #[tokio::test]
+    async fn an_https_proxy_is_reached_over_tls_by_the_api_client_too() {
+        // #192 was the passthrough; this pins down that reqwest, which carries the GitHub API
+        // calls, speaks TLS to an `https://` proxy with the same CA bundle the relay trusts
+        let (url, mut seen) = fake_tls_proxy().await;
+        let ca = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(ca.path(), crate::netutil::test_tls::CA_PEM).unwrap();
+        let spec = ProxySpec {
+            url,
+            username: None,
+            password: None,
+            stored: Default::default(),
+        };
+        let client = build_client(&HttpOptions {
+            proxy: Some(&spec),
+            ca_file: Some(ca.path()),
+            ..Default::default()
+        })
+        .unwrap();
+        let resp = client
+            .get("http://upstream.invalid/x")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let line = seen.recv().await.unwrap();
+        assert!(line.starts_with("GET http://upstream.invalid/x"), "{line}");
+    }
+
     #[tokio::test]
     async fn the_proxy_gets_whatever_credential_is_current_at_each_request() {
         // #151: the client is built at start, while the store is locked. What reaches the proxy

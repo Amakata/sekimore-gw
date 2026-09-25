@@ -104,7 +104,8 @@ proxy:
   cache_enabled: true                     # Enable cache
   cache_size_mb: 1000                     # Cache size (MB)
   upstream_proxy: null                    # corporate proxy, e.g. "proxy.example.com:8080". Leave null when there is none
-  upstream_proxy_tls: false               # Use TLS for upstream proxy connection
+  upstream_proxy_tls: false               # TLS to the upstream proxy. Squid (cache_peer … tls) and, from 0.2.39 (#192), the relay's
+                                          #   443 passthrough and GitHub API calls all speak TLS to it
 
   # Upstream proxy authentication (Basic Auth)
   # Environment variables: SEKIMORE_UPSTREAM_PROXY_USERNAME, SEKIMORE_UPSTREAM_PROXY_PASSWORD

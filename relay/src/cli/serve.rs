@@ -134,6 +134,20 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     // goes through the proxy — the passthrough and every GitHub client built below read it per
     // connection, from the cell this fills.
     crate::proxy_credential::spawn_refresher(r.proxy.as_ref(), secrets.clone());
+    // #192: an `https://` proxy (`proxy.upstream_proxy_tls`) is spoken to over TLS, trusting the
+    // same roots as the GitHub client (platform, SSL_CERT_FILE, relay.ca_file)
+    crate::netutil::init_proxy_tls(r.relay.ca_file.as_deref()).context("proxy TLS roots")?;
+    if let Some(px) = &r.proxy {
+        log::info!(
+            "upstream proxy {} ({})",
+            px.url,
+            if px.url.starts_with("https://") {
+                "TLS to the proxy, then CONNECT"
+            } else {
+                "plain CONNECT"
+            }
+        );
+    }
     let mut token_caches: Vec<Arc<crate::github::upstream_token::UpstreamTokenStore>> = Vec::new();
 
     // Per upstream: GitHub client, upstream git, SSH listener. The russh config, keys and session limit are shared

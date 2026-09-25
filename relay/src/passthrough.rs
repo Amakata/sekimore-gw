@@ -18,7 +18,7 @@ use tokio::sync::Semaphore;
 use crate::audit::{Actor, Audit};
 use crate::config::{HttpsMode, ProxySpec};
 use crate::git::{copy_touch, Watchdog};
-use crate::netutil::http_connect_tunnel;
+use crate::netutil::{http_connect_tunnel, Upstream};
 
 /// One upstream selectable by SNI. `domain` is the name DNS points at the relay (i.e. the name that arrives in the SNI); `host` is the real upstream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,11 +218,11 @@ impl Passthrough {
     }
 
     /// Connects to the default upstream (0.1.x compatible).
-    pub async fn connect_upstream(&self) -> std::io::Result<TcpStream> {
+    pub async fn connect_upstream(&self) -> std::io::Result<Upstream> {
         self.connect_upstream_to(&self.upstream, self.port).await
     }
 
-    pub async fn connect_upstream_to(&self, host: &str, port: u16) -> std::io::Result<TcpStream> {
+    pub async fn connect_upstream_to(&self, host: &str, port: u16) -> std::io::Result<Upstream> {
         if let Some(px) = &self.proxy {
             return http_connect_tunnel(px, host, port).await.map_err(|e| {
                 std::io::Error::new(e.kind(), format!("via upstream proxy {}: {e}", px.url))
@@ -246,7 +246,7 @@ impl Passthrough {
                 continue;
             }
             match tokio::time::timeout(Duration::from_secs(20), TcpStream::connect(addr)).await {
-                Ok(Ok(s)) => return Ok(s),
+                Ok(Ok(s)) => return Ok(Box::new(s)),
                 Ok(Err(e)) => last = Some(e),
                 Err(_) => {
                     last = Some(std::io::Error::new(
@@ -401,14 +401,15 @@ impl Passthrough {
     async fn pump(
         &self,
         client: TcpStream,
-        upstream: TcpStream,
+        upstream: Upstream,
         already: u64,
         cap: Option<u64>,
     ) -> (u64, u64, bool) {
         let wd = Watchdog::new(self.idle);
         wd.touch();
         let (cr, cw) = client.into_split();
-        let (ur, uw) = upstream.into_split();
+        // Not a TcpStream any more (#192: it may be TLS to a proxy), so split generically
+        let (ur, uw) = tokio::io::split(upstream);
         let wd_down = wd.clone();
         // upstream → dev keeps flowing in its own task (aborted, closing the connection, once the cap is hit)
         let down =
