@@ -13,6 +13,13 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.44 (2026-09-25)
+
+### Enhancement
+
+- a path ledger, `docs/paths.yml`: every edge with who resolves, who verifies the peer, what is presented and where it is audited. `tests/unit/test_paths.py` checks it as a graph; the ids are in `src/paths.py` and `relay/src/paths.rs` (#223)
+- README: the gateway-only setup is gone; the dev container is the way in (#226)
+
 ## 0.2.43 (2026-09-25)
 
 ### Security

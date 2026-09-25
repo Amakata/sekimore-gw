@@ -5,6 +5,16 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## 0.2.44（2026-09-25）
+
+### Security
+
+- ProxyJump の各ホップを上流の known_hosts で `StrictHostKeyChecking yes` として検証するようにした。強制する設定は生成した ssh_config に置き `-F` で渡す。OpenSSH は踏み台への ssh にもこれを渡すので、鍵の無い踏み台は keyscan の案内を出して閉じる方向で失敗する (#220)
+
+### Enhancement
+
+- `keyscan` と `login` が、ProxyJump の踏み台の先にある上流のホスト鍵を踏み台経由で取るようにした。鍵の種類ごとに1接続。`login` は先に不足している踏み台の鍵を、fingerprint を見せて yes/no で取る (#221)
+
 ## 0.2.43（2026-09-25）
 
 ### Enhancement
