@@ -147,6 +147,9 @@ class RelayAuditEntry(BaseModel):
     event: str
     actor: str | None = None
     peer: str | None = None
+    # #195: the destination of an HTTPS row (the host the relay dialed, else the SNI the
+    # client asked for), because peer is only dev's ephemeral port
+    destination: str | None = None
     repo: str | None = None
     verb: str | None = None
     path: str | None = None
@@ -524,6 +527,14 @@ def _tail_lines(path: Path, max_lines: int, max_bytes: int = 4 * 1024 * 1024) ->
     return lines[-max_lines:] if max_lines > 0 else lines
 
 
+def _field(obj: dict, key: str) -> str | None:
+    """One audit field as a non-empty string. "-" is the relay's own placeholder for "unknown"."""
+    value = obj.get(key)
+    if value in (None, "", "-"):
+        return None
+    return str(value)
+
+
 def to_entry(obj: dict) -> RelayAuditEntry | None:
     event = str(obj.get("event", ""))
     if not event:
@@ -542,8 +553,10 @@ def to_entry(obj: dict) -> RelayAuditEntry | None:
         return None
     details = []
     for k in (
+        "method",
         "bytes_in",
         "bytes_out",
+        "cap",
         "ms",
         "status",
         "cmdline",
@@ -554,7 +567,22 @@ def to_entry(obj: dict) -> RelayAuditEntry | None:
     ):
         if obj.get(k) not in (None, ""):
             details.append(f"{k}={obj[k]}")
+    # The relay writes both the host it dialed (upstream) and what the client asked for
+    # (sni). They differ only when a handler sends a domain to another upstream, so show
+    # the pair only then; otherwise one destination says it all.
+    upstream = _field(obj, "upstream")
+    sni = _field(obj, "sni")
+    destination = upstream or sni
+    for name, value in (("sni", sni), ("upstream", upstream)):
+        if value is not None and value != destination:
+            details.append(f"{name}={value}")
     peer = obj.get("peer")
+    reason = _field(obj, "reason")
+    detail = " ".join(details) if details else None
+    # A denied row carries its explanation in reason; mirror it so no BLOCKED row reads
+    # detail=null next to an allowed row that has one
+    if detail is None:
+        detail = reason
     flag = None
     if event == "https_passthrough" and _int_or(obj.get("bytes_in"), 0) >= LARGE_UPLOAD_BYTES:
         flag = "large_upload"
@@ -565,12 +593,13 @@ def to_entry(obj: dict) -> RelayAuditEntry | None:
         event=event,
         actor=obj.get("actor"),
         peer=str(peer) if peer else None,
+        destination=destination,
         repo=(str(obj["repo"]) or None) if obj.get("repo") is not None else None,
         verb=obj.get("verb"),
         path=obj.get("path"),
         label=obj.get("label"),
-        reason=obj.get("reason"),
-        detail=" ".join(details) if details else None,
+        reason=reason,
+        detail=detail,
         flag=flag,
     )
 

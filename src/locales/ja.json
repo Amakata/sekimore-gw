@@ -144,6 +144,7 @@
   "relay.file.present": "あり",
   "relay.file.missing": "なし",
   "relay.large_upload_badge": "⚠ 大きな送信",
+  "relay.to_destination": "宛先",
   "maint.description": "gateway のログ DB（SQLite）の運用コマンド: 状態確認・削除・リセット。",
   "maint.db": "SQLite のパス（既定: config.yml の database_path）",
   "maint.config": "config.yml のパス",

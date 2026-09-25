@@ -544,6 +544,8 @@ relay:
         assert len(small) == 1
         capped = [e for e in blocked if e["event"] == "https_upload_capped"]
         assert len(capped) == 1 and capped[0]["component"] == "HTTPS"
+        assert capped[0]["destination"] == "github.com"  # #195
+        assert {e["destination"] for e in allowed} == {"github.com", "ghcr.io"}
         assert stats["large_uploads"] == 1 and stats["upload_capped"] == 1
 
 
@@ -594,3 +596,61 @@ def describe_dashboard_permission_list():
             f"dashboard is out of step: missing {sorted(defined - shown)}, "
             f"stale {sorted(shown - defined)}"
         )
+
+
+def describe_https_destination():
+    """#195: an HTTPS row names the host it was headed for, and a denied row is never detail-less."""
+
+    def _entry(**fields):
+        entry = relay_view.to_entry({"ts": "2026-09-25T10:00:00Z", **fields})
+        assert entry is not None
+        return entry
+
+    def it_names_the_destination_of_a_failed_connection():
+        entry = _entry(
+            event="https_failed",
+            peer="10.200.2.3:33212",
+            upstream="api.github.com",
+            sni="api.github.com",
+            reason="via upstream proxy: proxy closed during CONNECT",
+        )
+        assert entry.component == "HTTPS" and entry.action == "BLOCKED"
+        assert entry.destination == "api.github.com"
+        # The reason still stands on its own for scripts, and fills the empty detail
+        assert entry.reason == "via upstream proxy: proxy closed during CONNECT"
+        assert entry.detail == entry.reason
+
+    def it_names_the_destination_of_a_passthrough():
+        entry = _entry(
+            event="https_passthrough",
+            peer="10.200.2.3:49946",
+            upstream="github.com",
+            sni="github.com",
+            bytes_in="767",
+            bytes_out="5504",
+        )
+        assert entry.destination == "github.com"
+        # The two agree, so neither is repeated in detail
+        assert entry.detail == "bytes_in=767 bytes_out=5504"
+
+    def it_falls_back_to_the_sni_when_there_is_no_upstream():
+        entry = _entry(event="https_rejected", peer="10.200.2.3:1", sni="ghcr.io")
+        assert entry.destination == "ghcr.io"
+
+    def it_ignores_the_relays_placeholder_sni():
+        entry = _entry(event="https_passthrough", upstream="github.com", sni="-")
+        assert entry.destination == "github.com" and entry.detail is None
+
+    def it_shows_both_when_the_handler_sends_the_sni_elsewhere():
+        entry = _entry(event="https_passthrough", upstream="github.com", sni="ghcr.io")
+        assert entry.destination == "github.com" and entry.detail == "sni=ghcr.io"
+
+    def it_leaves_rows_without_a_destination_alone():
+        entry = _entry(event="ssh_auth_ok", peer="10.200.2.3:22", fingerprint="SHA256:abc")
+        assert entry.destination is None and entry.detail == "fingerprint=SHA256:abc"
+
+    def it_renders_the_destination_in_the_relay_tab():
+        html = (
+            Path(__file__).resolve().parents[2] / "src" / "web_ui" / "templates" / "dashboard.html"
+        ).read_text(encoding="utf-8")
+        assert "e.destination" in html and "relay.to_destination" in html
