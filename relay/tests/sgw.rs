@@ -35,7 +35,9 @@ printf '%s\n' "$*" >> "{log}"
 printf 'HINTS=%s\n' "${{DOCKER_CLI_HINTS:-unset}}" >> "{log}"
 case "$1 $2" in
   "ps -q") echo cid123 ;;
-  "ps -a") echo "  proj-sekimore-gw-1  Up 2 hours  (ghcr.io/amakata/sekimore-gw:0.2.46)" ;;
+  "ps -a")
+    if [ "$3" = "-q" ]; then [ -n "${{FAKE_EMPTY_STACK:-}}" ] || echo cid123
+    else echo "  proj-sekimore-gw-1  Up 2 hours  (ghcr.io/amakata/sekimore-gw:0.2.46)"; fi ;;
   "inspect -f")
     case "$3" in
       *working_dir*) echo "{wd}" ;;
@@ -300,6 +302,59 @@ fn recreate_names_every_compose_file_the_container_was_created_with() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("the store was left locked"), "{stdout}");
+}
+
+#[test]
+fn down_removes_the_whole_stack_with_every_compose_file_and_the_orphans() {
+    let f = fixture();
+    let dc = f.project.join(".devcontainer");
+    std::fs::write(dc.join("docker-compose.relay.yml"), "services: {}\n").unwrap();
+    let out = sgw(&f, &["down"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = log(&f);
+    let down = log
+        .lines()
+        .find(|l| l.starts_with("compose "))
+        .unwrap_or_else(|| panic!("no compose in {log}"));
+    assert_eq!(
+        down,
+        format!(
+            "compose -p proj_devcontainer --project-directory {dc} -f {dc}/docker-compose.yml -f {dc}/docker-compose.relay.yml down --remove-orphans",
+            dc = dc.display()
+        )
+    );
+}
+
+#[test]
+fn down_with_no_container_left_names_the_stack_the_way_dev_containers_does() {
+    let f = fixture();
+    let dc = f.project.join(".devcontainer");
+    let out = sgw(&f, &["down"])
+        .env("FAKE_EMPTY_STACK", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = log(&f);
+    assert!(!log.contains("inspect"), "no label to read: {log}");
+    let down = log
+        .lines()
+        .find(|l| l.starts_with("compose "))
+        .unwrap_or_else(|| panic!("no compose in {log}"));
+    assert_eq!(
+        down,
+        format!(
+            "compose -p proj_devcontainer --project-directory {dc} -f {dc}/docker-compose.yml down --remove-orphans",
+            dc = dc.display()
+        )
+    );
 }
 
 #[test]

@@ -132,9 +132,10 @@ pub fn recreate(docker: &Docker, project: &str, no_unlock: bool) -> anyhow::Resu
     }
 }
 
-pub fn down(docker: &Docker) -> anyhow::Result<i32> {
-    let proj = docker.compose_project()?;
-    docker.run(&["compose".into(), "-p".into(), proj, "down".into()])
+/// The whole stack, dev container included, gone; the volumes stay. Also the way out of a start
+/// that fails with "network … already exists".
+pub fn down(docker: &Docker, project: &super::project::Project) -> anyhow::Result<i32> {
+    docker.down(&project.compose_project_name())
 }
 
 /// The Web UI in a browser, at whatever host port the gateway publishes 8080 on.

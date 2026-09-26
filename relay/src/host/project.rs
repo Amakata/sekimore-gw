@@ -24,6 +24,24 @@ impl Project {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.root.display().to_string())
     }
+
+    /// The compose project name the Dev Containers extension gives this stack when it starts it:
+    /// `<root's basename>_devcontainer`, normalised the way compose does.
+    pub fn compose_project_name(&self) -> String {
+        devcontainer_project_name(&self.name())
+    }
+}
+
+/// `<folder>_devcontainer` as compose normalises it: lower case, only `[a-z0-9_-]` kept, and a
+/// leading `-` or `_` dropped. `My Proj.2` starts as `myproj2_devcontainer`.
+pub fn devcontainer_project_name(folder: &str) -> String {
+    let kept: String = folder
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    let kept = kept.trim_start_matches(['-', '_']);
+    format!("{kept}_devcontainer")
 }
 
 /// What `sgw` refuses to do from inside the dev container: everything. The stack is run by the
@@ -79,6 +97,15 @@ pub fn discover(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_stack_is_named_the_way_dev_containers_names_it() {
+        use super::devcontainer_project_name as n;
+        assert_eq!(n("sgw-devcontainer"), "sgw-devcontainer_devcontainer");
+        assert_eq!(n("My Proj.2"), "myproj2_devcontainer");
+        assert_eq!(n("_hidden"), "hidden_devcontainer");
+        assert_eq!(n("案件"), "_devcontainer");
+    }
+
     use super::*;
 
     fn project_at(dir: &Path) {

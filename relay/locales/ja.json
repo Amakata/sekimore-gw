@@ -330,7 +330,7 @@
   "sgw.cmd.port": "サービスが公開しているホスト側のポート（既定: コンテナのポート 8080）",
   "sgw.cmd.id": "サービスのコンテナ ID",
   "sgw.cmd.project": "compose のプロジェクト名",
-  "sgw.cmd.down": "compose スタックを止めて消す（ボリュームは残る）",
+  "sgw.cmd.down": "スタックを丸ごと消す。dev コンテナも（ボリュームは残る）。「network … already exists」で上がらないときにも",
   "sgw.cmd.open": "運用者の SSH_AUTH_SOCK が届かない状態で VS Code を起動する",
   "sgw.cmd.open.check": "launchd、Docker Desktop、起動中の VS Code の SSH_AUTH_SOCK の状態を見る",
   "sgw.cmd.open.restore": "SSH_AUTH_SOCK を launchd に戻す（Docker Desktop を再起動する前に）",
