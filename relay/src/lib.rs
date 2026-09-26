@@ -2,6 +2,7 @@
 //!
 //! See `relay/README.md` for the module layout.
 
+pub mod agent_setup;
 pub mod api;
 pub mod audit;
 pub mod cli;

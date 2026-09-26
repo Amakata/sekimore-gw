@@ -40,6 +40,8 @@
   "cli.bootstrap.disable": "Stop accepting POST /bootstrap",
   "cli.bootstrap.enable": "Accept POST /bootstrap again",
   "cli.agent": "Agent-side CLI (does not read the configuration file; uses SEKIMORE_ENDPOINT / SEKIMORE_TOKEN / SEKIMORE_REPO)",
+  "cli.agent.setup": "what the dev container needs from the gateway, on every start: DNS and the route, the proxy environment, the keys, the token, known_hosts, ~/.ssh/config, git signing, the agent guide. Run as root by postStart",
+  "cli.agent.setup.gateway": "the gateway's address; skips the scan, /etc/resolv.conf and the route (tests, or a container that already routes there)",
   "cli.agent.repo": "Default repository Org/Repo (or host/Org/Repo with several upstreams)",
   "agent.whoami": "Show your project, permissions and repositories",
   "agent.guide": "Print the guide for AI agents (what the relay is, how to push, the sekimore commands, how to read denials)",

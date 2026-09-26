@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{bail, Context};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use super::{AgentClient, AgentCmd, NAME};
 use crate::api::types::{ApiRequest, BootstrapRequest, BootstrapResponse};
@@ -27,7 +27,20 @@ pub struct AgentCli {
     #[arg(short, long, action = clap::ArgAction::Count, global = true, help = t("cli.verbose"))]
     pub verbose: u8,
     #[command(subcommand)]
-    pub cmd: AgentCmd,
+    pub cmd: Top,
+}
+
+/// `setup` is sgw-agent's own; everything else is the relay's agent command set.
+#[derive(Subcommand, Debug)]
+pub enum Top {
+    /// What the dev container needs from the gateway, on every start (run as root by postStart)
+    #[command(about = t("cli.agent.setup"))]
+    Setup {
+        #[arg(long, value_name = "IP", env = "SEKIMORE_IP", help = t("cli.agent.setup.gateway"))]
+        gateway: Option<std::net::Ipv4Addr>,
+    },
+    #[command(flatten)]
+    Agent(AgentCmd),
 }
 
 /// `KEY=VALUE` lines of the env file, in order. `export KEY=…` and a value in single or double
@@ -232,7 +245,13 @@ async fn run_once(argv: &[String]) -> i32 {
         Ok(c) => c,
         Err(e) => e.exit(),
     };
-    match super::run(cli.repo.as_deref(), cli.cmd).await {
+    let result = match cli.cmd {
+        Top::Setup { gateway } => {
+            crate::agent_setup::run(crate::agent_setup::Options { gateway }).await
+        }
+        Top::Agent(cmd) => super::run(cli.repo.as_deref(), cmd).await,
+    };
+    match result {
         Ok(code) => code,
         Err(e) => {
             eprintln!("{NAME}: {e:#}");
