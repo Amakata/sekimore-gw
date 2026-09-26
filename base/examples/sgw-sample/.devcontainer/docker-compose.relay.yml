@@ -1,0 +1,69 @@
+# sekimore-relay overlay (the relay that carries git and the GitHub API; shipped inside
+# sekimore-gw since 0.1.2).
+#
+# List it after docker-compose.yml in devcontainer.json's dockerComposeFile.
+# Without the relay, drop it from there and delete domain_handlers: / relay: from
+# config/config.yml.
+#
+# What it does:
+#   * Hands sekimore-gw the operator's ssh-agent (the relay authenticates to upstream git with
+#     it; the keys never leave the Mac).
+#       - Docker Desktop (Mac): Docker Desktop already forwards the host's agent to a fixed path
+#         inside the VM, /run/host-services/ssh-auth.sock. That is the default.
+#         `ssh-add -l` on the Mac has to list a key (add one with
+#         `ssh-add --apple-use-keychain ~/.ssh/<key>`).
+#       - Vagrant VM: put a socket at a fixed path and name it in SEKIMORE_AGENT_SOCK
+#         (e.g. from the Mac: `ssh -N -o StreamLocalBindUnlink=yes
+#          -R /home/vagrant/.ssh-agent/agent.sock:$SSH_AUTH_SOCK <vm>`, then
+#          SEKIMORE_AGENT_SOCK=/home/vagrant/.ssh-agent/agent.sock). Re-establishing the
+#          forward changes the socket's inode, which leaves the mount stale, so
+#          `docker compose up -d --force-recreate sekimore-gw` is needed.
+#   * Keeps dev's disposable key (~/.ssh/sekimore) in a volume, so a rebuild does not change it.
+#   * Shares the signing key's socket between gateway and dev (sekimore-gw 0.2.29 and later, #59).
+#       - With relay.signing_key in config.yml, the gateway creates an agent socket at
+#         /run/sekimore/signing-agent.sock that exposes exactly one key of the host's ssh-agent.
+#         dev points SSH_AUTH_SOCK at it and runs `git commit`. The private key never enters dev.
+#       - That socket passes nothing but git signatures (SSHSIG, namespace=git), so it cannot be
+#         used to authenticate. The operator's other keys are hidden by fingerprint, even though
+#         they sit in the same agent.
+#       - Without relay.signing_key, this volume goes unused (dev generates a key as before).
+#
+# Assumes the operator's agent is not forwarded into dev (`ssh-add -l` inside dev has to fail).
+# How to stop the Dev Containers extension's implicit forwarding is in
+# doc/sgw-devcontainer-base/design/sekimore-relay-agent.md D-6.
+services:
+  sekimore-gw:
+    volumes:
+      - ${SEKIMORE_AGENT_SOCK:-/run/host-services/ssh-auth.sock}:/ssh-agent/agent.sock:ro
+      # The volume the signing socket lives in (used only when relay.signing_key is set)
+      - sekimore-signing:/run/sekimore
+    environment:
+      - SSH_AUTH_SOCK=/ssh-agent/agent.sock
+
+  dev:
+    volumes:
+      - sekimore-agent-keys:/home/vscode/.ssh/sekimore
+      # The same volume. Read-write because connect(2) to a unix socket needs write permission.
+      # The socket itself is 0600 and owned by relay.signing_key.socket_uid (1000 = vscode by
+      # default).
+      - sekimore-signing:/run/sekimore
+    environment:
+      # Read by sekimore-agent-setup.sh (auto: register the key and fetch the token
+      # automatically / manual: the operator runs add-key and token by hand)
+      - SEKIMORE_BOOTSTRAP=${SEKIMORE_BOOTSTRAP:-auto}
+      # 1 makes post-create's agent-forwarding check a warning instead of an ERROR
+      # (discouraged; set it in .env)
+      - SEKIMORE_ALLOW_AGENT_FORWARD=${SEKIMORE_ALLOW_AGENT_FORWARD:-0}
+      # 1 keeps the credential helper for git over HTTPS — the route that borrows the operator's
+      # GitHub credentials from the host (discouraged)
+      - SEKIMORE_ALLOW_CREDENTIAL_HELPER=${SEKIMORE_ALLOW_CREDENTIAL_HELPER:-0}
+      # The signing key's comment (the Title it gets when registered on GitHub as a Signing Key).
+      # Default: "sekimore-agent-signing: <project> / <git user.name> <user.email>"
+      - SEKIMORE_PROJECT=${SEKIMORE_PROJECT:-sgw-sample}
+      - SEKIMORE_SIGNING_KEY_COMMENT=${SEKIMORE_SIGNING_KEY_COMMENT:-}
+
+volumes:
+  sekimore-agent-keys:
+    name: sekimore-agent-keys-${DEVCONTAINER_ID}
+  sekimore-signing:
+    name: sekimore-signing-${DEVCONTAINER_ID}

@@ -1,0 +1,13 @@
+# Splash screen (project-specific overlay example)
+echo "╔════════════════════════════════════════╗"
+echo "║     sgw-sample Dev Environment          ║"
+echo "╚════════════════════════════════════════╝"
+echo ""
+echo "Available tools:"
+echo "  - aws:    $(aws --version 2>/dev/null || echo 'not installed')"
+echo "  - gh:     $(gh --version 2>/dev/null | head -1 || echo 'not installed')"
+echo "  - python: $(python -V 2>&1 || echo 'not installed')"
+echo "  - node:   $(node -v 2>/dev/null || echo 'not installed')"
+echo "  - php:    $(php -v 2>/dev/null | head -1 || echo 'not installed')"
+echo "  - claude: $(claude --version 2>/dev/null || echo 'not installed')"
+echo "────────────────────────────────────────"

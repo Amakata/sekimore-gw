@@ -101,7 +101,9 @@ updates:
   # the repository root and the fetcher matches any name containing `dockerfile`, so one entry
   # covers Dockerfile.agent too.
   - package-ecosystem: "docker"
-    directory: "/"
+    directories:
+      - "/"
+      - "/base"
     schedule:
       interval: "weekly"
       day: "monday"

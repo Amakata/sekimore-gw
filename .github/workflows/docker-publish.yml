@@ -9,6 +9,8 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # the base image's name (lowercase, as Docker wants it); built by the base-* jobs below
+  BASE_IMAGE: amakata/sgw-devcontainer-base
 
 jobs:
   # Build each architecture on a runner native to that CPU and push only the digest.
@@ -160,3 +162,132 @@ jobs:
           test "$rc" -eq 1
           rc=0; docker run --rm --platform linux/amd64 -v "$PWD/tests/fixtures/config_with_relay.yml:/etc/sekimore/config.yml:ro" "$IMAGE" sekimore-relay needs-relay || rc=$?
           test "$rc" -eq 0
+
+  # ---- the dev-container base image, from the gateway image this tag just published (#235) ----
+  # base/Dockerfile copies the relay and the agent guide out of the gateway image, so it builds
+  # after `merge` has tagged that image, against exactly this tag's version. Same digest-per-arch
+  # shape as above; the image name is the base's own.
+  base-build:
+    needs: merge
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-26.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-26.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Version from the tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Normalise the layer timestamps
+        run: echo "SOURCE_DATE_EPOCH=1577836800" >> "$GITHUB_ENV"
+
+      - name: Build and push by digest (${{ matrix.arch }})
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: base
+          file: base/Dockerfile
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          build-args: |
+            SEKIMORE_GW_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_LC }}:${{ env.VERSION }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.BASE_IMAGE }},push-by-digest=true,name-canonical=true,push=true,rewrite-timestamp=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          test -n "$digest"
+          touch "/tmp/digests/${digest#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: base-digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  base-merge:
+    needs: base-build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Version from the tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Download digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: /tmp/digests
+          pattern: base-digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags)
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Create and push manifest list
+        working-directory: /tmp/digests
+        run: |
+          set -eu
+          REPO="${REGISTRY}/${BASE_IMAGE}"
+          n=$(ls | wc -l); test "$n" -eq 2 || { echo "expected 2 digests, got $n"; ls; exit 1; }
+          echo "${{ steps.meta.outputs.tags }}" | while read -r TAG; do
+            [ -n "$TAG" ] || continue
+            # shellcheck disable=SC2046
+            docker buildx imagetools create -t "$TAG" $(printf "${REPO}@sha256:%s " *)
+          done
+
+      # The image holds the relay of this same tag: what base/tests/test_image.sh asks locally
+      - name: Smoke test (amd64)
+        run: |
+          set -eu
+          IMAGE="${REGISTRY}/${BASE_IMAGE}:${VERSION}"
+          docker pull --platform linux/amd64 "$IMAGE"
+          got=$(docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/sekimore-relay "$IMAGE" --version)
+          echo "$got"
+          case "$got" in *"$VERSION"*) ;; *) echo "the base image holds '$got', not $VERSION"; exit 1 ;; esac

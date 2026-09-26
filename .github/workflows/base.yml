@@ -1,0 +1,83 @@
+name: Base image
+
+# The dev-container base image lives in base/ and is released from the same tag as the gateway
+# (docker-publish.yml builds it right after the gateway image, #235). This workflow is the
+# pull-request side: the shell tests of the distributed files, and a build of the image against
+# a gateway image built from the same commit, so a release pull request — whose ARG names a
+# gateway that is not published yet — can still prove that the base builds and holds the relay
+# it claims.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "base/**"
+      - "share/gateway.mise.*.toml"
+      - "UPGRADING.md"
+      - "UPGRADING.ja.md"
+      - ".github/workflows/base.yml"
+  pull_request:
+    paths:
+      - "base/**"
+      - "share/gateway.mise.*.toml"
+      - "UPGRADING.md"
+      - "UPGRADING.ja.md"
+      - ".github/workflows/base.yml"
+  workflow_dispatch:
+
+jobs:
+  docs:
+    name: UPGRADING is current
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: UPGRADING covers the gateway this image takes
+        run: python3 base/scripts/check-upgrading.py
+
+  wrapper:
+    name: The sekimore wrapper refreshes its token
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: scripts/sekimore renews an expired project token
+        run: base/tests/test_wrapper_refresh.sh
+
+  distributed:
+    name: The distributed files and mise run upgrade
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: share/sgw/ and the sample agree
+        run: base/tests/test_sample_sgw.sh
+      - name: upgrade.sh
+        run: base/tests/test_upgrade.sh
+      - name: post-start.sh
+        run: base/tests/test_post_start.sh
+      - name: sgw.sh terminal handling
+        run: base/tests/test_sgw_tty.sh
+
+  image:
+    name: The image builds and holds the relay it claims
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The gateway of this same commit. Its version is the one base/Dockerfile's ARG names,
+      # published or not — that is what lets the release pull request build.
+      - name: Build the gateway image (amd64)
+        run: docker build -t sekimore-gw:ci .
+
+      - name: Build the base image against it
+        run: docker build -t sgw-devcontainer-base:ci --build-arg SEKIMORE_GW_IMAGE=sekimore-gw:ci base
+
+      # The files can all agree and the image still hold the wrong relay — a COPY that names a
+      # path that moved, or a stage resolving to another tag. This asks the image itself.
+      - name: What the image holds
+        run: base/tests/test_image.sh sgw-devcontainer-base:ci

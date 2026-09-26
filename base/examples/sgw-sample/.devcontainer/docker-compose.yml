@@ -1,0 +1,89 @@
+networks:
+  internal-net:
+    driver: bridge
+  internet:
+    driver: bridge
+
+services:
+  sekimore-gw:
+    image: ghcr.io/amakata/sekimore-gw:0.2.46
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_MODULE
+      - SYS_ADMIN
+    privileged: true
+    pid: host                 # the FORWARD rules that confine dev live in the host's DOCKER-USER chain
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.send_redirects: "0"
+      net.ipv4.conf.default.send_redirects: "0"
+    networks:
+      internal-net: {}
+      internet: {}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config:/etc/sekimore:ro
+      - ./config/squid:/etc/squid/templates:ro
+      - gateway-data:/data
+    environment:
+      - PROJECT_NAME=${COMPOSE_PROJECT_NAME}
+      - INTERNAL_NETWORK_NAME=${INTERNAL_NETWORK_NAME:-internal-net}
+      - INTERNET_NETWORK_NAME=${INTERNET_NETWORK_NAME:-internet}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "ss -tuln | grep ':53 ' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sleep infinity
+    init: true
+    volumes:
+      - claude-code-config:/home/vscode/.claude
+      - claude-code-commandhistory:/commandhistory
+      - pnpm-store:/pnpm-store
+      - mise-store:/home/vscode/.local/share/mise/installs
+      # overlayfs cannot be nested on overlayfs, so /var/lib/docker goes to a volume of its own
+      - docker-store:/var/lib/docker
+      - ..:/workspace:cached
+    environment:
+      - CLAUDE_CONFIG_DIR=/home/vscode/.claude
+      - PNPM_HOME=/pnpm-store
+      - PNPM_STORE_DIR=/pnpm-store
+      - npm_config_store_dir=/pnpm-store
+      - NODE_OPTIONS=--max-old-space-size=4096
+    env_file:
+      - .env
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    privileged: true          # For docker in docker
+    networks:
+      internal-net: {}
+    dns:
+      - 127.0.0.1
+    dns_search: []
+    depends_on:
+      sekimore-gw:
+        condition: service_healthy
+
+volumes:
+  claude-code-config:
+    name: claude-code-config-${DEVCONTAINER_ID}
+  claude-code-commandhistory:
+    name: claude-code-commandhistory-${DEVCONTAINER_ID}
+  pnpm-store:
+    name: pnpm-store-${DEVCONTAINER_ID}
+  docker-store:
+    name: docker-store-${DEVCONTAINER_ID}
+  mise-store:
+    name: mise-store-${DEVCONTAINER_ID}
+  gateway-data:
+    name: gateway-data-${DEVCONTAINER_ID}
