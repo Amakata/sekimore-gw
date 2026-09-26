@@ -369,7 +369,7 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
             } else {
                 None
             };
-            open::run(&proj.root, mode)
+            open::run(&docker, &proj.root, mode)
         }
     }
 }
