@@ -440,6 +440,13 @@ impl GitHub {
     /// The fetch behind `get_release_by_tag` and `get_release_for_edit`. Private, and reachable
     /// only from a method that has already proved something, so it adds no way around the policy.
     /// The tag is agent-supplied text in a path segment, hence `path_segment`.
+    ///
+    /// 0.2.49: a 404 falls back to the listing. `GET /releases/tags/{tag}` answers with published
+    /// releases only, so the draft Release the publish workflow makes is invisible to it and
+    /// `release edit --draft false` could never find the thing it exists to publish (#247). The
+    /// listing does include drafts for a token allowed to edit them. It is the same repository and
+    /// the same permission — only this one lookup widens, and the tag is compared, never
+    /// interpolated, so the fallback carries no agent text into the URL at all.
     async fn release_by_tag(
         &self,
         repo: &str,
@@ -454,6 +461,25 @@ impl GitHub {
             .await
         {
             Ok(v) => Ok(serde_json::from_value::<ReleaseResult>(v).ok()),
+            Err(GhError::Status { status: 404, .. }) => self.draft_by_tag(repo, tag).await,
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 0.2.49: the release for a tag, found in the listing rather than by tag (#247).
+    ///
+    /// Only `release_by_tag` calls this, and only after the tag lookup came back 404, so whatever
+    /// proved that call proves this one. A 404 here — a repository that is gone — stays `None`, so
+    /// the caller still says "no release for tag …" rather than an upstream error.
+    async fn draft_by_tag(&self, repo: &str, tag: &str) -> Result<Option<ReleaseResult>, GhError> {
+        match self
+            .rest::<Value>("GET", &format!("/repos/{repo}/releases?per_page=100"), None)
+            .await
+        {
+            Ok(v) => Ok(serde_json::from_value::<Vec<ReleaseResult>>(v)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|r| r.tag_name == tag)),
             Err(GhError::Status { status: 404, .. }) => Ok(None),
             Err(e) => Err(e),
         }

@@ -542,6 +542,27 @@ async fn release_view_and_list_need_only_read() {
 }
 
 #[tokio::test]
+async fn release_view_finds_a_draft_that_the_by_tag_lookup_cannot_see() {
+    // `release view` shares the lookup `release edit` uses, so the same fallback applies. This is
+    // no wider than release:read already was: `release list` has always shown drafts (#247).
+    let f = start_api(project_case_a(&["release:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        tag: "v3.0.0-workflow-draft".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/view", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(
+        resp.url.as_deref(),
+        Some("https://github.example/releases/v3.0.0-workflow-draft")
+    );
+    assert!(
+        resp.message.unwrap_or_default().contains("(draft)"),
+        "a draft should be marked as one"
+    );
+}
+
+#[tokio::test]
 async fn release_view_says_so_when_the_tag_has_none() {
     let f = start_api(project_case_a(&["release:read"]), BootstrapMode::Auto, true).await;
     let r = ApiRequest {
@@ -2456,6 +2477,99 @@ async fn editing_a_release_that_does_not_exist_says_so() {
     let (code, resp) = post(f.addr, "/release/edit", Some(&f.token), &r).await;
     assert_eq!(code, 400);
     assert!(resp.error.unwrap_or_default().contains("v0.0.0-none"));
+}
+
+#[tokio::test]
+async fn publishing_a_draft_the_workflow_made_falls_back_to_the_listing() {
+    // GitHub's /releases/tags/ answers with published releases only, so the draft Release the
+    // publish workflow leaves behind is invisible there and `release edit --draft false` used to
+    // answer "no release for tag" about the one thing it exists to publish (#247).
+    let f = start_api(
+        project_case_a(&["release:create", "release:publish"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v3.0.0-workflow-draft".into(),
+        set_draft: Some(false),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/edit", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = recorded(&f.recorder);
+    // The by-tag lookup (404), then the listing that does see the draft, then the edit itself.
+    assert_eq!(rec.len(), 3, "{rec:?}");
+    assert!(
+        rec[0]
+            .path
+            .starts_with("/api/v3/repos/LibOrg/awesome-lib/releases/tags/"),
+        "{:?}",
+        rec[0].path
+    );
+    assert_eq!(rec[1].method, "GET");
+    assert_eq!(
+        rec[1].path,
+        "/api/v3/repos/LibOrg/awesome-lib/releases?per_page=100"
+    );
+    assert_eq!(rec[2].method, "PATCH");
+    assert_eq!(rec[2].path, "/api/v3/repos/LibOrg/awesome-lib/releases/904");
+    assert_eq!(rec[2].body["draft"], false);
+    assert!(resp.message.unwrap_or_default().starts_with("published"));
+}
+
+#[tokio::test]
+async fn a_draft_found_in_the_listing_still_needs_release_publish() {
+    // The fallback is a second way to find the release, not a way around the boundary --draft
+    // draws: release:create alone must not take it out of draft (#247).
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v3.0.0-workflow-draft".into(),
+        set_draft: Some(false),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/edit", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp.error);
+    assert!(
+        !recorded(&f.recorder).iter().any(|c| c.method == "PATCH"),
+        "nothing should have been written"
+    );
+}
+
+#[tokio::test]
+async fn a_tag_in_neither_the_by_tag_lookup_nor_the_listing_still_says_so() {
+    // The fallback must not turn "no release for tag" into an upstream error, and must not invent
+    // a release out of an unrelated entry in the listing (#247).
+    let f = start_api(
+        project_case_a(&["release:create"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        tag: "v0.0.0-none".into(),
+        title: "renamed".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/release/edit", Some(&f.token), &r).await;
+    assert_eq!(code, 400);
+    assert!(resp
+        .error
+        .unwrap_or_default()
+        .contains("no release for tag v0.0.0-none"));
+    let rec = recorded(&f.recorder);
+    // Both lookups were tried, and neither found it, so nothing was written.
+    assert_eq!(rec.len(), 2, "{rec:?}");
+    assert_eq!(
+        rec[1].path,
+        "/api/v3/repos/LibOrg/awesome-lib/releases?per_page=100"
+    );
+    assert!(!rec.iter().any(|c| c.method == "PATCH"));
 }
 
 #[tokio::test]

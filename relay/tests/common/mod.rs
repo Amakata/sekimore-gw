@@ -404,7 +404,10 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
         );
     }
     if method == "GET" && p.contains("/releases/tags/") {
-        if p.ends_with("/v0.0.0-none") {
+        // 0.2.49: GitHub's by-tag lookup answers with published releases only. v0.0.0-none has no
+        // release at all; v3.0.0-workflow-draft has one, but it is still a draft, so this endpoint
+        // is blind to it and only the listing below can find it (#247).
+        if p.ends_with("/v0.0.0-none") || p.ends_with("/v3.0.0-workflow-draft") {
             return (
                 StatusCode::NOT_FOUND,
                 serde_json::json!({"message": "Not Found"}),
@@ -424,7 +427,10 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
             StatusCode::OK,
             serde_json::json!([
                 {"id": 902, "tag_name": "v1.1.0", "name": "v1.1.0", "html_url": "https://github.example/releases/v1.1.0", "draft": false, "prerelease": false},
-                {"id": 901, "tag_name": "v1.0.0", "name": "v1.0.0", "html_url": "https://github.example/releases/v1.0.0", "draft": true, "prerelease": false}
+                {"id": 901, "tag_name": "v1.0.0", "name": "v1.0.0", "html_url": "https://github.example/releases/v1.0.0", "draft": true, "prerelease": false},
+                // 0.2.9 made drafts editable; the draft a publish workflow leaves behind is only
+                // ever visible here, never through /releases/tags/ (#247).
+                {"id": 904, "tag_name": "v3.0.0-workflow-draft", "name": "v3.0.0-workflow-draft", "html_url": "https://github.example/releases/v3.0.0-workflow-draft", "draft": true, "prerelease": false}
             ]),
         );
     }
