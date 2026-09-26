@@ -11,6 +11,14 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.51（2026-09-26）
+
+### Enhancement
+
+- `sgw-agent setup`: agent-setup.sh を Rust に移した。connect スキャンまたは `--gateway` で見つける gateway、プロキシ環境変数、鍵、`/whoami` が通る限り保つトークン、env ファイル、known_hosts、git の署名設定、エージェント向けガイド (#261)
+- `sgw-post-start`: dev コンテナの起動が base イメージの中の 1 行になった。`sudo -E sgw-agent setup`、`docker-init.sh`、プロジェクトの `post-create.sh` を順に実行する。`postStartCommand` は `sgw-post-start` になり、配布する `post-start.sh` はこれに引き継ぐ (#261)
+- `sgw update` がこの 1 行を知らせ、`sgw verify` がこれを受け入れる。base イメージは `agent-setup.sh` を取り込まなくなった (#261)
+
 ## 0.2.50（2026-09-26）
 
 ### Enhancement
