@@ -11,9 +11,10 @@ of the same tag) and, later, the `sgw` binaries. One version number, `pyproject.
 2. Write the release up in `CHANGELOG.md` and `CHANGELOG.ja.md`: one section for the gateway, the
    relay, the base and sgw (`tests/unit/test_changelog_style.py` holds the shape)
 3. Move the base's pins to the new version: `ARG SEKIMORE_GW_IMAGE` in `base/Dockerfile`, the
-   sample's compose and Dockerfile, the READMEs under `base/`, and the `reviewed-up-to` marker of
-   `UPGRADING.md` / `UPGRADING.ja.md` after deciding whether the release asks anything of a
-   project. `tests/unit/test_base_versions.py` fails until every one of them says the new version
+   template's compose and Dockerfile (`relay/templates/devcontainer/`), the READMEs under
+   `base/`, and the `reviewed-up-to` marker of `UPGRADING.md` / `UPGRADING.ja.md` after
+   deciding whether the release asks anything of a project.
+   `tests/unit/test_base_versions.py` fails until every one of them says the new version
 4. `docker build -t sekimore-gw:X.Y.Z-local .` must succeed before anything is tagged
 5. Open the release pull request, merge it, tag the merge commit (signed) and push the tag.
    `docker-publish.yml` builds the gateway image, then the base image, then the `sgw` binaries

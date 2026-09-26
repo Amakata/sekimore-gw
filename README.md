@@ -118,7 +118,7 @@ Does not fit when the agent should:
 
 ## Documentation
 
-- [base/examples/sgw-sample/README.md](base/examples/sgw-sample/README.md) — the files `sgw init` writes
+- [docs/template.md](docs/template.md) — the files `sgw init` writes
 - [base/README.md](base/README.md) — what the dev container's image holds
 - [relay/README.md](relay/README.md) — the relay's configuration and the permission catalog
 - [config/config.sample.yml](config/config.sample.yml) — every key

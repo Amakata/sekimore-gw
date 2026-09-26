@@ -118,7 +118,7 @@ sekimore-gw（sgw）は、Docker で動く AI エージェントのためのネ�
 
 ## ドキュメント
 
-- [base/examples/sgw-sample/README.ja.md](base/examples/sgw-sample/README.ja.md) — `sgw init` が書くファイル
+- [docs/template.ja.md](docs/template.ja.md) — `sgw init` が書くファイル
 - [base/README.ja.md](base/README.ja.md) — dev コンテナのイメージの中身
 - [relay/README.ja.md](relay/README.ja.md) — 関所の設定と権限の一覧
 - [config/config.sample.yml](config/config.sample.yml) — すべてのキー

@@ -1,9 +1,10 @@
 //! The project template, embedded (#234): `sgw init` writes it.
 //!
-//! The files are `base/examples/sgw-sample/` at the commit this binary was built from, byte for
-//! byte. Their pins (the gateway image tag, the base's FROM) are this same version, which
+//! The files are `relay/templates/devcontainer/` at the commit this binary was built from, byte
+//! for byte. Their pins (the gateway image tag, the base's FROM) are this same version, which
 //! `tests/unit/test_base_versions.py` holds them to, so nothing is rewritten on the way out. The
-//! test below refuses a file that is on disk and not here, or here and not on disk. Beside them
+//! test below refuses a file that is on disk and not here, or here and not on disk. The
+//! directory stays on disk as the readable copy, and `docs/template.md` describes it. Beside them
 //! `init` writes `sgw.toml` (host::sgwtoml), the record `update` reads. No mise layer: sgw is the
 //! operator's tool, and `.devcontainer/sgw/` is a thing of the past (#234 stage 3).
 
@@ -18,63 +19,63 @@ pub struct Template {
     pub executable: bool,
 }
 
-macro_rules! sample {
+macro_rules! template {
     ($path:literal) => {
-        include_str!(concat!("../../../base/examples/sgw-sample/", $path))
+        include_str!(concat!("../../templates/devcontainer/", $path))
     };
 }
 
-/// Everything a project starts with. The sample's own READMEs are about the sample, not the
-/// project, and stay behind.
+/// Everything a project starts with. The template's guide is `docs/template.md`, not a file a
+/// project gets.
 pub const FILES: &[Template] = &[
     Template {
         path: ".devcontainer/.env.sample",
-        content: sample!(".devcontainer/.env.sample"),
+        content: template!(".devcontainer/.env.sample"),
         executable: false,
     },
     Template {
         path: ".devcontainer/.gitignore",
-        content: sample!(".devcontainer/.gitignore"),
+        content: template!(".devcontainer/.gitignore"),
         executable: false,
     },
     Template {
         path: ".devcontainer/Dockerfile",
-        content: sample!(".devcontainer/Dockerfile"),
+        content: template!(".devcontainer/Dockerfile"),
         executable: false,
     },
     Template {
         path: ".devcontainer/config/config.yml",
-        content: sample!(".devcontainer/config/config.yml"),
+        content: template!(".devcontainer/config/config.yml"),
         executable: false,
     },
     Template {
         path: ".devcontainer/config/squid/squid.conf.template",
-        content: sample!(".devcontainer/config/squid/squid.conf.template"),
+        content: template!(".devcontainer/config/squid/squid.conf.template"),
         executable: false,
     },
     Template {
         path: ".devcontainer/devcontainer.json",
-        content: sample!(".devcontainer/devcontainer.json"),
+        content: template!(".devcontainer/devcontainer.json"),
         executable: false,
     },
     Template {
         path: ".devcontainer/docker-compose.relay.yml",
-        content: sample!(".devcontainer/docker-compose.relay.yml"),
+        content: template!(".devcontainer/docker-compose.relay.yml"),
         executable: false,
     },
     Template {
         path: ".devcontainer/docker-compose.yml",
-        content: sample!(".devcontainer/docker-compose.yml"),
+        content: template!(".devcontainer/docker-compose.yml"),
         executable: false,
     },
     Template {
         path: ".devcontainer/scripts/post-create.sh",
-        content: sample!(".devcontainer/scripts/post-create.sh"),
+        content: template!(".devcontainer/scripts/post-create.sh"),
         executable: true,
     },
     Template {
         path: ".devcontainer/zsh-config/rc.d/99-splash.zsh",
-        content: sample!(".devcontainer/zsh-config/rc.d/99-splash.zsh"),
+        content: template!(".devcontainer/zsh-config/rc.d/99-splash.zsh"),
         executable: false,
     },
 ];
@@ -151,10 +152,10 @@ fn set_mode(path: &Path, executable: bool) -> anyhow::Result<()> {
         .with_context(|| format!("chmod {}", path.display()))
 }
 
-/// The repository's sample directory, for the test that holds the table to the disk.
+/// The repository's template directory, for the test that holds the table to the disk.
 #[cfg(test)]
-fn sample_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../base/examples/sgw-sample")
+fn template_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/devcontainer")
 }
 
 #[cfg(test)]
@@ -172,11 +173,11 @@ mod tests {
         }
     }
 
-    /// A file added to the sample and not here would be missing from every new project; one here
-    /// and not there is a template nothing on disk explains.
+    /// A file added to the template and not here would be missing from every new project; one
+    /// here and not there is a template nothing on disk explains.
     #[test]
-    fn the_table_is_the_sample_on_disk() {
-        let root = sample_dir();
+    fn the_table_is_the_template_on_disk() {
+        let root = template_dir();
         let mut on_disk = Vec::new();
         walk(&root, &root, &mut on_disk);
         on_disk.retain(|p| !(p.starts_with("README") && p.ends_with(".md")));

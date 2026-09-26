@@ -1,10 +1,10 @@
 """One version number for the gateway, the relay and the base image (#235).
 
 The base image lived in a repository of its own until 0.2.45, with a number of its own and a
-`take` step that copied the gateway's number into its Dockerfile, its sample, its READMEs and its
-UPGRADING marker; four shell tests guarded those copies. Since the move into this repository the
-number is `pyproject.toml`'s, and this test is what remains of those four: every place under base/
-that writes a version writes that one.
+`take` step that copied the gateway's number into its Dockerfile, its template, its READMEs
+and its UPGRADING marker; four shell tests guarded those copies. Since the move into this
+repository the number is `pyproject.toml`'s, and this test is what remains of those four:
+every place under base/ that writes a version writes that one.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = ROOT / "base"
-SAMPLE = BASE / "examples" / "sgw-sample" / ".devcontainer"
+TEMPLATE = ROOT / "relay" / "templates" / "devcontainer" / ".devcontainer"
 
 _GW_IMAGE = re.compile(r"ghcr\.io/amakata/sekimore-gw:(\d+(?:\.\d+)*)")
 _BASE_IMAGE = re.compile(r"ghcr\.io/amakata/sgw-devcontainer-base:(\d+(?:\.\d+)*)")
@@ -46,14 +46,14 @@ def describe_the_base_image_carries_the_gateways_version():
             "the image and the gateway are released from one tag, so the ARG names that tag"
         )
 
-    def it_pins_the_sample_to_this_version_of_both_images():
-        compose = _GW_IMAGE.findall(_text(SAMPLE / "docker-compose.yml"))
-        dockerfile = _BASE_IMAGE.findall(_text(SAMPLE / "Dockerfile"))
+    def it_pins_the_template_to_this_version_of_both_images():
+        compose = _GW_IMAGE.findall(_text(TEMPLATE / "docker-compose.yml"))
+        dockerfile = _BASE_IMAGE.findall(_text(TEMPLATE / "Dockerfile"))
         assert compose == [_version()], (
-            f"the sample's compose pins gateway {compose}, not {_version()}"
+            f"the template's compose pins gateway {compose}, not {_version()}"
         )
         assert dockerfile == [_version()], (
-            f"the sample's Dockerfile pins base {dockerfile}, not {_version()}"
+            f"the template's Dockerfile pins base {dockerfile}, not {_version()}"
         )
 
     def it_quotes_this_version_in_the_readmes():

@@ -17,7 +17,7 @@ FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.51
 # only what this project adds, e.g. mise use -g python@3.13.0 && mise reshim
 ```
 
-The sample's [Dockerfile](examples/sgw-sample/.devcontainer/Dockerfile) shows how to pre-install language versions.
+The template's [Dockerfile](../relay/templates/devcontainer/.devcontainer/Dockerfile) shows how to pre-install language versions.
 
 ## What is in the image
 
@@ -47,7 +47,6 @@ Not in the image:
 | git-delta, AWS CLI, Docker CE, Claude Code, Codex, the skills | the section of [Dockerfile](Dockerfile) with that name |
 | What every zsh starts with | [zsh-config/rc.d/](zsh-config/rc.d/) |
 | Claude Code's managed settings | [managed-settings.json](managed-settings.json) |
-| The files `sgw init` writes into `.devcontainer/sgw/` | [share/sgw/](share/sgw/), then `scripts/sync-sample-sgw.sh` |
 | The `sekimore` wrapper, `docker-init.sh`, the Docker install | [scripts/](scripts/) |
 | Which gateway the relay tools come from | `ARG SEKIMORE_GW_IMAGE`. A release sets it |
 
@@ -56,12 +55,11 @@ Build and test locally:
 ```sh
 docker build -t sgw-devcontainer-base:dev base
 base/tests/test_image.sh sgw-devcontainer-base:dev
-base/tests/test_sample_sgw.sh
 ```
 
 ## Links
 
-- [examples/sgw-sample/README.md](examples/sgw-sample/README.md) — the template `sgw init` writes
+- [docs/template.md](../docs/template.md) — the template `sgw init` writes
 - [UPGRADING.md](../UPGRADING.md) — what a release asks of a project
 - [CHANGELOG.md](../CHANGELOG.md) — one for the gateway, the relay, the base and sgw; [base/CHANGELOG.md](CHANGELOG.md) is the base's own history up to 0.2.45
 - [RELEASING.md](../RELEASING.md)

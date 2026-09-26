@@ -1,16 +1,16 @@
-# sgw-sample
+# The project template
 
-*[日本語版](README.ja.md)*
+*[日本語版](template.ja.md)*
 
 The files `sgw init --devcontainer` writes: a dev container built on `sgw-devcontainer-base`,
-behind `sekimore-gw`. This directory is the readable copy; `sgw` carries the same files. Do not
-copy it by hand.
+behind `sekimore-gw`. They live in
+[relay/templates/devcontainer/](../relay/templates/devcontainer/), the readable copy; `sgw`
+carries the same files, byte for byte. Do not copy them by hand.
 
 ## Files
 
 ```
-sgw-sample/
-├── README.md
+<your project>/
 ├── sgw.toml                        # sgw's record: the sha of each file as it wrote it (do not edit)
 └── .devcontainer/
     ├── devcontainer.json
@@ -55,7 +55,7 @@ sgw update --apply    # move to it
    `<file>.sgw-new` for you to merge (`--force` overwrites)
 3. recreates the gateway, after asking
 4. unlocks the store when the passphrase is stored
-5. lists what only the operator can do: Rebuild Container, the [UPGRADING.md](../../../UPGRADING.md) sections crossed (`sgw update --notes`), a commit
+5. lists what only the operator can do: Rebuild Container, the [UPGRADING.md](../UPGRADING.md) sections crossed (`sgw update --notes`), a commit
 
 A project from before 0.2.52 still has `.devcontainer/sgw/` (the mise layer) and a `mise.toml`
 that includes it; `sgw update --apply` removes the directory and those lines, and keeps your

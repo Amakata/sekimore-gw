@@ -1,15 +1,15 @@
-# sgw-sample
+# プロジェクトの雛形
 
-*[English](README.md)*
+*[English](template.md)*
 
 `sgw init --devcontainer` が書くファイル。`sekimore-gw` の内側に `sgw-devcontainer-base` で作る dev コンテナ。
-このディレクトリは読むための写しで、`sgw` が同じファイルを持っている。手でコピーしない。
+実体は [relay/templates/devcontainer/](../relay/templates/devcontainer/) にあり、これは読むための写し。
+`sgw` が同じファイルをそのまま持っている。手でコピーしない。
 
 ## ファイル
 
 ```
-sgw-sample/
-├── README.md
+<あなたのプロジェクト>/
 ├── sgw.toml                        # sgw の記録: 各ファイルを書いたときの sha（編集しない）
 └── .devcontainer/
     ├── devcontainer.json
@@ -53,7 +53,7 @@ sgw update --apply    # 更新する
    両方なら、この版のファイルを `<file>.sgw-new` として隣に書く（取り込んだら消す。`--force` で上書き）
 3. 確認のうえ、ゲートウェイを作り直す
 4. パスフレーズが保存されていれば解錠する
-5. 運用者にしかできない作業を表示する: Rebuild Container、またぐ [UPGRADING.ja.md](../../../UPGRADING.ja.md) の節（`sgw update --notes`）、コミット
+5. 運用者にしかできない作業を表示する: Rebuild Container、またぐ [UPGRADING.ja.md](../UPGRADING.ja.md) の節（`sgw update --notes`）、コミット
 
 0.2.52 より前のプロジェクトには `.devcontainer/sgw/`（mise の層）と、それを include する `mise.toml` がある。
 `sgw update --apply` がそのディレクトリと行を消し、自分のタスクは残す。
