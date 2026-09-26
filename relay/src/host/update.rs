@@ -243,9 +243,49 @@ pub fn edited(current: &[u8], new: &str, manifest_sha: Option<&str>) -> bool {
     manifest_sha != Some(h.as_str())
 }
 
+/// Whether the compose file's `sekimore-gw` service has `pid: host`. Without it the gateway
+/// runs, but cannot add the host-side rules that confine dev (UPGRADING 0.2.37), and a project
+/// whose pins were raised past 0.2.37 without that step is caught by nothing but `sgw verify`.
+/// A line-level read of the service block: no YAML parser, the same as `pinned_gateway`.
+pub fn compose_has_pid_host(compose: &str) -> bool {
+    let mut in_service: Option<usize> = None;
+    for line in compose.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - trimmed.len();
+        match in_service {
+            None => {
+                if trimmed.trim_end() == "sekimore-gw:" {
+                    in_service = Some(indent);
+                }
+            }
+            Some(svc) => {
+                if indent <= svc {
+                    return false;
+                }
+                let key = trimmed.split('#').next().unwrap_or("").trim();
+                if key == "pid: host" || key == "pid: \"host\"" || key == "pid: 'host'" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// What the project's own files need; `update` never writes them.
 pub fn owned_notes(root: &Path) -> Vec<String> {
     let mut notes = Vec::new();
+    let compose =
+        std::fs::read_to_string(root.join(".devcontainer/docker-compose.yml")).unwrap_or_default();
+    if compose.contains("sekimore-gw:") && !compose_has_pid_host(&compose) {
+        notes.push(format!(
+            "{}\n        services:\n          sekimore-gw:\n            pid: host",
+            t("sgw.update.r_pid_host")
+        ));
+    }
     let mise = std::fs::read_to_string(root.join("mise.toml")).unwrap_or_default();
     let has_sgw_env = mise.lines().any(|l| {
         let l = l.trim_start();
@@ -916,6 +956,30 @@ mod tests {
     }
 
     #[test]
+    fn pid_host_is_read_off_the_gateway_service_alone() {
+        let sample =
+            include_str!("../../../base/examples/sgw-sample/.devcontainer/docker-compose.yml");
+        assert!(compose_has_pid_host(sample));
+        assert!(compose_has_pid_host(
+            "services:\n  dev:\n    image: d\n  sekimore-gw:\n    image: g\n    pid: host   # rules\n"
+        ));
+        assert!(compose_has_pid_host(
+            "services:\n  sekimore-gw:\n    pid: \"host\"\n"
+        ));
+        // on the wrong service, commented out, or absent
+        assert!(!compose_has_pid_host(
+            "services:\n  dev:\n    pid: host\n  sekimore-gw:\n    image: g\n"
+        ));
+        assert!(!compose_has_pid_host(
+            "services:\n  sekimore-gw:\n    image: g\n    # pid: host\n"
+        ));
+        assert!(!compose_has_pid_host(
+            "services:\n  sekimore-gw:\n    image: g\n"
+        ));
+        assert!(!compose_has_pid_host(""));
+    }
+
+    #[test]
     fn owned_notes_name_what_the_project_files_lack() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -923,11 +987,17 @@ mod tests {
         std::fs::write(root.join("mise.toml"), "[tasks]\n").unwrap();
         std::fs::write(root.join(".devcontainer/devcontainer.json"), "{\"postStartCommand\": \"sudo --preserve-env=X /usr/local/bin/sekimore-agent-setup.sh\"}").unwrap();
         std::fs::write(root.join(".devcontainer/scripts/sgw.sh"), "").unwrap();
+        std::fs::write(
+            root.join(".devcontainer/docker-compose.yml"),
+            "services:\n  sekimore-gw:\n    image: x\n  dev:\n    pid: host\n",
+        )
+        .unwrap();
         let notes = owned_notes(root);
-        assert_eq!(notes.len(), 3, "{notes:?}");
-        assert!(notes[0].contains("includes = "));
-        assert!(notes[1].contains("post-start.sh"));
-        assert!(notes[2].contains(".devcontainer/scripts/sgw.sh"));
+        assert_eq!(notes.len(), 4, "{notes:?}");
+        assert!(notes[0].contains("pid: host"), "{}", notes[0]);
+        assert!(notes[1].contains("includes = "));
+        assert!(notes[2].contains("post-start.sh"));
+        assert!(notes[3].contains(".devcontainer/scripts/sgw.sh"));
         // the template's own files need nothing
         let tmp = tempfile::tempdir().unwrap();
         templates::write(tmp.path(), false).unwrap();

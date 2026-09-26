@@ -418,6 +418,7 @@
   "sgw.update.r_gw_down": "the gateway is not running; it comes up on {version} the next time it is opened (sgw open → Reopen in Container → sgw unlock)",
   "sgw.update.r_rebuild": "rebuild the dev container: Dev Containers: Rebuild Container from the VS Code command palette (base {version})",
   "sgw.update.r_notes": "read the UPGRADING sections: sgw update --notes",
+  "sgw.update.r_pid_host": "docker-compose.yml: the sekimore-gw service lacks pid: host, so the gateway cannot confine dev with the host-side rules (UPGRADING 0.2.37). Add it to that service only, then sgw recreate:",
   "sgw.update.r_include": "mise.toml does not take .devcontainer/sgw/ in. Put this into mise.toml:",
   "sgw.update.r_leftover": "no longer used: git rm {files}",
   "sgw.update.r_poststart": "make devcontainer.json's postStartCommand this one line (post-start.sh passes every SEKIMORE_* variable to sudo; the old --preserve-env= list goes):",

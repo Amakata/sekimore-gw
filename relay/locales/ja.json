@@ -418,6 +418,7 @@
   "sgw.update.r_gw_down": "gateway は動いていません。次に開いたとき {version} で起動します（sgw open → Reopen in Container → sgw unlock）",
   "sgw.update.r_rebuild": "dev コンテナを作り直す: VS Code のコマンドパレットで Dev Containers: Rebuild Container（base {version}）",
   "sgw.update.r_notes": "UPGRADING の節を読む: sgw update --notes",
+  "sgw.update.r_pid_host": "docker-compose.yml の sekimore-gw サービスに pid: host がありません。無いとゲートウェイはホスト側の規則で dev を閉じ込められません（UPGRADING 0.2.37）。そのサービスにだけ足して sgw recreate:",
   "sgw.update.r_include": "mise.toml が .devcontainer/sgw/ を読んでいません。次を mise.toml に書いてください:",
   "sgw.update.r_leftover": "もう使われていないファイル: git rm {files}",
   "sgw.update.r_poststart": "devcontainer.json の postStartCommand を次の 1 行にしてください（sudo に渡す SEKIMORE_* の一覧を post-start.sh が持ちます。以前の --preserve-env= の一覧は要りません）:",
