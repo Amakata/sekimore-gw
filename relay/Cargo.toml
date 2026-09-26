@@ -70,3 +70,9 @@ panic = "abort"
 name = "sgw"
 path = "src/bin/sgw.rs"
 required-features = ["host"]
+
+# the AI's command in the dev container (#257): sekimore-relay agent, with the env file and the
+# token refresh the sekimore wrapper used to do
+[[bin]]
+name = "sgw-agent"
+path = "src/bin/sgw_agent.rs"

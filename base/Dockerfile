@@ -257,6 +257,9 @@ USER root
 # ---------------------------------------------------------------------------
 COPY --from=sekimore-gw /usr/local/share/sekimore/agent-setup.sh /usr/local/bin/sekimore-agent-setup.sh
 COPY --from=sekimore-gw /usr/local/bin/sekimore-relay /usr/local/bin/sekimore-relay
+# sgw-agent is the AI's command (#257): sekimore-relay agent with the env file and the token
+# refresh built in. `sekimore` is its former name and execs it
+COPY --from=sekimore-gw /usr/local/bin/sgw-agent /usr/local/bin/sgw-agent
 COPY scripts/sekimore /usr/local/bin/sekimore
 RUN chmod +x /usr/local/bin/sekimore-agent-setup.sh /usr/local/bin/sekimore-relay /usr/local/bin/sekimore
 RUN mkdir -p /etc/sekimore-agent

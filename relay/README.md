@@ -111,10 +111,10 @@ GitHub's audit log cannot distinguish the agent's actions from a human's, so the
 
 - Generates a disposable authentication key, `~/.ssh/sekimore/id_ed25519`, or reuses the existing one.
 - Registers the public key with `POST /bootstrap` and receives a project token. While a valid token exists, it does not request a new one.
-- Writes the connection details to `/etc/sekimore-agent/env` (0600). The `sekimore` wrapper reads this file and renews the token automatically when it expires.
+- Writes the connection details to `/etc/sekimore-agent/env` (0600). `sgw-agent` reads this file and renews the token automatically when it expires (`sekimore`, its former name, execs it).
 - Writes a `Host` block to `~/.ssh/config` and a known_hosts entry for each upstream.
 - Configures commit signing. `relay.signing_key` (see below) determines which key is used.
-- Installs the usage guide for AI agents (`sekimore guide`) as a Claude Code skill and in Codex's `AGENTS.md`.
+- Installs the usage guide for AI agents (`sgw-agent guide`) as a Claude Code skill and in Codex's `AGENTS.md`.
 
 Environment variables for tuning:
 
@@ -223,16 +223,16 @@ sekimore issue unlabel --number 5 --labels bug   # issue unassign takes the same
 sekimore ci rerun --run-id 123 [--all]           # also: ci cancel --run-id 123; both require ci:rerun
 ```
 
-`sekimore guide` prints the usage guide for AI agents. The guide is embedded in the CLI, and its sources are `relay/share/agent-guide.en.md` and `agent-guide.ja.md`.
+`sgw-agent guide` prints the usage guide for AI agents. The guide is embedded in the CLI, and its sources are `relay/share/agent-guide.en.md` and `agent-guide.ja.md`.
 agent-setup installs the same text as a Claude Code skill (`~/.claude/skills/sekimore-relay/SKILL.md`) and as a marked block in Codex CLI's `~/.codex/AGENTS.md`,
-so these tools read it automatically. For other tools, place the output of `sekimore guide` in the location that the tool's conventions specify. `SEKIMORE_AGENT_INSTRUCTIONS=none` disables the installation, and `claude` or `codex` limits it to one tool.
+so these tools read it automatically. For other tools, place the output of `sgw-agent guide` in the location that the tool's conventions specify. `SEKIMORE_AGENT_INSTRUCTIONS=none` disables the installation, and `claude` or `codex` limits it to one tool.
 
-`sekimore` is a wrapper around `sekimore-relay agent`. Specify a repository with `--repo Org/Repo`. When there is more than one upstream, you can also write `host/Org/Repo`.
+`sgw-agent` is `sekimore-relay agent` with the env file and the token refresh built in; `sekimore` is its former name and still works. Specify a repository with `--repo Org/Repo`. When there is more than one upstream, you can also write `host/Org/Repo`.
 If the value of `--body` starts with `-`, write it as `--body="…"`.
 
-The following are denied by default: repositories outside the project, pushes to a read-only repository, `refs/for` to a base that is not in `bases`, direct pushes and `refs/pr/` branch names outside `push`, tags, deletions, and any API action that the configuration does not allow. The reason is printed to stderr as `sekimore: …`.
+The following are denied by default: repositories outside the project, pushes to a read-only repository, `refs/for` to a base that is not in `bases`, direct pushes and `refs/pr/` branch names outside `push`, tags, deletions, and any API action that the configuration does not allow. The reason is printed to stderr as `sgw-agent: …`.
 
-For each read-write repository, `sekimore whoami` prints the branch names that the repository accepts (`push`), the bases it allows, and the branch and base that each ref form resolves to. The agent can therefore check these rules before its first push.
+For each read-write repository, `sgw-agent whoami` prints the branch names that the repository accepts (`push`), the bases it allows, and the branch and base that each ref form resolves to. The agent can therefore check these rules before its first push.
 
 ## Configuration reference
 
@@ -341,8 +341,8 @@ or any other pattern.
 `refs/pr/` cannot specify a base, because there is no safe way to encode one. Every character that
 git accepts as a separator is also valid inside a branch name, and the characters that git forbids
 in a branch name (`:` `^` `~`) are also rejected in a refspec. To open a pull request against a
-different base, push without opening one and then run `sekimore pr create --head <branch> --base <base>`,
-or change the base afterwards with `sekimore pr update --base <base>`.
+different base, push without opening one and then run `sgw-agent pr create --head <branch> --base <base>`,
+or change the base afterwards with `sgw-agent pr update --base <base>`.
 
 **`refs/pr/` requires `bases` to be unset.** A `refs/pr/` push opens the pull request against the
 default branch, and the relay learns the default branch from the API only after the push. In a
@@ -420,7 +420,7 @@ sekimore release list --limit 10
   its generated notes after that text.
 - `--title` defaults to the tag name, so a release always has a title. `--prerelease` marks the release as a prerelease.
 - `--draft` creates the release unpublished and leaves publishing to a human. By default, the release is published.
-- `sekimore release edit --tag v0.2.6 --draft false` publishes that draft and requires `release:publish`.
+- `sgw-agent release edit --tag v0.2.6 --draft false` publishes that draft and requires `release:publish`.
   Editing a release that remains a draft (`--title`, `--notes`, `--prerelease`) requires only `release:create`.
 
 ### Exfiltration controls: the 443 upload cap and `https-relay`
@@ -466,9 +466,9 @@ SEKIMORE_LANG=ja sekimore-relay check    # Japanese
 sekimore guide --lang ja                 # prints only the guide in Japanese
 ```
 
-Localization covers `--help`, operator-facing output, and `sekimore guide`.
+Localization covers `--help`, operator-facing output, and `sgw-agent guide`.
 The guide language is selected with `--lang en|ja`, and the guide's sources are `relay/share/agent-guide.en.md` and `relay/share/agent-guide.ja.md`.
-Denial reasons (`sekimore: …`) and the audit log `audit.jsonl` intentionally remain in English, so that tools and agents can match on the strings.
+Denial reasons (`sgw-agent: …`) and the audit log `audit.jsonl` intentionally remain in English, so that tools and agents can match on the strings.
 
 ## Operations (operator)
 
@@ -505,7 +505,7 @@ Token records are deleted automatically 7 days after they expire. `audit.jsonl` 
 | `tag is not allowed for this repository` | Tag pushes are denied by default. | Add a glob to `tags` for that repository or upstream. |
 | `Permission denied (publickey)` (from the relay) | The agent's key is not registered. | Run `sudo sekimore-agent-setup.sh`, or have the operator run `add-key`. Check whether `bootstrap.disabled` exists. |
 | `! [remote rejected] … (sekimore: …)` | The policy denied the push. | Follow the instructions in the message. |
-| `denied: token expired at …` | The project token has expired. | The `sekimore` wrapper renews it automatically. In an older environment, run `sudo sekimore-agent-setup.sh`. |
+| `denied: token expired at …` | The project token has expired. | `sgw-agent` renews it automatically. In an older environment, run `sudo sekimore-agent-setup.sh`. |
 | `no upstream token … run sekimore-relay login` | The device flow has not been run, or the operator has logged out. | Run `sekimore-relay login`. |
 | `git ls-remote` hangs without output | DNS points to the relay, but the INPUT chain drops the packets. | Check whether `iptables-legacy -S INPUT` contains `--dport 22`. If it does not, the relay has not started. |
 | `https://github.com/…` fails | `https` is set to `reject`, or the upstream is unreachable. | Restore the default `passthrough`. Check `https_failed` in the audit log. |

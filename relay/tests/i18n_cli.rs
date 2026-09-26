@@ -76,9 +76,9 @@ fn the_guide_is_available_in_both_languages() {
         // particular one. What both languages must still describe is the spelling itself.
         "refs/heads/<branch>",
         "refs/pr/",
-        "sekimore whoami",
-        "sekimore pr create",
-        "sekimore ci log",
+        "sgw-agent whoami",
+        "sgw-agent pr create",
+        "sgw-agent ci log",
     ] {
         assert!(AGENT_GUIDE_EN.contains(needle), "en guide misses {needle}");
         assert!(AGENT_GUIDE_JA.contains(needle), "ja guide misses {needle}");

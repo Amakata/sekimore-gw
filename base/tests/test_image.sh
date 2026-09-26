@@ -51,6 +51,18 @@ case "$got" in
 esac
 echo "== the image holds $got"
 
+# ---- sgw-agent, the AI's command, is the same release (#257) ----
+agent=$(in_image /usr/local/bin/sgw-agent --version) ||
+  fail "sgw-agent does not run in the image: $agent"
+case "$agent" in
+  *"$GW"*) ;;
+  *) fail "the image holds sgw-agent '$agent', not gateway $GW" ;;
+esac
+alias_out=$(in_image /usr/local/bin/sekimore --version) ||
+  fail "the sekimore alias does not run in the image: $alias_out"
+[ "$alias_out" = "$agent" ] || fail "sekimore (alias) answers '$alias_out', sgw-agent '$agent'"
+echo "== sgw-agent $agent, and the sekimore alias answers the same"
+
 # ---- the agent guide came from that release, in both languages ----
 # An agent reads this, so a stale copy is a wrong instruction rather than a wrong number.
 for lang in en ja; do

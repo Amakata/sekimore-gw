@@ -11,6 +11,7 @@ use super::cmd::{AgentCmd, CiCmd, IssueCmd, PrCmd, ProjectCmd, ReleaseCmd, RepoC
 use super::print::{
     print_ci_log, print_pr_diff, print_pr_status, print_project_items, print_response,
 };
+use super::NAME;
 use crate::api::types::ApiRequest;
 
 fn split_csv(s: &str) -> Vec<String> {
@@ -178,7 +179,7 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     base,
                 } => {
                     if title.is_none() && body.is_none() && base.is_none() {
-                        eprintln!("sekimore: pr update needs --title, --body or --base");
+                        eprintln!("{NAME}: pr update needs --title, --body or --base");
                         return Ok(2);
                     }
                     req.number = number;
@@ -228,7 +229,7 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     req.before = before;
                     let resp = client.call(leaf, &req).await?;
                     if !resp.ok {
-                        eprintln!("sekimore: {}", resp.error.unwrap_or_default());
+                        eprintln!("{NAME}: {}", resp.error.unwrap_or_default());
                         return Ok(1);
                     }
                     if json {
@@ -269,7 +270,7 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                 }
                 CiCmd::Jobs { number, run_id } => {
                     if number.is_none() && run_id.is_none() {
-                        eprintln!("sekimore: ci jobs needs --number <pr> or --run-id <run>");
+                        eprintln!("{NAME}: ci jobs needs --number <pr> or --run-id <run>");
                         return Ok(2);
                     }
                     req.number = number.unwrap_or(0);
@@ -321,7 +322,7 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     req.before = before;
                     let resp = client.call(leaf, &req).await?;
                     if !resp.ok {
-                        eprintln!("sekimore: {}", resp.error.unwrap_or_default());
+                        eprintln!("{NAME}: {}", resp.error.unwrap_or_default());
                         return Ok(1);
                     }
                     if json {
@@ -523,7 +524,7 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
             req.first = limit;
             let resp = client.call(group, &req).await?;
             if !resp.ok {
-                eprintln!("sekimore: denied: {}", resp.error.unwrap_or_default());
+                eprintln!("{NAME}: denied: {}", resp.error.unwrap_or_default());
                 return Ok(1);
             }
             if json {
@@ -577,7 +578,7 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                         && prerelease.is_none()
                     {
                         eprintln!(
-                        "sekimore: release edit needs --title, --notes, --notes-file, --draft or --prerelease"
+                        "{NAME}: release edit needs --title, --notes, --notes-file, --draft or --prerelease"
                     );
                         return Ok(2);
                     }
@@ -609,7 +610,7 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
     };
     let resp = client.call(path, &req).await?;
     if !resp.ok {
-        eprintln!("sekimore: denied: {}", resp.error.unwrap_or_default());
+        eprintln!("{NAME}: denied: {}", resp.error.unwrap_or_default());
         return Ok(1);
     }
     // project list carries the board's field values, which pretty-printed JSON buries
@@ -631,7 +632,7 @@ async fn call_and_print(
 ) -> anyhow::Result<i32> {
     let resp = client.call(path, req).await?;
     if !resp.ok {
-        eprintln!("sekimore: {}", resp.error.unwrap_or_default());
+        eprintln!("{NAME}: {}", resp.error.unwrap_or_default());
         return Ok(1);
     }
     if json {
