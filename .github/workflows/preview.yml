@@ -12,12 +12,32 @@ on:
   pull_request:
     paths-ignore:
       - "**.md"
-      - "doc/**"
+      - "docs/**"
+      - "base/**"
+      - "tests/**"
+      - "relay/tests/**"
+      - ".github/workflows/base.yml"
+      - ".github/workflows/base-tests.yml"
+      - ".github/workflows/relay.yml"
+      - ".github/workflows/lint.yml"
+      - ".github/workflows/test.yml"
+      - ".github/workflows/docker-publish.yml"
+      - ".github/dependabot.yml"
   push:
     branches: [main]
     paths-ignore:
       - "**.md"
-      - "doc/**"
+      - "docs/**"
+      - "base/**"
+      - "tests/**"
+      - "relay/tests/**"
+      - ".github/workflows/base.yml"
+      - ".github/workflows/base-tests.yml"
+      - ".github/workflows/relay.yml"
+      - ".github/workflows/lint.yml"
+      - ".github/workflows/test.yml"
+      - ".github/workflows/docker-publish.yml"
+      - ".github/dependabot.yml"
 
 # 同じ PR への連続 push が同じタグを奪い合わないよう、前の実行を打ち切る。
 # 後発が先に終わると古い内容がタグに残るのと、arm64 ランナーの時間の節約と両方。
