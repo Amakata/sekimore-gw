@@ -302,9 +302,11 @@ pub fn owned_notes(root: &Path) -> Vec<String> {
     }
     let dcj =
         std::fs::read_to_string(root.join(".devcontainer/devcontainer.json")).unwrap_or_default();
-    if dcj.contains("sekimore-agent-setup") && !dcj.contains(".devcontainer/sgw/post-start.sh") {
+    if (dcj.contains("sekimore-agent-setup") || dcj.contains(".devcontainer/sgw/post-start.sh"))
+        && !dcj.contains("sgw-post-start")
+    {
         notes.push(format!(
-            "{}\n        \"postStartCommand\": \"sh /workspace/.devcontainer/sgw/post-start.sh\",",
+            "{}\n        \"postStartCommand\": \"sgw-post-start\",",
             t("sgw.update.r_poststart")
         ));
     }
@@ -996,7 +998,7 @@ mod tests {
         assert_eq!(notes.len(), 4, "{notes:?}");
         assert!(notes[0].contains("pid: host"), "{}", notes[0]);
         assert!(notes[1].contains("includes = "));
-        assert!(notes[2].contains("post-start.sh"));
+        assert!(notes[2].contains("sgw-post-start"), "{}", notes[2]);
         assert!(notes[3].contains(".devcontainer/scripts/sgw.sh"));
         // the template's own files need nothing
         let tmp = tempfile::tempdir().unwrap();

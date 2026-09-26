@@ -4,6 +4,10 @@ set -ex
 # ---------------------------------------------------------------------------
 # Agent-side setup for sekimore-relay (the relay for git and the GitHub API)
 #
+# Superseded by `sgw-agent setup` (relay/src/agent_setup/, #257), which the base image runs from
+# 0.2.51 through sgw-post-start. This script stays for the standalone compose example and older
+# base images; the two do the same things.
+#
 # Runs only when the gateway has a relay (http://<gw>:8420/healthz answers). Otherwise it does nothing.
 # postStartCommand runs on every start, so every write is idempotent (create if absent, replace instead of append, atomic env file).
 #

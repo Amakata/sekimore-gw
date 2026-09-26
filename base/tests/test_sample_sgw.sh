@@ -68,11 +68,12 @@ if ! cmp -s "$TMP/MANIFEST" "$DST/MANIFEST"; then
   fail "the sample's MANIFEST is stale (a copied file, or a pinned version, changed without it: scripts/sync-sample-sgw.sh)"
 fi
 
-echo "== the sample starts through post-start.sh"
-# the list of variables sudo lets through lives in post-start.sh; a postStartCommand that calls
-# agent-setup itself brings back the list that kept falling behind
-grep -q '"postStartCommand": "sh /workspace/.devcontainer/sgw/post-start.sh"' "$SAMPLE/.devcontainer/devcontainer.json" ||
-  fail "the sample's postStartCommand does not run .devcontainer/sgw/post-start.sh"
+echo "== the sample starts through sgw-post-start"
+# one line, in the image (base 0.2.51): sgw-agent setup as root with the whole environment, then
+# docker-init and post-create. A postStartCommand that calls the setup itself brings back the
+# --preserve-env= list that kept falling behind
+grep -q '"postStartCommand": "sgw-post-start"' "$SAMPLE/.devcontainer/devcontainer.json" ||
+  fail "the sample's postStartCommand is not the one line sgw-post-start"
 
 echo "== tasks.mise.en.toml and .ja.toml differ only in their descriptions"
 strip() { grep -v '^description = ' "$1"; }

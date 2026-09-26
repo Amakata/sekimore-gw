@@ -22,6 +22,11 @@
 # rather than overwrite it once it has been edited.
 set -e
 
+# From base 0.2.51 the image carries sgw-post-start (sgw-agent setup, docker-init, post-create),
+# and postStartCommand is that one line; a project still pointing here gets the same
+if [ -x /usr/local/bin/sgw-post-start ] && [ -z "${SGW_AGENT_SETUP:-}" ]; then
+  exec /usr/local/bin/sgw-post-start
+fi
 here=$(cd "$(dirname "$0")" && pwd)
 # The three steps' commands, overridable only so tests can stand in for them
 agent_setup=${SGW_AGENT_SETUP:-/usr/local/bin/sekimore-agent-setup.sh}

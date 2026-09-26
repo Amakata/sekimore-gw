@@ -1,0 +1,18 @@
+#!/bin/sh
+# sgw-post-start — what the dev container runs at every start (devcontainer.json's
+# postStartCommand, one line). Three steps, in this order:
+#   1. sudo -E sgw-agent setup     DNS and the route to the gateway, the proxy environment, the
+#                                  keys, the project token, known_hosts, ~/.ssh/config, git's
+#                                  signing settings, the agent guide, the credential helper taken
+#                                  out. -E hands every SEKIMORE_* variable of .env through sudo
+#   2. docker-init.sh              the inner Docker daemon
+#   3. .devcontainer/scripts/post-create.sh of the project, when it has one
+# The SGW_* variables below exist for the tests (base/tests/test_sgw_post_start.sh).
+set -e
+ws=${SGW_WORKSPACE:-/workspace}
+sudo -E "${SGW_AGENT_BIN:-/usr/local/bin/sgw-agent}" setup
+"${SGW_DOCKER_INIT:-/usr/local/bin/docker-init.sh}"
+post_create=${SGW_POST_CREATE:-$ws/.devcontainer/scripts/post-create.sh}
+if [ -f "$post_create" ]; then
+  sh "$post_create"
+fi

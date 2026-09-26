@@ -326,9 +326,12 @@ fn git_signs(ctx: &mut Ctx) -> anyhow::Result<()> {
 }
 
 /// What `postStartCommand` drops: the `SEKIMORE_*` variables `.env` sets that its
-/// `--preserve-env=` list does not name. None when post-start.sh is in use (it passes them all).
+/// `--preserve-env=` list does not name. None when sgw-post-start (sudo -E) or post-start.sh is
+/// in use: both pass them all.
 pub fn dropped_vars(devcontainer_json: &str, env_text: &str) -> Option<Vec<String>> {
-    if devcontainer_json.contains(".devcontainer/sgw/post-start.sh") {
+    if devcontainer_json.contains("sgw-post-start")
+        || devcontainer_json.contains(".devcontainer/sgw/post-start.sh")
+    {
         return None;
     }
     let preserved: Vec<String> = devcontainer_json
@@ -377,10 +380,10 @@ fn env_survives_sudo(ctx: &mut Ctx) -> anyhow::Result<()> {
         .unwrap_or_default();
     let env = std::fs::read_to_string(ctx.project.compose_dir.join(".env")).unwrap_or_default();
     match dropped_vars(&dc, &env) {
-        None => ctx.ok("postStartCommand runs .devcontainer/sgw/post-start.sh, which passes every SEKIMORE_* variable"),
+        None => ctx.ok("postStartCommand runs sgw-post-start (or post-start.sh), which passes every SEKIMORE_* variable"),
         Some(d) if d.is_empty() => ctx.ok("every setup-script variable in .env survives sudo"),
         Some(d) => ctx.fail(&format!(
-            "{} is set in .env but missing from --preserve-env= in devcontainer.json postStartCommand. Run .devcontainer/sgw/post-start.sh from it instead",
+            "{} is set in .env but missing from --preserve-env= in devcontainer.json postStartCommand. Make it the one line sgw-post-start",
             d.join(" ")
         )),
     }
@@ -842,8 +845,10 @@ mod tests {
 
     #[test]
     fn dropped_variables_are_the_ones_sudo_would_reset() {
-        let dc_new = r#"{"postStartCommand": "sh /workspace/.devcontainer/sgw/post-start.sh"}"#;
+        let dc_new = r#"{"postStartCommand": "sgw-post-start"}"#;
         assert_eq!(dropped_vars(dc_new, "SEKIMORE_X=1\n"), None);
+        let dc_mise = r#"{"postStartCommand": "sh /workspace/.devcontainer/sgw/post-start.sh"}"#;
+        assert_eq!(dropped_vars(dc_mise, "SEKIMORE_X=1\n"), None);
         let dc_old =
             r#"{"postStartCommand": "sudo --preserve-env=SEKIMORE_A,SEKIMORE_B /usr/local/bin/x"}"#;
         let env = "SEKIMORE_A=1\nSEKIMORE_B=2\nSEKIMORE_C=3\nSEKIMORE_AGENT_SOCK=/x\nOTHER=1\n  SEKIMORE_D=4\n";

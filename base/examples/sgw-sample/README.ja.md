@@ -30,7 +30,7 @@ sgw-sample/
     │   ├── sgw.sh                  # compose のラベルで gateway / dev コンテナを見つけ docker exec する
     │   ├── vscode.sh               # sgw open が実行するもの
     │   ├── upgrade.sh              # mise run upgrade
-    │   ├── post-start.sh           # postStartCommand が実行: agent-setup（SEKIMORE_* を全部渡す）、docker-init、post-create
+    │   ├── post-start.sh           # base 0.2.51 より前のやり方。いまの postStartCommand は sgw-post-start
     │   └── MANIFEST                # sgw update / upgrade が最後に書いたもの。手の編集を見分ける
     └── zsh-config/
         └── rc.d/                   # プロジェクト自身の zsh 設定

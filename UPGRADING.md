@@ -33,6 +33,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.29 – 0.2.36 | [0.2.37](#0237-the-gateway-needs-pid-host), **everyone** |
 | 0.2.37 – 0.2.43 | [0.2.44](#0244-a-proxyjump-bastions-host-key-has-to-be-known), **only if an upstream uses a `ProxyJump` bastion** |
 | 0.2.44 | [0.2.45](#0245-gwlogin-asks-on-a-terminal-and-stops-without-a-host-key), **only if an upstream needs a host key the gateway has not saved** |
+| 0.2.45 – 0.2.50 | [0.2.51](#0251-poststartcommand-is-one-line-sgw-post-start), **everyone, one line in devcontainer.json** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -769,3 +770,24 @@ sgw --help      # every subcommand
 `init` and `update` are not in this release; a project is still set up and upgraded with the mise
 tasks. From 0.2.48 the Release carries the binaries, so the install line above works, and
 `sgw init` / `sgw update` exist.
+
+## 0.2.51 postStartCommand is one line: sgw-post-start
+
+**Every project: one line in `.devcontainer/devcontainer.json`.** The dev container's start-up
+moved into the image. `sgw-agent setup` (agent-setup.sh ported to the relay's binary, #257) does
+what the script did — DNS and the route to the gateway, the proxy environment, the keys, the
+project token, known_hosts, `~/.ssh/config`, git's signing settings, the agent guide, the VS Code
+credential helper taken out — and `sgw-post-start` runs it as root with the whole environment,
+then `docker-init.sh`, then the project's `post-create.sh`. So `postStartCommand` is:
+
+```json
+"postStartCommand": "sgw-post-start",
+```
+
+`sgw update` names the line when it is missing. A project that keeps
+`sh /workspace/.devcontainer/sgw/post-start.sh` still starts: on this base that script hands over
+to `sgw-post-start`. `.devcontainer/sgw/post-start.sh` can go once the line is changed.
+
+Nothing else changes for a project. `sekimore` keeps working as the former name of `sgw-agent`.
+Rebuild Container after moving the base pin, as always when the base changes.
+

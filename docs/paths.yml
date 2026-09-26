@@ -118,10 +118,10 @@ edges:
     to: gateway.dns
     proto: dns/53
     resolves: gateway.dns
-    verifies_peer: none (the answer comes from the default route set by agent-setup)
+    verifies_peer: none (the answer comes from the default route set by sgw-agent setup)
     presents: none
     audit: sqlite dns log
-    impl: [src/dns_server.py, agent-setup.sh]
+    impl: [src/dns_server.py, relay/src/agent_setup/discover.rs]
     tests: [tests/unit/test_dns_server.py]
 
   - id: dev.egress.direct
@@ -175,7 +175,7 @@ edges:
     presents: none
     audit: squid access.log → sqlite proxy log
     switches: {upstream_proxy: set, direct_egress: deny}
-    impl: [src/proxy_manager.py, src/web_ui/app.py, agent-setup.sh]
+    impl: [src/proxy_manager.py, src/web_ui/app.py, relay/src/agent_setup/proxy_env.rs]
     tests: [tests/unit/test_proxy_manager.py, tests/unit/test_web_ui.py]
     verify: "the upstream proxy is used for ordinary traffic"
 
@@ -211,10 +211,10 @@ edges:
     to: gateway.relay.ssh
     proto: ssh/22
     resolves: gateway.dns (the relayed domain resolves to the gateway)
-    verifies_peer: dev's ~/.ssh/known_hosts, written by agent-setup with the relay's host key
+    verifies_peer: dev's ~/.ssh/known_hosts, written by sgw-agent setup with the relay's host key
     presents: disposable_ssh_key
     audit: "audit.jsonl ssh_rejected / ssh_auth_ok / ssh_auth_denied / ssh_channel_rejected / ssh_exec_rejected / ssh_request_rejected / cmd_rejected / repo_denied / push_rejected / refs_for_rewritten"
-    impl: [relay/src/ssh, agent-setup.sh]
+    impl: [relay/src/ssh, relay/src/agent_setup/relay.rs]
     tests: [relay/tests/ssh_server.rs, relay/tests/e2e_git.rs]
     verify: "git ls-remote through the relay"
 

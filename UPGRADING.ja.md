@@ -33,6 +33,7 @@
 | 0.2.29 〜 0.2.36 | [0.2.37](#0237-ゲートウェイに-pid-host-が要る)。**すべてのプロジェクト** |
 | 0.2.37 〜 0.2.43 | [0.2.44](#0244-proxyjump-の踏み台のホスト鍵が必要になった)。**上流が `ProxyJump` の踏み台を使う場合だけ** |
 | 0.2.44 | [0.2.45](#0245-gwlogin-は端末で尋ねホスト鍵が無ければ止まる)。**ゲートウェイが保存していないホスト鍵が上流に要る場合だけ** |
+| 0.2.45 〜 0.2.50 | [0.2.51](#0251-poststartcommand-は-1-行-sgw-post-start-になった)。**すべてのプロジェクト。devcontainer.json の 1 行** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -736,3 +737,24 @@ sgw --help      # サブコマンド一覧
 `init` と `update` はこの版には入っていません。プロジェクトの用意と更新は、これまでどおり mise の
 タスクで行います。0.2.48 からは Release にバイナリが載るので、上のインストール行が動き、`sgw init` /
 `sgw update` が使えます。
+
+## 0.2.51 postStartCommand は 1 行 `sgw-post-start` になった
+
+**すべてのプロジェクト: `.devcontainer/devcontainer.json` の 1 行。** dev コンテナの起動時の処理が
+イメージの中に移りました。`sgw-agent setup`（agent-setup.sh を関所のバイナリに移植したもの、#257）が
+スクリプトのしていたこと — DNS とゲートウェイへの経路、proxy 環境、鍵、プロジェクトトークン、
+known_hosts、`~/.ssh/config`、git の署名設定、エージェントのガイド、VS Code の credential helper の除去 —
+を行い、`sgw-post-start` がそれを root の環境そのままで実行し、続けて `docker-init.sh`、プロジェクトの
+`post-create.sh` を実行します。`postStartCommand` は次の 1 行です。
+
+```json
+"postStartCommand": "sgw-post-start",
+```
+
+無ければ `sgw update` がこの行を示します。`sh /workspace/.devcontainer/sgw/post-start.sh` のままでも
+起動はします（この base ではそのスクリプトが `sgw-post-start` に処理を渡します）。行を変えたら
+`.devcontainer/sgw/post-start.sh` は消してかまいません。
+
+プロジェクト側でほかに変わるものはありません。`sekimore` は `sgw-agent` の旧名として動き続けます。
+base の pin を上げたら、base が変わるときの常で Rebuild Container が要ります。
+
