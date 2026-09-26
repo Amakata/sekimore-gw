@@ -113,6 +113,32 @@ macro_rules! passthrough {
             ProjectName,
             #[command(about = t("sgw.cmd.down"))]
             Down,
+            #[command(about = t("sgw.cmd.init"))]
+            Init {
+                #[arg(long, default_value = "devcontainer", help = t("sgw.cmd.init.target"))]
+                target: String,
+                #[arg(long, help = t("sgw.cmd.init.force"))]
+                force: bool,
+                #[arg(value_name = "DIR", help = t("sgw.cmd.init.dir"))]
+                dir: Option<PathBuf>,
+            },
+            #[command(about = t("sgw.cmd.update"))]
+            Update {
+                #[arg(long, help = t("sgw.cmd.update.apply"))]
+                apply: bool,
+                #[arg(long, help = t("sgw.cmd.update.sync"))]
+                sync: bool,
+                #[arg(long, help = t("sgw.cmd.update.notes"))]
+                notes: bool,
+                #[arg(long, help = t("sgw.cmd.update.owned"))]
+                owned: bool,
+                #[arg(long, help = t("sgw.cmd.update.yes"))]
+                yes: bool,
+                #[arg(long, help = t("sgw.cmd.update.force"))]
+                force: bool,
+                #[arg(long, help = t("sgw.cmd.update.offline"))]
+                offline: bool,
+            },
             #[command(about = t("sgw.cmd.open"))]
             Open {
                 #[arg(long, help = t("sgw.cmd.open.check"))]
@@ -164,6 +190,10 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
     let env = |k: &str| std::env::var(k).ok();
     project::refuse_inside_devcontainer(env)?;
     let cwd = std::env::current_dir()?;
+    // init needs no project yet: it makes one
+    if let Cmd::Init { target, force, dir } = &cli.cmd {
+        return init(target, *force, dir.as_deref().unwrap_or(&cwd));
+    }
     let proj = project::discover(cli.project.as_deref(), &cwd, env)?;
     let docker = Docker::new(proj.compose_dir.clone());
     let no_tty = cli.no_tty;
@@ -253,6 +283,39 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
             Ok(0)
         }
         Down => ops::down(&docker),
+        Init { .. } => unreachable!("handled above"),
+        Update {
+            apply,
+            sync,
+            notes,
+            owned,
+            yes,
+            force,
+            offline,
+        } => {
+            use super::update::{Mode, Options};
+            let mode = if owned {
+                Mode::Owned
+            } else if notes {
+                Mode::Notes
+            } else if sync {
+                Mode::Sync
+            } else if apply {
+                Mode::Apply
+            } else {
+                Mode::Check
+            };
+            super::update::run(
+                &docker,
+                &proj,
+                Options {
+                    mode,
+                    yes,
+                    force,
+                    offline,
+                },
+            )
+        }
         Open {
             check,
             restore_agent_env,
@@ -267,6 +330,40 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
             open::run(&proj.root, mode)
         }
     }
+}
+
+/// `sgw init [--target T] [DIR]`: the project template, for the one target this version knows.
+fn init(target: &str, force: bool, dir: &std::path::Path) -> anyhow::Result<i32> {
+    use crate::i18n::tf;
+    let target = super::target::Target::parse(target).map_err(anyhow::Error::msg)?;
+    if !target.supported() {
+        anyhow::bail!(tf(
+            "sgw.init.unsupported",
+            &[("target", &target.to_string())]
+        ));
+    }
+    std::fs::create_dir_all(dir)?;
+    let report = super::templates::write(dir, force)?;
+    let shown = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    println!(
+        "{}",
+        tf(
+            "sgw.init.wrote",
+            &[
+                ("dir", &shown.display().to_string()),
+                ("target", &target.to_string())
+            ]
+        )
+    );
+    for f in &report.written {
+        println!("  {f}");
+    }
+    for f in &report.existed {
+        println!("  {f}  {}", t("sgw.init.kept"));
+    }
+    println!();
+    println!("{}", t("sgw.init.next"));
+    Ok(0)
 }
 
 #[cfg(test)]

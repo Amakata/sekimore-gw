@@ -15,4 +15,6 @@ pub mod ops;
 pub mod passphrase;
 pub mod project;
 pub mod target;
+pub mod templates;
+pub mod update;
 pub mod verify;
