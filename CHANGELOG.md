@@ -13,6 +13,15 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.48 (2026-09-26)
+
+### Enhancement
+
+- sgw init writes the project template, embedded in the binary; sgw update keeps a project current from it (the former upgrade.sh, nothing fetched from a tag any more) (#241)
+- README: get started with sgw; what each config.yml setting does and which sgw command does what; what goes wrong when the dev container comes up (#243)
+- the sgw binaries for macOS arm64 and Linux are on the Release again: the crate compiles on macOS (O_PATH was Linux-only), and CI checks that build on every pull request (#244)
+- README: the proxy password line sits with the proxy setting, not under Get started (#245)
+
 ## 0.2.47 (2026-09-26)
 
 ### Enhancement
