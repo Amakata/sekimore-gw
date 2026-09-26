@@ -263,7 +263,7 @@ COPY --from=sekimore-gw /usr/local/bin/sekimore-relay /usr/local/bin/sekimore-re
 COPY --from=sekimore-gw /usr/local/bin/sgw-agent /usr/local/bin/sgw-agent
 COPY scripts/sekimore /usr/local/bin/sekimore
 COPY scripts/sgw-post-start /usr/local/bin/sgw-post-start
-RUN chmod +x /usr/local/bin/sekimore-agent-setup.sh /usr/local/bin/sekimore-relay /usr/local/bin/sekimore
+RUN chmod +x /usr/local/bin/sgw-agent /usr/local/bin/sekimore-relay /usr/local/bin/sekimore /usr/local/bin/sgw-post-start
 RUN mkdir -p /etc/sekimore-agent
 
 USER ${USERNAME}
