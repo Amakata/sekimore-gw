@@ -12,6 +12,14 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.51 (2026-09-26)
+
+### Enhancement
+
+- `sgw-agent setup`: agent-setup.sh ported to Rust — the gateway found by a connect scan or `--gateway`, the proxy environment, the keys, the token kept while `/whoami` accepts it, the env file, known_hosts, git signing, the agent guide (#261)
+- `sgw-post-start`: the dev container's start is one line in the base image — `sudo -E sgw-agent setup`, `docker-init.sh`, the project's `post-create.sh`; `postStartCommand` becomes `sgw-post-start` and `post-start.sh` hands over to it (#261)
+- `sgw update` names the one line and `sgw verify` accepts it; the base image no longer copies `agent-setup.sh` (#261)
+
 ## 0.2.50 (2026-09-26)
 
 ### Enhancement
