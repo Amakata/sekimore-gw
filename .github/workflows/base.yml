@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - "base/**"
+      - "!base/**.md"
       - "share/gateway.mise.*.toml"
       - "UPGRADING.md"
       - "UPGRADING.ja.md"
@@ -18,6 +19,7 @@ on:
   pull_request:
     paths:
       - "base/**"
+      - "!base/**.md"
       - "share/gateway.mise.*.toml"
       - "UPGRADING.md"
       - "UPGRADING.ja.md"
