@@ -493,6 +493,7 @@ impl SigningAgent {
 /// — which refuses to traverse a symlink and opens nothing — confirm through that descriptor that
 /// it really is a socket, and chmod the descriptor by way of `/proc/self/fd`. A symlink dev
 /// planted instead gets `EOPNOTSUPP` rather than having its target changed.
+#[cfg(target_os = "linux")]
 fn set_socket_mode_0600(path: &Path) -> io::Result<()> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -529,6 +530,30 @@ fn set_socket_mode_0600(path: &Path) -> io::Result<()> {
         format!("/proc/self/fd/{}", fd.as_raw_fd()),
         std::fs::Permissions::from_mode(0o600),
     )
+}
+
+/// The same, where `O_PATH` and `/proc/self/fd` do not exist. The relay serves on Linux only;
+/// this is compiled into the host tool `sgw` on macOS, which never binds the socket. `lstat`
+/// refuses the symlink the Linux version refuses, then `fchmodat` with `AT_SYMLINK_NOFOLLOW`.
+#[cfg(not(target_os = "linux"))]
+fn set_socket_mode_0600(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.mode() & libc::S_IFMT as u32 != libc::S_IFSOCK as u32 {
+        return Err(io::Error::other(format!(
+            "{} is not the socket that was just bound; refusing to change its mode",
+            path.display()
+        )));
+    }
+    let c = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str()))
+        .map_err(|_| io::Error::other("the socket path contains a NUL"))?;
+    // SAFETY: `c` is a valid NUL-terminated path for the length of the call
+    let rc =
+        unsafe { libc::fchmodat(libc::AT_FDCWD, c.as_ptr(), 0o600, libc::AT_SYMLINK_NOFOLLOW) };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 // ---- framing ----
