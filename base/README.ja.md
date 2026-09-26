@@ -63,5 +63,5 @@ base/tests/test_sample_sgw.sh
 
 - [examples/sgw-sample/README.ja.md](examples/sgw-sample/README.ja.md) — `sgw init` が書く雛形
 - [UPGRADING.ja.md](../UPGRADING.ja.md) — 版を上げるときの作業
-- [CHANGELOG.ja.md](CHANGELOG.ja.md)
+- [CHANGELOG.ja.md](../CHANGELOG.ja.md) — ゲートウェイ、relay、base、sgw で 1 つ。[base/CHANGELOG.ja.md](CHANGELOG.ja.md) は 0.2.45 までの base 独自の履歴
 - [RELEASING.md](../RELEASING.md)

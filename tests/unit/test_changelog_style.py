@@ -23,12 +23,11 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-# Two changelogs, two languages each. The relay's carried the whole project until 0.2.18; the
-# gateway's own starts there. Both are held to the same shape, so a new one cannot quietly be
-# written to a different one.
+# One changelog, two languages. The relay's and the base's were folded into it once one version
+# number covered them all; base/CHANGELOG.md keeps the base's own numbering up to 0.2.45 and is
+# not written to.
 PAIRS = [
     ("gateway", ROOT / "CHANGELOG.md", ROOT / "CHANGELOG.ja.md"),
-    ("relay", ROOT / "relay" / "CHANGELOG.md", ROOT / "relay" / "CHANGELOG.ja.md"),
 ]
 FILES = [(f"{name}/{p.name}", p) for name, en, ja in PAIRS for p in (en, ja)]
 

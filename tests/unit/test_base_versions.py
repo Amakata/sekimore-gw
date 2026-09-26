@@ -85,9 +85,11 @@ def describe_the_base_image_carries_the_gateways_version():
             f"the sample's MANIFEST pins {pins}; run base/scripts/sync-sample-sgw.sh"
         )
 
-    def it_writes_this_version_up_in_the_base_changelog():
+    def it_writes_this_version_up_in_the_changelog():
+        # One changelog for the gateway, the relay, the base and sgw (#253). base/CHANGELOG.md
+        # is the base's own history up to 0.2.45 and gets nothing new.
         for name in ("CHANGELOG.md", "CHANGELOG.ja.md"):
-            heads = re.findall(r"^## (\d+(?:\.\d+)*)", _text(BASE / name), re.M)
+            heads = re.findall(r"^## (\d+(?:\.\d+)*)", _text(ROOT / name), re.M)
             assert heads and heads[0] == _version(), (
-                f"base/{name} leads with {heads[:1]}, not {_version()}"
+                f"{name} leads with {heads[:1]}, not {_version()}"
             )

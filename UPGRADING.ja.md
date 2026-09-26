@@ -6,10 +6,7 @@
 **このガイドに載せているのは、あなたが持っているファイルの変更が必要な版だけです。**
 載っていない版は、`mise run upgrade:apply` を実行するだけで更新が完了します（base 0.2.20 より前は、
 代わりにイメージのタグを上げて `mise run gw:recreate` を実行します）。各版で何が変わったかは
-changelog を参照してください。
-[ゲートウェイ](https://github.com/Amakata/sekimore-gw/blob/main/CHANGELOG.ja.md) /
-[relay](https://github.com/Amakata/sekimore-gw/blob/main/relay/CHANGELOG.ja.md) /
-[base](base/CHANGELOG.ja.md)
+[変更履歴](CHANGELOG.ja.md)を参照してください。
 
 「あなたが持っているファイル」とは、雛形から複製したファイルのことです。
 

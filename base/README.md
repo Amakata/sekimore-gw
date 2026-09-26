@@ -63,5 +63,5 @@ base/tests/test_sample_sgw.sh
 
 - [examples/sgw-sample/README.md](examples/sgw-sample/README.md) — the template `sgw init` writes
 - [UPGRADING.md](../UPGRADING.md) — what a release asks of a project
-- [CHANGELOG.md](CHANGELOG.md)
+- [CHANGELOG.md](../CHANGELOG.md) — one for the gateway, the relay, the base and sgw; [base/CHANGELOG.md](CHANGELOG.md) is the base's own history up to 0.2.45
 - [RELEASING.md](../RELEASING.md)
