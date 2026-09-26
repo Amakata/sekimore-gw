@@ -71,12 +71,12 @@ Fits when the agent should:
 - leave a record of every operation
 - hold no upstream credential
 
-Does not fit when:
+Does not fit when the agent should:
 
-- the upstream is not GitHub and its API needs rules: git over SSH works with any host, API translation is GitHub only ([#50](https://github.com/Amakata/sekimore-gw/issues/50))
-- the rules are about request content: TLS is not terminated, so only the destination and the byte count are seen
-- only destinations matter: a plain allowlist needs less than this
-- the agent does not use GitHub: the relay has no role
+- follow rules on an API other than GitHub's (git over SSH works anywhere; API rules are GitHub only, [#50](https://github.com/Amakata/sekimore-gw/issues/50))
+- be judged by what a request contains (TLS is not terminated; only the destination and the byte count are seen)
+- be limited in destinations only (a plain allowlist is enough)
+- never touch GitHub (the relay has no role)
 
 ## Documentation
 

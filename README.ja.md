@@ -71,12 +71,12 @@ Docker（macOS は Docker Desktop、Linux は Docker Engine）と、Dev Containe
 - すべての操作を記録する
 - 上流の資格情報を持たない
 
-向かないとき:
+エージェントに次をさせたいときには向きません。
 
-- 上流が GitHub ではなく、その API に規則が要る: SSH の git はどのホストでも動くが、API の変換は GitHub だけ（[#50](https://github.com/Amakata/sekimore-gw/issues/50)）
-- リクエストの内容で判断したい: TLS を終端しないので、分かるのは宛先とバイト数だけ
-- 宛先を制限したいだけ: 許可リストだけなら、もっと小さな仕組みで足りる
-- エージェントが GitHub を使わない: 関所の役割がない
+- GitHub 以外の API に規則を課す（SSH の git はどこでも動くが、API の規則は GitHub だけ。[#50](https://github.com/Amakata/sekimore-gw/issues/50)）
+- リクエストの内容で判断される（TLS を終端しない。分かるのは宛先とバイト数だけ）
+- 宛先の制限だけを受ける（許可リストだけで足りる）
+- GitHub に触らない（関所の役割がない）
 
 ## ドキュメント
 
