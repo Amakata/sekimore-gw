@@ -283,8 +283,10 @@ pub fn owned_notes(root: &Path) -> Vec<String> {
             t("sgw.update.r_pid_host")
         ));
     }
+    // the includes and the SGW line, the way the migration reads them — a comment that still
+    // mentions .devcontainer/sgw/ (the template's old header) is not a reason to say it again
     let mise = std::fs::read_to_string(root.join("mise.toml")).unwrap_or_default();
-    if mise.contains(".devcontainer/sgw/") {
+    if mise_without_sgw(&mise).is_some() {
         notes.push(t("sgw.update.r_include"));
     }
     let dcj =
@@ -1030,5 +1032,17 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         templates::write(tmp.path(), false).unwrap();
         assert!(owned_notes(tmp.path()).is_empty());
+        // a mise.toml whose comments still mention .devcontainer/sgw/ (the old template's
+        // header) after the migration took the includes out: nothing to say
+        std::fs::write(
+            tmp.path().join("mise.toml"),
+            "# The tasks come from .devcontainer/sgw/tasks.mise.toml\n[task_config]\n# .devcontainer/sgw/ is empty: `bash .devcontainer/sgw/upgrade.sh --sync` fills it.\n\n[tasks.mine]\nrun = \"echo\"\n",
+        )
+        .unwrap();
+        assert!(
+            owned_notes(tmp.path()).is_empty(),
+            "{:?}",
+            owned_notes(tmp.path())
+        );
     }
 }
