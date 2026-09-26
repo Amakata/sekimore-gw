@@ -210,6 +210,25 @@ Run the unit tests:
 uv run pytest tests/unit/ -v
 ```
 
+### The base image (`base/`)
+
+The dev-container base image and the files it distributes live in `base/` and are released
+from the same tag as the gateway (#235). Their tests are shell scripts, run directly:
+
+```bash
+base/tests/test_sample_sgw.sh      # share/sgw/ and the sample agree
+base/tests/test_upgrade.sh         # upgrade.sh against a fake GHCR and a fake raw.githubusercontent.com
+base/tests/test_post_start.sh
+base/tests/test_sgw_tty.sh
+base/tests/test_wrapper_refresh.sh
+base/tests/test_image.sh           # builds the image; needs docker
+python3 base/scripts/check-upgrading.py
+```
+
+After changing anything under `base/share/sgw/` or `share/gateway.mise.*.toml`, run
+`base/scripts/sync-sample-sgw.sh` so the sample follows. `tests/unit/test_base_versions.py`
+holds every version written under `base/` to `pyproject.toml`'s.
+
 ### Integration tests
 
 Place integration tests in `tests/integration/`:

@@ -16,7 +16,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = [ROOT / "UPGRADING.md", ROOT / "UPGRADING.ja.md"]
+# UPGRADING sits at the repository root since the move into sekimore-gw (#235)
+FILES = [ROOT.parent / "UPGRADING.md", ROOT.parent / "UPGRADING.ja.md"]
 DOCKERFILE = ROOT / "Dockerfile"
 
 _MARKER = re.compile(r"^<!-- reviewed-up-to: (\d+(?:\.\d+)*) -->")

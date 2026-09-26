@@ -18,7 +18,7 @@
 # Anything else a project wants at start goes in .devcontainer/scripts/post-create.sh, which is
 # the project's.
 #
-# Distributed by sgw-devcontainer-base: `mise run upgrade:apply` replaces this file, and stops
+# Distributed with sekimore-gw (base/share/sgw/): `mise run upgrade:apply` replaces this file, and stops
 # rather than overwrite it once it has been edited.
 set -e
 

@@ -14,7 +14,7 @@
 # How it finds them: the compose labels (service name + the project's working_dir = this .devcontainer).
 # The project name depends on the folder name, so look it up by label rather than by name.
 #
-# Distributed by sgw-devcontainer-base: `mise run upgrade:apply` replaces this file, and stops
+# Distributed with sekimore-gw (base/share/sgw/): `mise run upgrade:apply` replaces this file, and stops
 # rather than overwrite it once it has been edited.
 set -euo pipefail
 # The Docker CLI's "What's next: Try Docker Debug…" hint after docker exec would land in the

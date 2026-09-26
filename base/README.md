@@ -2,10 +2,11 @@
 
 *[日本語版](README.ja.md)*
 
-The dev-container side of [sekimore-gw](https://github.com/Amakata/sekimore-gw) (sgw for short).
-It is not used on its own. The sekimore-gw README explains why the setup exists.
+The dev-container side of sekimore-gw (sgw for short): this directory of the gateway's
+repository. It is not used on its own; the [top-level README](../README.md) explains why the
+setup exists. It was a repository of its own until 0.2.45 (`Amakata/sgw-devcontainer-base`, archived).
 
-- Published at: `ghcr.io/amakata/sgw-devcontainer-base`
+- Published at: `ghcr.io/amakata/sgw-devcontainer-base`, under the gateway's version number, from the same tag
 - Platforms: `linux/amd64`, `linux/arm64`
 
 ## Start a project
@@ -18,13 +19,13 @@ A project starts as a copy of [`examples/sgw-sample/`](examples/sgw-sample/). It
 Run the steps on the host, in order.
 [`examples/sgw-sample/README.md`](examples/sgw-sample/README.md) describes each one in detail.
 
-1. Clone this repository:
+1. Clone the repository:
    ```
-   git clone https://github.com/Amakata/sgw-devcontainer-base.git
+   git clone https://github.com/Amakata/sekimore-gw.git
    ```
 2. Copy the following into the project:
-   - `examples/sgw-sample/.devcontainer/`
-   - `examples/sgw-sample/mise.toml`
+   - `base/examples/sgw-sample/.devcontainer/`
+   - `base/examples/sgw-sample/mise.toml`
 3. Copy `.devcontainer/.env.sample` to `.devcontainer/.env`:
    ```
    cp .devcontainer/.env.sample .devcontainer/.env
@@ -77,7 +78,7 @@ The project's `.devcontainer/Dockerfile` needs only the following:
 
 ```dockerfile
 # a version, not latest: `mise run upgrade:apply` raises it
-FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.43
+FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.46
 
 # only what this project adds
 # e.g. mise use -g python@3.13.0 && mise reshim
@@ -142,7 +143,7 @@ mise run upgrade:apply    # move to it
 4. Unlocks it when the passphrase is stored.
 5. Lists what only the operator can do:
    - Rebuild Container when the base changed
-   - the [UPGRADING.md](UPGRADING.md) sections the upgrade crosses
+   - the [UPGRADING.md](../UPGRADING.md) sections the upgrade crosses
    - a commit
 
 It stops without writing if a file in `.devcontainer/sgw/` was edited by hand.
@@ -158,14 +159,14 @@ sgw-devcontainer-base      ── your .devcontainer/Dockerfile FROMs it
 .devcontainer/sgw/         ── the host scripts and tasks for both
 ```
 
-- The `sekimore-relay` CLI and `sekimore-agent-setup.sh` in this image come from gateway `ghcr.io/amakata/sekimore-gw:0.2.45` (`ARG SEKIMORE_GW_IMAGE`).
+- The `sekimore-relay` CLI and `sekimore-agent-setup.sh` in this image come from gateway `ghcr.io/amakata/sekimore-gw:0.2.46` (`ARG SEKIMORE_GW_IMAGE`).
   Base and gateway are separate 0.2.x series.
 - The gateway a project runs is the `image:` tag in its compose file.
   `mise run upgrade:apply` raises both.
 
 ## Links
 
-- [UPGRADING.md](UPGRADING.md) — what each release requires of a project. It includes:
+- [UPGRADING.md](../UPGRADING.md) — what each release requires of a project. It includes:
   - the move from gateway 0.0.x
   - the one-time move to `.devcontainer/sgw/` for projects created before base 0.2.20
 - [CHANGELOG.md](CHANGELOG.md) — this image, with the gateway version each release used. See also:

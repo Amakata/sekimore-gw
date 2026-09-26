@@ -34,7 +34,7 @@
 # agent-setup script. Taking both from the SAME tag keeps them in lock-step.
 # Override for local testing: --build-arg SEKIMORE_GW_IMAGE=sekimore-gw:relay-dev
 # ---------------------------------------------------------------------------
-ARG SEKIMORE_GW_IMAGE=ghcr.io/amakata/sekimore-gw:0.2.45
+ARG SEKIMORE_GW_IMAGE=ghcr.io/amakata/sekimore-gw:0.2.46
 FROM ${SEKIMORE_GW_IMAGE} AS sekimore-gw
 
 FROM mcr.microsoft.com/devcontainers/base:bookworm

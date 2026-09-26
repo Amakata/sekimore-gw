@@ -40,8 +40,7 @@ sekimore: denied: pr:merge is not allowed by policy
 
 ## はじめかた
 
-[sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) の `examples/sgw-sample/` テンプレートを使います。
-その README が clone から関所の動作確認までを案内します。
+`base/examples/sgw-sample/` のテンプレートを使います。[base/README.ja.md](base/README.ja.md) が clone から関所の動作確認までを案内します。
 
 認証の必要なプロキシの内側では、パスワードを秘密ストアに入れます（`.devcontainer/.env` はエージェントが読めるため）:
 
@@ -110,7 +109,7 @@ dev コンテナは起動時にゲートウェイから `HTTP_PROXY` と `NO_PRO
 | sekimore-gw、sgw | このゲートウェイ。`sgw` は sgw-devcontainer-base、`sgw.sh`、`.devcontainer/sgw/` に出てくる |
 | sekimore-relay | ゲートウェイの中の関所デーモンと、dev コンテナにある同名の CLI |
 | `sekimore` | dev コンテナのラッパー。`sekimore-relay agent …` を実行する。`sekimore guide` でエージェント向けガイドを表示 |
-| sgw-devcontainer-base | dev コンテナのイメージ。`examples/sgw-sample/` がプロジェクトのテンプレート |
+| sgw-devcontainer-base | dev コンテナのイメージ。このリポジトリの `base/` から作り、同じ版で出す。`base/examples/sgw-sample/` がプロジェクトのテンプレート |
 | `.devcontainer/sgw/`、`gw:*` | ホスト側のスクリプトと mise タスク。イメージと一緒に配布され、`mise run upgrade:apply` が入れ替える |
 
 ## ドキュメント
@@ -120,8 +119,10 @@ dev コンテナは起動時にゲートウェイから `HTTP_PROXY` と `NO_PRO
 - [docs/localization.ja.md](docs/localization.ja.md) — Web UI と CLI の言語（英語・日本語）
 - [docs/paths.ja.md](docs/paths.ja.md) — 経路台帳: すべての接続の辺をグラフとして検査
 - [CONTRIBUTING.md](CONTRIBUTING.md) — 開発、テスト、イメージ
-- [CHANGELOG.ja.md](CHANGELOG.ja.md)、[relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) — 1 つのイメージ、1 つの版番号
-- [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) — dev コンテナ側
+- [CHANGELOG.ja.md](CHANGELOG.ja.md)、[relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md)、[base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) — イメージは 2 つ、版は 1 つ
+- [UPGRADING.ja.md](UPGRADING.ja.md) — 版を上げるときにプロジェクト側で要る作業
+- [base/README.ja.md](base/README.ja.md) — dev コンテナ側: イメージとプロジェクトのテンプレート
+- [RELEASING.md](RELEASING.md) — リリースの手順
 
 ## トラブルシューティング
 

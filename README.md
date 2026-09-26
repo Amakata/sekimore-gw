@@ -40,8 +40,7 @@ sekimore: denied: pr:merge is not allowed by policy
 
 ## Get started
 
-Use the `examples/sgw-sample/` template in [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base).
-Its README goes from clone to a verified relay.
+Use the `base/examples/sgw-sample/` template. [base/README.md](base/README.md) goes from clone to a verified relay.
 
 Behind a proxy that requires credentials, put the password in the secret store
 (`.devcontainer/.env` is readable by the agent):
@@ -109,10 +108,10 @@ Does not fit:
 
 | Name | What it is |
 |---|---|
-| sekimore-gw, sgw | This gateway. `sgw` appears in sgw-devcontainer-base, `sgw.sh` and `.devcontainer/sgw/`. |
+| sekimore-gw, sgw | This gateway. `sgw` appears in `sgw-devcontainer-base`, `sgw.sh` and `.devcontainer/sgw/`. |
 | sekimore-relay | The relay daemon in the gateway, and the CLI of the same name in the dev container. |
 | `sekimore` | The wrapper in the dev container. Runs `sekimore-relay agent …`. `sekimore guide` prints the agent's guide. |
-| sgw-devcontainer-base | The dev-container image. `examples/sgw-sample/` is the project template. |
+| sgw-devcontainer-base | The dev-container image, built from `base/` of this repository and released with it. `base/examples/sgw-sample/` is the project template. |
 | `.devcontainer/sgw/`, `gw:*` | Host-side scripts and mise tasks. Distributed with the images, replaced by `mise run upgrade:apply`. |
 
 ## Documentation
@@ -122,8 +121,10 @@ Does not fit:
 - [docs/localization.md](docs/localization.md) — Web UI and CLI in English and Japanese
 - [docs/paths.md](docs/paths.md) — the path ledger: every connection edge, checked as a graph
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development, tests, images
-- [CHANGELOG.md](CHANGELOG.md), [relay/CHANGELOG.md](relay/CHANGELOG.md) — one image, one version number
-- [sgw-devcontainer-base](https://github.com/Amakata/sgw-devcontainer-base) — the dev-container side
+- [CHANGELOG.md](CHANGELOG.md), [relay/CHANGELOG.md](relay/CHANGELOG.md), [base/CHANGELOG.md](base/CHANGELOG.md) — two images, one version number
+- [UPGRADING.md](UPGRADING.md) — what a release asks of a project
+- [base/README.md](base/README.md) — the dev-container side: the image and the project template
+- [RELEASING.md](RELEASING.md) — how a release is cut
 
 ## Troubleshooting
 

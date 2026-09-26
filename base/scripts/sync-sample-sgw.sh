@@ -5,9 +5,7 @@
 # Run it after changing anything in share/sgw/, and when a release moves the sample's FROM tag or its
 # gateway image tag. tests/test_sample_sgw.sh fails until the two agree.
 #
-# gateway.mise.toml is the gateway's: share/gateway.mise.en.toml at the sekimore-gw release the
-# sample's compose file pins (#105). It is taken from a local sekimore-gw checkout when
-# SEKIMORE_GW_SRC names one, else from raw.githubusercontent.com at that tag.
+# gateway.mise.toml is the gateway's: ../share/gateway.mise.en.toml, from this same commit (#105, #235).
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -23,18 +21,9 @@ gw=$(sed -n 's|^[[:space:]]*image:[[:space:]]*ghcr.io/amakata/sekimore-gw:\([0-9
 mkdir -p "$DST"
 for f in sgw.sh vscode.sh upgrade.sh post-start.sh; do cp "$SRC/$f" "$DST/$f"; chmod 755 "$DST/$f"; done
 cp "$SRC/tasks.mise.en.toml" "$DST/tasks.mise.toml"
-# the gateway's task file at the pinned tag; the same two sources tests/test_sample_sgw.sh reads
-gateway_mise_at() {
-  if [ -n "${SEKIMORE_GW_SRC:-}" ]; then
-    git -C "$SEKIMORE_GW_SRC" show "v$1:share/gateway.mise.en.toml"
-  else
-    curl -fsSL --max-time 20 "${SGW_RAW_URL:-https://raw.githubusercontent.com}/Amakata/sekimore-gw/v$1/share/gateway.mise.en.toml"
-  fi
-}
-gateway_mise_at "$gw" > "$DST/gateway.mise.toml.new" ||
-  { rm -f "$DST/gateway.mise.toml.new"; echo "sync-sample-sgw: cannot read share/gateway.mise.en.toml of sekimore-gw v$gw (set SEKIMORE_GW_SRC to a sekimore-gw checkout that has the tag, or reach raw.githubusercontent.com)" >&2; exit 1; }
-[ -s "$DST/gateway.mise.toml.new" ] || { rm -f "$DST/gateway.mise.toml.new"; echo "sync-sample-sgw: share/gateway.mise.en.toml of sekimore-gw v$gw came back empty" >&2; exit 1; }
-mv "$DST/gateway.mise.toml.new" "$DST/gateway.mise.toml"
+# the gateway's task file: ../share/gateway.mise.en.toml of this same commit. One repository and
+# one version number (#235) make that the file the pinned gateway ships
+cp "$ROOT/../share/gateway.mise.en.toml" "$DST/gateway.mise.toml"
 {
   # the header upgrade.sh writes, taken out of upgrade.sh so the two cannot differ
   sed -n '/^new_manifest() {/,/^}/p' "$SRC/upgrade.sh" | sed -n 's/^  echo "\(# .*\)"$/\1/p'

@@ -6,8 +6,7 @@
 # exists to end, so it fails here instead of in someone's project:
 #
 #   - the sample's copies equal share/sgw/ (tasks.mise.toml equals tasks.mise.en.toml)
-#   - the sample's gateway.mise.toml is share/gateway.mise.en.toml at the gateway the sample pins
-#     (from a sekimore-gw checkout in SEKIMORE_GW_SRC, else raw.githubusercontent.com; #105)
+#   - the sample's gateway.mise.toml is ../share/gateway.mise.en.toml of this commit (#105, #235)
 #   - the sample's MANIFEST is exactly what upgrade.sh would write for the sample's pinned versions
 #   - tasks.mise.en.toml and tasks.mise.ja.toml differ in their descriptions and nowhere else
 #   - the three scripts decide the language with the same function, and it follows the relay's rule
@@ -50,23 +49,12 @@ gw=$(sed -n 's|^[[:space:]]*image:[[:space:]]*ghcr.io/amakata/sekimore-gw:\([0-9
 [ -n "$base" ] || fail "the sample's Dockerfile does not pin the base to a version; upgrade needs one"
 [ -n "$gw" ] || fail "the sample's compose file does not pin the gateway to a version; upgrade needs one"
 
-echo "== the sample's gateway.mise.toml is the gateway's own, at $gw"
-# The file is sekimore-gw's (share/gateway.mise.en.toml), so the sample cannot be checked against
-# anything in this repository: it is read at the pinned tag, the way scripts/sync-sample-sgw.sh
-# writes it. The copy taken at 0.2.31 was still there at 0.2.45, without the raw = true that
-# sekimore-gw#230 gave gw:login, and a new project started with that bug (#105).
-if [ -n "${SEKIMORE_GW_SRC:-}" ]; then
-  git -C "$SEKIMORE_GW_SRC" show "v$gw:share/gateway.mise.en.toml" > "$TMP/gateway.mise.toml" 2>/dev/null ||
-    fail "SEKIMORE_GW_SRC=$SEKIMORE_GW_SRC has no tag v$gw (or no share/gateway.mise.en.toml at it)"
-else
-  curl -fsSL --max-time 20 "${SGW_RAW_URL:-https://raw.githubusercontent.com}/Amakata/sekimore-gw/v$gw/share/gateway.mise.en.toml" > "$TMP/gateway.mise.toml" 2>/dev/null ||
-    fail "cannot read share/gateway.mise.en.toml of sekimore-gw v$gw from raw.githubusercontent.com; set SEKIMORE_GW_SRC to a sekimore-gw checkout that has the tag"
-fi
-[ -s "$TMP/gateway.mise.toml" ] || fail "share/gateway.mise.en.toml of sekimore-gw v$gw came back empty"
-if ! cmp -s "$TMP/gateway.mise.toml" "$DST/gateway.mise.toml"; then
-  diff -u "$DST/gateway.mise.toml" "$TMP/gateway.mise.toml" >&2 || true
-  fail "the sample's gateway.mise.toml is not sekimore-gw v$gw's share/gateway.mise.en.toml (scripts/sync-sample-sgw.sh)"
-fi
+echo "== the sample's gateway.mise.toml is the gateway's own"
+# The file is sekimore-gw's (share/gateway.mise.en.toml). One repository and one version number
+# (#235) mean the copy the sample carries is the one at this commit; a stale copy once shipped a
+# `gw:login` without the raw = true that sekimore-gw#230 gave it (#105).
+cmp -s "$ROOT/../share/gateway.mise.en.toml" "$DST/gateway.mise.toml" ||
+  fail "the sample's gateway.mise.toml differs from share/gateway.mise.en.toml (scripts/sync-sample-sgw.sh)"
 
 echo "== the sample's MANIFEST is what upgrade.sh would write"
 {

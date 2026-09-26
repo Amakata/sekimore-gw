@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.45 -->
+<!-- reviewed-up-to: 0.2.46 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -9,7 +9,7 @@ For any release that is not listed, running `mise run upgrade:apply` is the whol
 changed in each release, see the changelogs:
 [gateway](https://github.com/Amakata/sekimore-gw/blob/main/CHANGELOG.md) /
 [relay](https://github.com/Amakata/sekimore-gw/blob/main/relay/CHANGELOG.md) /
-[base](CHANGELOG.md).
+[base](base/CHANGELOG.md).
 
 "A file you own" is a file that you copied from the sample:
 
@@ -520,7 +520,7 @@ docker compose exec sekimore-gw sekimore-relay keyscan <upstream-host> --port <p
 
 The second one goes through the bastion, so run it after the first.
 
-0.2.38 – 0.2.43 require no action.
+0.2.38 – 0.2.43 require no action. Neither does [0.2.46](#0246-the-base-image-moved-into-sekimore-gw); it only says where the files come from now.
 
 ## 0.2.45 `gw:login` asks on a terminal and stops without a host key
 
@@ -736,3 +736,16 @@ it checks that dev has `HTTPS_PROXY`, and that a request that goes around it (`c
 to an `allow_domains` host fails. If that request succeeds while `proxy.direct_egress` is `deny`,
 it is a **FAIL**: dev can leave without the proxy. While `direct_egress` is `allow` it is a
 warning, not a failure.
+
+## 0.2.46 The base image moved into sekimore-gw
+
+Nothing to do. The dev-container base image (`ghcr.io/amakata/sgw-devcontainer-base`) is built
+from `base/` of the sekimore-gw repository and released from the same tag, so from 0.2.46 on the
+base carries the gateway's version number (the base went 0.2.43 → 0.2.46; 0.2.44 and 0.2.45 of the
+base do not exist). `mise run upgrade` shows both moving together.
+
+The distributed files (`.devcontainer/sgw/`) now come from `base/share/sgw/` of that repository,
+and this guide from its root. An `upgrade.sh` from 0.2.43 or earlier still looks in the former
+`Amakata/sgw-devcontainer-base` repository; that repository is archived, but carries a `v0.2.46` tag
+holding the new files, so `mise run upgrade:apply` crosses over once and reads from the new place
+from then on.

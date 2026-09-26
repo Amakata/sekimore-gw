@@ -8,8 +8,8 @@ DevContainer のベースイメージ — Dockerfile と焼き込む道具、同
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
-各リリースは取り込んだ sekimore-gw の版 (Dockerfile の `ARG SEKIMORE_GW_IMAGE`) を書く。
-両者の組合せの記録はこのファイル。
+0.2.46 からは sekimore-gw リポジトリの `base/` から作り、同じタグで、ゲートウェイと同じ版番号で出す（#235）。
+それより前の項目の PR 番号は旧 `Amakata/sgw-devcontainer-base` リポジトリのもの。各版は取り込んだゲートウェイの版を書いている。
 
 0.2.18 から始める。それ以前のリリースはここに書かない。各 PR とタグが記録。
 取り込んだ gateway の版だけは末尾にある。

@@ -20,7 +20,7 @@
 #   vscode.sh --restore-agent-env  put SSH_AUTH_SOCK back into launchd (before restarting Docker Desktop)
 #   SEKIMORE_VSCODE_APP=/path/to/Visual Studio Code.app   name the app location (when it cannot be found automatically)
 #
-# Distributed by sgw-devcontainer-base: `mise run upgrade:apply` replaces this file, and stops
+# Distributed with sekimore-gw (base/share/sgw/): `mise run upgrade:apply` replaces this file, and stops
 # rather than overwrite it once it has been edited.
 set -euo pipefail
 

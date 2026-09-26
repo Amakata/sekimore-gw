@@ -22,7 +22,7 @@
 # The language (output, and which task files are taken) follows the relay: SEKIMORE_LANG, LC_ALL,
 # LC_MESSAGES, LANG — ja is Japanese, en English, anything else falls through; English when none decides.
 #
-# Distributed by sgw-devcontainer-base: `mise run upgrade:apply` replaces this file, and stops
+# Distributed with sekimore-gw (base/share/sgw/): `mise run upgrade:apply` replaces this file, and stops
 # rather than overwrite it once it has been edited.
 set -euo pipefail
 
@@ -35,8 +35,9 @@ MANIFEST=$SGW_DIR/MANIFEST
 # Where things come from. Environment variables override them, for a fork.
 GW_IMAGE=${SGW_GATEWAY_IMAGE:-ghcr.io/amakata/sekimore-gw}
 BASE_IMAGE=${SGW_BASE_IMAGE:-ghcr.io/amakata/sgw-devcontainer-base}
+# One repository since gateway 0.2.46 (#235): the distributed files are under base/ in it, and
+# the base image carries the gateway's version number.
 GW_REPO=${SGW_GATEWAY_REPO:-Amakata/sekimore-gw}
-BASE_REPO=${SGW_BASE_REPO:-Amakata/sgw-devcontainer-base}
 RAW=${SGW_RAW_URL:-https://raw.githubusercontent.com}
 
 FILES="sgw.sh vscode.sh upgrade.sh post-start.sh tasks.mise.toml gateway.mise.toml"
@@ -284,9 +285,9 @@ newest() {
 # url_of <file> <base> <gateway> <lang>
 url_of() {
   case $1 in
-    tasks.mise.toml) echo "$RAW/$BASE_REPO/v$2/share/sgw/tasks.mise.$4.toml" ;;
+    tasks.mise.toml) echo "$RAW/$GW_REPO/v$2/base/share/sgw/tasks.mise.$4.toml" ;;
     gateway.mise.toml) echo "$RAW/$GW_REPO/v$3/share/gateway.mise.$4.toml" ;;
-    *) echo "$RAW/$BASE_REPO/v$2/share/sgw/$1" ;;
+    *) echo "$RAW/$GW_REPO/v$2/base/share/sgw/$1" ;;
   esac
 }
 fetch() { curl -fsSL -o "$2" "$1" 2>/dev/null; }
@@ -371,8 +372,8 @@ ORIG_LANG=$(manifest_get lang); ORIG_LANG=${ORIG_LANG:-$L}
 
 UPG_NAME=UPGRADING.md
 [ "$L" != ja ] || UPG_NAME=UPGRADING.ja.md
-UPG_URL="$RAW/$BASE_REPO/v$NEW_BASE/$UPG_NAME"
-UPG_PAGE="https://github.com/$BASE_REPO/blob/v$NEW_BASE/$UPG_NAME"
+UPG_URL="$RAW/$GW_REPO/v$NEW_BASE/$UPG_NAME"
+UPG_PAGE="https://github.com/$GW_REPO/blob/v$NEW_BASE/$UPG_NAME"
 UPG=
 if fetch "$UPG_URL" "$TMP/UPGRADING.md"; then UPG=$TMP/UPGRADING.md; fi
 

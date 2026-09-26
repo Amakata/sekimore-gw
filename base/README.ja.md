@@ -2,10 +2,11 @@
 
 *[English](README.md)*
 
-[sekimore-gw](https://github.com/Amakata/sekimore-gw) (略して sgw) の dev コンテナ側である。
-単体では使わない。この構成がなぜ必要かは sekimore-gw の README で説明している。
+sekimore-gw（略して sgw）の dev コンテナ側で、ゲートウェイのリポジトリのこのディレクトリにある。
+単体では使わない。この構成がなぜ必要かは[最上位の README](../README.ja.md) で説明している。
+0.2.45 までは独立したリポジトリだった（`Amakata/sgw-devcontainer-base`、archive 済み）。
 
-- 配布先: `ghcr.io/amakata/sgw-devcontainer-base`
+- 配布先: `ghcr.io/amakata/sgw-devcontainer-base`。ゲートウェイと同じ版番号で、同じタグから出す
 - 対応プラットフォーム: `linux/amd64`, `linux/arm64`
 
 ## プロジェクトを始める
@@ -18,13 +19,13 @@
 次の手順をホストで順に実行する。
 各手順の詳細は [`examples/sgw-sample/README.ja.md`](examples/sgw-sample/README.ja.md) に書いてある。
 
-1. このリポジトリを複製する:
+1. リポジトリを複製する:
    ```
-   git clone https://github.com/Amakata/sgw-devcontainer-base.git
+   git clone https://github.com/Amakata/sekimore-gw.git
    ```
 2. 次のものをプロジェクトにコピーする:
-   - `examples/sgw-sample/.devcontainer/`
-   - `examples/sgw-sample/mise.toml`
+   - `base/examples/sgw-sample/.devcontainer/`
+   - `base/examples/sgw-sample/mise.toml`
 3. `.devcontainer/.env.sample` を `.devcontainer/.env` にコピーする:
    ```
    cp .devcontainer/.env.sample .devcontainer/.env
@@ -77,7 +78,7 @@
 
 ```dockerfile
 # latest ではなく版を書く。`mise run upgrade:apply` がこれを上げる
-FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.43
+FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.46
 
 # プロジェクト固有の追加だけを書く
 # 例: mise use -g python@3.13.0 && mise reshim
@@ -142,7 +143,7 @@ mise run upgrade:apply    # 更新する
 4. パスフレーズが保存されていれば解錠する。
 5. 運用者にしかできない作業を表示する:
    - base が変わった場合の Rebuild Container
-   - 更新でまたぐ [UPGRADING.ja.md](UPGRADING.ja.md) の節
+   - 更新でまたぐ [UPGRADING.ja.md](../UPGRADING.ja.md) の節
    - コミット
 
 `.devcontainer/sgw/` のファイルが手で書き換えられている場合は、何も書き込まずに止まる。
@@ -158,14 +159,14 @@ sgw-devcontainer-base  ── あなたの .devcontainer/Dockerfile が FROM す
 .devcontainer/sgw/     ── 両方に合わせたホスト側のスクリプトとタスク
 ```
 
-- このイメージの `sekimore-relay` CLI と `sekimore-agent-setup.sh` は、ゲートウェイ `ghcr.io/amakata/sekimore-gw:0.2.45` (`ARG SEKIMORE_GW_IMAGE`) から取り込む。
+- このイメージの `sekimore-relay` CLI と `sekimore-agent-setup.sh` は、ゲートウェイ `ghcr.io/amakata/sekimore-gw:0.2.46` (`ARG SEKIMORE_GW_IMAGE`) から取り込む。
   base とゲートウェイは別々の 0.2.x 系列である。
 - プロジェクトが動かすゲートウェイは、compose ファイルの `image:` タグで決まる。
   `mise run upgrade:apply` が両方を上げる。
 
 ## リンク
 
-- [UPGRADING.ja.md](UPGRADING.ja.md) — 各リリースがプロジェクトに求める変更。次を含む:
+- [UPGRADING.ja.md](../UPGRADING.ja.md) — 各リリースがプロジェクトに求める変更。次を含む:
   - ゲートウェイ 0.0.x からの移行
   - base 0.2.20 より前に作ったプロジェクトの、`.devcontainer/sgw/` への一度きりの移行
 - [CHANGELOG.ja.md](CHANGELOG.ja.md) — このイメージの変更履歴。各リリースが使ったゲートウェイの版も記録している。関連:

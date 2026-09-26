@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.45 -->
+<!-- reviewed-up-to: 0.2.46 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -9,7 +9,7 @@
 changelog を参照してください。
 [ゲートウェイ](https://github.com/Amakata/sekimore-gw/blob/main/CHANGELOG.ja.md) /
 [relay](https://github.com/Amakata/sekimore-gw/blob/main/relay/CHANGELOG.ja.md) /
-[base](CHANGELOG.ja.md)
+[base](base/CHANGELOG.ja.md)
 
 「あなたが持っているファイル」とは、雛形から複製したファイルのことです。
 
@@ -495,7 +495,7 @@ docker compose exec sekimore-gw sekimore-relay keyscan <上流のホスト> --po
 
 2 つめは踏み台を経由するので、1 つめのあとに実行します。
 
-0.2.38 〜 0.2.43 では作業は不要です。
+0.2.38 〜 0.2.43 では作業は不要です。[0.2.46](#0246-base-イメージが-sekimore-gw-に移った) も不要で、ファイルの出どころが変わったことを書いているだけです。
 
 ## 0.2.45 `gw:login` は端末で尋ね、ホスト鍵が無ければ止まる
 
@@ -704,3 +704,15 @@ mise run relay:verify      # ホスト側
 が `allow_domains` のホストに届かないことを確認します。`proxy.direct_egress` が `deny` なのに
 届いた場合は **FAIL** です（dev がプロキシを通らずに外へ出られる）。`allow` の場合は失敗ではなく
 警告になります。
+
+## 0.2.46 base イメージが sekimore-gw に移った
+
+作業は不要です。dev コンテナの base イメージ（`ghcr.io/amakata/sgw-devcontainer-base`）は sekimore-gw
+リポジトリの `base/` から作り、同じタグで出すようになりました。0.2.46 からは base もゲートウェイと同じ
+版番号を持ちます（base は 0.2.43 → 0.2.46 に飛び、base の 0.2.44 と 0.2.45 はありません）。
+`mise run upgrade` は両方が一緒に動くことを示します。
+
+配布ファイル（`.devcontainer/sgw/`）はそのリポジトリの `base/share/sgw/` から、このガイドはその最上位から
+取るようになりました。0.2.43 以前の `upgrade.sh` は旧 `Amakata/sgw-devcontainer-base` リポジトリを見に
+行きますが、そのリポジトリは archive 済みのまま新しいファイルを持つ `v0.2.46` タグを持っているので、
+`mise run upgrade:apply` は一度そこを経由し、以後は新しい場所から読みます。

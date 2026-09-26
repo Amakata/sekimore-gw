@@ -71,9 +71,10 @@ EOF
 chmod +x "$BIN/curl" "$BIN/mise"
 
 # ---- fixtures: two base releases, two gateway releases ----
-B=$FIX/raw/Amakata/sgw-devcontainer-base G=$FIX/raw/Amakata/sekimore-gw
+# one repository (#235): the base's files sit under base/ of the gateway's tag; UPGRADING at its top
+B=$FIX/raw/Amakata/sekimore-gw G=$FIX/raw/Amakata/sekimore-gw
 for v in 0.2.19 0.2.20; do
-  d=$B/v$v/share/sgw; mkdir -p "$d"
+  d=$B/v$v/base/share/sgw; mkdir -p "$d"
   cp "$UPGRADE" "$d/upgrade.sh"
   # the stand-in sgw.sh: what upgrade.sh asks of the gateway
   cat > "$d/sgw.sh" <<EOF
@@ -199,16 +200,16 @@ has "$LOG/err" "+# my change"
 [ "$(tree_sum "$P")" = "$before" ] || fail "apply changed the project although it stopped"
 up "$P"
 has "$LOG/out" "edited by hand"
-cp "$B/v0.2.19/share/sgw/sgw.sh" "$P/.devcontainer/sgw/sgw.sh"
+cp "$B/v0.2.19/base/share/sgw/sgw.sh" "$P/.devcontainer/sgw/sgw.sh"
 
 echo "== a failed fetch changes nothing"
-mv "$B/v0.2.20/share/sgw/vscode.sh" "$TMP/vscode.hidden"
+mv "$B/v0.2.20/base/share/sgw/vscode.sh" "$TMP/vscode.hidden"
 before=$(tree_sum "$P")
 up "$P" --apply --yes
 [ "$RC" = 1 ] || fail "apply with a missing file exited $RC, not 1"
-has "$LOG/err" "v0.2.20/share/sgw/vscode.sh"
+has "$LOG/err" "v0.2.20/base/share/sgw/vscode.sh"
 [ "$(tree_sum "$P")" = "$before" ] || fail "a failed fetch changed the project"
-mv "$TMP/vscode.hidden" "$B/v0.2.20/share/sgw/vscode.sh"
+mv "$TMP/vscode.hidden" "$B/v0.2.20/base/share/sgw/vscode.sh"
 
 echo "== apply without a terminal: rewrites, replaces, and leaves the recreate to a person"
 reset_log
@@ -298,7 +299,7 @@ has "$LOG/out" "the gateway is not running"
 
 echo "== a file equal to the one about to replace it is not an edit"
 P=$TMP/p5; new_project "$P"; up "$P" --sync
-cp "$B/v0.2.20/share/sgw/sgw.sh" "$P/.devcontainer/sgw/sgw.sh"
+cp "$B/v0.2.20/base/share/sgw/sgw.sh" "$P/.devcontainer/sgw/sgw.sh"
 up "$P" --apply
 [ "$RC" = 0 ] || { cat "$LOG/err"; fail "a file already at the new version stopped apply"; }
 
@@ -345,7 +346,7 @@ hasnt "$LOG/out" "postStartCommand"
 echo "== an apply that replaces upgrade.sh lets the new one say what your files need"
 # The release moved to carries a rule the running upgrade.sh has never heard of. Without the hand-off
 # it would only show on the next run (#53).
-sed 's/^collect_owned() {$/collect_owned() {\n  remain "a rule only the new upgrade.sh knows"/' "$UPGRADE" > "$B/v0.2.20/share/sgw/upgrade.sh"
+sed 's/^collect_owned() {$/collect_owned() {\n  remain "a rule only the new upgrade.sh knows"/' "$UPGRADE" > "$B/v0.2.20/base/share/sgw/upgrade.sh"
 P=$TMP/p11; new_project "$P"; up "$P" --sync
 printf '{ "postStartCommand": "sudo /usr/local/bin/sekimore-agent-setup.sh" }\n' > "$P/.devcontainer/devcontainer.json"
 up "$P" --apply
@@ -354,7 +355,7 @@ has "$LOG/out" "a rule only the new upgrade.sh knows"
 has "$LOG/out" "What your own files need"
 # said once, by the new script, not once by each
 [ "$(grep -c 'sgw/post-start.sh",' "$LOG/out")" = 1 ] || { cat "$LOG/out"; fail "the postStartCommand line was not said exactly once"; }
-cp "$UPGRADE" "$B/v0.2.20/share/sgw/upgrade.sh"
+cp "$UPGRADE" "$B/v0.2.20/base/share/sgw/upgrade.sh"
 
 echo "== unpinned, and inside the dev container"
 P=$TMP/p9; new_project "$P"

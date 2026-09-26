@@ -10,8 +10,10 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
-Every release names the sekimore-gw version it takes (`ARG SEKIMORE_GW_IMAGE` in
-the Dockerfile), so the pairing between the two is this file.
+From 0.2.46 the image is built from `base/` of the sekimore-gw repository and
+released from the same tag, under the gateway's version number (#235). Entries
+before that name pull requests of the former `Amakata/sgw-devcontainer-base`
+repository; each of those releases named the gateway version it took.
 
 Starts at 0.2.18. Releases before it are not written up here; the pull requests
 and the tag on each are the record. The gateway each of them took is at the

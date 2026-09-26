@@ -62,6 +62,6 @@ uv run scripts/paths.py dot | dot -Tsvg > paths.svg  draw it (Graphviz)
 1. Add the row to `docs/paths.yml`
 2. Add its id to `src/paths.py` or `relay/src/paths.rs`, and use the constant where the
    connection is opened
-3. Name the tests that cover it; add a `relay:verify` item in sgw-devcontainer-base when a real
+3. Name the tests that cover it; add a `relay:verify` item in `base/share/sgw/tasks.mise.*.toml` when a real
    machine has to probe it
 4. Run `uv run pytest tests/unit/test_paths.py`
