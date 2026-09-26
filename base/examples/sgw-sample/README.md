@@ -2,50 +2,9 @@
 
 *[日本語版](README.ja.md)*
 
-The project template `sgw init --devcontainer` writes: a dev container built on
-`sgw-devcontainer-base` behind `sekimore-gw`. It includes:
-
-- an isolated network in which all traffic goes through `sekimore-gw`
-- the configuration of `sekimore-relay`, the relay that carries git and the GitHub API
-  (`docker-compose.relay.yml`). The AI agent uses `git@github.com:Org/Repo.git` unchanged; its
-  key is disposable, and the connection to the upstream is authenticated with the operator's
-  ssh-agent inside the gateway. The relay refuses repositories outside the project and
-  operations that are not permitted
-- a minimal `Dockerfile` that only builds `FROM` the base image, with an example of installing
-  specific language versions with `mise`
-
-This directory is the readable copy; `sgw` carries the same files and writes them. Do not copy
-it by hand: `sgw init` does, with the pins of its own version.
-
-## Usage
-
-The steps are in [base/README.md](../../README.md): `sgw init`, `.env`, `config.yml`,
-`sgw open`, `sgw unlock`, `sgw login`, `sgw signing-key`, `sgw verify`. What is worth knowing
-behind them:
-
-- **VS Code must start without `SSH_AUTH_SOCK`** (`sgw open`). The Dev Containers extension
-  always forwards the operator's ssh-agent into the dev container and no setting disables it.
-  On macOS the `code` CLI starts the application through `open`, so `env -u SSH_AUTH_SOCK code`
-  changes nothing; `sgw open` removes the variable from launchd, starts the application directly
-  and checks its environment (`sgw open --check`). Before restarting Docker Desktop, run
-  `sgw open --restore-agent-env`. Opened the usual way, post-create **stops with an ERROR** and
-  says so.
-- **The secret store is locked after every recreate** (`sgw unlock`; `sgw keychain-set` once
-  makes `sgw recreate` unlock it). The upstream API token lives in it: locked, the relay cannot
-  use the GitHub API (git push and pull use SSH and still work).
-- The signing key's comment, which becomes its title on GitHub, is
-  `sekimore-agent-signing: <project> / <your name> <email>`; `SEKIMORE_SIGNING_KEY_COMMENT` in
-  `.env` changes it.
-- After adding or changing an upstream in `config.yml`: `sgw restart`, then `sgw refresh` (it
-  rebuilds dev's `~/.ssh/config` Host blocks and the proxy environment without Rebuild Container).
-- Routine: `sgw check`, `sgw tokens`, `sgw audit`, `sgw revoke-project` (when the project ends),
-  `sgw relay <any sekimore-relay subcommand>`.
-
-To use the template without the relay, remove `docker-compose.relay.yml` from `dockerComposeFile`
-in `devcontainer.json`, and delete `domain_handlers:` and `relay:` from `config/config.yml`.
-
-The mise tasks in `.devcontainer/sgw/` (`mise run gw:unlock`, `mise run relay:verify`, …) do
-the same as the `sgw` commands, for a project that uses them; `mise tasks` lists them.
+The files `sgw init --devcontainer` writes: a dev container built on `sgw-devcontainer-base`,
+behind `sekimore-gw`. This directory is the readable copy; `sgw` carries the same files. Do not
+copy it by hand.
 
 ## Files
 
@@ -77,3 +36,32 @@ sgw-sample/
     └── zsh-config/
         └── rc.d/                   # the project's own zsh configuration
 ```
+
+## Worth knowing
+
+- VS Code must start without `SSH_AUTH_SOCK`, which is what `sgw open` does. Opened the usual way, post-create stops with an ERROR
+- The secret store is locked after every recreate. Locked, the relay cannot use the GitHub API; git over SSH still works
+- After adding or changing an upstream in `config.yml`: `sgw restart`, then `sgw refresh`
+- The signing key's title on GitHub is `sekimore-agent-signing: <project> / <name> <email>`; `SEKIMORE_SIGNING_KEY_COMMENT` in `.env` changes it
+- When the project ends: `sgw revoke-project`
+- The mise tasks in `.devcontainer/sgw/` do the same as the `sgw` commands (`mise tasks` lists them)
+
+## Keeping up to date
+
+`.devcontainer/sgw/` is distributed: `sgw update --apply` replaces it, so do not edit it. To change
+a task, define one with the same name in `mise.toml`.
+
+```bash
+sgw update            # what is newer, which files change, what UPGRADING asks. Changes nothing
+sgw update --apply    # move to it
+```
+
+`sgw update --apply`:
+
+1. raises the gateway's `image:` tag and the `FROM` tag to `sgw`'s own version
+2. replaces `.devcontainer/sgw/`
+3. recreates the gateway, after asking
+4. unlocks the store when the passphrase is stored
+5. lists what only the operator can do: Rebuild Container, the [UPGRADING.md](../../../UPGRADING.md) sections crossed (`sgw update --notes`), a commit
+
+It stops when a file in `.devcontainer/sgw/` was edited by hand (`--force` overwrites).

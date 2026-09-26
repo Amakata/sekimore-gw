@@ -2,41 +2,8 @@
 
 *[English](README.md)*
 
-`sgw init --devcontainer` が書くプロジェクトの雛形。`sekimore-gw` の内側に `sgw-devcontainer-base` で作る dev コンテナ。中身は次のとおり。
-
-- すべての通信が `sekimore-gw` を通る隔離されたネットワーク
-- git と GitHub API を中継する関所 `sekimore-relay` の設定（`docker-compose.relay.yml`）。AI エージェントは
-  `git@github.com:Org/Repo.git` をそのまま使う。鍵は使い捨てで、上流への接続はゲートウェイの中で運用者の
-  ssh-agent が認証する。関所は案件外のリポジトリと許可していない操作を拒否する
-- base イメージを `FROM` するだけの最小の `Dockerfile`。`mise` で言語の版を入れる例つき
-
-このディレクトリは読むための写しです。`sgw` が同じファイルを持っていて、それを書きます。手でコピーしないでください。
-`sgw init` が、自分の版の pin で書きます。
-
-## 使いかた
-
-手順は [base/README.ja.md](../../README.ja.md) にあります: `sgw init`、`.env`、`config.yml`、`sgw open`、`sgw unlock`、
-`sgw login`、`sgw signing-key`、`sgw verify`。その裏で知っておくとよいこと:
-
-- **VS Code は `SSH_AUTH_SOCK` なしで起動しなければならない**（`sgw open`）。Dev Containers 拡張は運用者の ssh-agent を
-  必ず dev コンテナに転送し、止める設定がない。macOS の `code` CLI は `open` 経由でアプリを起動するので
-  `env -u SSH_AUTH_SOCK code` では変わらない。`sgw open` は launchd から変数を外し、アプリを直接起動し、環境を確かめる
-  （`sgw open --check`）。Docker Desktop を再起動する前に `sgw open --restore-agent-env`。ふつうに開くと post-create が
-  **ERROR で止まり**、そう言う。
-- **秘密ストアは作り直すたびに施錠される**（`sgw unlock`。一度 `sgw keychain-set` すれば `sgw recreate` が解錠する）。
-  上流 API のトークンはこの中にあり、施錠中は関所が GitHub API を使えない（git の push / pull は SSH なので動く）。
-- 署名鍵のコメント（GitHub での題名になる）は `sekimore-agent-signing: <project> / <name> <email>`。`.env` の
-  `SEKIMORE_SIGNING_KEY_COMMENT` で変えられる。
-- `config.yml` に上流を足したり変えたりしたら: `sgw restart`、そのあと `sgw refresh`（dev の `~/.ssh/config` の Host ブロックと
-  proxy 環境を Rebuild Container なしで作り直す）。
-- 日常: `sgw check`、`sgw tokens`、`sgw audit`、`sgw revoke-project`（案件の終わりに）、
-  `sgw relay <sekimore-relay の任意のサブコマンド>`。
-
-関所なしで使うには、`devcontainer.json` の `dockerComposeFile` から `docker-compose.relay.yml` を外し、
-`config/config.yml` から `domain_handlers:` と `relay:` を消す。
-
-`.devcontainer/sgw/` の mise タスク（`mise run gw:unlock`、`mise run relay:verify` …）は `sgw` のコマンドと同じことをする。
-`mise tasks` に一覧がある。
+`sgw init --devcontainer` が書くファイル。`sekimore-gw` の内側に `sgw-devcontainer-base` で作る dev コンテナ。
+このディレクトリは読むための写しで、`sgw` が同じファイルを持っている。手でコピーしない。
 
 ## ファイル
 
@@ -68,3 +35,32 @@ sgw-sample/
     └── zsh-config/
         └── rc.d/                   # プロジェクト自身の zsh 設定
 ```
+
+## 知っておくこと
+
+- VS Code は `SSH_AUTH_SOCK` なしで起動する必要がある。`sgw open` がそうする。ふつうに開くと post-create が ERROR で止まる
+- 秘密ストアは作り直すたびに施錠される。施錠中は関所が GitHub API を使えない。SSH の git は動く
+- `config.yml` に上流を足したり変えたりしたら: `sgw restart`、そのあと `sgw refresh`
+- 署名鍵の GitHub での題名は `sekimore-agent-signing: <project> / <name> <email>`。`.env` の `SEKIMORE_SIGNING_KEY_COMMENT` で変えられる
+- 案件が終わったら: `sgw revoke-project`
+- `.devcontainer/sgw/` の mise タスクは `sgw` のコマンドと同じことをする（`mise tasks` に一覧）
+
+## 最新への追従
+
+`.devcontainer/sgw/` は配布物で、`sgw update --apply` が入れ替える。編集しない。タスクを変えたければ、
+`mise.toml` に同じ名前のタスクを書く。
+
+```bash
+sgw update            # 何が新しいか、どのファイルが変わるか、UPGRADING が何を求めるか。何も変更しない
+sgw update --apply    # 更新する
+```
+
+`sgw update --apply` がすること:
+
+1. ゲートウェイの `image:` タグと `FROM` タグを `sgw` 自身の版に上げる
+2. `.devcontainer/sgw/` を入れ替える
+3. 確認のうえ、ゲートウェイを作り直す
+4. パスフレーズが保存されていれば解錠する
+5. 運用者にしかできない作業を表示する: Rebuild Container、またぐ [UPGRADING.ja.md](../../../UPGRADING.ja.md) の節（`sgw update --notes`）、コミット
+
+`.devcontainer/sgw/` のファイルが手で書き換えられていれば止まる（`--force` で上書き）。
