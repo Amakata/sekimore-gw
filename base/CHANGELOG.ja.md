@@ -1,38 +1,11 @@
-# sgw-devcontainer-base 変更履歴
+# sgw-devcontainer-base 変更履歴（0.2.45 まで）
 
 *[English](CHANGELOG.md)*
 
-DevContainer のベースイメージ — Dockerfile と焼き込む道具、同梱する zsh 設定と
-スクリプト、`examples/` のサンプル devcontainer。
-
-**Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
-各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
-
-0.2.46 からは sekimore-gw リポジトリの `base/` から作り、同じタグで、ゲートウェイと同じ版番号で出す（#235）。
-それより前の項目の PR 番号は旧 `Amakata/sgw-devcontainer-base` リポジトリのもの。各版は取り込んだゲートウェイの版を書いている。
-
-0.2.18 から始める。それ以前のリリースはここに書かない。各 PR とタグが記録。
-取り込んだ gateway の版だけは末尾にある。
-
-## 0.2.48（2026-09-26）
-
-### Enhancement
-
-- base イメージ自体の変更は無い。ゲートウェイと一緒に出す。サンプルの README は sgw init が何を書き出すかを説明するようになった (sekimore-gw#243)
-
-## 0.2.47（2026-09-26）
-
-### Enhancement
-
-- base イメージ自体の変更は無い。ゲートウェイと一緒に出す (sekimore-gw#238)
-
-## 0.2.46（2026-09-26）
-
-### Enhancement
-
-- sekimore-gw リポジトリの `base/` に移った。イメージはそこから作り、ゲートウェイのタグで、その版番号で出す。base は 0.2.43 → 0.2.46 に飛ぶ (sekimore-gw#236)
-- `upgrade.sh` は配布ファイルを sekimore-gw のタグの `base/share/sgw/` から、UPGRADING をその最上位から取る。サンプルの `gateway.mise.toml` は同じコミットの `../share` のもの (sekimore-gw#236)
-- 他と同じ Apache-2.0 にした。以前は MIT だった (sekimore-gw#236)
+base イメージは 0.2.45 まで独立したリポジトリ（`Amakata/sgw-devcontainer-base`、archive 済み）で、
+版番号も別だった。下の各版は取り込んだゲートウェイの版を書いていて、PR 番号はそのリポジトリのもの。
+0.2.46 からは sekimore-gw リポジトリの `base/` から作り、同じタグで出す。その変更は
+[../CHANGELOG.ja.md](../CHANGELOG.ja.md) にある。ここには何も足さない。
 
 ## 0.2.43（2026-09-25）
 
@@ -233,7 +206,6 @@ DevContainer のベースイメージ — Dockerfile と焼き込む道具、同
 ## 0.2.18 より前
 
 内容は書かない。各 PR とタグが記録。ここに残すのは、取り込んだ gateway の版だけ。
-
 - 0.2.17 は gateway 0.2.15 を取り込んだ
 - 0.2.16 は gateway 0.2.15 を取り込んだ
 - 0.2.15 は gateway 0.2.14 を取り込んだ

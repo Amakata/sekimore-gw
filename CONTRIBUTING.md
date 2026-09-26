@@ -373,7 +373,7 @@ Fixes #123
 ## Release process
 
 1. Update the version in `pyproject.toml` and in `relay/Cargo.toml`.
-2. Update the changelogs: `CHANGELOG.md`, `CHANGELOG.ja.md`, `relay/CHANGELOG.md` and `relay/CHANGELOG.ja.md`.
+2. Update the changelog: `CHANGELOG.md` and `CHANGELOG.ja.md`.
 3. Create the git tag: `git tag v0.0.2`.
 4. Push the tag: `git push origin v0.0.2`.
 5. GitHub Actions builds and publishes the Docker image.

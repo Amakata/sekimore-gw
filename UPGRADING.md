@@ -6,10 +6,7 @@
 **This guide lists only the releases that require you to change a file you own.**
 For any release that is not listed, running `mise run upgrade:apply` is the whole upgrade
 (before base 0.2.20, raise the image tag and run `mise run gw:recreate` instead). For what
-changed in each release, see the changelogs:
-[gateway](https://github.com/Amakata/sekimore-gw/blob/main/CHANGELOG.md) /
-[relay](https://github.com/Amakata/sekimore-gw/blob/main/relay/CHANGELOG.md) /
-[base](base/CHANGELOG.md).
+changed in each release, see the [changelog](CHANGELOG.md).
 
 "A file you own" is a file that you copied from the sample:
 

@@ -1,43 +1,12 @@
-# sgw-devcontainer-base changelog
+# sgw-devcontainer-base changelog, until 0.2.45
 
 *[日本語版](CHANGELOG.ja.md)*
 
-The devcontainer base image: the Dockerfile and the tools baked into it, the zsh
-configuration and the scripts it ships, and the sample devcontainer under
-`examples/`.
-
-Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first —
-and say what changed, with the pull request that changed it. The reasoning is in
-the pull request.
-
-From 0.2.46 the image is built from `base/` of the sekimore-gw repository and
-released from the same tag, under the gateway's version number (#235). Entries
-before that name pull requests of the former `Amakata/sgw-devcontainer-base`
-repository; each of those releases named the gateway version it took.
-
-Starts at 0.2.18. Releases before it are not written up here; the pull requests
-and the tag on each are the record. The gateway each of them took is at the
-bottom.
-
-## 0.2.48 (2026-09-26)
-
-### Enhancement
-
-- no change to the base image; released with the gateway. The sample's README describes what sgw init writes (sekimore-gw#243)
-
-## 0.2.47 (2026-09-26)
-
-### Enhancement
-
-- no change to the base image; released with the gateway (sekimore-gw#238)
-
-## 0.2.46 (2026-09-26)
-
-### Enhancement
-
-- moved into the sekimore-gw repository as `base/`; the image is built from there and released from the gateway's tag, under its version number, so the base goes 0.2.43 → 0.2.46 (sekimore-gw#236)
-- `upgrade.sh` reads the distributed files from `base/share/sgw/` of the sekimore-gw tag and UPGRADING from its root; the sample's `gateway.mise.toml` is `../share`'s of the same commit (sekimore-gw#236)
-- licensed Apache-2.0 with the rest of the repository; it was MIT (sekimore-gw#236)
+The base image was a repository of its own (`Amakata/sgw-devcontainer-base`, archived) with a
+version number of its own until 0.2.45; each release below names the gateway version it took, and
+the pull request numbers are that repository's. From 0.2.46 the image is built from `base/` of
+the sekimore-gw repository and released from the same tag, and its changes are in
+[../CHANGELOG.md](../CHANGELOG.md). Nothing is added here.
 
 ## 0.2.43 (2026-09-25)
 
@@ -239,7 +208,6 @@ bottom.
 
 Not written up: the pull request and the tag on each is the record. What is kept
 here is the gateway each one took.
-
 - 0.2.17 took gateway 0.2.15
 - 0.2.16 took gateway 0.2.15
 - 0.2.15 took gateway 0.2.14
