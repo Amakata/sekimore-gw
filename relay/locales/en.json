@@ -330,7 +330,7 @@
   "sgw.cmd.port": "the host port a service publishes (default: container port 8080)",
   "sgw.cmd.id": "the container ID of a service",
   "sgw.cmd.project": "the compose project name",
-  "sgw.cmd.down": "stop and remove the compose stack (the volumes stay)",
+  "sgw.cmd.down": "remove the whole stack, dev container included (the volumes stay); also the way out of \"network … already exists\"",
   "sgw.cmd.open": "start VS Code where the operator's SSH_AUTH_SOCK does not reach it",
   "sgw.cmd.open.check": "show the state of SSH_AUTH_SOCK in launchd, in Docker Desktop and in the running VS Code",
   "sgw.cmd.open.restore": "put SSH_AUTH_SOCK back into launchd (before restarting Docker Desktop)",

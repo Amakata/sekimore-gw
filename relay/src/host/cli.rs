@@ -282,7 +282,7 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
             println!("{}", docker.compose_project()?);
             Ok(0)
         }
-        Down => ops::down(&docker),
+        Down => ops::down(&docker, &proj),
         Init { .. } => unreachable!("handled above"),
         Update {
             apply,

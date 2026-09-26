@@ -391,6 +391,55 @@ impl Docker {
         ])
     }
 
+    /// Any container of this stack, stopped ones included, by the working-directory label alone
+    /// (never another project's). None when the stack has nothing at all.
+    fn stack_container(&self) -> anyhow::Result<Option<String>> {
+        let ids = self.out(&["ps", "-a", "-q", "--filter", &self.working_dir_filter()])?;
+        Ok(ids
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .map(str::to_string))
+    }
+
+    /// `docker compose down --remove-orphans` for the whole stack, dev container included.
+    ///
+    /// The project name and files come from a container's labels when the stack has one, even
+    /// stopped: that is the case this exists for, a start that fails with "network … already
+    /// exists" because the previous containers still hold it, when `find_container` (running
+    /// ones only) sees nothing. With no container at all, the name is what Dev Containers would
+    /// have used (`fallback_project`) and the files are those in the compose directory.
+    pub fn down(&self, fallback_project: &str) -> anyhow::Result<i32> {
+        let wd = self.compose_dir.display().to_string();
+        let (proj, wd, cfgs, envfile) = match self.stack_container()? {
+            Some(cid) => (
+                self.label(&cid, "com.docker.compose.project")?,
+                self.label(&cid, "com.docker.compose.project.working_dir")?,
+                self.label(&cid, "com.docker.compose.project.config_files")?,
+                self.label(&cid, "com.docker.compose.project.environment_file")?,
+            ),
+            None => (
+                fallback_project.to_string(),
+                wd,
+                String::new(),
+                String::new(),
+            ),
+        };
+        let fargs = compose_args(Path::new(&wd), &cfgs, &envfile, |p| p.is_file());
+        println!("project={proj}");
+        println!("compose: {}", fargs.join(" "));
+        let mut args: Vec<String> = vec![
+            "compose".into(),
+            "-p".into(),
+            proj,
+            "--project-directory".into(),
+            wd,
+        ];
+        args.extend(fargs);
+        args.extend(["down".into(), "--remove-orphans".into()]);
+        self.run(&args)
+    }
+
     /// The compose project of the gateway's container, for `docker compose -p`.
     pub fn compose_project(&self) -> anyhow::Result<String> {
         let cid = self.find_container(GATEWAY)?;
