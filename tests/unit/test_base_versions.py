@@ -22,7 +22,9 @@ _BASE_IMAGE = re.compile(r"ghcr\.io/amakata/sgw-devcontainer-base:(\d+(?:\.\d+)*
 
 
 def _version() -> str:
-    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "version"
+    ]
 
 
 def _text(path: Path) -> str:
@@ -31,8 +33,14 @@ def _text(path: Path) -> str:
 
 def describe_the_base_image_carries_the_gateways_version():
     def it_takes_the_gateway_of_this_very_version():
-        m = re.search(r"^ARG SEKIMORE_GW_IMAGE=ghcr\.io/amakata/sekimore-gw:(\S+)$", _text(BASE / "Dockerfile"), re.M)
-        assert m, "base/Dockerfile has no ARG SEKIMORE_GW_IMAGE=ghcr.io/amakata/sekimore-gw:<version>"
+        m = re.search(
+            r"^ARG SEKIMORE_GW_IMAGE=ghcr\.io/amakata/sekimore-gw:(\S+)$",
+            _text(BASE / "Dockerfile"),
+            re.M,
+        )
+        assert m, (
+            "base/Dockerfile has no ARG SEKIMORE_GW_IMAGE=ghcr.io/amakata/sekimore-gw:<version>"
+        )
         assert m.group(1) == _version(), (
             f"base/Dockerfile takes gateway {m.group(1)} but pyproject.toml says {_version()}; "
             "the image and the gateway are released from one tag, so the ARG names that tag"
@@ -41,15 +49,23 @@ def describe_the_base_image_carries_the_gateways_version():
     def it_pins_the_sample_to_this_version_of_both_images():
         compose = _GW_IMAGE.findall(_text(SAMPLE / "docker-compose.yml"))
         dockerfile = _BASE_IMAGE.findall(_text(SAMPLE / "Dockerfile"))
-        assert compose == [_version()], f"the sample's compose pins gateway {compose}, not {_version()}"
-        assert dockerfile == [_version()], f"the sample's Dockerfile pins base {dockerfile}, not {_version()}"
+        assert compose == [_version()], (
+            f"the sample's compose pins gateway {compose}, not {_version()}"
+        )
+        assert dockerfile == [_version()], (
+            f"the sample's Dockerfile pins base {dockerfile}, not {_version()}"
+        )
 
     def it_quotes_this_version_in_the_readmes():
         for name in ("README.md", "README.ja.md"):
             text = _text(BASE / name)
             quoted = set(_GW_IMAGE.findall(text)) | set(_BASE_IMAGE.findall(text))
-            assert quoted, f"base/{name} no longer quotes an image; drop it from this test if that is deliberate"
-            assert quoted == {_version()}, f"base/{name} quotes {sorted(quoted)}, the version is {_version()}"
+            assert quoted, (
+                f"base/{name} no longer quotes an image; drop it from this test if that is deliberate"
+            )
+            assert quoted == {_version()}, (
+                f"base/{name} quotes {sorted(quoted)}, the version is {_version()}"
+            )
 
     def it_has_had_upgrading_reviewed_for_this_version():
         # Most releases ask nothing of a user; what has to happen every time is the decision. The
@@ -72,4 +88,6 @@ def describe_the_base_image_carries_the_gateways_version():
     def it_writes_this_version_up_in_the_base_changelog():
         for name in ("CHANGELOG.md", "CHANGELOG.ja.md"):
             heads = re.findall(r"^## (\d+(?:\.\d+)*)", _text(BASE / name), re.M)
-            assert heads and heads[0] == _version(), f"base/{name} leads with {heads[:1]}, not {_version()}"
+            assert heads and heads[0] == _version(), (
+                f"base/{name} leads with {heads[:1]}, not {_version()}"
+            )
