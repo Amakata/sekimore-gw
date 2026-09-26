@@ -8,6 +8,10 @@ description = "Policy-enforcing relay for AI agents: git over SSH and GitHub API
 
 [features]
 default = []
+# The host-side tool `sgw` (#234): the operator's binary on the Mac / Linux host. Off in the
+# image build, which compiles only the relay; its templates and scripts under base/ are not in
+# that build context, so everything host-side sits behind this feature.
+host = []
 # Enables LocalGitUpstream (runs git receive-pack/upload-pack against a local bare repo)
 # for end-to-end tests. Never enabled in the image build.
 test-hooks = []
@@ -61,3 +65,8 @@ lto = "thin"
 codegen-units = 1
 strip = true
 panic = "abort"
+
+[[bin]]
+name = "sgw"
+path = "src/bin/sgw.rs"
+required-features = ["host"]

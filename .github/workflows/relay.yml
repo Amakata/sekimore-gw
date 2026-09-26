@@ -33,9 +33,9 @@ jobs:
       - name: fmt
         run: cargo fmt --check
       - name: clippy
-        run: cargo clippy --all-targets --features test-hooks -- -D warnings
+        run: cargo clippy --all-targets --features test-hooks,host -- -D warnings
       - name: test (e2e requires git + ssh)
-        run: cargo test --features test-hooks --locked
+        run: cargo test --features test-hooks,host --locked
         env:
           SEKIMORE_E2E_REQUIRED: "1"
       - name: forbidden dependencies

@@ -210,6 +210,21 @@ Run the unit tests:
 uv run pytest tests/unit/ -v
 ```
 
+### The host tool `sgw` (`relay/src/host/`)
+
+The operator's binary on the host (#234) is a second binary of the relay crate, behind the
+`host` feature so the image build never compiles it:
+
+```bash
+cd relay
+cargo build --features host --bin sgw
+cargo test --features host host          # the unit tests
+cargo test --features host --test sgw    # end to end, against a fake docker on PATH
+```
+
+CI runs clippy and the tests with `--features test-hooks,host`. Its help and messages are the
+`sgw.*` keys of `relay/locales/{en,ja}.json`.
+
 ### The base image (`base/`)
 
 The dev-container base image and the files it distributes live in `base/` and are released

@@ -9,6 +9,8 @@ pub mod config;
 pub mod fsutil;
 pub mod git;
 pub mod github;
+#[cfg(feature = "host")]
+pub mod host;
 pub mod i18n;
 pub mod netutil;
 pub mod passthrough;
