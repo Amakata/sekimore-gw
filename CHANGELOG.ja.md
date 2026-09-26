@@ -11,6 +11,17 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.53（2026-09-27）
+
+### Fix
+
+- `sgw update` が移行後も毎回 `mise.toml` を挙げなくなった。旧雛形のコメントにある `.devcontainer/sgw/` は include ではないので、移行と同じく `includes` と `SGW` の行を読む (#268)
+- `sgw verify` の上流プロキシの項目が、設定済みの gateway でも必ず SKIP になっていた。URL は `/api/config` の `proxy` の下から読む。`proxy.enabled` が false なら理由を添えて SKIP する (#269)
+
+### Enhancement
+
+- `sgw open` の報告は 3 行を 1 回だけ出す。シェルのソケット、rc ファイル、アプリのパス、プロセスは `--check` で見る。gateway が起動していれば秘密ストアをこの端末で解錠し、次の手順は番号付きで示す (#267)
+
 ## 0.2.52（2026-09-26）
 
 ### Enhancement

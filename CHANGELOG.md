@@ -12,6 +12,17 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.53 (2026-09-27)
+
+### Fix
+
+- `sgw update` no longer names `mise.toml` on every run after the migration: a comment that mentions `.devcontainer/sgw/` is not an include, so it reads the `includes` and the `SGW` line the way the migration does (#268)
+- `sgw verify`'s upstream-proxy item skipped on every gateway that had one: the URL is read under `proxy` in `/api/config` now, and a false `proxy.enabled` skips with a precise reason (#269)
+
+### Enhancement
+
+- `sgw open`'s report is three lines printed once; the shell's socket, the rc files, the app's path and the processes are `--check`'s; the store is unlocked at the terminal when the gateway is up, and the next steps are a numbered list (#267)
+
 ## 0.2.52 (2026-09-26)
 
 ### Enhancement
