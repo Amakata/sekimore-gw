@@ -11,54 +11,92 @@
 
 sekimore-gw（sgw）は、Docker で動く AI エージェントのためのネットワークゲートウェイです。
 
-- 1 つのコンテナに 4 つの層: DNS、ファイアウォール、Squid、関所。設定は 1 つの `config.yml`
-- 運用者の GitHub の資格情報は関所（sekimore-relay）が持つ。エージェントはゲートウェイの外で通用するものを持たない
-- 権限は操作ごとに付与する: `pr:create` は許可、`pr:merge` は拒否
+- 1 つのコンテナに全部入り:
+  - DNS フィルタ
+  - IP ファイアウォール
+  - HTTP プロキシ
+  - git と GitHub API の relay（関所、sekimore-relay）
+- 設定は 1 つの `config.yml`
+- GitHub の資格情報は関所が持つ。エージェントは持たない
+- 権限は操作ごと: `pr:create` は許可、`pr:merge` は拒否
+- 許可した通信もブロックした通信も Web UI で見える
 
 ## トークンでは足りない理由
 
-- エージェントのコンテナにあるトークンは読み出せる。`~/.ssh` も `.env` も同じ
-- classic の `repo` トークン: アカウントが到達できるすべてのリポジトリに読み書きできる
-- fine-grained トークン: リポジトリは絞れるが、操作は絞れない。「Pull requests: write」は作成もマージもできる
-- どちらもエージェントの操作を記録しない。送信量の上限もない
-
+- コンテナの中のトークンは、エージェントに読める
+- トークンはリポジトリを絞れても、操作は絞れない
+- 何をしたかの記録が残らない
 
 ## はじめかた
 
-Docker（macOS は Docker Desktop、Linux は Docker Engine）と、Dev Containers 拡張の入った VS Code が要ります。
+必要なもの:
 
-1. 運用者の道具 `sgw` を入れる:
+- Docker（macOS は Docker Desktop、Linux は Docker Engine）
+- VS Code と Dev Containers 拡張
+
+1. `sgw` を入れる:
    ```bash
    curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh
    ```
-2. プロジェクトの雛形をディレクトリに書く:
+2. 雛形を書く:
    ```bash
    sgw init --devcontainer my-project
+   cd my-project
    ```
-3. 続きは [base/README.ja.md](base/README.ja.md): `config.yml`、dev コンテナ、`sgw unlock` / `sgw login` / `sgw verify`。
+3. `.devcontainer/.env` と `.devcontainer/config/config.yml` を埋める
+4. VS Code を完全に終了してから開き直し、「Reopen in Container」を選ぶ:
+   ```bash
+   sgw open
+   ```
+   ⚠️ VS Code は必ず `sgw open` で起動する
+5. 秘密ストアを解錠する:
+   ```bash
+   sgw unlock
+   ```
+   ⚠️ 初回に決めたパスフレーズで、以後も解錠する
+6. GitHub にログインする:
+   ```bash
+   sgw login
+   ```
+   ⚠️ 初回だけ。結果は秘密ストアに入る
+7. 確認する:
+   ```bash
+   sgw verify
+   ```
 
 ## 何を設定すると何が起きるか
 
-設定は `.devcontainer/config/config.yml` に全部あります。[config.sample.yml](config/config.sample.yml) に全キーがコメント付きで載っています。
+設定は `.devcontainer/config/config.yml`。全キーの説明は [config.sample.yml](config/config.sample.yml)。
 
 | 設定 | 効果 |
 |---|---|
-| `allow_domains` | エージェントの普段の通信が届いてよい宛先。DNS・ファイアウォール・Squid が同じこの一覧に従う |
-| `domain_handlers`、`relay` | このドメインは関所を通る: SSH の git、GitHub API、上限付きの HTTPS。上流の資格情報は関所が持ち、エージェントは持たない |
-| `relay.project.repos`、`permissions` | どのリポジトリを、読み取り専用か読み書きか、33 種類の操作のどれを許すか: `pr:create` は許可、`pr:merge` は拒否 |
-| `proxy.upstream_proxy`、`proxy.direct_egress` | 外に出る通信すべてに企業プロキシを通す。`deny` でプロキシを迂回する道を塞ぐ。パスワードは秘密ストアに入れる（`sgw proxy-credential set`）。エージェントが読めるファイルには書かない |
-| `network.allowed_ports` | エージェントが届いてよいポート。未設定は全ポート。ふつうは `[80, 443]` |
+| `allow_domains` | エージェントが届いてよい宛先 |
+| `domain_handlers` | 関所を通すドメイン: git、GitHub API、HTTPS |
+| `relay.project.repos` | エージェントが触ってよいリポジトリ |
+| `relay.project.permissions` | 許す操作 |
+| `network.allowed_ports` | 届いてよいポート |
 
-| 操作 | コマンド |
+| したいこと | コマンド |
 |---|---|
-| 秘密ストアを解錠する（作り直すたびに。`sgw keychain-set` を一度やれば自動） | `sgw unlock` |
-| GitHub にログインする（一度だけ） | `sgw login` |
-| 構成全体を確認する | `sgw verify` |
-| `domain_handlers` や `relay` を変えたあと | `sgw restart` |
+| 秘密ストアを解錠する（ゲートウェイのコンテナを作り直したあとは施錠されている） | `sgw unlock` |
+| 解錠を自動にする | `sgw keychain-set` |
+| GitHub にログインする | `sgw login` |
+| 構成を確認する | `sgw verify` |
+| `config.yml` の変更を反映する | `sgw restart` |
 | 新しい版に上げる | `sgw update --apply` |
-| エージェントがしたこと・拒否されたことを見る | `sgw audit` |
+| 許可・ブロックされた通信を Web UI で見る | `sgw web` |
+| エージェントの操作記録を見る | `sgw audit` |
 
-ほかのコマンドは `sgw --help`。
+ほかは `sgw --help`。
+
+## オプション
+
+| したいこと | 設定 |
+|---|---|
+| 企業プロキシを通す | `proxy.upstream_proxy`。パスワードは `sgw proxy-credential set` |
+| 踏み台越しに GitHub に届く | `domain_handlers.<host>.ssh_options: [ProxyJump=…]` |
+| GitHub Enterprise を使う | `domain_handlers` にそのホストを足す（`ssh_port`、`api_base`） |
+| エージェントのコミットを GitHub で Verified にする | `sgw signing-key` が表示する鍵を Signing Key として登録する |
 
 ## 向くとき、向かないとき
 
@@ -73,35 +111,36 @@ Docker（macOS は Docker Desktop、Linux は Docker Engine）と、Dev Containe
 
 エージェントに次をさせたいときには向きません。
 
-- GitHub 以外の API に規則を課す（SSH の git はどこでも動くが、API の規則は GitHub だけ。[#50](https://github.com/Amakata/sekimore-gw/issues/50)）
-- リクエストの内容で判断される（TLS を終端しない。分かるのは宛先とバイト数だけ）
-- 宛先の制限だけを受ける（許可リストだけで足りる）
-- GitHub に触らない（関所の役割がない）
+- GitHub 以外の API に規則を課す
+- リクエストの内容で判断される（TLS を終端しない）
+- 宛先の制限だけを受ける（許可リストで足りる）
+- GitHub に触らない
 
 ## ドキュメント
 
-- [relay/README.ja.md](relay/README.ja.md) — 関所の設定、エージェント側の手順、日々の使い方、設定リファレンス、権限の一覧
-- [config/config.sample.yml](config/config.sample.yml) — すべてのキー。既定値とコメント付き
-- [docs/localization.ja.md](docs/localization.ja.md) — Web UI と CLI の言語（英語・日本語）
-- [docs/paths.ja.md](docs/paths.ja.md) — 経路台帳: すべての接続の辺をグラフとして検査
-- [CONTRIBUTING.md](CONTRIBUTING.md) — 開発、テスト、イメージ
-- [CHANGELOG.ja.md](CHANGELOG.ja.md)、[relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md)、[base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) — イメージは 2 つ、版は 1 つ
-- [UPGRADING.ja.md](UPGRADING.ja.md) — 版を上げるときにプロジェクト側で要る作業
-- [base/README.ja.md](base/README.ja.md) — dev コンテナ側: イメージとプロジェクトのテンプレート
-- [RELEASING.md](RELEASING.md) — リリースの手順
+- [base/examples/sgw-sample/README.ja.md](base/examples/sgw-sample/README.ja.md) — `sgw init` が書くファイル
+- [base/README.ja.md](base/README.ja.md) — dev コンテナのイメージの中身
+- [relay/README.ja.md](relay/README.ja.md) — 関所の設定と権限の一覧
+- [config/config.sample.yml](config/config.sample.yml) — すべてのキー
+- [UPGRADING.ja.md](UPGRADING.ja.md) — 版を上げるときの作業
+- [CHANGELOG.ja.md](CHANGELOG.ja.md) — 変更履歴
+- [docs/paths.ja.md](docs/paths.ja.md) — 経路台帳
+- [docs/localization.ja.md](docs/localization.ja.md) — 英語と日本語
+- [CONTRIBUTING.md](CONTRIBUTING.md)、[RELEASING.md](RELEASING.md)
 
 ## dev コンテナがうまく上がらないとき
 
-`sgw verify` が、落ちた項目と打つコマンドを言います。よくあるもの:
+まず `sgw verify`。落ちた項目と打つコマンドを言います。
 
 | 症状 | すること |
 |---|---|
-| 再起動や更新のあと、エージェントが GitHub に届かない | 秘密ストアが施錠されている: `sgw unlock`（一度 `sgw keychain-set` しておけば `sgw recreate` が自分で解錠する） |
-| dev の `sekimore whoami` がトークンが無いと言う | `sgw login`、そのあと `sgw verify` |
-| dev の `ssh-add -l` に自分の鍵が並ぶ | VS Code が `SSH_AUTH_SOCK` 付きで起動している。完全に終了して `sgw open` で起動する |
-| `config.yml` の `domain_handlers` や `relay` を変えたのに効かない | `sgw restart`。`allow_domains` だけの変更は reload の窓が開いていれば反映される（`sgw reload-status`） |
-| エージェントに要るドメインが解決されない | `allow_domains` に足す。拒否の記録は Web UI（`sgw web`）と `sgw logs` にある |
-| `sgw update --apply` のあともゲートウェイのイメージが古い | `sgw recreate` が pull する。`docker restart` では古いまま。base の変更は VS Code の Rebuild Container が要る |
+| 再起動や更新のあと、エージェントが GitHub に届かない | `sgw unlock` |
+| dev の `ssh-add -l` に自分の鍵が並ぶ | VS Code を完全に終了して `sgw open` |
+| `config.yml` を変えたのに効かない | `sgw restart` |
+| エージェントに要るドメインが解決されない | `allow_domains` に足す。ブロックされた通信は `sgw web` で見える |
+| 版を上げたのにゲートウェイが古い | `sgw recreate` |
+| 起動時に「network … already exists」と出る | 前の dev コンテナとゲートウェイが残っている。`sgw down` で丸ごと消して開き直す |
+| 版を上げたのに dev コンテナが古い | VS Code の Rebuild Container |
 
 ## ライセンス
 
