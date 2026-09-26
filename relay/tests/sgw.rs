@@ -796,6 +796,17 @@ fn update_moves_a_project_off_the_mise_layer() {
         "# The day-to-day operations\n[task_config]\nincludes = [\".devcontainer/sgw/tasks.mise.toml\", \".devcontainer/sgw/gateway.mise.toml\"]\n\n[env]\nSGW = \"{{config_root}}/.devcontainer/sgw/sgw.sh\"\n\n[tasks.mine]\nrun = \"echo mine\"\n",
     )
     .unwrap();
+    // the start line of the mise era, which names a file the migration removes
+    let dcj = dir.join(".devcontainer/devcontainer.json");
+    let text = std::fs::read_to_string(&dcj).unwrap();
+    std::fs::write(
+        &dcj,
+        text.replace(
+            "\"postStartCommand\": \"sgw-post-start\"",
+            "\"postStartCommand\": \"sh /workspace/.devcontainer/sgw/post-start.sh\"",
+        ),
+    )
+    .unwrap();
     // a file of the project's own in the directory stops the removal
     std::fs::write(old.join("notes.txt"), "keep\n").unwrap();
     let out = sgw(&f, &["update", "--offline"])
@@ -829,6 +840,15 @@ fn update_moves_a_project_off_the_mise_layer() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("removed .devcontainer/sgw/"), "{stdout}");
     assert!(!old.exists());
+    let text = std::fs::read_to_string(&dcj).unwrap();
+    assert!(
+        text.contains("\"postStartCommand\": \"sgw-post-start\""),
+        "the start line follows the removed script: {text}"
+    );
+    assert!(
+        !stdout.contains("make devcontainer.json's postStartCommand"),
+        "{stdout}"
+    );
     let text = std::fs::read_to_string(&mise).unwrap();
     assert!(!text.contains(".devcontainer/sgw/"), "{text}");
     assert!(

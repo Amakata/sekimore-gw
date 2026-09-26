@@ -420,6 +420,8 @@
   "sgw.update.m_foreign_stop": ".devcontainer/sgw/ holds files sgw did not put there ({files}); move them out, then sgw update --apply",
   "sgw.update.m_mise": "mise.toml: the includes of .devcontainer/sgw/ and the SGW line go; your own tasks stay",
   "sgw.update.m_removed": "removed .devcontainer/sgw/",
+  "sgw.update.m_poststart": "devcontainer.json: postStartCommand names .devcontainer/sgw/post-start.sh, which goes; it becomes the one line sgw-post-start",
+  "sgw.update.m_poststart_done": "devcontainer.json: postStartCommand is sgw-post-start now",
   "sgw.update.m_mise_done": "mise.toml: took out the includes of .devcontainer/sgw/ and the SGW line",
   "sgw.update.r_mise_empty": "mise.toml has nothing of its own left: git rm mise.toml",
   "sgw.update.r_sgw_new": "{file}: merge {file}.sgw-new (this version's file) into yours, then delete it",

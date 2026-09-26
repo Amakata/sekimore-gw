@@ -802,6 +802,8 @@ Rebuild Container after moving the base pin, as always when the base changes.
 - removes `.devcontainer/sgw/` (only when it holds nothing but those files)
 - takes the `includes` of `.devcontainer/sgw/` and the `SGW` line out of `mise.toml`; your own
   tasks stay. When nothing of yours is left, it says so: `git rm mise.toml`
+- makes `postStartCommand` the one line `sgw-post-start` when it still named
+  `.devcontainer/sgw/post-start.sh` (that file is gone)
 - writes `sgw.toml` beside `.devcontainer/`: sgw's record of the template files as it wrote them,
   so later updates can tell a file you edited from one a new version changes
 

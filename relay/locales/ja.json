@@ -420,6 +420,8 @@
   "sgw.update.m_foreign_stop": ".devcontainer/sgw/ に sgw が置いていないファイルがある（{files}）。外に出してから sgw update --apply",
   "sgw.update.m_mise": "mise.toml: .devcontainer/sgw/ の includes と SGW の行を消す。自分のタスクは残る",
   "sgw.update.m_removed": ".devcontainer/sgw/ を消した",
+  "sgw.update.m_poststart": "devcontainer.json: postStartCommand が消える .devcontainer/sgw/post-start.sh を指している。sgw-post-start の 1 行にする",
+  "sgw.update.m_poststart_done": "devcontainer.json: postStartCommand を sgw-post-start にした",
   "sgw.update.m_mise_done": "mise.toml: .devcontainer/sgw/ の includes と SGW の行を消した",
   "sgw.update.r_mise_empty": "mise.toml に自分のものは残っていない: git rm mise.toml",
   "sgw.update.r_sgw_new": "{file}: {file}.sgw-new（この版のファイル）を自分のものに取り込んで、消す",
