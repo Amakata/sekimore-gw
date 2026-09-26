@@ -5,6 +5,11 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      base_version:
+        description: "Publish only the base image, against the gateway image of this version (already on GHCR). Empty: build the gateway as usual"
+        required: false
+        default: ""
 
 env:
   REGISTRY: ghcr.io
@@ -17,6 +22,7 @@ jobs:
   # Much faster, since arm64 no longer goes through QEMU (it used to be one job for both
   # architectures, with arm64 taking ~10 min under QEMU).
   build:
+    if: ${{ !inputs.base_version }}
     strategy:
       fail-fast: false
       matrix:
@@ -92,6 +98,7 @@ jobs:
 
   # Combine the two digests into a single multi-arch manifest and tag it
   merge:
+    if: ${{ !inputs.base_version }}
     needs: build
     runs-on: ubuntu-26.04
     permissions:
@@ -169,7 +176,9 @@ jobs:
   # shape as above; the image name is the base's own.
   base-build:
     needs: merge
-    if: startsWith(github.ref, 'refs/tags/v')
+    # On a tag, after the gateway image of that tag. On a dispatch with base_version, alone: the
+    # gateway image is already on GHCR (the recovery path when this half failed, as 0.2.46's did)
+    if: ${{ !cancelled() && ((startsWith(github.ref, 'refs/tags/v') && needs.merge.result == 'success') || inputs.base_version) }}
     strategy:
       fail-fast: false
       matrix:
@@ -187,8 +196,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Version from the tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Version to publish (the tag's, or the dispatch input)
+        run: |
+          v="${{ inputs.base_version }}"; [ -n "$v" ] || v="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      # The gateway image reference needs the lowercase repository name, same as in `build`
+      - name: Lowercase image name
+        run: echo "IMAGE_LC=${IMAGE_NAME,,}" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -231,7 +246,7 @@ jobs:
 
   base-merge:
     needs: base-build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ !cancelled() && needs.base-build.result == 'success' }}
     runs-on: ubuntu-26.04
     permissions:
       contents: read
@@ -239,8 +254,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Version from the tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Version to publish (the tag's, or the dispatch input)
+        run: |
+          v="${{ inputs.base_version }}"; [ -n "$v" ] || v="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -259,25 +276,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags)
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
-
+      # The same tags the gateway gets (X.Y.Z, X.Y, X, latest), from VERSION rather than from
+      # the git ref, so a dispatch on main tags the same way a tag push does
       - name: Create and push manifest list
         working-directory: /tmp/digests
         run: |
           set -eu
           REPO="${REGISTRY}/${BASE_IMAGE}"
           n=$(ls | wc -l); test "$n" -eq 2 || { echo "expected 2 digests, got $n"; ls; exit 1; }
-          echo "${{ steps.meta.outputs.tags }}" | while read -r TAG; do
-            [ -n "$TAG" ] || continue
+          case "$VERSION" in *.*.*) ;; *) echo "VERSION '$VERSION' is not X.Y.Z"; exit 1 ;; esac
+          major=${VERSION%%.*}; minor=${VERSION%.*}
+          for TAG in "$REPO:$VERSION" "$REPO:$minor" "$REPO:$major" "$REPO:latest"; do
             # shellcheck disable=SC2046
             docker buildx imagetools create -t "$TAG" $(printf "${REPO}@sha256:%s " *)
           done
