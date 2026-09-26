@@ -316,7 +316,7 @@ mod proxy_tests {
             "the store's wins"
         );
 
-        // changed with gw:proxy-credential, no restart
+        // changed with sgw proxy-credential, no restart
         spec.stored
             .set(Some(("store-user".into(), "rotated".into())));
         get().await.unwrap();

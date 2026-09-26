@@ -3305,7 +3305,7 @@ async fn a_board_that_could_not_be_resolved_is_tried_again() {
     assert_eq!(code, 403, "{:?}", resp.error);
     let msg = resp.error.unwrap_or_default();
     assert!(
-        msg.contains("gw:unlock"),
+        msg.contains("sgw unlock"),
         "a declared board that would not resolve must not read as one that was never configured: {msg}"
     );
 

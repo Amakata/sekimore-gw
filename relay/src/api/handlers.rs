@@ -211,7 +211,7 @@ async fn resolve_board(
         // operator to a file that already has it; the usual reason is a locked secret store,
         // since resolving needs the upstream token (#99).
         return Err(ApiError::forbidden(
-            "the project's boards are declared but could not be resolved; the relay needs the              upstream API token for that, so a locked secret store is the usual reason.              Ask a human to run: mise run gw:unlock",
+            "the project's boards are declared but could not be resolved; the relay needs the              upstream API token for that, so a locked secret store is the usual reason.              Ask a human to run: sgw unlock",
         ));
     }
     let id = req.project_id.trim();

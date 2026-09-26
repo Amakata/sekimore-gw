@@ -28,7 +28,7 @@ use crate::tokens::TokenStore;
 
 // 0.2.28: `security_events` is what the Dependabot alerts endpoints want (#132). A token
 // issued before it was added lacks it; `security alerts` then gets GitHub's 403 and the way out
-// is `gw:login` once more.
+// is sgw login once more.
 pub const DEVICE_FLOW_SCOPES: &[&str] = &["repo", "project", "security_events"];
 
 /// Pad a label to `width` display columns (CJK characters count as two).
@@ -1064,7 +1064,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
         // Squid reads the store and the two can disagree
         crate::proxy_credential::prime(Some(px), &secret_source_via_socket(&r)).await;
         // #194: `credential_source()` says "none" both for a locked store and an empty one, and
-        // the operator's next step differs — `gw:unlock` against `gw:proxy-credential set`. Ask
+        // the operator's next step differs — sgw unlock against sgw proxy-credential set`. Ask
         // the store which it is, over the same control socket.
         let state = store_state(&r.paths.control_sock).await;
         println!(
@@ -1583,7 +1583,7 @@ pub fn bootstrap(path: &Path, action: BootstrapAction) -> anyhow::Result<()> {
 /// either would put it in `ps`, and an argument would put it in shell history too.
 ///
 /// 0.2.29: `--stdin` reads it from a pipe instead, so the host can feed it from its own keychain
-/// (`mise run gw:unlock-auto`) and a recreate needs nobody at the keyboard. Only the typing
+/// (`sgw unlock-auto`) and a recreate needs nobody at the keyboard. Only the typing
 /// changes — the passphrase still arrives over the same socket, and the gateway still has no way
 /// to find it on its own.
 pub async fn unlock(path: &Path, from_stdin: bool) -> anyhow::Result<()> {
@@ -1639,7 +1639,7 @@ fn unlock_step(state: &str, from_stdin: bool) -> anyhow::Result<UnlockStep> {
         "unlocked" => Ok(UnlockStep::AlreadyUnlocked),
         "not initialised" if from_stdin => anyhow::bail!(
             "there is no secret store yet, and the first passphrase is chosen at a prompt that \
-             asks for it twice. Run `mise run gw:unlock` once, then `mise run gw:keychain-set` \
+             asks for it twice. Run `sgw unlock` once, then `sgw keychain-set` \
              to store it"
         ),
         "not initialised" => Ok(UnlockStep::SetTheFirstPassphrase),
@@ -1689,7 +1689,7 @@ async fn send_passphrase(
 /// Write the store out as a sealed envelope.
 ///
 /// Defaults to stdout, so the operator's own redirect decides where it lands and the file never
-/// has to be fetched back out of the container: `mise run gw:store-export > store.json`. `--out`
+/// has to be fetched back out of the container: `sgw store export > store.json`. `--out`
 /// is for writing it inside the gateway, and creates the file 0600 because the operator's umask
 /// is not something to rely on for this.
 ///
@@ -1775,7 +1775,7 @@ pub async fn proxy_credential_set(path: &Path) -> anyhow::Result<()> {
     let sock = store_paths(path)?;
     eprintln!(
         "The upstream proxy's credential. It is stored sealed, so the gateway has to be\n\
-         unlocked (mise run gw:unlock) before Squid and the relay can use it — until then\n\
+         unlocked (sgw unlock) before Squid and the relay can use it — until then\n\
          they fall back to SEKIMORE_UPSTREAM_PROXY_* or config.yml, if either has one."
     );
     let user = store::control::prompt("Proxy username")?;
@@ -1799,7 +1799,7 @@ pub async fn proxy_credential_set(path: &Path) -> anyhow::Result<()> {
     println!("{message}");
     println!(
         "The relay picks it up within seconds of the store being unlocked. Squid does too, when \
-         it is unlocked; if it is unlocked already, `mise run gw:restart` applies it to Squid now."
+         it is unlocked; if it is unlocked already, `sgw restart` applies it to Squid now."
     );
     Ok(())
 }
@@ -2251,7 +2251,7 @@ mod tests {
         let err = unlock_step("not initialised", true)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("gw:unlock"), "say what to run instead: {err}");
+        assert!(err.contains("sgw unlock"), "say what to run instead: {err}");
         // and the three that are allowed through
         assert_eq!(
             unlock_step("not initialised", false).unwrap(),
@@ -2300,9 +2300,9 @@ garbage line\n";
         let locked = credential_status("locked", &bare(None));
         let unset = credential_status("unlocked", &bare(None));
         assert_ne!(locked, unset);
-        assert!(locked.contains("gw:unlock"), "say what to run: {locked}");
+        assert!(locked.contains("sgw unlock"), "say what to run: {locked}");
         assert!(
-            unset.contains("gw:proxy-credential"),
+            unset.contains("sgw proxy-credential"),
             "say what to run: {unset}"
         );
         // A store that was never created is as unreadable as a locked one, and the way out is
@@ -2326,7 +2326,7 @@ garbage line\n";
         from_store.stored.set(Some(("bob".into(), "sekret".into())));
         assert_eq!(
             credential_status("unlocked", &from_store),
-            "the secret store (gw:proxy-credential)"
+            "the secret store (sgw proxy-credential)"
         );
     }
 
@@ -2364,7 +2364,7 @@ garbage line\n";
         from_store.stored.set(Some(("bob".into(), "sekret".into())));
         assert_eq!(
             credential_status("unlocked", &from_store),
-            "\x1b[32mthe secret store (gw:proxy-credential)\x1b[0m"
+            "\x1b[32mthe secret store (sgw proxy-credential)\x1b[0m"
         );
         assert_eq!(
             credential_status("unlocked", &bare(Some("alice"))),

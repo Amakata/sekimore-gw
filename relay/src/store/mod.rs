@@ -8,7 +8,7 @@
 //! injection through the gateway's own query path from yielding anything. A compromise of the
 //! gateway *while unlocked* is not covered — it holds the key because it has to do the work.
 //!
-//! The database is its own file, not the audit log's. `mise run gw:db-reset` exists to reset that
+//! The database is its own file, not the audit log's. `sgw db-reset` exists to reset that
 //! one; secrets sharing it would be destroyed by routine log maintenance.
 
 pub mod control;
@@ -38,7 +38,7 @@ impl std::fmt::Display for StoreError {
         match self {
             StoreError::Locked => write!(
                 f,
-                "the secret store is locked. Ask a human to run: mise run gw:unlock"
+                "the secret store is locked. Ask a human to run: sgw unlock"
             ),
             StoreError::Tampered => write!(
                 f,

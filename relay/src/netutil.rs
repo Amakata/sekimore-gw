@@ -521,14 +521,14 @@ async fn connect_through<S: AsyncRead + AsyncWrite + Unpin>(
             return Err(io::Error::other(format!(
                 "proxy refused CONNECT {host}:{port}: {line} — the relay went through the local \
                  Squid, which presents the stored credential to the upstream itself. Set it with \
-                 mise run gw:proxy-credential, and unlock the store (mise run gw:unlock)"
+                 sgw proxy-credential, and unlock the store (sgw unlock)"
             )));
         }
         // #151: say which credential was refused. Squid and the relay can read different ones, and
         // "407" alone left the operator comparing the two by hand
         return Err(io::Error::other(format!(
             "proxy refused CONNECT {host}:{port}: {line} — the relay presented the credential from {}. \
-             Set it with mise run gw:proxy-credential, and unlock the store (mise run gw:unlock)",
+             Set it with sgw proxy-credential, and unlock the store (sgw unlock)",
             proxy.credential_source()
         )));
     }
@@ -707,7 +707,7 @@ mod tests {
             err.contains("SEKIMORE_UPSTREAM_PROXY_* or config.yml"),
             "{err}"
         );
-        assert!(err.contains("gw:proxy-credential"), "{err}");
+        assert!(err.contains("sgw proxy-credential"), "{err}");
     }
 
     /// #205: the reporter's upstream offers only TLS 1.2 with RSA key exchange, which rustls
@@ -767,7 +767,7 @@ mod tests {
         );
         // The remedy is still the same command, because the credential Squid presents is the
         // one in the store.
-        assert!(err.contains("gw:proxy-credential"), "{err}");
+        assert!(err.contains("sgw proxy-credential"), "{err}");
     }
 
     /// #205: `check`'s probe on the via-Squid route walks the real path, so what it reports is
