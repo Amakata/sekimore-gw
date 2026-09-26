@@ -86,19 +86,19 @@ The relay authenticates to the upstream git server with the operator's ssh-agent
 Changes to `domain_handlers` and `relay` take effect only when the container is recreated. A hot reload logs a warning and keeps the old values.
 
 ```bash
-docker compose up -d --force-recreate sekimore-gw      # with Dev Containers: mise run gw:recreate
+docker compose up -d --force-recreate sekimore-gw      # with Dev Containers: sgw recreate
 docker compose exec sekimore-gw sekimore-relay check   # policy and state (agent / known_hosts / token / keys)
 ```
 
 ### 4. Authenticate to the upstream (first time only)
 
 ```bash
-docker compose exec sekimore-gw sekimore-relay login   # with Dev Containers: mise run gw:login
+docker compose exec sekimore-gw sekimore-relay login   # with Dev Containers: sgw login
 #   Open: https://github.com/login/device
 #   Code: XXXX-XXXX          ← approve the code in the browser
 ```
 
-- The token is sealed in the secret store (0.2.18), so the gateway must be unlocked (`mise run gw:unlock`) before a login can store the token. If an older version left a `/data/relay/upstream_token` file, the relay moves the token into the store and deletes the file the first time it reads the token. The login also adds the upstream's SSH host keys to known_hosts.
+- The token is sealed in the secret store (0.2.18), so the gateway must be unlocked (`sgw unlock`) before a login can store the token. If an older version left a `/data/relay/upstream_token` file, the relay moves the token into the store and deletes the file the first time it reads the token. The login also adds the upstream's SSH host keys to known_hosts.
 - With more than one upstream, run the command once per upstream with `--upstream <domain>`. The same applies to `logout` and `whoami`.
 - `sekimore-relay whoami` shows which GitHub identity the relay acts as.
 
@@ -190,7 +190,7 @@ the client here is an AI agent.
 At that boundary, the relay therefore sends `GET /repos/{repo}/git/commits/{sha}`. It makes one or
 two calls per push regardless of how many blob deltas the pack contains, and each call stays within
 the authorization that the push has already passed. If the relay cannot get an answer, it refuses
-the push. **`required` therefore requires the gateway to be unlocked (`mise run gw:unlock`) and
+the push. **`required` therefore requires the gateway to be unlocked (`sgw unlock`) and
 logged in**, and the denial message says so when either is missing.
 
 Without `relay.signing_key`, the previous behavior applies. `sgw-agent setup` generates
@@ -261,7 +261,7 @@ Each key is a fully qualified domain name and must match exactly. Configuring `g
 | `https` | `passthrough` | How port 443 is handled. `reject` closes the connection immediately. |
 | `https_max_upload_bytes` | `1048576` | The default upload cap for the 443 passthrough, in bytes. `-1` means unlimited. The relay closes a connection that exceeds the cap and audits it as `https_upload_capped`. |
 | `state_dir` | `/data/relay` | The directory for state files |
-| `store.unlock` | `prompt` | How the secret store is unlocked. With `prompt`, a person runs `mise run gw:unlock` after every restart, and the passphrase is never stored at rest. `file` (`path:`) and `env` (`var:`) read the passphrase instead. They are **for developing sekimore-gw itself**, where the gateway is recreated many times an hour. They store the passphrase at rest, and the relay logs a warning about this at startup. Never set `env` through `.devcontainer/.env`, because the agent can write to that file. |
+| `store.unlock` | `prompt` | How the secret store is unlocked. With `prompt`, a person runs `sgw unlock` after every restart, and the passphrase is never stored at rest. `file` (`path:`) and `env` (`var:`) read the passphrase instead. They are **for developing sekimore-gw itself**, where the gateway is recreated many times an hour. They store the passphrase at rest, and the relay logs a warning about this at startup. Never set `env` through `.devcontainer/.env`, because the agent can write to that file. |
 | `token_ttl` | `12h` | The lifetime of a project token |
 | `bootstrap` | `auto` | Whether `POST /bootstrap` is allowed. With `manual`, the operator registers keys. |
 | `ssh_options` | `[]` | `-o` options shared by all upstreams |
@@ -473,8 +473,8 @@ Denial reasons (`sgw-agent: …`) and the audit log `audit.jsonl` intentionally 
 ## Operations (operator)
 
 The Relay tab of the Web UI shows the configuration, permissions, tokens, access history and blocked attempts. The tab is read-only.
-To open the Web UI in a dev container setup, run `mise run web`, which reads the published port from the running gateway container. With a standalone `docker compose` setup, open the port that your compose file publishes for the Web UI (the gateway listens on 8080 inside the container, and the sample `docker-compose.yml` publishes `8080:8080`).
-Dev Containers setups also provide `mise run gw:tokens` / `gw:revoke-project` / `gw:audit` / `gw -- <args>`.
+To open the Web UI in a dev container setup, run `sgw web`, which reads the published port from the running gateway container. With a standalone `docker compose` setup, open the port that your compose file publishes for the Web UI (the gateway listens on 8080 inside the container, and the sample `docker-compose.yml` publishes `8080:8080`).
+Dev Containers setups also provide `sgw tokens` / `sgw revoke-project` / `sgw audit` / `sgw relay <args>`.
 
 | Command | Purpose |
 |---|---|
@@ -510,7 +510,7 @@ Token records are deleted automatically 7 days after they expire. `audit.jsonl` 
 | `git ls-remote` hangs without output | DNS points to the relay, but the INPUT chain drops the packets. | Check whether `iptables-legacy -S INPUT` contains `--dport 22`. If it does not, the relay has not started. |
 | `https://github.com/…` fails | `https` is set to `reject`, or the upstream is unreachable. | Restore the default `passthrough`. Check `https_failed` in the audit log. |
 | `could not read Username` on HTTPS git | HTTPS authentication is blocked intentionally, so that the operator's credentials cannot bypass the relay. | Use SSH (`git@github.com:`). |
-| The post-create message that the ssh-agent is being forwarded does not go away | `code` on macOS inherits the launchd environment. | Quit VS Code completely and run `mise run vscode`. |
+| The post-create message that the ssh-agent is being forwarded does not go away | `code` on macOS inherits the launchd environment. | Quit VS Code completely and run `sgw open`. |
 
 ### Troubleshooting the upstream proxy path from inside dev
 

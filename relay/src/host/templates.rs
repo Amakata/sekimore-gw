@@ -3,8 +3,9 @@
 //! The files are `base/examples/sgw-sample/` at the commit this binary was built from, byte for
 //! byte. Their pins (the gateway image tag, the base's FROM) are this same version, which
 //! `tests/unit/test_base_versions.py` holds them to, so nothing is rewritten on the way out. The
-//! sample stays on disk as the human-readable copy until stage 3 of the design removes it; the
-//! test below refuses a file that is on disk and not here, or here and not on disk.
+//! test below refuses a file that is on disk and not here, or here and not on disk. Beside them
+//! `init` writes `sgw.toml` (host::sgwtoml), the record `update` reads. No mise layer: sgw is the
+//! operator's tool, and `.devcontainer/sgw/` is a thing of the past (#234 stage 3).
 
 use std::path::Path;
 
@@ -72,48 +73,8 @@ pub const FILES: &[Template] = &[
         executable: true,
     },
     Template {
-        path: ".devcontainer/sgw/MANIFEST",
-        content: sample!(".devcontainer/sgw/MANIFEST"),
-        executable: false,
-    },
-    Template {
-        path: ".devcontainer/sgw/gateway.mise.toml",
-        content: sample!(".devcontainer/sgw/gateway.mise.toml"),
-        executable: false,
-    },
-    Template {
-        path: ".devcontainer/sgw/post-start.sh",
-        content: sample!(".devcontainer/sgw/post-start.sh"),
-        executable: true,
-    },
-    Template {
-        path: ".devcontainer/sgw/sgw.sh",
-        content: sample!(".devcontainer/sgw/sgw.sh"),
-        executable: true,
-    },
-    Template {
-        path: ".devcontainer/sgw/tasks.mise.toml",
-        content: sample!(".devcontainer/sgw/tasks.mise.toml"),
-        executable: false,
-    },
-    Template {
-        path: ".devcontainer/sgw/upgrade.sh",
-        content: sample!(".devcontainer/sgw/upgrade.sh"),
-        executable: true,
-    },
-    Template {
-        path: ".devcontainer/sgw/vscode.sh",
-        content: sample!(".devcontainer/sgw/vscode.sh"),
-        executable: true,
-    },
-    Template {
         path: ".devcontainer/zsh-config/rc.d/99-splash.zsh",
         content: sample!(".devcontainer/zsh-config/rc.d/99-splash.zsh"),
-        executable: false,
-    },
-    Template {
-        path: "mise.toml",
-        content: sample!("mise.toml"),
         executable: false,
     },
 ];
@@ -134,6 +95,7 @@ pub fn conflicts(root: &Path) -> Vec<String> {
     FILES
         .iter()
         .map(|t| t.path)
+        .chain(std::iter::once(super::sgwtoml::NAME))
         .filter(|p| root.join(p).exists())
         .map(str::to_string)
         .collect()
@@ -174,6 +136,11 @@ pub fn write(root: &Path, force: bool) -> anyhow::Result<Report> {
         set_mode(&env_path, false)?;
         report.written.push(env.to_string());
     }
+    let toml = root.join(super::sgwtoml::NAME);
+    std::fs::write(&toml, super::sgwtoml::SgwToml::of_template().render())
+        .with_context(|| format!("write {}", toml.display()))?;
+    set_mode(&toml, false)?;
+    report.written.push(super::sgwtoml::NAME.to_string());
     Ok(report)
 }
 
@@ -261,22 +228,32 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let r = write(tmp.path(), false).unwrap();
-        assert_eq!(r.written.len(), FILES.len() + 1, ".env included");
+        assert_eq!(
+            r.written.len(),
+            FILES.len() + 2,
+            ".env and sgw.toml included"
+        );
         assert!(r.existed.is_empty());
         assert!(tmp.path().join(".devcontainer/.env").is_file());
-        let sgw_sh = tmp.path().join(".devcontainer/sgw/sgw.sh");
+        let post_create = tmp.path().join(".devcontainer/scripts/post-create.sh");
         assert_ne!(
-            std::fs::metadata(&sgw_sh).unwrap().permissions().mode() & 0o111,
+            std::fs::metadata(&post_create)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o111,
             0
         );
         assert_eq!(
-            std::fs::metadata(tmp.path().join("mise.toml"))
+            std::fs::metadata(tmp.path().join("sgw.toml"))
                 .unwrap()
                 .permissions()
                 .mode()
                 & 0o777,
             0o644
         );
+        assert!(!tmp.path().join(".devcontainer/sgw").exists());
+        assert!(!tmp.path().join("mise.toml").exists());
         // again: refused, and nothing changed
         std::fs::write(tmp.path().join(".devcontainer/.env"), "EDITED=1\n").unwrap();
         let e = write(tmp.path(), false).unwrap_err().to_string();

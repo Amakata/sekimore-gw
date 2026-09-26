@@ -57,5 +57,5 @@ uv run scripts/paths.py dot | dot -Tsvg > paths.svg  描く（Graphviz）
 
 1. `docs/paths.yml` に行を足す
 2. `src/paths.py` か `relay/src/paths.rs` に id を足し、接続を開く場所でその定数を使う
-3. 覆うテストを書く。実機で確かめる必要があれば `base/share/sgw/tasks.mise.*.toml` の `relay:verify` に項目を足す
+3. 覆うテストを書く。実機で確かめる必要があれば `relay/src/host/verify.rs` の `sgw verify` に項目を足す
 4. `uv run pytest tests/unit/test_paths.py` を実行する

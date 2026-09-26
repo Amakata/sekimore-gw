@@ -78,13 +78,6 @@ def describe_the_base_image_carries_the_gateways_version():
                 f"{name} is reviewed up to {m.group(1)}; decide whether {_version()} asks anything of the reader, then move the marker"
             )
 
-    def it_writes_the_sample_manifest_for_this_version():
-        manifest = _text(SAMPLE / "sgw" / "MANIFEST")
-        pins = dict(re.findall(r"^(base|gateway) (\S+)$", manifest, re.M))
-        assert pins == {"base": _version(), "gateway": _version()}, (
-            f"the sample's MANIFEST pins {pins}; run base/scripts/sync-sample-sgw.sh"
-        )
-
     def it_writes_this_version_up_in_the_changelog():
         # One changelog for the gateway, the relay, the base and sgw (#253). base/CHANGELOG.md
         # is the base's own history up to 0.2.45 and gets nothing new.

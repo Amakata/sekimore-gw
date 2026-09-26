@@ -138,9 +138,9 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `denied: pr:merge is not allowed by policy` | 権限がない | 人間にマージを依頼する |
 | `denied: token expired` | 案件トークンの有効期限が切れた | トークンは自動で更新される。拒否が続く場合は、人間に agent-setup の再実行を依頼する |
 | `head X is not allowed` | PR の head が `push` の範囲外か、fork を指している | 先に関所経由でブランチを push し、そのブランチから PR を作成する |
-| `known_hosts … has no entry for X` | ゲートウェイに上流のホスト鍵がない | **自分では解決できない。** 対処は Docker を動かしているホストでの `mise run gw:login`。メッセージ全体を人間に伝える |
-| `no upstream token for …` | 運用者がゲートウェイにログインしていない | これも自分では解決できない。対処はホストでの `mise run gw:login` |
-| `the secret store is locked …` | ゲートウェイはトークンを保持しているが、誰もストアを解錠していない | これも自分では解決できない。対処はホストでの `mise run gw:unlock`。ログインでは解決しない |
+| `known_hosts … has no entry for X` | ゲートウェイに上流のホスト鍵がない | **自分では解決できない。** 対処は Docker を動かしているホストでの `sgw login`。メッセージ全体を人間に伝える |
+| `no upstream token for …` | 運用者がゲートウェイにログインしていない | これも自分では解決できない。対処はホストでの `sgw login` |
+| `the secret store is locked …` | ゲートウェイはトークンを保持しているが、誰もストアを解錠していない | これも自分では解決できない。対処はホストでの `sgw unlock`。ログインでは解決しない |
 
 最後の 3 つは、このコンテナの外に保存されているゲートウェイ自身の資格情報に関する拒否です。
 `sekimore-relay` で始まるコマンドは運用者用で、ゲートウェイの中で実行します。ここで実行すると、

@@ -7,12 +7,10 @@
 //! The project's own files (`mise.toml`, `devcontainer.json`, `config.yml`) are never written:
 //! what they need is said at the end, the way `upgrade.sh --owned` did.
 
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
 use anyhow::{bail, Context};
-use sha2::{Digest, Sha256};
 
 use crate::i18n::{lang, t, tf};
 
@@ -29,47 +27,17 @@ pub const INSTALL: &str =
 
 const UPGRADING_EN: &str = include_str!("../../../UPGRADING.md");
 const UPGRADING_JA: &str = include_str!("../../../UPGRADING.ja.md");
-const TASKS_JA: &str = include_str!("../../../base/share/sgw/tasks.mise.ja.toml");
-const GATEWAY_TASKS_JA: &str = include_str!("../../../share/gateway.mise.ja.toml");
-
-/// The distributed files, in the order `upgrade.sh` listed them (MANIFEST keeps that order).
-pub const DISTRIBUTED: &[&str] = &[
+/// The files the mise-era `.devcontainer/sgw/` held (`upgrade.sh` wrote them). The migration
+/// removes that directory only when it holds nothing else.
+pub const OLD_DISTRIBUTED: &[&str] = &[
     "sgw.sh",
     "vscode.sh",
     "upgrade.sh",
     "post-start.sh",
     "tasks.mise.toml",
     "gateway.mise.toml",
+    "MANIFEST",
 ];
-
-pub struct Dist {
-    pub name: &'static str,
-    pub content: &'static str,
-    pub executable: bool,
-}
-
-/// The distributed files of this version, in `lang` (the two task files have a Japanese twin).
-pub fn distributed(lang: &str) -> Vec<Dist> {
-    DISTRIBUTED
-        .iter()
-        .map(|name| {
-            let ja = match (lang, *name) {
-                ("ja", "tasks.mise.toml") => Some(TASKS_JA),
-                ("ja", "gateway.mise.toml") => Some(GATEWAY_TASKS_JA),
-                _ => None,
-            };
-            let t = templates::FILES
-                .iter()
-                .find(|t| t.path == format!(".devcontainer/sgw/{name}"))
-                .unwrap_or_else(|| panic!("{name} is not in the template"));
-            Dist {
-                name,
-                content: ja.unwrap_or(t.content),
-                executable: t.executable,
-            }
-        })
-        .collect()
-}
 
 pub fn upgrading(lang: &str) -> &'static str {
     if lang == "ja" {
@@ -188,59 +156,70 @@ pub fn sections(
     out
 }
 
-// ---- MANIFEST -------------------------------------------------------------------------------
+// ---- the template's files -------------------------------------------------------------------
 
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Manifest {
-    pub base: String,
-    pub gateway: String,
-    pub lang: String,
-    pub files: BTreeMap<String, String>,
+pub use super::sgwtoml::{sha256_hex, SgwToml};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileState {
+    /// the file is this version's
+    Same,
+    /// the file is as sgw wrote it and this version changes it: overwritten
+    Changes,
+    /// the file was edited and this version does not change it: left alone
+    Yours,
+    /// the file was edited and this version changes it too: `.sgw-new` beside it (--force overwrites)
+    Conflict,
+    /// the file is not there (a project may leave one out on purpose): left alone
+    Missing,
 }
 
-impl Manifest {
-    pub fn parse(text: &str) -> Manifest {
-        let mut m = Manifest::default();
-        for line in text.lines() {
-            let mut w = line.split_whitespace();
-            match (w.next(), w.next(), w.next()) {
-                (Some("base"), Some(v), None) => m.base = v.into(),
-                (Some("gateway"), Some(v), None) => m.gateway = v.into(),
-                (Some("lang"), Some(v), None) => m.lang = v.into(),
-                (Some("file"), Some(name), Some(sha)) => {
-                    m.files.insert(name.into(), sha.into());
-                }
-                _ => {}
-            }
+/// Three shas decide: `recorded` (sgw.toml, what sgw wrote last), `current` (disk), `new` (this
+/// version). No record is read as "this version is the baseline": a project that never had
+/// sgw.toml keeps its files, and only a later change to the template is a conflict.
+pub fn file_state(recorded: Option<&str>, current: Option<&str>, new: &str) -> FileState {
+    let Some(cur) = current else {
+        return FileState::Missing;
+    };
+    if cur == new {
+        return FileState::Same;
+    }
+    match recorded {
+        None => FileState::Yours,
+        Some(r) if r == new => FileState::Yours,
+        Some(r) if r == cur => FileState::Changes,
+        Some(_) => FileState::Conflict,
+    }
+}
+
+/// mise.toml without the lines the mise layer needed: the includes of `.devcontainer/sgw/` and
+/// the `SGW` path. The project's own tasks stay. None when nothing had to go.
+pub fn mise_without_sgw(text: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut dropped = false;
+    for line in text.lines() {
+        let t = line.trim_start();
+        let is_include = t.starts_with("includes") && t.contains(".devcontainer/sgw/");
+        let is_sgw = t.starts_with("SGW") && t.contains(".devcontainer/sgw/sgw.sh");
+        if is_include || is_sgw {
+            dropped = true;
+            continue;
         }
-        m
+        out.push_str(line);
+        out.push('\n');
     }
-
-    /// The text `upgrade.sh` wrote, so the two tools can follow each other.
-    pub fn render(base: &str, gateway: &str, lang: &str, files: &[(&str, String)]) -> String {
-        let mut s = String::from(
-            "# Written by upgrade.sh: what it last put in this directory, so an edit by hand can be told\n# apart from a file it wrote. Do not edit.\n",
-        );
-        s.push_str(&format!("base {base}\ngateway {gateway}\nlang {lang}\n"));
-        for (name, sha) in files {
-            s.push_str(&format!("file {name} {sha}\n"));
-        }
-        s
+    if dropped {
+        Some(out)
+    } else {
+        None
     }
 }
 
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
-}
-
-/// The file on disk would lose something if overwritten: it matches neither the file about to
-/// replace it nor what MANIFEST says was written.
-pub fn edited(current: &[u8], new: &str, manifest_sha: Option<&str>) -> bool {
-    let h = sha256_hex(current);
-    if h == sha256_hex(new.as_bytes()) {
-        return false;
-    }
-    manifest_sha != Some(h.as_str())
+/// Only comments, blank lines and table headers: nothing of the project's own.
+pub fn mise_has_nothing_own(text: &str) -> bool {
+    text.lines()
+        .map(str::trim)
+        .all(|l| l.is_empty() || l.starts_with('#') || (l.starts_with('[') && l.ends_with(']')))
 }
 
 /// Whether the compose file's `sekimore-gw` service has `pid: host`. Without it the gateway
@@ -287,18 +266,8 @@ pub fn owned_notes(root: &Path) -> Vec<String> {
         ));
     }
     let mise = std::fs::read_to_string(root.join("mise.toml")).unwrap_or_default();
-    let has_sgw_env = mise.lines().any(|l| {
-        let l = l.trim_start();
-        l.starts_with("SGW") && l.contains('=') && l.contains(".devcontainer/sgw/sgw.sh")
-    });
-    if !mise.contains(".devcontainer/sgw/tasks.mise.toml")
-        || !mise.contains(".devcontainer/sgw/gateway.mise.toml")
-        || !has_sgw_env
-    {
-        notes.push(format!(
-            "{}\n        [task_config]\n        includes = [\".devcontainer/sgw/tasks.mise.toml\", \".devcontainer/sgw/gateway.mise.toml\"]\n        [env]\n        SGW = \"{{{{config_root}}}}/.devcontainer/sgw/sgw.sh\"",
-            t("sgw.update.r_include")
-        ));
+    if mise.contains(".devcontainer/sgw/") {
+        notes.push(t("sgw.update.r_include"));
     }
     let dcj =
         std::fs::read_to_string(root.join(".devcontainer/devcontainer.json")).unwrap_or_default();
@@ -311,6 +280,7 @@ pub fn owned_notes(root: &Path) -> Vec<String> {
         ));
     }
     let left: Vec<&str> = [
+        ".devcontainer/sgw",
         ".devcontainer/scripts/sgw.sh",
         ".devcontainer/scripts/vscode.sh",
         ".devcontainer/gateway.mise.toml",
@@ -401,7 +371,6 @@ pub async fn newest_on_ghcr(image: &str) -> anyhow::Result<Option<String>> {
 pub enum Mode {
     Check,
     Apply,
-    Sync,
     Notes,
     Owned,
 }
@@ -410,26 +379,16 @@ pub struct Options {
     pub mode: Mode,
     /// `--yes`: recreate the gateway without asking
     pub yes: bool,
-    /// `--force`: overwrite a distributed file that was edited by hand
+    /// `--force`: overwrite a template file the project edited when this version changes it too
     pub force: bool,
     /// `--offline`: do not ask GHCR whether a newer release exists
     pub offline: bool,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FileState {
-    New,
-    Same,
-    Changes,
-    Edited,
 }
 
 pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<i32> {
     let root = &project.root;
     let compose_path = project.compose_dir.join("docker-compose.yml");
     let dockerfile_path = project.compose_dir.join("Dockerfile");
-    let sgw_dir = project.compose_dir.join("sgw");
-    let manifest_path = sgw_dir.join("MANIFEST");
     let rel = |p: &Path| p.strip_prefix(root).unwrap_or(p).display().to_string();
     let l = lang();
 
@@ -454,9 +413,7 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
 
     // The version this sgw moves to is its own. A project ahead of it is not walked backwards;
     // a registry ahead of it says "install the newer sgw"
-    let (new_gw, new_base) = if opts.mode == Mode::Sync {
-        (cur_gw.clone(), cur_base.clone())
-    } else {
+    let (new_gw, new_base) = {
         let v = VERSION.to_string();
         (
             if ver_lt(&v, &cur_gw) {
@@ -472,7 +429,7 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         )
     };
     let mut newer_sgw: Option<String> = None;
-    if !opts.offline && opts.mode != Mode::Sync {
+    if !opts.offline {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -489,15 +446,10 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         }
     }
 
-    let manifest = std::fs::read_to_string(&manifest_path)
+    let toml_path = root.join(super::sgwtoml::NAME);
+    let recorded = std::fs::read_to_string(&toml_path)
         .ok()
-        .map(|s| Manifest::parse(&s))
-        .unwrap_or_default();
-    let orig_lang = if manifest.lang.is_empty() {
-        l.to_string()
-    } else {
-        manifest.lang.clone()
-    };
+        .map(|s| SgwToml::parse(&s));
 
     if opts.mode == Mode::Notes {
         let out = sections(upgrading(l), &cur_gw, &new_gw, &cur_base, &new_base, true);
@@ -547,55 +499,60 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         );
     }
     println!();
-    let at = if opts.mode == Mode::Sync {
-        t("sgw.update.at_pinned")
-    } else {
-        t("sgw.update.at_newest")
-    };
-    println!("{}", tf("sgw.update.files_at", &[("at", &at)]));
-    if orig_lang != l {
-        println!(
-            "  {}",
-            tf(
-                "sgw.update.lang_changed",
-                &[("from", &orig_lang), ("to", l)]
-            )
-        );
-    }
-    let dist = distributed(l);
-    let mut states: Vec<(&Dist, FileState)> = Vec::new();
-    for d in &dist {
-        let path = sgw_dir.join(d.name);
-        let st = match std::fs::read(&path) {
-            Err(_) => FileState::New,
-            Ok(cur) => {
-                if sha256_hex(&cur) == sha256_hex(d.content.as_bytes()) {
-                    FileState::Same
-                } else if edited(
-                    &cur,
-                    d.content,
-                    manifest.files.get(d.name).map(String::as_str),
-                ) {
-                    FileState::Edited
-                } else {
-                    FileState::Changes
-                }
-            }
-        };
+    println!("{}", t("sgw.update.files_hdr"));
+    let mut states: Vec<(&templates::Template, FileState, String)> = Vec::new();
+    for tpl in templates::FILES {
+        let current = std::fs::read(root.join(tpl.path))
+            .ok()
+            .map(|b| sha256_hex(&b));
+        let new = sha256_hex(tpl.content.as_bytes());
+        let rec = recorded
+            .as_ref()
+            .and_then(|r| r.files.get(tpl.path))
+            .map(String::as_str);
+        let st = file_state(rec, current.as_deref(), &new);
         let word = match st {
-            FileState::New => t("sgw.update.f_new"),
             FileState::Same => t("sgw.update.f_same"),
             FileState::Changes => t("sgw.update.f_changes"),
-            FileState::Edited => {
+            FileState::Yours => t("sgw.update.f_yours"),
+            FileState::Conflict => {
                 if opts.force {
                     t("sgw.update.f_forced")
                 } else {
-                    t("sgw.update.f_edited")
+                    t("sgw.update.f_conflict")
                 }
             }
+            FileState::Missing => t("sgw.update.f_missing"),
         };
-        println!("  {:<20} {word}", d.name);
-        states.push((d, st));
+        println!("  {:<46} {word}", tpl.path);
+        states.push((tpl, st, new));
+    }
+    // the mise layer, where a project still has it
+    let old_dir = project.compose_dir.join("sgw");
+    let migrate = old_dir.is_dir();
+    let mut foreign: Vec<String> = Vec::new();
+    if migrate {
+        for e in std::fs::read_dir(&old_dir)? {
+            let name = e?.file_name().to_string_lossy().into_owned();
+            if !OLD_DISTRIBUTED.contains(&name.as_str()) {
+                foreign.push(name);
+            }
+        }
+        foreign.sort();
+        println!("  {}", t("sgw.update.m_dir"));
+        if !foreign.is_empty() {
+            println!(
+                "  {}",
+                tf("sgw.update.m_foreign", &[("files", &foreign.join(" "))])
+            );
+        }
+    }
+    let mise_path = root.join("mise.toml");
+    let mise_new = std::fs::read_to_string(&mise_path)
+        .ok()
+        .and_then(|text| mise_without_sgw(&text));
+    if mise_new.is_some() {
+        println!("  {}", t("sgw.update.m_mise"));
     }
     println!();
     let notes = sections(upgrading(l), &cur_gw, &new_gw, &cur_base, &new_base, false);
@@ -609,26 +566,33 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
     }
     println!();
 
-    let files_sha: Vec<(&str, String)> = dist
+    let to_write: Vec<&templates::Template> = states
         .iter()
-        .map(|d| (d.name, sha256_hex(d.content.as_bytes())))
+        .filter(|(_, st, _)| {
+            *st == FileState::Changes || (*st == FileState::Conflict && opts.force)
+        })
+        .map(|(tpl, _, _)| *tpl)
         .collect();
-    let new_manifest = Manifest::render(&new_base, &new_gw, l, &files_sha);
-    let changed: Vec<&str> = states
+    let conflicts: Vec<&templates::Template> = states
         .iter()
-        .filter(|(_, s)| matches!(s, FileState::New | FileState::Changes))
-        .map(|(d, _)| d.name)
+        .filter(|(_, st, _)| *st == FileState::Conflict && !opts.force)
+        .map(|(tpl, _, _)| *tpl)
         .collect();
-    let edited_files: Vec<&str> = states
-        .iter()
-        .filter(|(_, s)| *s == FileState::Edited)
-        .map(|(d, _)| d.name)
-        .collect();
+    let toml_new = SgwToml {
+        version: VERSION.to_string(),
+        files: states
+            .iter()
+            .filter(|(_, st, _)| *st != FileState::Missing)
+            .map(|(tpl, _, new)| (tpl.path.to_string(), new.clone()))
+            .collect(),
+    };
     let up_to_date = cur_gw == new_gw
         && cur_base == new_base
-        && changed.is_empty()
-        && edited_files.is_empty()
-        && std::fs::read_to_string(&manifest_path).ok().as_deref() == Some(new_manifest.as_str());
+        && to_write.is_empty()
+        && conflicts.is_empty()
+        && !migrate
+        && mise_new.is_none()
+        && std::fs::read_to_string(&toml_path).ok().as_deref() == Some(toml_new.render().as_str());
 
     if opts.mode == Mode::Check {
         let owned = owned_notes(root);
@@ -641,8 +605,6 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         }
         if up_to_date {
             println!("{}", t("sgw.update.all_current"));
-        } else if !edited_files.is_empty() && !opts.force {
-            println!("{}", t("sgw.update.next_edited"));
         } else if newer_sgw.is_some() && cur_gw == new_gw {
             println!("{}", tf("sgw.update.next_sgw", &[("install", INSTALL)]));
         } else {
@@ -651,16 +613,19 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         return Ok(0);
     }
 
-    // ---- apply / sync ----
-    if !edited_files.is_empty() && !opts.force {
-        for f in &edited_files {
-            eprintln!("{}", tf("sgw.update.edited_stop", &[("file", f)]));
-        }
-        eprintln!("{}", t("sgw.update.edited_how"));
+    // ---- apply ----
+    if migrate && !foreign.is_empty() {
+        eprintln!(
+            "{}",
+            tf(
+                "sgw.update.m_foreign_stop",
+                &[("files", &foreign.join(" "))]
+            )
+        );
         eprintln!("{}", t("sgw.update.unchanged"));
         return Ok(1);
     }
-    if opts.mode == Mode::Apply && newer_sgw.is_some() && cur_gw == new_gw {
+    if newer_sgw.is_some() && cur_gw == new_gw {
         // nothing this sgw can render is newer than what the project has
         println!("{}", tf("sgw.update.next_sgw", &[("install", INSTALL)]));
         return Ok(0);
@@ -702,19 +667,37 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
                 )
             );
         }
-        std::fs::create_dir_all(&sgw_dir)?;
-        for (d, st) in &states {
-            if *st == FileState::Same {
-                continue;
-            }
-            write_atomic(&sgw_dir, d.name, d.content.as_bytes(), d.executable)?;
-            println!("{}", tf("sgw.update.wrote", &[("file", d.name)]));
+        for tpl in &to_write {
+            write_file(&root.join(tpl.path), tpl.content.as_bytes(), tpl.executable)?;
+            println!("{}", tf("sgw.update.wrote", &[("file", tpl.path)]));
         }
-        write_atomic(&sgw_dir, "MANIFEST", new_manifest.as_bytes(), false)?;
+        for tpl in &conflicts {
+            let beside = format!("{}.sgw-new", tpl.path);
+            write_file(&root.join(&beside), tpl.content.as_bytes(), tpl.executable)?;
+            println!("{}", tf("sgw.update.wrote", &[("file", &beside)]));
+            remain.push(tf("sgw.update.r_sgw_new", &[("file", tpl.path)]));
+        }
+        if migrate {
+            std::fs::remove_dir_all(&old_dir)
+                .with_context(|| format!("remove {}", old_dir.display()))?;
+            println!("{}", t("sgw.update.m_removed"));
+        }
+        if let Some(text) = &mise_new {
+            write_in_place(&mise_path, text)?;
+            println!("{}", t("sgw.update.m_mise_done"));
+            if mise_has_nothing_own(text) {
+                remain.push(t("sgw.update.r_mise_empty"));
+            }
+        }
+        write_file(&toml_path, toml_new.render().as_bytes(), false)?;
+        println!(
+            "{}",
+            tf("sgw.update.wrote", &[("file", super::sgwtoml::NAME)])
+        );
     }
     println!();
 
-    if opts.mode == Mode::Apply && cur_gw != new_gw {
+    if cur_gw != new_gw {
         if docker.find_container(GATEWAY).is_ok() {
             let go = opts.yes || ask(&tf("sgw.update.ask_recreate", &[("version", &new_gw)]));
             if go {
@@ -730,7 +713,7 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
             remain.push(tf("sgw.update.r_gw_down", &[("version", &new_gw)]));
         }
     }
-    if opts.mode == Mode::Apply && cur_base != new_base {
+    if cur_base != new_base {
         remain.push(tf("sgw.update.r_rebuild", &[("version", &new_base)]));
     }
     if !notes.trim().is_empty() {
@@ -775,18 +758,22 @@ fn write_in_place(path: &Path, text: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A temporary name beside the file, then a rename over it: atomic, and it leaves an old
-/// `upgrade.sh`'s inode to any bash still reading it.
-fn write_atomic(dir: &Path, name: &str, content: &[u8], executable: bool) -> anyhow::Result<()> {
+/// A temporary name beside the file, then a rename over it: atomic.
+fn write_file(path: &Path, content: &[u8], executable: bool) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
+    let dir = path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let tmp = dir.join(format!(".{name}.new"));
     std::fs::write(&tmp, content).with_context(|| format!("write {}", tmp.display()))?;
     std::fs::set_permissions(
         &tmp,
         std::fs::Permissions::from_mode(if executable { 0o755 } else { 0o644 }),
     )?;
-    std::fs::rename(&tmp, dir.join(name))
-        .with_context(|| format!("rename to {}", dir.join(name).display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("rename to {}", path.display()))?;
     Ok(())
 }
 
@@ -888,58 +875,47 @@ mod tests {
     }
 
     #[test]
-    fn manifest_round_trips_and_edits_are_told_apart() {
-        let text = Manifest::render(
-            "0.2.46",
-            "0.2.46",
-            "en",
-            &[("sgw.sh", "aa".into()), ("upgrade.sh", "bb".into())],
+    fn three_shas_decide_what_update_does_with_a_file() {
+        use FileState::*;
+        assert_eq!(file_state(None, None, "n"), Missing);
+        assert_eq!(file_state(Some("n"), Some("n"), "n"), Same);
+        assert_eq!(
+            file_state(Some("old"), Some("old"), "n"),
+            Changes,
+            "as written, template changed"
         );
-        let m = Manifest::parse(&text);
-        assert_eq!(m.base, "0.2.46");
-        assert_eq!(m.lang, "en");
-        assert_eq!(m.files.get("upgrade.sh").map(String::as_str), Some("bb"));
-        let written = "echo old\n";
-        let sha = sha256_hex(written.as_bytes());
-        assert!(
-            !edited(written.as_bytes(), "echo new\n", Some(&sha)),
-            "as written: not edited"
+        assert_eq!(
+            file_state(Some("n"), Some("mine"), "n"),
+            Yours,
+            "edited, template unchanged"
         );
-        assert!(
-            !edited("echo new\n".as_bytes(), "echo new\n", None),
-            "already the new one"
+        assert_eq!(
+            file_state(None, Some("mine"), "n"),
+            Yours,
+            "no record: this version is the baseline"
         );
-        assert!(
-            edited("echo mine\n".as_bytes(), "echo new\n", Some(&sha)),
-            "neither: edited"
-        );
-        assert!(
-            edited("echo mine\n".as_bytes(), "echo new\n", None),
-            "no manifest to vouch for it"
+        assert_eq!(
+            file_state(Some("old"), Some("mine"), "n"),
+            Conflict,
+            "edited and changed"
         );
     }
 
     #[test]
-    fn the_distributed_files_of_this_version_in_both_languages() {
-        let en = distributed("en");
-        assert_eq!(en.iter().map(|d| d.name).collect::<Vec<_>>(), DISTRIBUTED);
-        assert!(en.iter().find(|d| d.name == "sgw.sh").unwrap().executable);
-        let ja = distributed("ja");
-        let t_en = en
-            .iter()
-            .find(|d| d.name == "tasks.mise.toml")
-            .unwrap()
-            .content;
-        let t_ja = ja
-            .iter()
-            .find(|d| d.name == "tasks.mise.toml")
-            .unwrap()
-            .content;
-        assert_ne!(t_en, t_ja);
+    fn the_mise_layer_leaves_mise_toml_and_the_projects_tasks_stay() {
+        let text = "# mine\n[task_config]\nincludes = [\".devcontainer/sgw/tasks.mise.toml\", \".devcontainer/sgw/gateway.mise.toml\"]\n\n[env]\nSGW = \"{{config_root}}/.devcontainer/sgw/sgw.sh\"\n\n[tasks.mine]\nrun = \"echo\"\n";
+        let out = mise_without_sgw(text).unwrap();
         assert_eq!(
-            en.iter().find(|d| d.name == "sgw.sh").unwrap().content,
-            ja.iter().find(|d| d.name == "sgw.sh").unwrap().content
+            out,
+            "# mine\n[task_config]\n\n[env]\n\n[tasks.mine]\nrun = \"echo\"\n"
         );
+        assert!(!mise_has_nothing_own(&out));
+        assert!(mise_has_nothing_own("# only\n[task_config]\n\n[env]\n"));
+        assert_eq!(mise_without_sgw("[tasks.mine]\nrun = \"echo\"\n"), None);
+    }
+
+    #[test]
+    fn upgrading_is_embedded_in_both_languages() {
         assert!(upgrading("en").starts_with("<!-- reviewed-up-to:"));
         assert!(upgrading("ja").contains("更新"));
     }
@@ -986,7 +962,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(root.join(".devcontainer/scripts")).unwrap();
-        std::fs::write(root.join("mise.toml"), "[tasks]\n").unwrap();
+        std::fs::write(
+            root.join("mise.toml"),
+            "[task_config]\nincludes = [\".devcontainer/sgw/tasks.mise.toml\"]\n",
+        )
+        .unwrap();
         std::fs::write(root.join(".devcontainer/devcontainer.json"), "{\"postStartCommand\": \"sudo --preserve-env=X /usr/local/bin/sekimore-agent-setup.sh\"}").unwrap();
         std::fs::write(root.join(".devcontainer/scripts/sgw.sh"), "").unwrap();
         std::fs::write(
@@ -997,7 +977,8 @@ mod tests {
         let notes = owned_notes(root);
         assert_eq!(notes.len(), 4, "{notes:?}");
         assert!(notes[0].contains("pid: host"), "{}", notes[0]);
-        assert!(notes[1].contains("includes = "));
+        // the wording is the locale's; the path is in both
+        assert!(notes[1].contains(".devcontainer/sgw/"), "{}", notes[1]);
         assert!(notes[2].contains("sgw-post-start"), "{}", notes[2]);
         assert!(notes[3].contains(".devcontainer/scripts/sgw.sh"));
         // the template's own files need nothing

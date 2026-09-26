@@ -11,7 +11,7 @@ copy it by hand.
 ```
 sgw-sample/
 ├── README.md
-├── mise.toml                       # yours: includes .devcontainer/sgw/, and your own tasks
+├── sgw.toml                        # sgw's record: the sha of each file as it wrote it (do not edit)
 └── .devcontainer/
     ├── devcontainer.json
     ├── docker-compose.yml          # two services, dev and sekimore-gw
@@ -25,14 +25,6 @@ sgw-sample/
     │       └── squid.conf.template
     ├── scripts/
     │   └── post-create.sh          # unpacks zsh rc.d, detects agent forwarding (and stops with an ERROR)
-    ├── sgw/                        # distributed: sgw update --apply replaces all of it. Do not edit
-    │   ├── tasks.mise.toml         # the host-side mise tasks (vscode / web / relay:verify / upgrade ...)
-    │   ├── gateway.mise.toml       # the gateway's mise tasks (gw:*)
-    │   ├── sgw.sh                  # finds the gateway / dev container by compose label and runs docker exec in it
-    │   ├── vscode.sh               # what sgw open runs
-    │   ├── upgrade.sh              # mise run upgrade
-    │   ├── post-start.sh           # the way before base 0.2.51; postStartCommand is sgw-post-start now
-    │   └── MANIFEST                # what sgw update / upgrade wrote last, used to detect manual edits
     └── zsh-config/
         └── rc.d/                   # the project's own zsh configuration
 ```
@@ -44,12 +36,11 @@ sgw-sample/
 - After adding or changing an upstream in `config.yml`: `sgw restart`, then `sgw refresh`
 - The signing key's title on GitHub is `sekimore-agent-signing: <project> / <name> <email>`; `SEKIMORE_SIGNING_KEY_COMMENT` in `.env` changes it
 - When the project ends: `sgw revoke-project`
-- The mise tasks in `.devcontainer/sgw/` do the same as the `sgw` commands (`mise tasks` lists them)
 
 ## Keeping up to date
 
-`.devcontainer/sgw/` is distributed: `sgw update --apply` replaces it, so do not edit it. To change
-a task, define one with the same name in `mise.toml`.
+Everything `sgw init` wrote is yours to edit. `sgw.toml` is sgw's record of what it wrote (the
+sha of each file), so `sgw update` can tell a file you edited from one a new version changes.
 
 ```bash
 sgw update            # what is newer, which files change, what UPGRADING asks. Changes nothing
@@ -59,9 +50,13 @@ sgw update --apply    # move to it
 `sgw update --apply`:
 
 1. raises the gateway's `image:` tag and the `FROM` tag to `sgw`'s own version
-2. replaces `.devcontainer/sgw/`
+2. overwrites a template file that is still as sgw wrote it when this version changes it; leaves
+   one you edited alone; when both happened, writes this version's file beside yours as
+   `<file>.sgw-new` for you to merge (`--force` overwrites)
 3. recreates the gateway, after asking
 4. unlocks the store when the passphrase is stored
 5. lists what only the operator can do: Rebuild Container, the [UPGRADING.md](../../../UPGRADING.md) sections crossed (`sgw update --notes`), a commit
 
-It stops when a file in `.devcontainer/sgw/` was edited by hand (`--force` overwrites).
+A project from before 0.2.52 still has `.devcontainer/sgw/` (the mise layer) and a `mise.toml`
+that includes it; `sgw update --apply` removes the directory and those lines, and keeps your
+own tasks.

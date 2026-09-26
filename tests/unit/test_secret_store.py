@@ -30,8 +30,8 @@ class FakeRelay:
     """A control socket that answers with whatever the test hands it.
 
     Stands in for the relay, which is Rust and not startable from here. The shape of the reply is
-    copied from `relay/src/store/control.rs`; `test_gateway_mise_tasks.py` does the same kind of
-    thing for the task file — read the other side's contract and hold this side to it.
+    copied from `relay/src/store/control.rs` — read the other side's contract and hold this side
+    to it.
     """
 
     def __init__(self, tmp_path, reply, *, hang: bool = False, close_early: bool = False):
