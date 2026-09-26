@@ -12,6 +12,16 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.52 (2026-09-26)
+
+### Enhancement
+
+- the mise layer is gone: `sgw init` writes the project files and `sgw.toml`, which records the sha of each template file as written, and no longer writes `.devcontainer/sgw/` or `mise.toml` (#263)
+- `sgw update` tells a file you edited from one a new version changes, writing `.sgw-new` beside it when both; it moves a project of the mise era over, removing `.devcontainer/sgw/` and taking the includes out of `mise.toml` (#263)
+- `--sync` is gone, and with it `base/share/sgw/` and the gateway's task files (#263)
+- the migration points `postStartCommand` at `sgw-post-start` when it still named the removed `post-start.sh` (#264)
+- the project template lives in `relay/templates/devcontainer/`; its guide is `docs/template.md` (#265)
+
 ## 0.2.51 (2026-09-26)
 
 ### Enhancement

@@ -11,6 +11,16 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.52（2026-09-26）
+
+### Enhancement
+
+- mise の層が無くなった。`sgw init` はプロジェクトのファイルと `sgw.toml`（書き出した雛形ファイルそれぞれの sha を記録する）を書き、`.devcontainer/sgw/` と `mise.toml` は書かなくなった (#263)
+- `sgw update` は、あなたが編集したファイルと新しい版が変えるファイルを見分け、両方に当たるときは隣に `.sgw-new` を置く。mise 時代のプロジェクトも移行し、`.devcontainer/sgw/` を消して `mise.toml` から include を取り除く (#263)
+- `--sync` が無くなり、`base/share/sgw/` と gateway のタスクファイルも無くなった (#263)
+- 移行は、`postStartCommand` が消えた `post-start.sh` を指したままのとき `sgw-post-start` に向ける (#264)
+- プロジェクトの雛形は `relay/templates/devcontainer/` に置く。その案内は `docs/template.md` (#265)
+
 ## 0.2.51（2026-09-26）
 
 ### Enhancement
