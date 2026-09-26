@@ -769,6 +769,7 @@ base の pin を上げたら、base が変わるときの常で Rebuild Containe
 - `.devcontainer/sgw/` を消す（それらのファイルしか無いときだけ）
 - `mise.toml` から `.devcontainer/sgw/` の `includes` と `SGW` の行を消す。自分のタスクは残る。
   自分のものが何も残らなければそう言う: `git rm mise.toml`
+- `postStartCommand` がまだ `.devcontainer/sgw/post-start.sh` を指していれば `sgw-post-start` の 1 行にする（そのファイルは消える）
 - `.devcontainer/` の隣に `sgw.toml` を書く。sgw が書いた雛形ファイルの記録で、以後の更新で
   「あなたが編集したファイル」と「新しい版が変えるファイル」を見分ける
 

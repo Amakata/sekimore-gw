@@ -215,6 +215,24 @@ pub fn mise_without_sgw(text: &str) -> Option<String> {
     }
 }
 
+/// devcontainer.json with a `postStartCommand` that names the removed `.devcontainer/sgw/post-start.sh`
+/// pointed at `sgw-post-start` instead: the file is gone once the mise layer is, so a start that
+/// still named it would fail. A text edit of that one value; None when there is nothing to do.
+pub fn devcontainer_with_sgw_post_start(text: &str) -> Option<String> {
+    let re_value = |s: &str| -> Option<(usize, usize)> {
+        let key = s.find("\"postStartCommand\"")?;
+        let colon = key + s[key..].find(':')?;
+        let open = colon + s[colon..].find('"')?;
+        let close = open + 1 + s[open + 1..].find('"')?;
+        Some((open + 1, close))
+    };
+    let (a, b) = re_value(text)?;
+    if !text[a..b].contains(".devcontainer/sgw/post-start.sh") {
+        return None;
+    }
+    Some(format!("{}sgw-post-start{}", &text[..a], &text[b..]))
+}
+
 /// Only comments, blank lines and table headers: nothing of the project's own.
 pub fn mise_has_nothing_own(text: &str) -> bool {
     text.lines()
@@ -554,6 +572,13 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
     if mise_new.is_some() {
         println!("  {}", t("sgw.update.m_mise"));
     }
+    let dcj_path = project.compose_dir.join("devcontainer.json");
+    let dcj_new = std::fs::read_to_string(&dcj_path)
+        .ok()
+        .and_then(|text| devcontainer_with_sgw_post_start(&text));
+    if dcj_new.is_some() {
+        println!("  {}", t("sgw.update.m_poststart"));
+    }
     println!();
     let notes = sections(upgrading(l), &cur_gw, &new_gw, &cur_base, &new_base, false);
     if notes.trim().is_empty() {
@@ -592,6 +617,7 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         && conflicts.is_empty()
         && !migrate
         && mise_new.is_none()
+        && dcj_new.is_none()
         && std::fs::read_to_string(&toml_path).ok().as_deref() == Some(toml_new.render().as_str());
 
     if opts.mode == Mode::Check {
@@ -688,6 +714,10 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
             if mise_has_nothing_own(text) {
                 remain.push(t("sgw.update.r_mise_empty"));
             }
+        }
+        if let Some(text) = &dcj_new {
+            write_in_place(&dcj_path, text)?;
+            println!("{}", t("sgw.update.m_poststart_done"));
         }
         write_file(&toml_path, toml_new.render().as_bytes(), false)?;
         println!(
@@ -912,6 +942,21 @@ mod tests {
         assert!(!mise_has_nothing_own(&out));
         assert!(mise_has_nothing_own("# only\n[task_config]\n\n[env]\n"));
         assert_eq!(mise_without_sgw("[tasks.mine]\nrun = \"echo\"\n"), None);
+    }
+
+    #[test]
+    fn the_start_line_that_named_the_removed_script_becomes_the_one_line() {
+        let dc = "{\n  \"name\": \"x\",\n  \"postStartCommand\": \"sh /workspace/.devcontainer/sgw/post-start.sh\",\n  \"waitFor\": \"postStartCommand\"\n}\n";
+        assert_eq!(
+            devcontainer_with_sgw_post_start(dc).unwrap(),
+            "{\n  \"name\": \"x\",\n  \"postStartCommand\": \"sgw-post-start\",\n  \"waitFor\": \"postStartCommand\"\n}\n"
+        );
+        assert_eq!(
+            devcontainer_with_sgw_post_start("{\"postStartCommand\": \"sgw-post-start\"}"),
+            None
+        );
+        assert_eq!(devcontainer_with_sgw_post_start("{\"postStartCommand\": \"sudo --preserve-env=X /usr/local/bin/sekimore-agent-setup.sh\"}"), None, "the older form is the operator's to change");
+        assert_eq!(devcontainer_with_sgw_post_start("{}"), None);
     }
 
     #[test]
