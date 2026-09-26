@@ -12,6 +12,12 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.50 (2026-09-26)
+
+### Enhancement
+
+- sgw-agent is the AI's command in the dev container: one binary that is sekimore-relay agent with the env file and the token refresh the sekimore shell wrapper did; the base image ships it and `sekimore` stays as an alias that execs it (#259)
+
 ## 0.2.49 (2026-09-26)
 
 ### Fix

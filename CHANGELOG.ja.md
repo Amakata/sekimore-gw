@@ -11,6 +11,12 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.50（2026-09-26）
+
+### Enhancement
+
+- sgw-agent が dev コンテナでの AI のコマンドになった。sekimore-relay agent に、sekimore シェルラッパーがやっていた env ファイルの読み込みとトークンの更新を足した 1 つのバイナリ。base イメージがこれを載せ、`sekimore` はこれを exec するエイリアスとして残る (#259)
+
 ## 0.2.49（2026-09-26）
 
 ### Fix
