@@ -17,13 +17,30 @@ of the same tag) and, later, the `sgw` binaries. One version number, `pyproject.
    every one of them says the new version
 4. `docker build -t sekimore-gw:X.Y.Z-local .` must succeed before anything is tagged
 5. Open the release pull request, merge it, tag the merge commit (signed) and push the tag.
-   `docker-publish.yml` builds the gateway image, then the base image, then publishes both
+   `docker-publish.yml` builds the gateway image, then the base image, then the `sgw` binaries
+   (macOS arm64, Linux x86_64 / arm64), and creates a **draft** Release with the binaries,
+   their sha256 files and `install.sh` attached
+6. Publish the Release with the changelog's bullets as its notes:
+   ```
+   sekimore release edit --repo Amakata/sekimore-gw --tag vX.Y.Z --notes="- …" --draft false
+   ```
+   (`release create` would collide with the draft the workflow made)
 
 ## Tags pushed to GHCR
 
 | Trigger | Gateway image | Base image |
 | --- | --- | --- |
 | Push of a `vX.Y.Z` tag | `X.Y.Z`, `X.Y`, `X`, `latest` | the same |
+
+## Release assets
+
+`sgw-<target>.tar.gz` and `.sha256` for `aarch64-apple-darwin`, `x86_64-unknown-linux-musl`,
+`aarch64-unknown-linux-musl`, and `install.sh` (`scripts/install-sgw.sh`). The asset names carry
+no version, so `releases/latest/download/…` works:
+
+```sh
+curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh
+```
 | Push to `main`, pull request | preview image (`preview.yml`); base built but not pushed (`base.yml`) | — |
 
 ## Local builds of the base image

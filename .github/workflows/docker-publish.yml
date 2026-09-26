@@ -300,3 +300,84 @@ jobs:
           got=$(docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/sekimore-relay "$IMAGE" --version)
           echo "$got"
           case "$got" in *"$VERSION"*) ;; *) echo "the base image holds '$got', not $VERSION"; exit 1 ;; esac
+
+  # ---- the host tool `sgw`, as release assets (#234) ----
+  # Built natively on each platform: macOS on an Apple-silicon runner (rustls-native-certs pulls
+  # in the Security framework, which a Linux cross build has no SDK for), Linux as the same static
+  # musl binaries the relay uses. Attached to a *draft* Release with `gh`; the release step then
+  # writes the notes and publishes it (RELEASING.md).
+  sgw:
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-26.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-26.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # 1.89.0
+        with:
+          targets: ${{ matrix.target }}
+      - name: musl-tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --locked --features host --bin sgw --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          set -eu
+          v="${GITHUB_REF_NAME#v}"
+          bin="target/${{ matrix.target }}/release/sgw"
+          "$bin" --version | grep -F "$v"
+          mkdir -p ../dist
+          name="sgw-${{ matrix.target }}"
+          tar -C "$(dirname "$bin")" -czf "../dist/$name.tar.gz" sgw
+          (cd ../dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+          cat "../dist/$name.tar.gz.sha256"
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sgw-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # The draft Release with every asset, once both images are out. `sekimore release edit --draft
+  # false` publishes it with the notes (RELEASING.md). A re-run of this job replaces the assets.
+  release:
+    needs: [merge, base-merge, sgw]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          pattern: sgw-*
+          merge-multiple: true
+      - name: Create the draft release, or add to it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          tag="$GITHUB_REF_NAME"
+          cp scripts/install-sgw.sh dist/install.sh
+          ls -l dist
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" --draft --title "sekimore-gw ${tag#v}" --notes "(notes follow)" dist/*
+          fi
