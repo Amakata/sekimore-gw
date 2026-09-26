@@ -362,5 +362,6 @@
   "sgw.refresh.proxy": "== dev: 上流 proxy の環境（/etc/profile.d/sekimore-proxy.sh）",
   "sgw.refresh.no_proxy": "ありません（上流 proxy が未設定か、ゲートウェイが 0.2.42 より古い）",
   "sgw.refresh.proxy_present": "あります: dev の新しいシェルは読みます。開いているシェルでは . /etc/profile.d/sekimore-proxy.sh",
-  "sgw.refresh.done": "refresh: 完了。Host ブロックはすぐ効きます。proxy 環境は dev で新しいターミナルを開いてください"
+  "sgw.refresh.done": "refresh: 完了。Host ブロックはすぐ効きます。proxy 環境は dev で新しいターミナルを開いてください",
+  "sgw.cmd.verify": "プロジェクトの受け入れ検査: ゲートウェイの状態、署名鍵、ストア、dev から関所経由の git / HTTPS / API 呼び出し、上流 proxy、ホスト側の規則"
 }

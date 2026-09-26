@@ -122,6 +122,13 @@ pub fn parse_port(docker_port_output: &str) -> Option<u16> {
     first.rsplit(':').next()?.parse().ok()
 }
 
+/// What a captured `docker exec` gave back.
+pub struct Captured {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
 pub struct Docker {
     bin: String,
     pub compose_dir: PathBuf,
@@ -302,6 +309,49 @@ impl Docker {
         }
         let st = child.wait()?;
         Ok(st.code().unwrap_or(1))
+    }
+
+    /// `docker exec -i` with both outputs captured and stdin closed: for `verify`, which reads
+    /// answers rather than showing a terminal.
+    pub fn exec_capture(
+        &self,
+        cid: &str,
+        user: Option<&str>,
+        argv: &[String],
+    ) -> anyhow::Result<Captured> {
+        let mut args: Vec<String> = vec!["exec".into(), "-i".into()];
+        if let Some(u) = user {
+            args.push("-u".into());
+            args.push(u.into());
+        }
+        args.push(cid.into());
+        args.extend(argv.iter().cloned());
+        let o = self
+            .cmd()
+            .args(&args)
+            .stdin(Stdio::null())
+            .output()
+            .with_context(|| format!("run {} exec", self.bin))?;
+        Ok(Captured {
+            code: o.status.code().unwrap_or(1),
+            stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+        })
+    }
+
+    /// The gateway address of a Docker network (the bridge's `.1`), or None.
+    pub fn network_gateway(&self, network: &str) -> Option<String> {
+        let out = self
+            .out(&[
+                "network",
+                "inspect",
+                "-f",
+                "{{(index .IPAM.Config 0).Gateway}}",
+                network,
+            ])
+            .ok()?;
+        let s = out.trim().to_string();
+        (!s.is_empty() && s != "<no value>").then_some(s)
     }
 
     pub fn inspect(&self, cid: &str, format: &str) -> anyhow::Result<String> {

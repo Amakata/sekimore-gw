@@ -316,3 +316,27 @@ fn help_is_in_the_language_asked_for() {
     let ja = String::from_utf8_lossy(&out.stdout);
     assert!(ja.contains("秘密ストアを解錠する"), "{ja}");
 }
+
+/// `verify` runs every item for a dev container, names the ledger rows, and fails when the
+/// answers are missing (the fake docker answers nothing to exec).
+#[test]
+fn verify_reports_every_item_with_its_ledger_rows() {
+    let f = fixture();
+    let out = sgw(&f, &["verify"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for heading in [
+        "== gateway: sekimore-relay check",
+        "== dev: only the gateway's filtered signing key may be reachable [dev.signing]",
+        "== gateway: the secret store [operator.store]",
+        "== dev: git ls-remote through the relay (first repo of the project) [dev.relay.ssh, relay.ssh.upstream]",
+        "== dev: a root process must not route past the gateway (host-side FORWARD rules, gateway 0.2.37) [dev.egress.route_past_gateway]",
+    ] {
+        assert!(stdout.contains(heading), "missing {heading} in {stdout}");
+    }
+    assert!(stdout.contains("verify: FAILED"), "{stdout}");
+    assert!(
+        stdout.contains("SKIP: no 443 target configured"),
+        "{stdout}"
+    );
+}

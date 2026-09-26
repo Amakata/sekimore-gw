@@ -95,6 +95,8 @@ macro_rules! passthrough {
             SigningKey,
             #[command(about = t("sgw.cmd.refresh"))]
             Refresh,
+            #[command(about = t("sgw.cmd.verify"))]
+            Verify,
             #[command(about = t("sgw.cmd.web"))]
             Web,
             #[command(about = t("sgw.cmd.ps"))]
@@ -232,6 +234,7 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
             true,
         ),
         Refresh => ops::refresh(&docker),
+        Verify => super::verify::run(&docker, &proj, super::target::Target::DEFAULT),
         Web => ops::web(&docker),
         Ps => docker.ps(),
         Port {

@@ -15,3 +15,4 @@ pub mod ops;
 pub mod passphrase;
 pub mod project;
 pub mod target;
+pub mod verify;

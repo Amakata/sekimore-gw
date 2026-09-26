@@ -362,5 +362,6 @@
   "sgw.refresh.proxy": "== dev: the upstream proxy environment (/etc/profile.d/sekimore-proxy.sh)",
   "sgw.refresh.no_proxy": "not present (no upstream proxy configured, or the gateway is older than 0.2.42)",
   "sgw.refresh.proxy_present": "present: a new shell in dev reads it; a shell already open needs . /etc/profile.d/sekimore-proxy.sh",
-  "sgw.refresh.done": "refresh: done. The Host blocks apply at once; open a new terminal in dev for the proxy environment"
+  "sgw.refresh.done": "refresh: done. The Host blocks apply at once; open a new terminal in dev for the proxy environment",
+  "sgw.cmd.verify": "the acceptance check of the project: the gateway's state, the signing key, the store, git / HTTPS / one API call through the relay from dev, the upstream proxy, the host-side rules"
 }

@@ -324,6 +324,7 @@ edges:
     switches: {upstream_proxy: unset}
     impl: [relay/src/passthrough.rs]
     tests: [relay/src/passthrough.rs]
+    verify: "HTTPS to a relayed domain must reach the upstream"
 
   - id: passthrough.via_proxy
     from: gateway.relay.passthrough

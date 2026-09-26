@@ -182,6 +182,38 @@ def describe_the_audit_events_on_each_edge():
         assert leaked == [], f"registered events written without an edge: {leaked}"
 
 
+def describe_the_verify_items_of_sgw():
+    """`sgw verify` (relay/src/host/verify.rs) names the ledger rows each item probes; the
+    ledger's `verify` attribute says which rows a real machine checks. The two must agree."""
+
+    def _verify_edges() -> set[str]:
+        text = (ROOT / "relay" / "src" / "host" / "verify.rs").read_text(encoding="utf-8")
+        consts = dict(
+            re.findall(
+                r'^pub const ([A-Z_]+): &str = "([a-z_.]+)";',
+                (ROOT / "relay" / "src" / "paths.rs").read_text(encoding="utf-8"),
+                re.M,
+            )
+        )
+        out: set[str] = set()
+        for block in re.findall(r"edges: &\[([^\]]*)\]", text):
+            for name in re.findall(r"paths::([A-Z_]+)", block):
+                out.add(consts[name])
+            for lit in re.findall(r'"([a-z_.]+)"', block):
+                out.add(lit)
+        return out
+
+    def it_probes_exactly_the_edges_the_ledger_says_a_real_machine_checks(edges):
+        in_ledger = {i for i, e in edges.items() if e.get("verify")}
+        in_sgw = _verify_edges()
+        assert in_sgw - in_ledger == set(), (
+            f"sgw verify names edges the ledger does not mark as verified: {in_sgw - in_ledger}"
+        )
+        assert in_ledger - in_sgw == set(), (
+            f"the ledger says these are probed on a real machine, but no verify item names them: {in_ledger - in_sgw}"
+        )
+
+
 def describe_rule_ssh_hops_are_verified_by_the_relay():
     """#220: the bastion hop was checked against ~/.ssh/known_hosts with StrictHostKeyChecking=ask."""
 
