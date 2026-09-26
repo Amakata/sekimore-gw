@@ -203,7 +203,30 @@ pub fn main() -> i32 {
             return 2;
         }
     };
-    let cli = Cli::parse_from(argv);
+    // each command's own --help says its grouped name: `Usage: sgw store export …`
+    use clap::{CommandFactory, FromArgMatches};
+    // (clap composes the usage name from the flat name and has no setter for it, so the usage
+    // it renders is taken and its head replaced)
+    let mut cmd = Cli::command();
+    cmd.build();
+    let usages: Vec<(String, String)> = cmd
+        .get_subcommands_mut()
+        .map(|sc| {
+            let n = sc.get_name().to_string();
+            let u = sc.render_usage().to_string();
+            let u = u.trim_start_matches("Usage: ").replacen(
+                &format!("sgw {n}"),
+                &super::groups::path(&n),
+                1,
+            );
+            (n, u)
+        })
+        .collect();
+    for (n, u) in usages {
+        cmd = cmd.mut_subcommand(n, |c| c.override_usage(u));
+    }
+    let matches = cmd.get_matches_from(argv);
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     match run(cli) {
         Ok(code) => code,
         Err(e) => {

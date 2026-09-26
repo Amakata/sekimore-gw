@@ -179,6 +179,21 @@ pub fn rewrite(mut argv: Vec<String>) -> Rewritten {
     }
 }
 
+/// How a flat command is spelled with its group, for the usage line of its own help:
+/// `store-export` is `sgw store export`. A command at the top, or one that is not in the table,
+/// is `sgw <name>`.
+pub fn path(flat: &str) -> String {
+    for g in GROUPS {
+        if let Some(l) = g.leaves.iter().find(|l| l.flat == flat) {
+            if l.flat == g.name {
+                return format!("sgw {}", g.name);
+            }
+            return format!("sgw {} {}", g.name, l.name);
+        }
+    }
+    format!("sgw {flat}")
+}
+
 const NAME_WIDTH: usize = 18;
 
 fn line(name: &str, about: &str) -> String {
@@ -252,6 +267,15 @@ mod tests {
             rewrite(v(&["sgw", "dev", "shell"])),
             Rewritten::Args(v(&["sgw", "dev"]))
         );
+    }
+
+    #[test]
+    fn the_usage_line_spells_a_command_with_its_group() {
+        assert_eq!(path("store-export"), "sgw store export");
+        assert_eq!(path("tokens"), "sgw token list");
+        assert_eq!(path("init"), "sgw init");
+        assert_eq!(path("dev"), "sgw dev");
+        assert_eq!(path("relay"), "sgw gw relay");
     }
 
     #[test]

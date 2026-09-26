@@ -410,6 +410,20 @@ fn a_group_alone_lists_its_commands_and_an_unknown_leaf_is_refused() {
 }
 
 #[test]
+fn a_commands_own_help_spells_it_with_its_group() {
+    let f = fixture();
+    let out = sgw(&f, &["store", "export", "--help"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Usage: sgw store export "), "{text}");
+    let out = sgw(&f, &["recreate", "--help"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Usage: sgw gw recreate"), "{text}");
+    let out = sgw(&f, &["init", "--help"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Usage: sgw init"), "{text}");
+}
+
+#[test]
 fn help_lists_the_commands_by_group() {
     let f = fixture();
     let out = sgw(&f, &["--help"]).output().unwrap();
