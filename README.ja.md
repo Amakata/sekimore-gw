@@ -37,12 +37,6 @@ Docker（macOS は Docker Desktop、Linux は Docker Engine）と、Dev Containe
    ```
 3. 続きは [base/README.ja.md](base/README.ja.md): `config.yml`、dev コンテナ、`sgw unlock` / `sgw login` / `sgw verify`。
 
-認証の必要なプロキシの内側では、パスワードを秘密ストアに入れます（`.devcontainer/.env` はエージェントが読めるため）:
-
-```bash
-sgw proxy-credential set
-```
-
 ## 何を設定すると何が起きるか
 
 設定は `.devcontainer/config/config.yml` に全部あります。[config.sample.yml](config/config.sample.yml) に全キーがコメント付きで載っています。
@@ -52,7 +46,7 @@ sgw proxy-credential set
 | `allow_domains` | エージェントの普段の通信が届いてよい宛先。DNS・ファイアウォール・Squid が同じこの一覧に従う |
 | `domain_handlers`、`relay` | このドメインは関所を通る: SSH の git、GitHub API、上限付きの HTTPS。上流の資格情報は関所が持ち、エージェントは持たない |
 | `relay.project.repos`、`permissions` | どのリポジトリを、読み取り専用か読み書きか、33 種類の操作のどれを許すか: `pr:create` は許可、`pr:merge` は拒否 |
-| `proxy.upstream_proxy`、`proxy.direct_egress` | 外に出る通信すべてに企業プロキシを通す。`deny` でプロキシを迂回する道を塞ぐ |
+| `proxy.upstream_proxy`、`proxy.direct_egress` | 外に出る通信すべてに企業プロキシを通す。`deny` でプロキシを迂回する道を塞ぐ。パスワードは秘密ストアに入れる（`sgw proxy-credential set`）。エージェントが読めるファイルには書かない |
 | `network.allowed_ports` | エージェントが届いてよいポート。未設定は全ポート。ふつうは `[80, 443]` |
 
 | 操作 | コマンド |
