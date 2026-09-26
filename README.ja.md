@@ -139,14 +139,8 @@ sekimore-gw（sgw）は、Docker で動く AI エージェントのためのネ�
 | `config.yml` を変えたのに効かない | `sgw restart` |
 | エージェントに要るドメインが解決されない | `allow_domains` に足す。ブロックされた通信は `sgw web` で見える |
 | 版を上げたのにゲートウェイが古い | `sgw recreate` |
+| 起動時に「network … already exists」と出る | 前の dev コンテナとゲートウェイが残っている。`sgw down` で丸ごと消して開き直す |
 | 版を上げたのに dev コンテナが古い | VS Code の Rebuild Container |
-
-起動時に `network <名前> already exists` と出たら、前の dev コンテナとゲートウェイがそのネットワークに繋がったまま残っています。エラーに出た名前で、コンテナごと消してから開き直します:
-
-```bash
-docker rm -f $(docker ps -aq --filter network=<名前>)
-docker network rm <名前>
-```
 
 ## ライセンス
 
