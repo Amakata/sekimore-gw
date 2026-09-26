@@ -751,7 +751,7 @@ esac
         agents = home / ".codex" / "AGENTS.md"
         atext = agents.read_text()
         assert atext.count("<!-- >>> sekimore-relay >>> -->") == 1
-        assert "`sekimore guide`" in atext and "sekimore whoami" in atext
+        assert "`sgw-agent guide`" in atext and "sgw-agent whoami" in atext
         # Existing AGENTS.md content is preserved; only the block is replaced
         agents.write_text("# my own notes\n\n" + atext)
         proc, home = _run(tmp_path, shim)
