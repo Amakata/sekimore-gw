@@ -22,61 +22,52 @@ sekimore-gw (sgw) is a network gateway for AI agents in Docker.
 - A fine-grained token narrows repositories, not actions. "Pull requests: write" both opens and merges.
 - Neither records what the agent did. Neither caps what it sends.
 
-```console
-# anywhere: the project token means nothing to GitHub
-$ curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: token skm_..." https://api.github.com/user
-401
-
-# in the dev container: allowed by the policy
-$ sekimore pr create --head sekimore/topic --base main --title "..."
-#42 https://github.com/Org/Repo/pull/42
-
-# in the dev container: not allowed
-$ sekimore pr merge --number 42
-sekimore: denied: pr:merge is not allowed by policy
-```
-
-`gh` is not part of this setup. With a token, it would bypass every permission here. The dev-container image does not include it.
 
 ## Get started
 
-Use the `base/examples/sgw-sample/` template. [base/README.md](base/README.md) goes from clone to a verified relay.
+Needs Docker (Docker Desktop on macOS, or Docker Engine on Linux) and VS Code with the Dev Containers extension.
+
+1. Install `sgw`, the operator's tool:
+   ```bash
+   curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh
+   ```
+2. Write the project template into a directory:
+   ```bash
+   sgw init --devcontainer my-project
+   ```
+3. [base/README.md](base/README.md) takes it from there: `config.yml`, the dev container, `sgw unlock`, `sgw login`, `sgw verify`.
 
 Behind a proxy that requires credentials, put the password in the secret store
 (`.devcontainer/.env` is readable by the agent):
 
 ```bash
-mise run gw:proxy-credential -- set
+sgw proxy-credential set
 ```
 
-## How it works
+## What you set, and what it does
 
-Four layers from one `config.yml`. Restricting one leaves the others as a bypass.
+Everything is in `.devcontainer/config/config.yml`; [config.sample.yml](config/config.sample.yml) lists every key with a comment.
 
-| Layer | Role |
+| Setting | Effect |
 |---|---|
-| **DNS** (:53) | Resolves allowlisted domains only. Opens the firewall for the returned addresses. Relay domains resolve to the gateway. |
-| **Firewall** (iptables, ipset) | Forwards only to addresses and ports that DNS admitted. Drops direct-IP connections. `network.allowed_ports` limits ports; unset means all ports. |
-| **Squid** (:3128) | The agent's HTTP proxy. Resolves names itself, so it carries the same allowlist. Refuses relay domains. |
-| **Relay** (sekimore-relay) | git over SSH (:22), GitHub API (:8420), HTTPS passthrough (:443). The only holder of upstream credentials. |
+| `allow_domains` | The destinations the agent's ordinary traffic may reach. DNS, the firewall and Squid all follow this one list |
+| `domain_handlers`, `relay` | These domains go through the relay instead: git over SSH, the GitHub API, HTTPS with an upload cap. The relay holds the upstream credentials; the agent holds none |
+| `relay.project.repos`, `permissions` | Which repositories, read-only or read-write, and which of the 33 actions: `pr:create` allowed, `pr:merge` denied |
+| `proxy.upstream_proxy`, `proxy.direct_egress` | A corporate proxy for everything that leaves; `deny` closes the way around it |
+| `network.allowed_ports` | The ports the agent may reach. Unset means all; `[80, 443]` is the usual |
 
-The relay:
+| Operation | Command |
+|---|---|
+| Unlock the secret store (after every recreate; `sgw keychain-set` once makes it automatic) | `sgw unlock` |
+| Log in to GitHub, once | `sgw login` |
+| Check the whole setup | `sgw verify` |
+| After changing `domain_handlers` or `relay` | `sgw restart` |
+| Move to a newer release | `sgw update --apply` |
+| Watch what the agent did and was refused | `sgw audit` |
 
-- enforces a per-project policy: repositories, read-only or read-write, 33 permissions, pull request base branches
-- turns `git push HEAD:refs/for/main` into a branch and a pull request
-- signs commits with a key the agent can use but not read
-- caps uploads through the 443 passthrough
-- logs allowed and refused operations
+Every other command: `sgw --help`.
 
-Details: [relay/README.md](relay/README.md).
-
-With `proxy.upstream_proxy` set, only the relay's own paths and clients that name Squid
-explicitly use the upstream; everything else leaves the gateway directly. `proxy.direct_egress:
-deny` closes that path, so Squid is the only way out. The dev container gets `HTTP_PROXY` and
-`NO_PROXY` from the gateway at start (`GET /api/proxy-env`; `NO_PROXY` is built from
-`domain_handlers`, plus anything in `proxy.no_proxy`).
-
-## When to use it
+## Fits, does not fit
 
 Fits when the agent should:
 
@@ -87,32 +78,12 @@ Fits when the agent should:
 - leave a record of every operation
 - hold no upstream credential
 
-Does not fit:
+Does not fit when:
 
-| Case | Why |
-|---|---|
-| API rules for an upstream other than GitHub | Git over SSH works with any host. API translation is GitHub only. GitLab or Artifactory: allowlist, or 443 passthrough with a cap. [#50](https://github.com/Amakata/sekimore-gw/issues/50) |
-| Rules on request content | TLS is not terminated. Destination and byte count only. No MITM certificate needed. |
-| Destinations only | A plain allowlist needs less than this. |
-| An agent that does not use GitHub | The relay has no role. |
-
-## Requirements
-
-- Docker 20.10 or later, Docker Compose 2.0 or later
-- A Linux host, or Docker Desktop on macOS (the layers run inside the Docker VM)
-- The gateway runs with `NET_ADMIN`, `privileged: true` and `pid: host`. `pid: host` lets it place the FORWARD rules that confine the agent in the host's DOCKER-USER chain. The template's `docker-compose.yml` sets all three.
-- The agent container uses `dns: [127.0.0.1]` and runs `agent-setup.sh` at start to find the gateway and set the default route. The dev-container image does both.
-- `network.allowed_ports` is unset by default, so every port is open. Set `[80, 443]` unless the agent needs more. A change requires a restart.
-
-## Names
-
-| Name | What it is |
-|---|---|
-| sekimore-gw, sgw | This gateway. `sgw` appears in `sgw-devcontainer-base`, `sgw.sh` and `.devcontainer/sgw/`. |
-| sekimore-relay | The relay daemon in the gateway, and the CLI of the same name in the dev container. |
-| `sekimore` | The wrapper in the dev container. Runs `sekimore-relay agent …`. `sekimore guide` prints the agent's guide. |
-| sgw-devcontainer-base | The dev-container image, built from `base/` of this repository and released with it. `base/examples/sgw-sample/` is the project template. |
-| `.devcontainer/sgw/`, `gw:*` | Host-side scripts and mise tasks. Distributed with the images, replaced by `mise run upgrade:apply`. |
+- the upstream is not GitHub and its API needs rules: git over SSH works with any host, API translation is GitHub only ([#50](https://github.com/Amakata/sekimore-gw/issues/50))
+- the rules are about request content: TLS is not terminated, so only the destination and the byte count are seen
+- only destinations matter: a plain allowlist needs less than this
+- the agent does not use GitHub: the relay has no role
 
 ## Documentation
 
@@ -126,29 +97,18 @@ Does not fit:
 - [base/README.md](base/README.md) — the dev-container side: the image and the project template
 - [RELEASING.md](RELEASING.md) — how a release is cut
 
-## Troubleshooting
+## When the dev container does not come up right
 
-**The agent cannot find the gateway**
+`sgw verify` names the item that fails and what to run. The usual ones:
 
-- Check `dns: [127.0.0.1]` on the agent container
-- Check the agent's logs: `docker logs <agent-container>`
-- `agent-setup.sh` scans the whole subnet only when the prefix length is 24 or more
-
-**A domain does not resolve**
-
-- Check `allow_domains` in `config/config.yml`
-- Blocked requests: the Web UI, or `docker logs sekimore-gw`
-
-**The database is large**
-
-Run in the gateway container (the `gw:db-*` mise tasks wrap these):
-
-```bash
-python -m src.maint db-stats                                   # size and row counts
-python -m src.maint db-prune --before-days 90 --yes --vacuum   # delete old records
-```
-
-The relay's audit log (`/data/relay/audit.jsonl`) is a separate file. These commands do not touch it.
+| Symptom | Do |
+|---|---|
+| The agent cannot reach GitHub after a restart or an update | The secret store is locked: `sgw unlock` (or `sgw keychain-set` once, so `sgw recreate` unlocks by itself) |
+| `sekimore whoami` in dev says there is no token | `sgw login`, then `sgw verify` |
+| `ssh-add -l` in dev lists your own keys | VS Code was started with `SSH_AUTH_SOCK`. Quit it completely and start it with `sgw open` |
+| A change to `domain_handlers` or `relay` in `config.yml` has no effect | `sgw restart`; a change to `allow_domains` alone is picked up while the reload window is open (`sgw reload-status`) |
+| A domain the agent needs is not resolved | Add it to `allow_domains`; the refusals are in the Web UI (`sgw web`) and in `sgw logs` |
+| The gateway image is old after `sgw update --apply` | `sgw recreate` pulls it; `docker restart` keeps the old one. A base change needs Rebuild Container in VS Code |
 
 ## License
 

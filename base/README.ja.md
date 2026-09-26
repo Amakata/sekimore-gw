@@ -11,73 +11,69 @@ sekimore-gw（略して sgw）の dev コンテナ側で、ゲートウェイの
 
 ## プロジェクトを始める
 
-プロジェクトは [`examples/sgw-sample/`](examples/sgw-sample/) の複製から始める。中身は次のとおり。
+運用者の道具 `sgw` が、プロジェクトを書き、ホストからゲートウェイを動かす。次の手順をホストで順に実行する。
+`sgw init` が書く雛形の中身は [`examples/sgw-sample/README.ja.md`](examples/sgw-sample/README.ja.md) にある。
 
-- ゲートウェイと dev のコンテナ
-- ホスト側の mise タスク
-
-次の手順をホストで順に実行する。
-各手順の詳細は [`examples/sgw-sample/README.ja.md`](examples/sgw-sample/README.ja.md) に書いてある。
-
-1. リポジトリを複製する:
+1. `sgw` を入れる:
    ```
-   git clone https://github.com/Amakata/sekimore-gw.git
+   curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh
    ```
-2. 次のものをプロジェクトにコピーする:
-   - `base/examples/sgw-sample/.devcontainer/`
-   - `base/examples/sgw-sample/mise.toml`
-3. `.devcontainer/.env.sample` を `.devcontainer/.env` にコピーする:
+2. 雛形を書く:
    ```
-   cp .devcontainer/.env.sample .devcontainer/.env
+   sgw init --devcontainer my-project
+   cd my-project
    ```
-   プロジェクト名、ユーザー名、メールアドレスを埋める。
-4. `.devcontainer/config/config.yml` を編集する:
+   `.devcontainer/`（ゲートウェイと dev のコンテナ、`config.yml`、ホスト側のファイル）と `mise.toml`、
+   `.env.sample` から作った `.devcontainer/.env` が書かれる。
+   `.devcontainer/.env` にプロジェクト名、ユーザー名、メールアドレスを埋める。
+3. `.devcontainer/config/config.yml` を編集する:
    - `relay.project.repos` と `permissions` を設定する。
    - このファイルにはゲートウェイが読むキーがすべて載っている。
    - 影響の大きい権限はコメントアウトしてある。
-5. VS Code を完全に終了し、次を実行して「Reopen in Container」を選ぶ:
+4. VS Code を完全に終了し、次を実行して「Reopen in Container」を選ぶ:
    ```
-   mise run vscode
+   sgw open
    ```
-   このタスクは `SSH_AUTH_SOCK` なしで VS Code を開く。
-   運用者の ssh-agent は dev コンテナに届かない。
-6. 秘密ストアを解錠する:
+   `SSH_AUTH_SOCK` なしで VS Code を開く。運用者の ssh-agent は dev コンテナに届かない。
+5. 秘密ストアを解錠する:
    ```
-   mise run gw:unlock
+   sgw unlock
    ```
    - 初回の実行でパスフレーズを設定する。
    - ゲートウェイを作り直すたびに解錠し直す必要がある。
    - これを省くには、次を一度実行する:
      ```
-     mise run gw:keychain-set
+     sgw keychain-set
      ```
      パスフレーズがホストに保存される。保存先は macOS のキーチェーン、Secret Service、root 所有のファイルのいずれかである。
-     以後は `gw:recreate` がストアを自動で解錠する。
-7. GitHub にログインする (初回だけ):
+     以後は `sgw recreate` がストアを自動で解錠する。
+6. GitHub にログインする（初回だけ）:
    ```
-   mise run gw:login
+   sgw login
    ```
    - デバイスフローを使う。
-   - 上流のトークンと `known_hosts` を保存する。
+   - 上流のトークンと `known_hosts` を保存する。ホスト鍵は保存する前に確認を求める。
    - 解錠済みのストアが必要である。
-8. 署名鍵を表示する:
+7. 署名鍵を表示する:
    ```
-   mise run dev:signing-key
+   sgw signing-key
    ```
    表示された公開鍵を、GitHub に Signing Key として登録する。
    エージェントのコミットはこの鍵で署名される。
-9. 構成全体を確認する:
+8. 構成全体を確認する:
    ```
-   mise run relay:verify
+   sgw verify
    ```
    これが通れば設定は完了である。
+
+`.devcontainer/sgw/` の mise タスクも同じことをする（`mise run gw:unlock`、`mise run relay:verify` …）。`mise tasks` に一覧がある。
 
 ## プロジェクトの Dockerfile
 
 プロジェクトの `.devcontainer/Dockerfile` に必要なのは次の内容だけである。
 
 ```dockerfile
-# latest ではなく版を書く。`mise run upgrade:apply` がこれを上げる
+# 版を書く。latest ではなく: `sgw update --apply` が上げる
 FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.47
 
 # プロジェクト固有の追加だけを書く
@@ -114,55 +110,53 @@ FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.47
 
 ## 所有と最新への追従
 
-サンプルから複製したものはすべてプロジェクトのものになる。`.devcontainer/sgw/` だけは例外である。
+`sgw init` が書いたものはすべてプロジェクトのものになる。`.devcontainer/sgw/` だけは例外である。
 
-- `.devcontainer/sgw/` にはホスト側のスクリプトとタスクが入っている。
-- `mise run upgrade:apply` がこれを入れ替える。手で編集しない。
+- `.devcontainer/sgw/` には `sgw` より前のやり方のホスト側スクリプトと mise タスクが入っている。
+  `sgw update --apply`（または `mise run upgrade:apply`）がこれを入れ替える。手で編集しない。
 - 配布タスクを変えるには、プロジェクトの `mise.toml` に同じ名前のタスクを定義する。
   そちらが優先される。
-- `.devcontainer/sgw/gateway.mise.toml` には `gw:*` タスクが入っている。
-  ゲートウェイイメージが英語版と日本語版を同梱している。
-  `mise run upgrade:sync` が現在の言語のものを取得する。
+- タスクファイルは英語版と日本語版がある。`sgw update --sync` が現在の言語のものを書く。
   言語は `SEKIMORE_LANG`、次に `LC_ALL`、`LC_MESSAGES`、`LANG` で決まる。
-- 保存したパスフレーズで `gw:recreate` がストアを解錠しないようにするには、`SGW_NO_AUTO_UNLOCK=1` を設定する。
+- 保存したパスフレーズで解錠させないには、`sgw recreate --no-unlock`（または `SGW_NO_AUTO_UNLOCK=1`）。
 - `config.yml` に `proxy.upstream_proxy` があると、ゲートウェイが `HTTP_PROXY`・`HTTPS_PROXY`・
   `NO_PROXY` を dev に書き、`10-sekimore-proxy.zsh` がすべてのシェルに渡す。
   プロジェクトが独自に設定している場合は外すか値を揃える。dev の通常の通信が本当に上流を通るかは
-  `mise run relay:verify` が確認する（UPGRADING: base 0.2.40）。
+  `sgw verify` が確認する（UPGRADING: base 0.2.40）。
 
 ```bash
-mise run upgrade          # 何が新しいか、どのファイルが変わるか、UPGRADING が何を求めるか。何も変更しない
-mise run upgrade:apply    # 更新する
+sgw update            # 何が新しいか、どのファイルが変わるか、UPGRADING が何を求めるか。何も変更しない
+sgw update --apply    # 更新する
 ```
 
-`upgrade:apply` は次のことを行う。
+`sgw update --apply` は次のことを行う。
 
-1. ゲートウェイの `image:` タグと `FROM` タグを、GHCR の最新の版に上げる。
-2. `.devcontainer/sgw/` を入れ替える。
+1. ゲートウェイの `image:` タグと `FROM` タグを、`sgw` 自身の版に上げる。GHCR に `sgw` より新しい版が
+   あるときはそう言い、代わりに `install.sh` を示す。
+2. `.devcontainer/sgw/` をその版のファイル（バイナリが持っている）で入れ替える。
 3. 確認を求めたうえで、ゲートウェイを作り直す。
 4. パスフレーズが保存されていれば解錠する。
 5. 運用者にしかできない作業を表示する:
    - base が変わった場合の Rebuild Container
-   - 更新でまたぐ [UPGRADING.ja.md](../UPGRADING.ja.md) の節
+   - 更新でまたぐ [UPGRADING.ja.md](../UPGRADING.ja.md) の節（`sgw update --notes`）
    - コミット
 
-`.devcontainer/sgw/` のファイルが手で書き換えられている場合は、何も書き込まずに止まる。
+`.devcontainer/sgw/` のファイルが手で書き換えられている場合は、何も書き込まずに止まる（`--force` で上書き）。
 
-3 つの部分は互いに依存している。
-1 つのコマンドですべてを更新するのはそのためである。
+各部分は互いに依存しており、1 つの版番号がそれらを覆う。
 
 ```
-sekimore-gw (ゲートウェイ)  ── このイメージが関所のバイナリを取り込む
+sekimore-gw (ゲートウェイ)   ── このイメージが関所のバイナリを取り込む
         ↓
-sgw-devcontainer-base  ── あなたの .devcontainer/Dockerfile が FROM する
+sgw-devcontainer-base    ── あなたの .devcontainer/Dockerfile が FROM する
         ↓
-.devcontainer/sgw/     ── 両方に合わせたホスト側のスクリプトとタスク
+sgw / .devcontainer/sgw/ ── 運用者の道具とホスト側のファイル。同じ版
 ```
 
 - このイメージの `sekimore-relay` CLI と `sekimore-agent-setup.sh` は、ゲートウェイ `ghcr.io/amakata/sekimore-gw:0.2.47` (`ARG SEKIMORE_GW_IMAGE`) から取り込む。
-  base とゲートウェイは別々の 0.2.x 系列である。
+  base はゲートウェイと同じ版番号を持ち、1 つのタグから出る。
 - プロジェクトが動かすゲートウェイは、compose ファイルの `image:` タグで決まる。
-  `mise run upgrade:apply` が両方を上げる。
+  `sgw update --apply` が両方を上げる。
 
 ## リンク
 
@@ -172,5 +166,5 @@ sgw-devcontainer-base  ── あなたの .devcontainer/Dockerfile が FROM す
 - [CHANGELOG.ja.md](CHANGELOG.ja.md) — このイメージの変更履歴。各リリースが使ったゲートウェイの版も記録している。関連:
   - [ゲートウェイの CHANGELOG](https://github.com/Amakata/sekimore-gw/blob/main/CHANGELOG.ja.md)
   - [関所の CHANGELOG](https://github.com/Amakata/sekimore-gw/blob/main/relay/CHANGELOG.ja.md)
-- [RELEASING.md](RELEASING.md) — リリースの順序、ローカルビルド、GHCR に push するタグ (保守者向け、英語)
+- [RELEASING.md](../RELEASING.md) — リリースの手順、ローカルビルド、GHCR に push するタグ（保守者向け、英語）
 - ライセンス: Apache-2.0（[LICENSE](../LICENSE)。ゲートウェイと同じ）
