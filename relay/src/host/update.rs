@@ -835,7 +835,10 @@ mod tests {
                 && body.contains("## 0.2.9 not a heading")
                 && body.contains("body-b20")
         );
-        assert!(!body.contains("body-0.2.1\n") && !body.contains("body-0.2.11"), "{body}");
+        assert!(
+            !body.contains("body-0.2.1\n") && !body.contains("body-0.2.11"),
+            "{body}"
+        );
         assert_eq!(
             sections(upg, "0.2.10", "0.2.10", "0.2.20", "0.2.20", false),
             ""
