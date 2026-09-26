@@ -9,7 +9,7 @@
 
 ### Fix
 
-- `release edit` が draft の Release を見つけられるようにした。タグ引きは公開済みの Release しか返さないので、404 のときは Release 一覧に切り替える。workflow が作った draft は一覧には出る (#247)
+- `release edit` が draft の Release を見つけられるようにした。タグ引きは公開済みの Release しか返さないので、404 のときは Release 一覧に切り替える。workflow が作った draft は一覧には出る (#249)
 
 ## 0.2.48（2026-09-26）
 
