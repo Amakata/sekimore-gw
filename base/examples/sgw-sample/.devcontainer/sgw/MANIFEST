@@ -1,7 +1,7 @@
 # Written by upgrade.sh: what it last put in this directory, so an edit by hand can be told
 # apart from a file it wrote. Do not edit.
-base 0.2.46
-gateway 0.2.46
+base 0.2.47
+gateway 0.2.47
 lang en
 file sgw.sh d50561b90074e1151db259120f2248b9a315e1ae5415c42515ef99609429614f
 file vscode.sh 5fe3ac3e3bdb457bb6b5ca803cbf7e30eb4010749d2a1ab6be4139146e9f7a9f

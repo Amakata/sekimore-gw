@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.46 -->
+<!-- reviewed-up-to: 0.2.47 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -495,7 +495,7 @@ docker compose exec sekimore-gw sekimore-relay keyscan <上流のホスト> --po
 
 2 つめは踏み台を経由するので、1 つめのあとに実行します。
 
-0.2.38 〜 0.2.43 では作業は不要です。[0.2.46](#0246-base-イメージが-sekimore-gw-に移った) も不要で、ファイルの出どころが変わったことを書いているだけです。
+0.2.38 〜 0.2.43 では作業は不要です。[0.2.46](#0246-base-イメージが-sekimore-gw-に移った) も不要で、ファイルの出どころが変わったことを書いているだけです。[0.2.47](#0247-sgw-が使えるようになった) も不要で、mise のタスクの横に `sgw` が増えるだけです。
 
 ## 0.2.45 `gw:login` は端末で尋ね、ホスト鍵が無ければ止まる
 
@@ -716,3 +716,25 @@ mise run relay:verify      # ホスト側
 取るようになりました。0.2.43 以前の `upgrade.sh` は旧 `Amakata/sgw-devcontainer-base` リポジトリを見に
 行きますが、そのリポジトリは archive 済みのまま新しいファイルを持つ `v0.2.46` タグを持っているので、
 `mise run upgrade:apply` は一度そこを経由し、以後は新しい場所から読みます。
+
+## 0.2.47 sgw が使えるようになった
+
+作業は不要です。mise のタスクはこれまでどおり動きます。この版で無くなるものはありません。
+
+新しいのは、ホスト側の運用者の道具 `sgw` です。タスクの横に置くバイナリとして配ります。
+インストールすると、プロジェクトのディレクトリから使えます。
+
+```bash
+curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh
+```
+
+```bash
+sgw check       # 関所の設定と状態
+sgw verify      # プロジェクトの受け入れ検査
+sgw unlock      # 秘密ストアを解錠する
+sgw recreate    # イメージを pull してゲートウェイを作り直す
+sgw --help      # サブコマンド一覧
+```
+
+`init` と `update` はこの版には入っていません。プロジェクトの用意と更新は、これまでどおり mise の
+タスクで行います。

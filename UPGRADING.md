@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.46 -->
+<!-- reviewed-up-to: 0.2.47 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -520,7 +520,7 @@ docker compose exec sekimore-gw sekimore-relay keyscan <upstream-host> --port <p
 
 The second one goes through the bastion, so run it after the first.
 
-0.2.38 – 0.2.43 require no action. Neither does [0.2.46](#0246-the-base-image-moved-into-sekimore-gw); it only says where the files come from now.
+0.2.38 – 0.2.43 require no action. Neither does [0.2.46](#0246-the-base-image-moved-into-sekimore-gw); it only says where the files come from now. [0.2.47](#0247-sgw-is-available) requires no action either; it only adds `sgw` beside the mise tasks.
 
 ## 0.2.45 `gw:login` asks on a terminal and stops without a host key
 
@@ -749,3 +749,25 @@ and this guide from its root. An `upgrade.sh` from 0.2.43 or earlier still looks
 `Amakata/sgw-devcontainer-base` repository; that repository is archived, but carries a `v0.2.46` tag
 holding the new files, so `mise run upgrade:apply` crosses over once and reads from the new place
 from then on.
+
+## 0.2.47 sgw is available
+
+Nothing to do. The mise tasks keep working exactly as before; this release takes nothing away.
+
+What is new is `sgw`, the operator's tool on the host, released as a binary beside them. It can be
+installed next to the tasks and used from the project directory:
+
+```bash
+curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh
+```
+
+```bash
+sgw check       # the relay's configuration and state
+sgw verify      # the project's acceptance check
+sgw unlock      # unlock the secret store
+sgw recreate    # pull the image and re-create the gateway
+sgw --help      # every subcommand
+```
+
+`init` and `update` are not in this release; a project is still set up and upgraded with the mise
+tasks.

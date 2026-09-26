@@ -12,6 +12,14 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.47（2026-09-26）
+
+### Enhancement
+
+- ホスト側の運用者の道具 sgw を relay クレートの 2 つめのバイナリとして足した。gw:* / relay:* / dev:* の各タスクをサブコマンドにし、端末はホスト側で判断し、パスフレーズは stdin からだけ受け取る (#238)
+- sgw verify: 受け入れ確認を Rust で書いた。各項目が経路台帳のどの行を見ているか、どの対象に当てはまるかを示す (#240)
+- リリース成果物: macOS arm64 と Linux x86_64 / arm64 の sgw を install.sh と一緒に、タグの workflow が draft の Release に添える (#239)
+
 ## 0.2.46（2026-09-26）
 
 ### Enhancement

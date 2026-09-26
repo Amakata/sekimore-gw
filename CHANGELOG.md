@@ -13,6 +13,14 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.47 (2026-09-26)
+
+### Enhancement
+
+- sgw, the operator's tool on the host, as a second binary of the relay crate: every gw:* / relay:* / dev:* task as a subcommand, the terminal decided on the host, the passphrase down stdin only (#238)
+- sgw verify: the acceptance check in Rust; every item names its path-ledger rows and the targets it applies to (#240)
+- release assets: sgw for macOS arm64 and Linux x86_64 / arm64 with install.sh, attached to a draft Release by the tag's workflow (#239)
+
 ## 0.2.46 (2026-09-26)
 
 ### Enhancement
