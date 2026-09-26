@@ -236,8 +236,9 @@ base/tests/test_image.sh           # builds the image; needs docker
 python3 base/scripts/check-upgrading.py
 ```
 
-The project template `sgw init` writes is `base/examples/sgw-sample/`, embedded in the `sgw`
-binary; `relay/src/host/templates.rs` holds the two to each other. `tests/unit/test_base_versions.py`
+The project template `sgw init` writes is `relay/templates/devcontainer/`, embedded in the
+`sgw` binary; `relay/src/host/templates.rs` holds the two to each other, and
+`docs/template.md` describes it. `tests/unit/test_base_versions.py`
 holds every version written under `base/` to `pyproject.toml`'s.
 
 ### Integration tests

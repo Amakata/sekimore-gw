@@ -935,9 +935,9 @@ mod tests {
 
     #[test]
     fn pid_host_is_read_off_the_gateway_service_alone() {
-        let sample =
-            include_str!("../../../base/examples/sgw-sample/.devcontainer/docker-compose.yml");
-        assert!(compose_has_pid_host(sample));
+        let template =
+            include_str!("../../templates/devcontainer/.devcontainer/docker-compose.yml");
+        assert!(compose_has_pid_host(template));
         assert!(compose_has_pid_host(
             "services:\n  dev:\n    image: d\n  sekimore-gw:\n    image: g\n    pid: host   # rules\n"
         ));
