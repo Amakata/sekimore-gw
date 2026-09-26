@@ -137,10 +137,16 @@ First `sgw verify`. It names the item that fails and what to run.
 | The agent cannot reach GitHub after a restart or an update | `sgw unlock` |
 | `ssh-add -l` in dev lists your own keys | Quit VS Code completely, then `sgw open` |
 | A change to `config.yml` has no effect | `sgw restart` |
-| "network … already exists" while starting | The previous dev container and gateway are still there and hold the network. Find them with `docker ps -a`, `docker rm -f` them, open again |
 | A domain the agent needs is not resolved | Add it to `allow_domains`. The blocked access shows in `sgw web` |
 | The gateway is old after an update | `sgw recreate` |
 | The dev container is old after an update | Rebuild Container in VS Code |
+
+`network <name> already exists` while starting means the previous dev container and gateway are still attached to that network. Take the name from the error, remove them with it, then open again:
+
+```bash
+docker rm -f $(docker ps -aq --filter network=<name>)
+docker network rm <name>
+```
 
 ## License
 
