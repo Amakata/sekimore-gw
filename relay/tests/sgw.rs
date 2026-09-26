@@ -340,3 +340,207 @@ fn verify_reports_every_item_with_its_ledger_rows() {
         "{stdout}"
     );
 }
+
+/// `init` makes a project the other commands then find, and refuses to run twice over it.
+#[test]
+fn init_writes_the_template_and_the_project_is_then_found() {
+    let f = fixture();
+    let dir = f._tmp.path().join("fresh");
+    let out = sgw(
+        &f,
+        &["init", "--target", "devcontainer", dir.to_str().unwrap()],
+    )
+    .output()
+    .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(".devcontainer/docker-compose.yml"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("sgw verify"), "{stdout}");
+    assert!(dir.join(".devcontainer/config/config.yml").is_file());
+    assert!(dir.join(".devcontainer/.env").is_file());
+    // found from a subdirectory of it, like any project
+    let sub = dir.join("src");
+    std::fs::create_dir_all(&sub).unwrap();
+    let out = sgw(&f, &["check"]).current_dir(&sub).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // a second init refuses
+    let out = sgw(&f, &["init", dir.to_str().unwrap()]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("exist already"));
+    // a target this version has not got is refused before anything is written
+    let other = f._tmp.path().join("sbx");
+    let out = sgw(&f, &["init", "--target", "sbx", other.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not implemented"));
+    assert!(!other.join(".devcontainer").exists());
+}
+
+/// `update` on a project the same sgw wrote: everything current. With older pins: the tags
+/// move to this version and the distributed files follow, with a MANIFEST upgrade.sh can read.
+#[test]
+fn update_reports_and_applies_against_the_embedded_template() {
+    let f = fixture();
+    let dir = f._tmp.path().join("upd");
+    let out = sgw(&f, &["init", dir.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success());
+    let out = sgw(&f, &["update", "--offline"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Everything is up to date."), "{stdout}");
+    // an older project: pins behind, a distributed file behind, MANIFEST vouching for it
+    let compose = dir.join(".devcontainer/docker-compose.yml");
+    let text = std::fs::read_to_string(&compose).unwrap();
+    let version = env!("CARGO_PKG_VERSION");
+    std::fs::write(
+        &compose,
+        text.replace(&format!("sekimore-gw:{version}"), "sekimore-gw:0.2.40"),
+    )
+    .unwrap();
+    let dockerfile = dir.join(".devcontainer/Dockerfile");
+    let text = std::fs::read_to_string(&dockerfile).unwrap();
+    std::fs::write(
+        &dockerfile,
+        text.replace(
+            &format!("sgw-devcontainer-base:{version}"),
+            "sgw-devcontainer-base:0.2.38",
+        ),
+    )
+    .unwrap();
+    let old = "#!/usr/bin/env bash\n# vscode.sh base 0.2.38\n";
+    std::fs::write(dir.join(".devcontainer/sgw/vscode.sh"), old).unwrap();
+    let manifest = dir.join(".devcontainer/sgw/MANIFEST");
+    let m = std::fs::read_to_string(&manifest).unwrap();
+    let sha = {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(old.as_bytes()))
+    };
+    let m: String = m
+        .lines()
+        .map(|l| {
+            if l.starts_with("file vscode.sh ") {
+                format!("file vscode.sh {sha}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(&manifest, m).unwrap();
+    let out = sgw(&f, &["update", "--offline"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(&format!("gateway      0.2.40     {version}")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("vscode.sh            changes"), "{stdout}");
+    assert!(stdout.contains("To apply: sgw update --apply"), "{stdout}");
+    // --notes: the UPGRADING sections crossed (0.2.44 and 0.2.45 are between 0.2.40 and now)
+    let out = sgw(&f, &["update", "--notes", "--offline"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let notes = String::from_utf8_lossy(&out.stdout);
+    assert!(notes.contains("## 0.2.44"), "{notes}");
+    // --apply (the gateway is "running" in the fake docker, --yes recreates it)
+    let out = sgw(&f, &["update", "--apply", "--offline", "--yes"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(&format!("gateway: 0.2.40 → {version}")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("wrote .devcontainer/sgw/vscode.sh"),
+        "{stdout}"
+    );
+    assert!(std::fs::read_to_string(&compose)
+        .unwrap()
+        .contains(&format!("sekimore-gw:{version}")));
+    assert!(std::fs::read_to_string(&dockerfile)
+        .unwrap()
+        .contains(&format!("sgw-devcontainer-base:{version}")));
+    assert_ne!(
+        std::fs::read_to_string(dir.join(".devcontainer/sgw/vscode.sh")).unwrap(),
+        old
+    );
+    assert!(std::fs::read_to_string(&manifest)
+        .unwrap()
+        .contains(&format!("gateway {version}")));
+    assert!(
+        log(&f).contains(" up -d --force-recreate sekimore-gw"),
+        "the gateway was recreated"
+    );
+    assert!(stdout.contains("Rebuild Container"), "{stdout}");
+    // and now everything is current again
+    let out = sgw(&f, &["update", "--offline"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Everything is up to date."));
+}
+
+/// A distributed file edited by hand stops --apply, and nothing is written.
+#[test]
+fn update_refuses_to_overwrite_a_hand_edited_file() {
+    let f = fixture();
+    let dir = f._tmp.path().join("edited");
+    sgw(&f, &["init", dir.to_str().unwrap()]).output().unwrap();
+    let sgw_sh = dir.join(".devcontainer/sgw/sgw.sh");
+    std::fs::write(&sgw_sh, "#!/usr/bin/env bash\necho mine\n").unwrap();
+    let out = sgw(&f, &["update", "--apply", "--offline", "--yes"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("sgw.sh has been edited by hand"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(&sgw_sh).unwrap(),
+        "#!/usr/bin/env bash\necho mine\n"
+    );
+    // --force overwrites it
+    let out = sgw(&f, &["update", "--apply", "--offline", "--yes", "--force"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_ne!(
+        std::fs::read_to_string(&sgw_sh).unwrap(),
+        "#!/usr/bin/env bash\necho mine\n"
+    );
+}
