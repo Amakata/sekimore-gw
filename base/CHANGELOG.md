@@ -19,6 +19,12 @@ Starts at 0.2.18. Releases before it are not written up here; the pull requests
 and the tag on each are the record. The gateway each of them took is at the
 bottom.
 
+## 0.2.47 (2026-09-26)
+
+### Enhancement
+
+- no change to the base image; released with the gateway (sekimore-gw#238)
+
 ## 0.2.46 (2026-09-26)
 
 ### Enhancement

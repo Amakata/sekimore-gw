@@ -78,7 +78,7 @@ sekimore-gw（略して sgw）の dev コンテナ側で、ゲートウェイの
 
 ```dockerfile
 # latest ではなく版を書く。`mise run upgrade:apply` がこれを上げる
-FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.46
+FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.47
 
 # プロジェクト固有の追加だけを書く
 # 例: mise use -g python@3.13.0 && mise reshim
@@ -159,7 +159,7 @@ sgw-devcontainer-base  ── あなたの .devcontainer/Dockerfile が FROM す
 .devcontainer/sgw/     ── 両方に合わせたホスト側のスクリプトとタスク
 ```
 
-- このイメージの `sekimore-relay` CLI と `sekimore-agent-setup.sh` は、ゲートウェイ `ghcr.io/amakata/sekimore-gw:0.2.46` (`ARG SEKIMORE_GW_IMAGE`) から取り込む。
+- このイメージの `sekimore-relay` CLI と `sekimore-agent-setup.sh` は、ゲートウェイ `ghcr.io/amakata/sekimore-gw:0.2.47` (`ARG SEKIMORE_GW_IMAGE`) から取り込む。
   base とゲートウェイは別々の 0.2.x 系列である。
 - プロジェクトが動かすゲートウェイは、compose ファイルの `image:` タグで決まる。
   `mise run upgrade:apply` が両方を上げる。
