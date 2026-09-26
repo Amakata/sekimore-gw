@@ -12,7 +12,17 @@ use super::docker::{Docker, Tty};
 use super::{open, ops, passphrase, project};
 
 #[derive(Parser, Debug)]
-#[command(name = "sgw", version, about = t("sgw.about"), disable_help_subcommand = true)]
+#[command(
+    name = "sgw",
+    version,
+    about = t("sgw.about"),
+    disable_help_subcommand = true,
+    // the commands are listed by group (host::groups), not by clap
+    override_usage = "sgw [OPTIONS] <COMMAND> [ARGS]",
+    arg_required_else_help = true,
+    help_template = "{about-with-newline}\n{usage-heading} {usage}{after-help}{all-args}",
+    after_help = super::groups::commands_help()
+)]
 pub struct Cli {
     /// The project (the directory that holds .devcontainer/). Default: found from the current directory
     #[arg(long, global = true, value_name = "DIR", env = "SGW_PROJECT_ROOT", help = t("sgw.project"))]
@@ -29,91 +39,91 @@ macro_rules! passthrough {
         #[derive(Subcommand, Debug)]
         pub enum Cmd {
             $(
-                #[command(about = t($key))]
+                #[command(hide = true, about = t($key))]
                 $name {
                     #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
                     args: Vec<String>,
                 },
             )*
-            #[command(about = t("sgw.cmd.relay"))]
+            #[command(hide = true, about = t("sgw.cmd.relay"))]
             Relay {
                 #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
                 args: Vec<String>,
             },
-            #[command(name = "unlock-auto", about = t("sgw.cmd.unlock_auto"))]
+            #[command(hide = true, name = "unlock-auto", about = t("sgw.cmd.unlock_auto"))]
             UnlockAuto,
-            #[command(name = "keychain-set", about = t("sgw.cmd.keychain_set"))]
+            #[command(hide = true, name = "keychain-set", about = t("sgw.cmd.keychain_set"))]
             KeychainSet,
-            #[command(about = t("sgw.cmd.recreate"))]
+            #[command(hide = true, about = t("sgw.cmd.recreate"))]
             Recreate {
                 #[arg(long = "no-unlock", help = t("sgw.cmd.recreate.no_unlock"))]
                 no_unlock: bool,
             },
-            #[command(about = t("sgw.cmd.restart"))]
+            #[command(hide = true, about = t("sgw.cmd.restart"))]
             Restart,
-            #[command(about = t("sgw.cmd.logs"))]
+            #[command(hide = true, about = t("sgw.cmd.logs"))]
             Logs {
                 #[arg(long, default_value_t = 100, help = t("sgw.cmd.logs.tail"))]
                 tail: u32,
             },
-            #[command(about = t("sgw.cmd.audit"))]
+            #[command(hide = true, about = t("sgw.cmd.audit"))]
             Audit,
-            #[command(about = t("sgw.cmd.shell"))]
+            #[command(hide = true, about = t("sgw.cmd.shell"))]
             Shell,
-            #[command(name = "db-stats", about = t("sgw.cmd.db_stats"))]
+            #[command(hide = true, name = "db-stats", about = t("sgw.cmd.db_stats"))]
             DbStats {
                 #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
                 args: Vec<String>,
             },
-            #[command(name = "db-prune", about = t("sgw.cmd.db_prune"))]
+            #[command(hide = true, name = "db-prune", about = t("sgw.cmd.db_prune"))]
             DbPrune {
                 #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
                 args: Vec<String>,
             },
-            #[command(name = "db-reset", about = t("sgw.cmd.db_reset"))]
+            #[command(hide = true, name = "db-reset", about = t("sgw.cmd.db_reset"))]
             DbReset {
                 #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
                 args: Vec<String>,
             },
-            #[command(name = "reload-status", about = t("sgw.cmd.reload_status"))]
+            #[command(hide = true, name = "reload-status", about = t("sgw.cmd.reload_status"))]
             ReloadStatus,
-            #[command(name = "reload-follow", about = t("sgw.cmd.reload_follow"))]
+            #[command(hide = true, name = "reload-follow", about = t("sgw.cmd.reload_follow"))]
             ReloadFollow {
                 #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
                 args: Vec<String>,
             },
-            #[command(name = "reload-freeze", about = t("sgw.cmd.reload_freeze"))]
+            #[command(hide = true, name = "reload-freeze", about = t("sgw.cmd.reload_freeze"))]
             ReloadFreeze,
-            #[command(about = t("sgw.cmd.dev"))]
+            #[command(hide = true, about = t("sgw.cmd.dev"))]
             Dev {
                 #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
                 args: Vec<String>,
             },
-            #[command(name = "agent-setup", about = t("sgw.cmd.agent_setup"))]
+            #[command(hide = true, name = "agent-setup", about = t("sgw.cmd.agent_setup"))]
             AgentSetup,
-            #[command(name = "signing-key", about = t("sgw.cmd.signing_key"))]
+            #[command(hide = true, name = "signing-key", about = t("sgw.cmd.signing_key"))]
             SigningKey,
-            #[command(about = t("sgw.cmd.refresh"))]
+            #[command(hide = true, about = t("sgw.cmd.refresh"))]
             Refresh,
-            #[command(about = t("sgw.cmd.verify"))]
+            #[command(hide = true, about = t("sgw.cmd.verify"))]
             Verify,
-            #[command(about = t("sgw.cmd.web"))]
+            #[command(hide = true, about = t("sgw.cmd.web"))]
             Web,
-            #[command(about = t("sgw.cmd.ps"))]
+            #[command(hide = true, about = t("sgw.cmd.ps"))]
             Ps,
-            #[command(about = t("sgw.cmd.port"))]
+            #[command(hide = true, about = t("sgw.cmd.port"))]
             Port {
                 service: String,
                 #[arg(default_value_t = 8080)]
                 container_port: u16,
             },
-            #[command(about = t("sgw.cmd.id"))]
+            #[command(hide = true, about = t("sgw.cmd.id"))]
             Id { service: String },
-            #[command(name = "project", about = t("sgw.cmd.project"))]
+            #[command(hide = true, name = "project", about = t("sgw.cmd.project"))]
             ProjectName,
-            #[command(about = t("sgw.cmd.down"))]
+            #[command(hide = true, about = t("sgw.cmd.down"))]
             Down,
-            #[command(about = t("sgw.cmd.init"))]
+            #[command(hide = true, about = t("sgw.cmd.init"))]
             Init {
                 #[arg(long, default_value = "devcontainer", help = t("sgw.cmd.init.target"))]
                 target: String,
@@ -122,7 +132,7 @@ macro_rules! passthrough {
                 #[arg(value_name = "DIR", help = t("sgw.cmd.init.dir"))]
                 dir: Option<PathBuf>,
             },
-            #[command(about = t("sgw.cmd.update"))]
+            #[command(hide = true, about = t("sgw.cmd.update"))]
             Update {
                 #[arg(long, help = t("sgw.cmd.update.apply"))]
                 apply: bool,
@@ -139,7 +149,7 @@ macro_rules! passthrough {
                 #[arg(long, help = t("sgw.cmd.update.offline"))]
                 offline: bool,
             },
-            #[command(about = t("sgw.cmd.open"))]
+            #[command(hide = true, about = t("sgw.cmd.open"))]
             Open {
                 #[arg(long, help = t("sgw.cmd.open.check"))]
                 check: bool,
@@ -176,7 +186,24 @@ fn relay_sub(sub: &str, args: &[String]) -> Vec<String> {
 }
 
 pub fn main() -> i32 {
-    let cli = Cli::parse();
+    use super::groups::{group_help, rewrite, Rewritten};
+    let argv = match rewrite(std::env::args().collect()) {
+        Rewritten::Args(a) => a,
+        Rewritten::GroupHelp(g) => {
+            print!("{}", group_help(g));
+            return 0;
+        }
+        Rewritten::Unknown { group, leaf } => {
+            eprintln!(
+                "{} {}",
+                paint_err(Tone::Bad, "sgw:"),
+                crate::i18n::tf("sgw.help.unknown", &[("group", group), ("leaf", &leaf)])
+            );
+            eprint!("{}", group_help(group));
+            return 2;
+        }
+    };
+    let cli = Cli::parse_from(argv);
     match run(cli) {
         Ok(code) => code,
         Err(e) => {
