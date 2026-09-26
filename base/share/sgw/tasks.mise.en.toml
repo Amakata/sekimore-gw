@@ -78,7 +78,7 @@ run = 'bash "$SGW" dev zsh'
 
 ["dev:agent-setup"]
 description = "run agent-setup again in dev (registers the key with the relay and remakes the token and known_hosts; idempotent)"
-run = 'bash "$SGW" dev sudo /usr/local/bin/sekimore-agent-setup.sh'
+run = 'bash "$SGW" dev sh -c "if [ -x /usr/local/bin/sgw-agent ]; then sudo -E /usr/local/bin/sgw-agent setup; else sudo /usr/local/bin/sekimore-agent-setup.sh; fi"'
 
 ["dev:signing-key"]
 description = "print the AI's signing public key (register it on GitHub under Settings -> SSH and GPG keys as a Signing Key)"
@@ -99,6 +99,7 @@ echo "== dev: run the gateway's agent setup again (the way post-start.sh does)"
 # here to fall behind (post-start.sh says why).
 bash "$SGW" dev sh -c '
 set -e
+if [ -x /usr/local/bin/sgw-agent ] && [ -z "${SGW_AGENT_SETUP:-}" ]; then sudo -E /usr/local/bin/sgw-agent setup; exit $?; fi
 agent_setup=${SGW_AGENT_SETUP:-/usr/local/bin/sekimore-agent-setup.sh}
 vars=$(env | sed -n "s/^\(SEKIMORE_[A-Za-z0-9_]*\)=.*/\1/p" | sort -u | paste -sd, -)
 if [ -n "$vars" ]; then
@@ -190,7 +191,7 @@ echo "== .env: the setup script's variables must survive sudo"
 # sudo resets the environment. post-start.sh passes every SEKIMORE_* variable through it; the older
 # postStartCommand named them in --preserve-env=, and one missing from that list is set and then
 # silently ignored. What the gateway and post-create.sh read does not go through sudo.
-if grep -q '\.devcontainer/sgw/post-start\.sh' .devcontainer/devcontainer.json 2>/dev/null; then
+if grep -q 'sgw-post-start\|\.devcontainer/sgw/post-start\.sh' .devcontainer/devcontainer.json 2>/dev/null; then
   ok "postStartCommand runs .devcontainer/sgw/post-start.sh, which passes every SEKIMORE_* variable"
 else
 plist=,$(sed -n 's/.*--preserve-env=\([A-Za-z0-9_,]*\).*/\1/p' .devcontainer/devcontainer.json | head -1),

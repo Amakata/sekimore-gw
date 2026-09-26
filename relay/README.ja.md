@@ -106,7 +106,7 @@ GitHub の監査ログではエージェントの操作と人間の操作を区�
 
 ## エージェント側の準備（dev コンテナ内）
 
-`agent-setup.sh`（sgw-devcontainer-base では `/usr/local/bin/sekimore-agent-setup.sh` として配置され、postStartCommand で起動のたびに実行されます）は、関所を検出すると次の処理を自動で行います。
+`sgw-agent setup`（sgw-devcontainer-base では postStartCommand の `sgw-post-start` で起動のたびに実行されます）は、関所を検出すると次の処理を自動で行います。
 
 - 使い捨て認証鍵 `~/.ssh/sekimore/id_ed25519` を生成します（既にあれば再利用します）。
 - `POST /bootstrap` で公開鍵を登録し、プロジェクトトークンを受け取ります。有効なトークンがある間は再発行を求めません。
@@ -148,7 +148,7 @@ git の署名が対象とするのは `"SSHSIG" ++ namespace ++ …` です。SS
 socket はモード 0600 で作成され、`socket_uid` が所有します。関所はどちらもパスではなくファイルディスクリプタ経由で設定します。
 volume は共有されており dev コンテナには sudo があるので、パスを解決し直す `chmod` は、ゲートウェイ側のファイルに向け直されるおそれがあるためです。
 
-dev コンテナ側に sekimore 専用のコマンドは不要で、通常の `git commit` で署名されます。`agent-setup.sh` が公開鍵を
+dev コンテナ側に sekimore 専用のコマンドは不要で、通常の `git commit` で署名されます。`sgw-agent setup` が公開鍵を
 `~/.ssh/sekimore/signing.pub` に書き込み、`user.signingkey` をそのファイルに設定し、`SSH_AUTH_SOCK` を
 `/etc/sekimore-agent/env` に書き込みます。
 
@@ -169,7 +169,7 @@ services:
 ```
 
 `sekimore-relay check` は、fingerprint と、その鍵がホストの agent に実際にあるかを表示します。鍵が無いときは、
-`agent-setup.sh` が `commit.gpgsign false` を設定し、その旨を表示します。誰も登録していない鍵で代用することはしません。
+`sgw-agent setup` が `commit.gpgsign false` を設定し、その旨を表示します。誰も登録していない鍵で代用することはしません。
 
 ### `signing: required` は上流 API に 1 回問い合わせる
 
@@ -182,7 +182,7 @@ pack には、上流が持っていないオブジェクトだけが入ります
 1 push あたり 1〜2 回で、その範囲はその push が既に通過した認可の内側に収まります。関所は、答えを得られなければ push を拒否します。
 そのため **`required` では、ゲートウェイの解錠（`mise run gw:unlock`）と login が必要です**。どちらかが欠けているときは、拒否メッセージがその旨を示します。
 
-`relay.signing_key` を設定しなければ、従来の動作になります。`agent-setup.sh` が dev コンテナ内で `~/.ssh/sekimore/signing_ed25519` を生成し、
+`relay.signing_key` を設定しなければ、従来の動作になります。`sgw-agent setup` が dev コンテナ内で `~/.ssh/sekimore/signing_ed25519` を生成し、
 人がその公開鍵を GitHub に「Signing Key」として手で登録する必要があります。公開鍵はログに表示されます。
 
 ## 日常の使い方（エージェント）
@@ -212,7 +212,7 @@ sekimore ci rerun --run-id 123 [--all]           # ci cancel --run-id 123 もあ
 ```
 
 AI エージェント向けの使い方は `sgw-agent guide` で表示できます。ガイドは CLI に埋め込まれており、正本は `relay/share/agent-guide.en.md` と `agent-guide.ja.md` です。
-agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimore-relay/SKILL.md`）と Codex CLI の `~/.codex/AGENTS.md`（マーカー付きブロック）に配置するので、
+`sgw-agent setup` が同じ内容を Claude Code の skill（`~/.claude/skills/sekimore-relay/SKILL.md`）と Codex CLI の `~/.codex/AGENTS.md`（マーカー付きブロック）に配置するので、
 これらのツールは自動で読み込みます。他のツールでは、`sgw-agent guide` の出力を、そのツールの規約で決まっている場所に置いてください。`SEKIMORE_AGENT_INSTRUCTIONS=none` で配置を無効にでき、`claude` または `codex` を指定すると一方だけに配置します。
 
 `sgw-agent` は `sekimore-relay agent` に env ファイルの読み込みとトークンの更新を組み込んだものです。旧名の `sekimore` もまだ使えます。リポジトリは `--repo Org/Repo` で指定します。上流が複数あるときは `host/Org/Repo` とも書けます。
@@ -429,7 +429,7 @@ network:
 - `allow_domains` に残したドメインは関所を通らないので、上限も掛かりません。上限を掛けたいドメインだけを handler に移します。
 
 複数上流の仕組み: SSH の exec 要求にはホスト名が含まれないので、関所は上流ごとに別のポートで listen し、接続を受けたポートで上流を選びます。
-agent-setup が `~/.ssh/config` に上流ごとの `Host` と `Port` を書き込むので、エージェントが使う URL は変わりません。
+`sgw-agent setup` が `~/.ssh/config` に上流ごとの `Host` と `Port` を書き込むので、エージェントが使う URL は変わりません。
 443 番ポートでは、TLS の SNI で上流を選びます。関所の ssh はホスト側の `~/.ssh/config` を読まないので、踏み台やプロキシは `ssh_options` に設定します。
 踏み台のホスト鍵は `sekimore-relay keyscan bastion.example.com --upstream ghe.example.com` で追加します。
 
@@ -487,9 +487,9 @@ Dev Containers 構成では、`mise run gw:tokens` / `gw:revoke-project` / `gw:a
 | `push to refs/heads/main is not allowed` | 直接 push の宛先が、許可された名前空間の外のブランチです。 | `refs/for/main` に push して PR を作ります。必要なら `push` に glob を追加します。 |
 | `branch X already exists upstream` | その名前が既に使われており、`on_exists` が `reject` です。 | 別の名前で push するか、`refs/heads/<branch>` への直接 push でブランチを更新します。 |
 | `tag is not allowed for this repository` | タグの push は既定で拒否されます。 | そのリポジトリか上流の `tags` に glob を追加します。 |
-| `Permission denied (publickey)`（関所から） | エージェントの鍵が登録されていません。 | `sudo sekimore-agent-setup.sh` を実行するか、運用者が `add-key` を実行します。`bootstrap.disabled` の有無も確認します。 |
+| `Permission denied (publickey)`（関所から） | エージェントの鍵が登録されていません。 | `sudo -E sgw-agent setup` を実行するか、運用者が `add-key` を実行します。`bootstrap.disabled` の有無も確認します。 |
 | `! [remote rejected] … (sekimore: …)` | ポリシーが push を拒否しました。 | メッセージの案内に従います。 |
-| `denied: token expired at …` | プロジェクトトークンの期限が切れています。 | `sgw-agent` が自動で取り直します。古い環境では `sudo sekimore-agent-setup.sh` を実行します。 |
+| `denied: token expired at …` | プロジェクトトークンの期限が切れています。 | `sgw-agent` が自動で取り直します。古い環境では `sudo -E sgw-agent setup` を実行します。 |
 | `no upstream token … run sekimore-relay login` | device flow を実行していないか、logout した後です。 | `sekimore-relay login` を実行します。 |
 | `git ls-remote` が出力なしで止まる | DNS は関所を向いていますが、INPUT チェインでパケットが破棄されています。 | `iptables-legacy -S INPUT` に `--dport 22` があるかを確認します。無ければ関所が起動していません。 |
 | `https://github.com/…` が失敗する | `https` が `reject` に設定されているか、上流に届きません。 | 既定の `passthrough` に戻します。監査ログの `https_failed` を確認します。 |
@@ -520,7 +520,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
 - 関所自身の経路（SSH の git、GitHub API、443 の通過）は常に通ります。Squid を明示したクライアント（`curl -x http://sekimore-gw:3128`）も通ります。
 - dev から `allow_domains` にしかない宛先への通常の通信は通りません。DNS の応答でアドレスがファイアウォールに登録され、そのまま NAT で出ていくため、Squid の access.log に行が残りません（#212）。
 - `proxy.direct_egress: deny` はその登録をやめ、出口を Squid だけにします。DNS は応答を返すので名前は解決でき、`HTTP_PROXY` を無視するクライアントは黙って外へ出るかわりに失敗します。`allow_ips` は影響を受けません。`upstream_proxy` が必要で、なければゲートウェイは起動を拒否します。
-- dev コンテナは起動時に `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` を受け取ります。`agent-setup.sh` が `GET /api/proxy-env` を読み、`/etc/profile.d/sekimore-proxy.sh` と `/etc/environment` の印つきブロックを書きます。`NO_PROXY` には `domain_handlers` の宛先すべて（Squid は意図的に CONNECT を拒否します）と `proxy.no_proxy` が入ります。dev のイメージが `/etc/profile.d` を読む必要があり、sgw-devcontainer-base はこれを同梱する版から読みます。
+- dev コンテナは起動時に `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` を受け取ります。`sgw-agent setup` が `GET /api/proxy-env` を読み、`/etc/profile.d/sekimore-proxy.sh` と `/etc/environment` の印つきブロックを書きます。`NO_PROXY` には `domain_handlers` の宛先すべて（Squid は意図的に CONNECT を拒否します）と `proxy.no_proxy` が入ります。dev のイメージが `/etc/profile.d` を読む必要があり、sgw-devcontainer-base はこれを同梱する版から読みます。
 - 現在のモードは `sekimore-relay check` の `proxy:` の下に `egress:` として出ます。直接送出が許可されている間は黄色です。
 
 `upstream_proxy_tls: true` で Squid が有効なとき、関所は上流プロキシへ TLS を話しません。CONNECT をローカルの Squid に送り、Squid が OpenSSL で TLS を話し、保管した資格情報も Squid が提示します（`cache_peer … login=`）。これにより、TLS 1.2 の RSA 鍵交換しか提示しない上流（`tls-dh=` のない Squid の `https_port`）にも届きます。関所の rustls はこれを話せません（#205）。Squid が無効なときは関所自身が TLS を話し、TLS 1.3 か ECDHE のみです。どちらの経路かは `sekimore-relay check` の `route:` に出ます。`reach:` はその経路を実際に試します。

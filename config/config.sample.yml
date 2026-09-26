@@ -137,7 +137,7 @@ proxy:
   direct_egress: allow                    # allow (default) | deny
 
   # Extra NO_PROXY entries for the dev container. The gateway hands dev HTTP_PROXY and NO_PROXY
-  # at start (agent-setup.sh reads GET /api/proxy-env), and builds NO_PROXY from `domain_handlers`
+  # at start (sgw-agent setup reads GET /api/proxy-env), and builds NO_PROXY from `domain_handlers`
   # by itself: Squid refuses CONNECT to the relay's targets on purpose, so without them the
   # GitHub API and npm would break. Add here only what this project must not send to the proxy.
   # Written like allow_domains: a leading dot is the suffix, a bare name is that host, a CIDR

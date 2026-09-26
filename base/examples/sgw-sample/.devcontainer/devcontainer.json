@@ -20,6 +20,6 @@
     }
   },
   "remoteUser": "vscode",
-  "postStartCommand": "sh /workspace/.devcontainer/sgw/post-start.sh",
+  "postStartCommand": "sgw-post-start",
   "waitFor": "postStartCommand"
 }

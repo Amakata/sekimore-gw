@@ -153,21 +153,20 @@ pub fn web(docker: &Docker) -> anyhow::Result<i32> {
     Ok(0)
 }
 
-/// Run the gateway's agent setup again in dev, the way post-start.sh does, so the ~/.ssh/config
+/// The setup in dev, as root with the whole environment: `sgw-agent setup` (base 0.2.51 and
+/// later), or agent-setup.sh with every SEKIMORE_* variable named to sudo on an older base.
+pub const SETUP_IN_DEV: &str = r#"set -e
+if [ -x /usr/local/bin/sgw-agent ] && [ -z "${SGW_AGENT_SETUP:-}" ]; then exec sudo -E /usr/local/bin/sgw-agent setup; fi
+agent_setup=${SGW_AGENT_SETUP:-/usr/local/bin/sekimore-agent-setup.sh}
+vars=$(env | sed -n "s/^\(SEKIMORE_[A-Za-z0-9_]*\)=.*/\1/p" | sort -u | paste -sd, -)
+if [ -n "$vars" ]; then sudo --preserve-env="$vars" "$agent_setup"; else sudo "$agent_setup"; fi"#;
+
+/// Run the gateway's agent setup again in dev, the way postStart does, so the ~/.ssh/config
 /// Host blocks and the upstream proxy environment follow config.yml without Rebuild Container
 /// (base #97).
 pub fn refresh(docker: &Docker) -> anyhow::Result<i32> {
     println!("{}", t("sgw.refresh.setup"));
-    // The same invocation as post-start.sh: agent-setup as root, with every SEKIMORE_* variable
-    // dev has. sudo resets the environment, so a variable reaches agent-setup only if
-    // --preserve-env= names it; the names are taken from dev's own environment
-    let rc = dev_sh(
-        docker,
-        r#"set -e
-agent_setup=${SGW_AGENT_SETUP:-/usr/local/bin/sekimore-agent-setup.sh}
-vars=$(env | sed -n "s/^\(SEKIMORE_[A-Za-z0-9_]*\)=.*/\1/p" | sort -u | paste -sd, -)
-if [ -n "$vars" ]; then sudo --preserve-env="$vars" "$agent_setup"; else sudo "$agent_setup"; fi"#,
-    )?;
+    let rc = dev_sh(docker, SETUP_IN_DEV)?;
     if rc != 0 {
         bail!(t("sgw.refresh.failed"));
     }

@@ -107,7 +107,7 @@ GitHub's audit log cannot distinguish the agent's actions from a human's, so the
 
 ## Agent-side setup (inside the dev container)
 
-`agent-setup.sh` (installed as `/usr/local/bin/sekimore-agent-setup.sh` in sgw-devcontainer-base and run by postStartCommand on every start) performs the following steps automatically when it detects the relay:
+`sgw-agent setup` (run by `sgw-post-start`, the dev container's postStartCommand, in sgw-devcontainer-base on every start) performs the following steps automatically when it detects the relay:
 
 - Generates a disposable authentication key, `~/.ssh/sekimore/id_ed25519`, or reuses the existing one.
 - Registers the public key with `POST /bootstrap` and receives a project token. While a valid token exists, it does not request a new one.
@@ -155,7 +155,7 @@ descriptor rather than by path. The volume is shared and the dev container has s
 that resolved the path again could be redirected to a file in the gateway.
 
 The dev container needs no sekimore-specific command; a plain `git commit` is enough.
-`agent-setup.sh` writes the public key to `~/.ssh/sekimore/signing.pub`, sets `user.signingkey`
+`sgw-agent setup` writes the public key to `~/.ssh/sekimore/signing.pub`, sets `user.signingkey`
 to that file, and writes `SSH_AUTH_SOCK` to `/etc/sekimore-agent/env`.
 
 ```yaml
@@ -175,7 +175,7 @@ services:
 ```
 
 `sekimore-relay check` prints the fingerprint and whether the host agent actually holds that key.
-If the agent does not hold it, `agent-setup.sh` sets `commit.gpgsign false` and reports this. It
+If the agent does not hold it, `sgw-agent setup` sets `commit.gpgsign false` and reports this. It
 does not substitute a key that nobody has registered.
 
 ### `signing: required` makes one upstream API query
@@ -193,7 +193,7 @@ the authorization that the push has already passed. If the relay cannot get an a
 the push. **`required` therefore requires the gateway to be unlocked (`mise run gw:unlock`) and
 logged in**, and the denial message says so when either is missing.
 
-Without `relay.signing_key`, the previous behavior applies. `agent-setup.sh` generates
+Without `relay.signing_key`, the previous behavior applies. `sgw-agent setup` generates
 `~/.ssh/sekimore/signing_ed25519` in the dev container, and a person must register its public key
 on GitHub as a "Signing Key" by hand. The public key is printed in the log.
 
@@ -224,7 +224,7 @@ sekimore ci rerun --run-id 123 [--all]           # also: ci cancel --run-id 123;
 ```
 
 `sgw-agent guide` prints the usage guide for AI agents. The guide is embedded in the CLI, and its sources are `relay/share/agent-guide.en.md` and `agent-guide.ja.md`.
-agent-setup installs the same text as a Claude Code skill (`~/.claude/skills/sekimore-relay/SKILL.md`) and as a marked block in Codex CLI's `~/.codex/AGENTS.md`,
+`sgw-agent setup` installs the same text as a Claude Code skill (`~/.claude/skills/sekimore-relay/SKILL.md`) and as a marked block in Codex CLI's `~/.codex/AGENTS.md`,
 so these tools read it automatically. For other tools, place the output of `sgw-agent guide` in the location that the tool's conventions specify. `SEKIMORE_AGENT_INSTRUCTIONS=none` disables the installation, and `claude` or `codex` limits it to one tool.
 
 `sgw-agent` is `sekimore-relay agent` with the env file and the token refresh built in; `sekimore` is its former name and still works. Specify a repository with `--repo Org/Repo`. When there is more than one upstream, you can also write `host/Org/Repo`.
@@ -445,7 +445,7 @@ network:
 - Domains that remain in `allow_domains` bypass the relay entirely and have no cap. Move only the domains that need a cap to a handler.
 
 Multiple upstreams: an SSH exec request does not carry a host name, so the relay listens on a separate port for each upstream and selects the upstream by the port that received the connection.
-agent-setup writes a `Host` and `Port` entry for each upstream to `~/.ssh/config`, so the agent's URLs do not change.
+`sgw-agent setup` writes a `Host` and `Port` entry for each upstream to `~/.ssh/config`, so the agent's URLs do not change.
 On port 443, the relay selects the upstream by the TLS SNI. The relay's ssh does not read the host's `~/.ssh/config`, so configure bastions and proxies in `ssh_options`.
 Add a bastion's host key with `sekimore-relay keyscan bastion.example.com --upstream ghe.example.com`.
 
@@ -503,9 +503,9 @@ Token records are deleted automatically 7 days after they expire. `audit.jsonl` 
 | `push to refs/heads/main is not allowed` | The direct push targets a branch outside the allowed namespace. | Push to `refs/for/main` to open a PR. If necessary, add a glob to `push`. |
 | `branch X already exists upstream` | The name is already in use and `on_exists` is `reject`. | Push under a different name, or update the branch with a direct push to `refs/heads/<branch>`. |
 | `tag is not allowed for this repository` | Tag pushes are denied by default. | Add a glob to `tags` for that repository or upstream. |
-| `Permission denied (publickey)` (from the relay) | The agent's key is not registered. | Run `sudo sekimore-agent-setup.sh`, or have the operator run `add-key`. Check whether `bootstrap.disabled` exists. |
+| `Permission denied (publickey)` (from the relay) | The agent's key is not registered. | Run `sudo -E sgw-agent setup`, or have the operator run `add-key`. Check whether `bootstrap.disabled` exists. |
 | `! [remote rejected] … (sekimore: …)` | The policy denied the push. | Follow the instructions in the message. |
-| `denied: token expired at …` | The project token has expired. | `sgw-agent` renews it automatically. In an older environment, run `sudo sekimore-agent-setup.sh`. |
+| `denied: token expired at …` | The project token has expired. | `sgw-agent` renews it automatically. In an older environment, run `sudo -E sgw-agent setup`. |
 | `no upstream token … run sekimore-relay login` | The device flow has not been run, or the operator has logged out. | Run `sekimore-relay login`. |
 | `git ls-remote` hangs without output | DNS points to the relay, but the INPUT chain drops the packets. | Check whether `iptables-legacy -S INPUT` contains `--dport 22`. If it does not, the relay has not started. |
 | `https://github.com/…` fails | `https` is set to `reject`, or the upstream is unreachable. | Restore the default `passthrough`. Check `https_failed` in the audit log. |
@@ -536,7 +536,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
 - The relay's own paths (git over SSH, the GitHub API, the 443 passthrough) always do, and so does a client that names Squid explicitly (`curl -x http://sekimore-gw:3128`).
 - Dev's ordinary traffic to a destination that is only in `allow_domains` does not: its DNS answer admits the address into the firewall and the packet is NATed straight out, leaving no line in Squid's access.log (#212).
 - `proxy.direct_egress: deny` stops admitting those addresses, so Squid is the only way out. DNS still answers, so names resolve; a client that ignores `HTTP_PROXY` then fails instead of leaving silently. `allow_ips` is unaffected. It needs an `upstream_proxy`, or the gateway refuses to start.
-- The dev container gets `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` at start: `agent-setup.sh` reads `GET /api/proxy-env` and writes `/etc/profile.d/sekimore-proxy.sh` plus a marked block in `/etc/environment`. `NO_PROXY` carries every `domain_handlers` target — Squid refuses CONNECT to them on purpose — plus `proxy.no_proxy`. The dev image has to source `/etc/profile.d`, which sgw-devcontainer-base does from the version that ships this.
+- The dev container gets `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` at start: `sgw-agent setup` reads `GET /api/proxy-env` and writes `/etc/profile.d/sekimore-proxy.sh` plus a marked block in `/etc/environment`. `NO_PROXY` carries every `domain_handlers` target — Squid refuses CONNECT to them on purpose — plus `proxy.no_proxy`. The dev image has to source `/etc/profile.d`, which sgw-devcontainer-base does from the version that ships this.
 - `sekimore-relay check` prints the mode under `proxy:` as `egress:`, in yellow while direct egress is allowed.
 
 With `upstream_proxy_tls: true` and Squid enabled, the relay does not speak TLS to the upstream proxy at all: it sends its CONNECT to the local Squid, which takes the TLS hop with OpenSSL and presents the stored credential itself (`cache_peer … login=`). That works with a proxy offering only TLS 1.2 RSA key exchange — a Squid `https_port` without `tls-dh=` — which the relay's rustls cannot speak (#205). With Squid disabled the relay speaks TLS itself: TLS 1.3 or ECDHE only. `sekimore-relay check` prints which route is in use, under `route:`, and its `reach:` line probes that route.

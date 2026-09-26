@@ -85,7 +85,7 @@ echo "== the agent guide ships in both languages"
 # node, npm and codex come from the mise shims, which Debian's /etc/profile would drop from a
 # login shell if /etc/profile.d did not put them back (#60) — so checking them here is checking
 # that too.
-for t in git delta zsh mise claude codex node npm aws docker sekimore sekimore-agent-setup.sh; do
+for t in git delta zsh mise claude codex node npm aws docker sekimore sgw-agent sgw-post-start; do
   in_image /bin/sh -lc "command -v $t >/dev/null" ||
     fail "$t is not on PATH in the image"
 done

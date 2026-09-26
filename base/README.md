@@ -31,7 +31,7 @@ The sample's [Dockerfile](examples/sgw-sample/.devcontainer/Dockerfile) shows ho
 | Languages | `mise`. No language version |
 | AI | Claude Code CLI, OpenAI Codex CLI, the official Anthropic skills |
 | Cloud | AWS CLI v2, Docker CE with buildx and compose |
-| Gateway | `sekimore-agent-setup.sh`, `sekimore-relay`, `sekimore`, copied out of `ghcr.io/amakata/sekimore-gw:0.2.50` |
+| Gateway | `sgw-agent` (the AI's command; `sgw-agent setup` at every start), `sekimore-relay`, `sekimore` (the former name), `sgw-post-start` (what `postStartCommand` runs), copied out of `ghcr.io/amakata/sekimore-gw:0.2.50` |
 | zsh defaults | `/etc/skel/zsh-rc.d/`, copied into `~/.config/zsh/rc.d/` by post-create |
 
 Not in the image:

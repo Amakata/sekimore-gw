@@ -255,13 +255,15 @@ USER root
 # these layers — not node, codex, Claude Code or the oh-my-zsh plugins, which is
 # what made every bump a full re-pull.
 # ---------------------------------------------------------------------------
-COPY --from=sekimore-gw /usr/local/share/sekimore/agent-setup.sh /usr/local/bin/sekimore-agent-setup.sh
 COPY --from=sekimore-gw /usr/local/bin/sekimore-relay /usr/local/bin/sekimore-relay
 # sgw-agent is the AI's command (#257): sekimore-relay agent with the env file and the token
-# refresh built in. `sekimore` is its former name and execs it
+# refresh built in, and `sgw-agent setup` is what the container needs from the gateway at every
+# start (agent-setup.sh, ported). `sekimore` is its former name and execs it; sgw-post-start is
+# the one line postStartCommand runs
 COPY --from=sekimore-gw /usr/local/bin/sgw-agent /usr/local/bin/sgw-agent
 COPY scripts/sekimore /usr/local/bin/sekimore
-RUN chmod +x /usr/local/bin/sekimore-agent-setup.sh /usr/local/bin/sekimore-relay /usr/local/bin/sekimore
+COPY scripts/sgw-post-start /usr/local/bin/sgw-post-start
+RUN chmod +x /usr/local/bin/sgw-agent /usr/local/bin/sekimore-relay /usr/local/bin/sekimore /usr/local/bin/sgw-post-start
 RUN mkdir -p /etc/sekimore-agent
 
 USER ${USERNAME}

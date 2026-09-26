@@ -299,10 +299,7 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
         Dev { args } => ops::dev(&docker, &args, no_tty),
         AgentSetup => ops::dev(
             &docker,
-            &[
-                "sudo".into(),
-                "/usr/local/bin/sekimore-agent-setup.sh".into(),
-            ],
+            &["sh".into(), "-c".into(), ops::SETUP_IN_DEV.into()],
             no_tty,
         ),
         SigningKey => ops::dev(
