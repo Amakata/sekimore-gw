@@ -41,6 +41,13 @@ sgw_lang() {
   echo en
 }
 L=$(sgw_lang)
+# The commands the hints name: sgw's when `sgw open` runs this script (it sets SGW_CLI), the mise
+# tasks of .devcontainer/sgw/ otherwise
+if [ -n "${SGW_CLI:-}" ]; then
+  H_RESTORE='sgw open --restore-agent-env'; H_CHECK='sgw open --check'; H_UNLOCK='sgw unlock'; H_VERIFY='sgw verify'
+else
+  H_RESTORE='mise run vscode:restore-agent-env'; H_CHECK='mise run vscode:check'; H_UNLOCK='mise run gw:unlock'; H_VERIFY='mise run relay:verify'
+fi
 
 # msg <key>: the format string for the current language. English is the fallback.
 msg() {
@@ -63,28 +70,28 @@ msg() {
     *:must_quit) echo '  The running VS Code has SSH_AUTH_SOCK. It has to be quit completely (Cmd+Q).' ;;
     ja:quit_now) echo '  今終了しますか? (未保存があれば VS Code が確認します) [y/N] ' ;;
     *:quit_now) echo '  Quit it now? (VS Code will ask about anything unsaved) [y/N] ' ;;
-    ja:unset_launchd) echo 'vscode.sh: launchd の SSH_AUTH_SOCK を外しました (保存: %s。戻すには: mise run vscode:restore-agent-env)' ;;
-    *:unset_launchd) echo "vscode.sh: unset launchd's SSH_AUTH_SOCK (saved in %s; to put it back: mise run vscode:restore-agent-env)" ;;
-    ja:w_dd_down) echo 'vscode.sh: ⚠️  Docker Desktop が起動していません。gateway に agent を渡すには、vscode:restore-agent-env の後に Docker Desktop を起動してください' ;;
-    *:w_dd_down) echo 'vscode.sh: ⚠️  Docker Desktop is not running. To get the agent to the gateway, start Docker Desktop after vscode:restore-agent-env' ;;
-    ja:w_dd_bad) echo 'vscode.sh: ⚠️  Docker Desktop が SSH_AUTH_SOCK 無しで動いています。gateway の agent は使えません (vscode:restore-agent-env → Docker Desktop 再起動)' ;;
-    *:w_dd_bad) echo "vscode.sh: ⚠️  Docker Desktop is running without SSH_AUTH_SOCK. The gateway's agent will not work (vscode:restore-agent-env → restart Docker Desktop)" ;;
+    ja:unset_launchd) echo "vscode.sh: launchd の SSH_AUTH_SOCK を外しました (保存: %s。戻すには: $H_RESTORE)" ;;
+    *:unset_launchd) echo "vscode.sh: unset launchd's SSH_AUTH_SOCK (saved in %s; to put it back: $H_RESTORE)" ;;
+    ja:w_dd_down) echo "vscode.sh: ⚠️  Docker Desktop が起動していません。gateway に agent を渡すには、$H_RESTORE の後に Docker Desktop を起動してください" ;;
+    *:w_dd_down) echo "vscode.sh: ⚠️  Docker Desktop is not running. To get the agent to the gateway, start Docker Desktop after $H_RESTORE" ;;
+    ja:w_dd_bad) echo "vscode.sh: ⚠️  Docker Desktop が SSH_AUTH_SOCK 無しで動いています。gateway の agent は使えません ($H_RESTORE → Docker Desktop 再起動)" ;;
+    *:w_dd_bad) echo "vscode.sh: ⚠️  Docker Desktop is running without SSH_AUTH_SOCK. The gateway's agent will not work ($H_RESTORE → restart Docker Desktop)" ;;
     ja:e_launched) echo 'vscode.sh: ❌ 直接起動した本体 (pid %s) の環境に SSH_AUTH_SOCK があります。この出力を添えて報告してください' ;;
     *:e_launched) echo 'vscode.sh: ❌ the directly launched app (pid %s) has SSH_AUTH_SOCK in its environment. Report this with the output above' ;;
     ja:ok_launched) echo 'vscode.sh: 本体 pid %s の環境に SSH_AUTH_SOCK は無い' ;;
     *:ok_launched) echo 'vscode.sh: no SSH_AUTH_SOCK in the environment of app pid %s' ;;
-    ja:e_running) echo 'vscode.sh: ❌ 起動中の VS Code の環境に SSH_AUTH_SOCK があります。この出力を添えて報告してください (mise run vscode:check でも再確認できます)' ;;
-    *:e_running) echo 'vscode.sh: ❌ the running VS Code has SSH_AUTH_SOCK in its environment. Report this with the output above (mise run vscode:check re-checks it)' ;;
+    ja:e_running) echo "vscode.sh: ❌ 起動中の VS Code の環境に SSH_AUTH_SOCK があります。この出力を添えて報告してください ($H_CHECK でも再確認できます)" ;;
+    *:e_running) echo "vscode.sh: ❌ the running VS Code has SSH_AUTH_SOCK in its environment. Report this with the output above ($H_CHECK re-checks it)" ;;
     ja:store_unlocked) echo 'vscode.sh: 秘密ストアは解錠済み' ;;
     *:store_unlocked) echo 'vscode.sh: the secret store is unlocked' ;;
-    ja:store_unlock_now) echo 'vscode.sh: 秘密ストアが「%s」です。ここで解錠します (中断しても後から mise run gw:unlock)' ;;
-    *:store_unlock_now) echo 'vscode.sh: the secret store is "%s". Unlocking it here (if you stop, run mise run gw:unlock later)' ;;
-    ja:store_left_locked) echo 'vscode.sh: 解錠していません。後で mise run gw:unlock を実行してください' ;;
-    *:store_left_locked) echo 'vscode.sh: not unlocked. Run mise run gw:unlock later' ;;
-    ja:gw_not_up) echo 'vscode.sh: ゲートウェイはまだ起動していません。コンテナで開いた後、mise run gw:unlock で秘密ストアを解錠してください' ;;
-    *:gw_not_up) echo 'vscode.sh: the gateway is not up yet. After opening the container, unlock the secret store with mise run gw:unlock' ;;
-    ja:done) echo "vscode.sh: OK — 'Dev Containers: Reopen in Container' で開き、dev 内で 'ssh-add -l' が失敗することを確認 (mise run relay:verify)。" ;;
-    *:done) echo "vscode.sh: OK — open it with 'Dev Containers: Reopen in Container', then check that 'ssh-add -l' fails inside dev (mise run relay:verify)." ;;
+    ja:store_unlock_now) echo "vscode.sh: 秘密ストアが「%s」です。ここで解錠します (中断しても後から $H_UNLOCK)" ;;
+    *:store_unlock_now) echo "vscode.sh: the secret store is \"%s\". Unlocking it here (if you stop, run $H_UNLOCK later)" ;;
+    ja:store_left_locked) echo "vscode.sh: 解錠していません。後で $H_UNLOCK を実行してください" ;;
+    *:store_left_locked) echo "vscode.sh: not unlocked. Run $H_UNLOCK later" ;;
+    ja:gw_not_up) echo "vscode.sh: ゲートウェイはまだ起動していません。コンテナで開いた後、$H_UNLOCK で秘密ストアを解錠してください" ;;
+    *:gw_not_up) echo "vscode.sh: the gateway is not up yet. After opening the container, unlock the secret store with $H_UNLOCK" ;;
+    ja:done) echo "vscode.sh: OK — 'Dev Containers: Reopen in Container' で開き、dev 内で 'ssh-add -l' が失敗することを確認 ($H_VERIFY)。" ;;
+    *:done) echo "vscode.sh: OK — open it with 'Dev Containers: Reopen in Container', then check that 'ssh-add -l' fails inside dev ($H_VERIFY)." ;;
   esac
 }
 say() { local f; f=$(msg "$1"); shift; printf "$f\n" "$@"; }

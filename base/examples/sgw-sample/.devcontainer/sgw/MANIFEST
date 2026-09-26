@@ -4,7 +4,7 @@ base 0.2.48
 gateway 0.2.48
 lang en
 file sgw.sh d50561b90074e1151db259120f2248b9a315e1ae5415c42515ef99609429614f
-file vscode.sh 5fe3ac3e3bdb457bb6b5ca803cbf7e30eb4010749d2a1ab6be4139146e9f7a9f
+file vscode.sh bbb0794275e7c2903ebdbe6e3e2745f04fc65921e383dfaa1fb256ee4ee447f3
 file upgrade.sh d8e83c903b7c5a72a79692118fd7a81e51eff6c14eb029c0e557aefb96fcb461
 file post-start.sh 0033dcdf46d830a62ccccb4668fffe036c0d78965ea298c59df1de7ad90f8595
 file tasks.mise.toml 5143b722c922ae0e9dbb97cb8c861dcb941f912041aedd40065ebfb124cd754b
