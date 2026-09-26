@@ -586,7 +586,7 @@ async fn judge_commits(
                                 name: c.name.clone(),
                                 sha: sha.clone(),
                                 reason: format!(
-                                    "could not be looked up on the upstream ({e}); signing: required needs the upstream API, so the gateway has to be unlocked (`mise run gw:unlock`) and logged in"
+                                    "could not be looked up on the upstream ({e}); signing: required needs the upstream API, so the gateway has to be unlocked (`sgw unlock`) and logged in"
                                 ),
                             }
                         })?;
@@ -1852,7 +1852,7 @@ mod tests {
                 &FakeUpstream::broken(),
             ));
             assert!(why.contains("the secret store is locked"), "{why}");
-            assert!(why.contains("gw:unlock"), "{why}");
+            assert!(why.contains("sgw unlock"), "{why}");
         }
 
         #[test]

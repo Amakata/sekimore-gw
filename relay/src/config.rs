@@ -549,7 +549,7 @@ impl BoardRef {
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase", tag = "unlock")]
 pub enum StoreUnlock {
-    /// A person runs `mise run gw:unlock`. Nothing at rest opens the store
+    /// A person runs `sgw unlock`. Nothing at rest opens the store
     #[default]
     Prompt,
     /// Read the passphrase from a file outside the worktree, 0600. For development only
@@ -1465,7 +1465,7 @@ impl ProxySpec {
     /// Where `credential()` comes from, for `check` and for the message when the proxy refuses it.
     pub fn credential_source(&self) -> &'static str {
         if self.stored.get().is_some() {
-            "the secret store (gw:proxy-credential)"
+            "the secret store (sgw proxy-credential)"
         } else if self.username.is_some() {
             "SEKIMORE_UPSTREAM_PROXY_* or config.yml"
         } else {
@@ -2561,7 +2561,7 @@ relay:
         // `credential_source()` still reports it: `check` says which credential Squid will use.
         assert_eq!(
             px.credential_source(),
-            "the secret store (gw:proxy-credential)"
+            "the secret store (sgw proxy-credential)"
         );
     }
 }

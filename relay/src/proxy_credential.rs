@@ -1,12 +1,12 @@
 //! The upstream proxy's credential as the secret store holds it (#151).
 //!
 //! 0.2.22 (#53) moved the credential out of `.devcontainer/.env` — which the dev container can
-//! read — into the store, filed under `proxy/upstream` by `gw:proxy-credential`. Squid was wired to
+//! read — into the store, filed under `proxy/upstream` by sgw proxy-credential. Squid was wired to
 //! the store; the relay kept reading `SEKIMORE_UPSTREAM_PROXY_*` and `config.yml`, so once a
 //! recreate dropped the old variables its passthrough and its own API calls got 407 while Squid,
 //! with the same stored value, got through.
 //!
-//! The store is locked when the relay starts and unlocked later, and `gw:proxy-credential` can
+//! The store is locked when the relay starts and unlocked later, and sgw proxy-credential can
 //! change the value at any time. So the credential is not read once: `serve` keeps a shared cell
 //! current (`spawn_refresher`), a one-shot subcommand fills it once (`prime`), and every user of the
 //! proxy reads the cell at the moment it connects (`ProxySpec::credential`).
@@ -24,7 +24,7 @@ pub const NAMESPACE: &str = "proxy";
 pub const NAME: &str = "upstream";
 
 /// How often `serve` looks at the store again. An unlock, a lock, or a new credential set with
-/// `gw:proxy-credential` is picked up within this.
+/// sgw proxy-credential is picked up within this.
 const REFRESH: Duration = Duration::from_secs(5);
 
 /// A username and a password.
@@ -67,7 +67,7 @@ impl fmt::Debug for StoredProxyCredential {
     }
 }
 
-/// The stored value is the JSON `gw:proxy-credential` writes: `{"username": …, "password": …}`.
+/// The stored value is the JSON sgw proxy-credential writes: `{"username": …, "password": …}`.
 /// Anything else is not a credential this relay can present.
 pub fn parse(value: &str) -> Option<Credential> {
     let v: serde_json::Value = serde_json::from_str(value).ok()?;

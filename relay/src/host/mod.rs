@@ -10,6 +10,7 @@
 
 pub mod cli;
 pub mod docker;
+pub mod groups;
 pub mod open;
 pub mod ops;
 pub mod passphrase;

@@ -193,7 +193,7 @@ async fn call(
 }
 
 fn unavailable(why: &str) -> TokenError {
-    // Not `Locked`: a caller routing on that would tell the operator to run `gw:unlock`, which
+    // Not `Locked`: a caller routing on that would tell the operator to run sgw unlock, which
     // cannot help with a database that did not open. This is the relay's own fault, not a state
     // the operator can change with a passphrase.
     TokenError::Io(std::io::Error::other(format!(
@@ -204,7 +204,7 @@ fn unavailable(why: &str) -> TokenError {
 fn locked(name: &str) -> TokenError {
     TokenError::Locked(format!(
         "the secret store is locked, so {NAMESPACE}/{name} cannot be read. \
-         Ask a human to run: mise run gw:unlock"
+         Ask a human to run: sgw unlock"
     ))
 }
 
@@ -484,7 +484,7 @@ mod tests {
         inner.lock().await.lock();
 
         match s.token().await {
-            Err(TokenError::Locked(m)) => assert!(m.contains("gw:unlock"), "{m}"),
+            Err(TokenError::Locked(m)) => assert!(m.contains("sgw unlock"), "{m}"),
             other => panic!("expected Locked, got {other:?}"),
         }
     }
@@ -616,7 +616,7 @@ mod tests {
             // code. Matching on the message would have passed here and broken on a reword.
             let (s, _d, _inner) = served(false).await;
             match s.token().await {
-                Err(TokenError::Locked(m)) => assert!(m.contains("gw:unlock"), "{m}"),
+                Err(TokenError::Locked(m)) => assert!(m.contains("sgw unlock"), "{m}"),
                 other => panic!("expected Locked, got {other:?}"),
             }
         }

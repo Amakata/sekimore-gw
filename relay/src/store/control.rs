@@ -84,7 +84,7 @@ enum Request {
 
 /// A failure the caller has to act on differently, said in a way that does not involve reading
 /// the message. "There is no token" sends the operator to `login`; "the store is sealed" sends
-/// them to `gw:unlock`. Matching on prose to tell those apart breaks the first time the prose is
+/// them to sgw unlock. Matching on prose to tell those apart breaks the first time the prose is
 /// improved.
 pub const CODE_NOT_FOUND: &str = "not_found";
 pub const CODE_LOCKED: &str = "locked";
@@ -132,7 +132,7 @@ impl Response {
     fn from_store_error(e: StoreError) -> Self {
         match e {
             StoreError::Locked => Response::coded(
-                "the secret store is locked; ask a human to run: mise run gw:unlock",
+                "the secret store is locked; ask a human to run: sgw unlock",
                 CODE_LOCKED,
             ),
             other => Response::err(other.to_string()),
@@ -238,7 +238,7 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>, on_lock: &OnLock) 
                 }
                 // `Locked` here is the AEAD tag failing to open the wrapped DEK, which is what a
                 // wrong passphrase looks like. Its own Display is written for a consumer that
-                // found the store locked and tells the reader to run `mise run gw:unlock` — the
+                // found the store locked and tells the reader to run `sgw unlock` — the
                 // command whose prompt they are standing at. Nothing is disclosed by saying so:
                 // they just typed it, and `Tampered` keeps its own message so a spliced store is
                 // never reported as a typo.
@@ -447,7 +447,7 @@ pub fn prompt(label: &str) -> anyhow::Result<Secret> {
     if !tty {
         anyhow::bail!(
             "a passphrase has to be typed, and stdin is not a terminal. \
-             Run this without piping it, through `mise run gw:unlock`"
+             Run this without piping it, through `sgw unlock`"
         );
     }
     eprint!("{label}: ");
@@ -509,7 +509,7 @@ fn refuse_a_terminal(terminal: bool) -> anyhow::Result<()> {
     if terminal {
         anyhow::bail!(
             "--stdin reads the passphrase from a pipe, and stdin is a terminal. \
-             Pipe it in, or run `mise run gw:unlock` to type it with echo off"
+             Pipe it in, or run `sgw unlock` to type it with echo off"
         );
     }
     Ok(())
@@ -636,7 +636,7 @@ mod tests {
     #[tokio::test]
     async fn a_wrong_passphrase_does_not_send_the_operator_back_to_the_prompt_they_are_at() {
         // `StoreError::Locked`'s own text reads "the secret store is locked. Ask a human to run:
-        // mise run gw:unlock", which is what this used to answer — to the person standing at that
+        // sgw unlock", which is what this used to answer — to the person standing at that
         // very prompt, having just mistyped. Three of them in a row is what opened the issue.
         let (sock, _d) = served(true).await;
         let (ok, msg) = call(&sock, r#"{"op":"unlock","passphrase":"wrong"}"#)
@@ -644,7 +644,7 @@ mod tests {
             .unwrap();
         assert!(!ok);
         assert!(
-            !msg.contains("gw:unlock"),
+            !msg.contains("sgw unlock"),
             "must not name the command being run: {msg}"
         );
         assert!(msg.contains("passphrase"), "must say what failed: {msg}");
@@ -705,7 +705,7 @@ mod tests {
         .await
         .unwrap();
         assert!(!ok);
-        assert!(!msg.contains("gw:unlock"), "{msg}");
+        assert!(!msg.contains("sgw unlock"), "{msg}");
         assert!(msg.contains("old passphrase"), "{msg}");
 
         // and the store is untouched: the original still opens it
@@ -1046,7 +1046,7 @@ mod tests {
     #[test]
     fn a_terminal_on_stdin_is_refused_and_a_pipe_is_not() {
         let err = refuse_a_terminal(true).unwrap_err().to_string();
-        assert!(err.contains("gw:unlock"), "say what to run instead: {err}");
+        assert!(err.contains("sgw unlock"), "say what to run instead: {err}");
         assert!(refuse_a_terminal(false).is_ok());
     }
 

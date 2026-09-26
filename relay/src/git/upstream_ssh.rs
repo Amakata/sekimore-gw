@@ -270,7 +270,7 @@ impl OpenSshUpstream {
              running docker (not in this container): `docker compose exec sekimore-gw \
              sekimore-relay login` fetches the upstream host keys, or `docker compose exec \
              sekimore-gw sekimore-relay keyscan {} --port {}` takes them from the host itself \
-             (also for a ProxyJump bastion). In the devcontainer setup that is `mise run gw:login`.{}",
+             (also for a ProxyJump bastion). In the devcontainer setup that is `sgw login`.{}",
             self.known_hosts.display(),
             self.host,
             self.host,
@@ -440,7 +440,7 @@ mod tests {
             );
         }
         // and the wrapper this project actually uses
-        assert!(m.contains("mise run gw:login"), "{m}");
+        assert!(m.contains("sgw login"), "{m}");
         // the host and port belong to the upstream that failed, not a placeholder
         assert!(m.contains("github.com"), "{m}");
         assert!(m.contains("--port 22"), "{m}");

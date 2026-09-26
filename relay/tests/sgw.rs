@@ -358,6 +358,107 @@ fn down_with_no_container_left_names_the_stack_the_way_dev_containers_does() {
 }
 
 #[test]
+fn a_group_and_its_leaf_run_the_flat_command() {
+    let f = fixture();
+    let out = sgw(&f, &["store", "status"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        log(&f).contains(" sekimore-relay store-status\n"),
+        "{}",
+        log(&f)
+    );
+    let out = sgw(&f, &["token", "list"]).output().unwrap();
+    assert!(out.status.success());
+    assert!(log(&f).contains(" sekimore-relay tokens\n"), "{}", log(&f));
+    let out = sgw(&f, &["gw", "project"]).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "proj_devcontainer"
+    );
+    // dev is a group and the flat command that runs anything in dev; anything but a leaf is the latter
+    let out = sgw(&f, &["dev", "cat", "/etc/hostname"]).output().unwrap();
+    assert!(out.status.success());
+    assert!(log(&f).contains("cat /etc/hostname"), "{}", log(&f));
+}
+
+#[test]
+fn a_group_alone_lists_its_commands_and_an_unknown_leaf_is_refused() {
+    let f = fixture();
+    for args in [&["store"][..], &["store", "--help"], &["store", "-h"]] {
+        let out = sgw(&f, args).output().unwrap();
+        assert!(out.status.success(), "{args:?}");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("sgw store <COMMAND>"), "{text}");
+        assert!(
+            text.contains("\n  unlock ") && text.contains("\n  keychain-set "),
+            "{text}"
+        );
+        assert!(!text.contains("login"), "{text}");
+    }
+    let out = sgw(&f, &["store", "foo"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no command 'foo'") && err.contains("\n  unlock "),
+        "{err}"
+    );
+    assert!(log(&f).is_empty(), "nothing ran: {}", log(&f));
+}
+
+#[test]
+fn a_commands_own_help_spells_it_with_its_group() {
+    let f = fixture();
+    let out = sgw(&f, &["store", "export", "--help"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Usage: sgw store export "), "{text}");
+    let out = sgw(&f, &["recreate", "--help"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Usage: sgw gw recreate"), "{text}");
+    let out = sgw(&f, &["init", "--help"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Usage: sgw init"), "{text}");
+}
+
+#[test]
+fn help_lists_the_commands_by_group() {
+    let f = fixture();
+    let out = sgw(&f, &["--help"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let at = |s: &str| text.find(s).unwrap_or_else(|| panic!("no {s:?} in {text}"));
+    assert!(
+        at("Commands:") < at("\n  init ") && at("\n  init ") < at("\nstore "),
+        "{text}"
+    );
+    assert!(
+        at("\nstore ") < at("\n  unlock ") && at("\n  unlock ") < at("\ngithub "),
+        "{text}"
+    );
+    assert!(
+        at("\ngw ") < at("\n  recreate ") && at("\n  recreate ") < at("\ndev "),
+        "{text}"
+    );
+    assert!(text.contains("sgw unlock is sgw store unlock"), "{text}");
+    assert!(
+        text.contains("Usage: sgw [OPTIONS] <COMMAND> [ARGS]"),
+        "{text}"
+    );
+    assert!(text.contains("Options:"), "{text}");
+    // no flat command is listed on its own: the groups are the listing
+    assert!(!text.contains("\n  store-status "), "{text}");
+    // bare sgw: the help, the way clap's arg_required_else_help gives it (stderr, exit 2)
+    let out = sgw(&f, &[]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("\nstore "),
+        "bare sgw prints the help"
+    );
+}
+
+#[test]
 fn help_is_in_the_language_asked_for() {
     let f = fixture();
     let out = sgw(&f, &["--help"]).output().unwrap();
