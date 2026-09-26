@@ -41,7 +41,7 @@ no version, so `releases/latest/download/…` works:
 ```sh
 curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh
 ```
-| Push to `main`, pull request | preview image (`preview.yml`); base built but not pushed (`base.yml`) | — |
+| Push to `main`, pull request | preview image (`preview.yml`); base built but not pushed (`base.yml`), its files tested (`base-tests.yml`) | — |
 
 ## Local builds of the base image
 

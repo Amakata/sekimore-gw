@@ -5,11 +5,13 @@ on:
     branches: [main, master]
     paths:
       - "relay/**"
+      - "!relay/**.md"
       - ".github/workflows/relay.yml"
       - "tests/fixtures/**"
   pull_request:
     paths:
       - "relay/**"
+      - "!relay/**.md"
       - ".github/workflows/relay.yml"
       - "tests/fixtures/**"
   schedule:

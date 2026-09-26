@@ -1,0 +1,63 @@
+name: Base files
+
+# The shell tests of what base/ ships — the sekimore wrapper, the distributed files under
+# share/sgw/ and the sample that must match them — and the check that UPGRADING covers the
+# gateway version. None of them needs Docker; the image build is base.yml.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "base/**"
+      - "!base/**.md"
+      - "share/gateway.mise.*.toml"
+      - "UPGRADING.md"
+      - "UPGRADING.ja.md"
+      - "pyproject.toml"
+      - ".github/workflows/base-tests.yml"
+  pull_request:
+    paths:
+      - "base/**"
+      - "!base/**.md"
+      - "share/gateway.mise.*.toml"
+      - "UPGRADING.md"
+      - "UPGRADING.ja.md"
+      - "pyproject.toml"
+      - ".github/workflows/base-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  docs:
+    name: UPGRADING is current
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: UPGRADING covers the gateway this image takes
+        run: python3 base/scripts/check-upgrading.py
+
+  wrapper:
+    name: The sekimore wrapper refreshes its token
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: scripts/sekimore renews an expired project token
+        run: base/tests/test_wrapper_refresh.sh
+
+  distributed:
+    name: The distributed files and mise run upgrade
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: share/sgw/ and the sample agree
+        run: base/tests/test_sample_sgw.sh
+      - name: upgrade.sh
+        run: base/tests/test_upgrade.sh
+      - name: post-start.sh
+        run: base/tests/test_post_start.sh
+      - name: sgw.sh terminal handling
+        run: base/tests/test_sgw_tty.sh
