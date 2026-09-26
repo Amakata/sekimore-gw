@@ -37,13 +37,6 @@ Needs Docker (Docker Desktop on macOS, or Docker Engine on Linux) and VS Code wi
    ```
 3. [base/README.md](base/README.md) takes it from there: `config.yml`, the dev container, `sgw unlock`, `sgw login`, `sgw verify`.
 
-Behind a proxy that requires credentials, put the password in the secret store
-(`.devcontainer/.env` is readable by the agent):
-
-```bash
-sgw proxy-credential set
-```
-
 ## What you set, and what it does
 
 Everything is in `.devcontainer/config/config.yml`; [config.sample.yml](config/config.sample.yml) lists every key with a comment.
@@ -53,7 +46,7 @@ Everything is in `.devcontainer/config/config.yml`; [config.sample.yml](config/c
 | `allow_domains` | The destinations the agent's ordinary traffic may reach. DNS, the firewall and Squid all follow this one list |
 | `domain_handlers`, `relay` | These domains go through the relay instead: git over SSH, the GitHub API, HTTPS with an upload cap. The relay holds the upstream credentials; the agent holds none |
 | `relay.project.repos`, `permissions` | Which repositories, read-only or read-write, and which of the 33 actions: `pr:create` allowed, `pr:merge` denied |
-| `proxy.upstream_proxy`, `proxy.direct_egress` | A corporate proxy for everything that leaves; `deny` closes the way around it |
+| `proxy.upstream_proxy`, `proxy.direct_egress` | A corporate proxy for everything that leaves; `deny` closes the way around it. Its password goes into the secret store (`sgw proxy-credential set`), not into a file the agent can read |
 | `network.allowed_ports` | The ports the agent may reach. Unset means all; `[80, 443]` is the usual |
 
 | Operation | Command |
@@ -78,12 +71,12 @@ Fits when the agent should:
 - leave a record of every operation
 - hold no upstream credential
 
-Does not fit when:
+Does not fit when the agent should:
 
-- the upstream is not GitHub and its API needs rules: git over SSH works with any host, API translation is GitHub only ([#50](https://github.com/Amakata/sekimore-gw/issues/50))
-- the rules are about request content: TLS is not terminated, so only the destination and the byte count are seen
-- only destinations matter: a plain allowlist needs less than this
-- the agent does not use GitHub: the relay has no role
+- follow rules on an API other than GitHub's (git over SSH works anywhere; API rules are GitHub only, [#50](https://github.com/Amakata/sekimore-gw/issues/50))
+- be judged by what a request contains (TLS is not terminated; only the destination and the byte count are seen)
+- be limited in destinations only (a plain allowlist is enough)
+- never touch GitHub (the relay has no role)
 
 ## Documentation
 
