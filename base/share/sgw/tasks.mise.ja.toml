@@ -1,0 +1,381 @@
+# The host-side tasks, included from mise.toml. `mise tasks` lists them.
+# Host-side only: the Docker inside the devcontainer has no gateway, so they refuse to run in there.
+#
+# Distributed by sgw-devcontainer-base: `mise run upgrade:apply` replaces this file, and stops
+# rather than overwrite it once it has been edited. To change a task, define one with the same
+# name in mise.toml — mise prefers it over this file.
+#
+# The order is the part worth remembering:
+#
+#   mise run vscode          # open VS Code without SSH_AUTH_SOCK (the operator's keys stay away from the AI)
+#   mise run gw:unlock       # unlock the secret store. **This comes first**; locked, the GitHub API does not work
+#   mise run gw:login        # first time only. It cannot run before the unlock
+#   mise run relay:verify    # the acceptance check for the whole set
+#   mise run upgrade         # is anything newer? (changes nothing)
+
+# ---- Starting up ----
+[vscode]
+description = "VS Code を SSH_AUTH_SOCK が届かない状態で起動する (launchd の変数を外し、open を通さず直接起動、起動後に本体の環境を確認)"
+# raw: when the gateway is already up it offers to unlock the secret store, which needs a terminal
+raw = true
+run = 'bash "$(dirname "$SGW")/vscode.sh"'
+
+["vscode:check"]
+description = "launchd / Docker Desktop / 起動中の VS Code の SSH_AUTH_SOCK の状態を表示する"
+run = 'bash "$(dirname "$SGW")/vscode.sh" --check'
+
+["vscode:restore-agent-env"]
+description = "launchd に SSH_AUTH_SOCK を戻す (mise run vscode が外したもの。Docker Desktop を再起動する前に実行)"
+run = 'bash "$(dirname "$SGW")/vscode.sh" --restore-agent-env'
+
+[web]
+description = "sekimore-gw の Web UI をブラウザで開く"
+# The port comes from the running container. A number written here drifts from the compose file
+# as soon as a project moves the published port (8090 taken, so 8091).
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+port=$(bash "$SGW" port sekimore-gw 8080)
+url="http://localhost:$port"
+echo "$url"
+open "$url" 2>/dev/null || xdg-open "$url"
+'''
+
+[ps]
+description = "この devcontainer の compose スタックのコンテナ一覧"
+run = 'bash "$SGW" ps'
+
+[down]
+description = "compose スタックを停止・削除する (volume は残る。VS Code を閉じた後の後片付け)"
+run = 'docker compose -p "$(bash "$SGW" project)" down'
+
+# ---- Upgrading ----
+[upgrade]
+description = "固定している gateway と base を最新と比べ、更新で何が変わるかを表示する (何も変更しない)"
+run = 'bash "$(dirname "$SGW")/upgrade.sh"'
+
+["upgrade:apply"]
+description = "最新に更新する: タグを書き換え、.devcontainer/sgw/ を入れ替え、確認のうえ gateway を作り直して解錠する"
+# raw: it asks before recreating the gateway, and the unlock may prompt for the passphrase
+raw = true
+run = 'bash "$(dirname "$SGW")/upgrade.sh" --apply'
+
+["upgrade:sync"]
+description = ".devcontainer/sgw/ を、いま固定している版に揃える (タグを手で変えたとき、言語を変えたとき)"
+run = 'bash "$(dirname "$SGW")/upgrade.sh" --sync'
+
+["upgrade:notes"]
+description = "固定している版から最新までの UPGRADING の節を表示する"
+run = 'bash "$(dirname "$SGW")/upgrade.sh" --notes'
+
+# ---- dev (the AI's sandbox) ----
+["dev:shell"]
+description = "dev コンテナのシェル (vscode ユーザー)"
+# raw: an interactive shell needs the terminal; without it mise's prefix output mode makes stdout a
+# pipe, sgw.sh drops -t, and zsh sits there without a prompt
+raw = true
+run = 'bash "$SGW" dev zsh'
+
+["dev:agent-setup"]
+description = "dev で agent-setup を再実行 (relay への鍵登録・トークン・known_hosts を作り直す。冪等)"
+run = 'bash "$SGW" dev sudo /usr/local/bin/sekimore-agent-setup.sh'
+
+["dev:signing-key"]
+description = "AI の署名用公開鍵を表示 (GitHub の Settings → SSH and GPG keys に Signing Key として登録する)"
+run = 'bash "$SGW" dev cat /home/vscode/.ssh/sekimore/signing_ed25519.pub'
+
+# ---- After changing config.yml ----
+["relay:refresh"]
+description = "dev でゲートウェイの agent setup を再実行する (post-start.sh と同じやり方)。Rebuild Container なしで ~/.ssh/config の Host ブロックと上流プロキシの環境を config.yml に合わせる"
+# The Host blocks come from the gateway's configuration and are written by agent-setup at
+# post-start, so an upstream added to config.yml only reaches dev at the next start. This runs
+# the same setup again instead (sgw-devcontainer-base#97). Run it after mise run gw:restart.
+run = '''
+set -u
+echo "== dev: run the gateway's agent setup again (the way post-start.sh does)"
+# The same invocation as share/sgw/post-start.sh: agent-setup as root, with every SEKIMORE_*
+# variable dev has. sudo resets the environment, so a variable reaches agent-setup only if
+# --preserve-env= names it; the names are taken from dev's own environment, so there is no list
+# here to fall behind (post-start.sh says why).
+bash "$SGW" dev sh -c '
+set -e
+agent_setup=${SGW_AGENT_SETUP:-/usr/local/bin/sekimore-agent-setup.sh}
+vars=$(env | sed -n "s/^\(SEKIMORE_[A-Za-z0-9_]*\)=.*/\1/p" | sort -u | paste -sd, -)
+if [ -n "$vars" ]; then
+  sudo --preserve-env="$vars" "$agent_setup"
+else
+  sudo "$agent_setup"
+fi
+' || { echo "relay:refresh: FAILED - sekimore-agent-setup.sh did not finish. Is the gateway up? (mise run gw:check)" >&2; exit 1; }
+echo
+echo "== dev: the Host blocks now in ~/.ssh/config"
+# agent-setup replaces this marked block in place: one Host per upstream the gateway is configured for
+blocks=$(bash "$SGW" dev sh -c 'sed -n "/^# >>> sekimore-relay >>>/,/^# <<< sekimore-relay <<</p" ~/.ssh/config' || true)
+if [ -n "$blocks" ]; then
+  printf '%s\n' "$blocks"
+  printf '%s\n' "$blocks" | sed -n 's/^Host /wrote: Host /p'
+else
+  echo "no sekimore-relay block in ~/.ssh/config - the gateway has no relay, or the setup wrote none"
+fi
+echo
+echo "== dev: the upstream proxy environment (/etc/profile.d/sekimore-proxy.sh)"
+# gateway 0.2.42 and later write it when config.yml sets proxy.upstream_proxy; without one there is none
+if bash "$SGW" dev sh -c 'test -f /etc/profile.d/sekimore-proxy.sh'; then
+  bash "$SGW" dev sh -c 'grep -E "^export (HTTP_PROXY|NO_PROXY)=" /etc/profile.d/sekimore-proxy.sh' || true
+  echo "present - a new shell in dev reads it; a shell already open needs . /etc/profile.d/sekimore-proxy.sh"
+else
+  echo "not present (no upstream proxy configured, or the gateway is older than 0.2.42)"
+fi
+echo
+echo "relay:refresh: done. The Host blocks apply at once; open a new terminal in dev for the proxy environment"
+'''
+
+# ---- The acceptance check ----
+["relay:verify"]
+description = "relay の受け入れ確認: gateway の状態 / dev に依頼者の agent が届いていないこと / dev から関所経由の git・HTTPS・GitHub API 1 回 / dev の通常の通信が上流プロキシを通ること"
+run = '''
+set -u
+fail=0
+# colors only on a terminal; NO_COLOR wins; SEKIMORE_COLOR=always|never forces
+if [ "${SEKIMORE_COLOR:-auto}" = always ] || { [ "${SEKIMORE_COLOR:-auto}" = auto ] && [ -z "${NO_COLOR+x}" ] && [ -t 1 ]; }; then
+  c_ok=$'\e[32m'; c_bad=$'\e[31m'; c_off=$'\e[0m'
+else
+  c_ok=; c_bad=; c_off=
+fi
+ok()   { printf '%sOK:%s %s\n' "$c_ok" "$c_off" "$*"; }
+fail() { printf '%s❌ FAIL:%s %s\n' "$c_bad" "$c_off" "$*"; fail=1; }
+# The [ids] at the end of a heading name the rows of docs/paths.yml in sekimore-gw (the path
+# ledger, sekimore-gw#223): who resolves, who verifies the peer, what is presented, where it is
+# audited, and the code and tests behind the item.
+echo "== gateway: sekimore-relay check"
+# kept whole: the 443 target: lines pick the domain the HTTPS probe below goes to
+gwcheck=$(bash "$SGW" gw sekimore-relay check || true)
+printf '%s\n' "$gwcheck" | sed -n '/^state:/,$p'
+echo
+echo "== dev: only the gateway's filtered signing key may be reachable [dev.signing]"
+n=$(bash "$SGW" dev sh -c 'set -a; . /etc/sekimore-agent/env 2>/dev/null; set +a; ssh-add -l 2>/dev/null' | grep -c . || true)
+if [ "$n" = 1 ]; then
+  ok "exactly one key (the signing key, via the gateway's filtered agent)"
+elif [ "$n" = 0 ]; then
+  ok "no ssh-agent in dev"
+else
+  fail "ssh-add -l lists $n keys inside dev — the operator's keys are exposed to the AI. Reopen with: mise run vscode"
+fi
+echo
+echo "== dev: git signs with the key it is meant to [dev.signing]"
+# The Dev Containers extension copies the host's user.signingkey over the container's on every
+# start; from gateway 0.2.31 agent-setup's own setting wins. An inline key:: value, or a key the
+# signing socket does not offer, makes every commit fail with "Couldn't find key in agent".
+sig=$(bash "$SGW" dev sh -c 'set -a; . /etc/sekimore-agent/env 2>/dev/null; set +a
+  [ "$(git config --get commit.gpgsign 2>/dev/null)" = true ] || { echo off; exit; }
+  k=$(git config --get user.signingkey 2>/dev/null)
+  case $k in "") echo "unset"; exit ;; key::*) echo inline; exit ;; esac
+  [ -f "$k" ] || { echo "missing: $k"; exit; }
+  if [ -n "${SEKIMORE_SIGNING_SOCK:-}" ]; then
+    pub=$(cut -d" " -f1,2 "$k")
+    if SSH_AUTH_SOCK=$SEKIMORE_SIGNING_SOCK ssh-add -L 2>/dev/null | cut -d" " -f1,2 | grep -qxF "$pub"; then echo ok; else echo "not offered by the signing socket: $k"; fi
+  else
+    echo ok
+  fi' 2>/dev/null || echo "dev unavailable")
+case "$sig" in
+  ok) ok "user.signingkey is the key the gateway signs with" ;;
+  off) echo "note: commit signing is off in dev" ;;
+  inline)
+    fail "user.signingkey is an inline key:: value — the host's, copied in by the Dev Containers extension. Recreate with gateway 0.2.31 or later"
+    ;;
+  *) fail "user.signingkey — $sig" ;;
+esac
+echo
+echo "== .env: the setup script's variables must survive sudo"
+# sudo resets the environment. post-start.sh passes every SEKIMORE_* variable through it; the older
+# postStartCommand named them in --preserve-env=, and one missing from that list is set and then
+# silently ignored. What the gateway and post-create.sh read does not go through sudo.
+if grep -q '\.devcontainer/sgw/post-start\.sh' .devcontainer/devcontainer.json 2>/dev/null; then
+  ok "postStartCommand runs .devcontainer/sgw/post-start.sh, which passes every SEKIMORE_* variable"
+else
+plist=,$(sed -n 's/.*--preserve-env=\([A-Za-z0-9_,]*\).*/\1/p' .devcontainer/devcontainer.json | head -1),
+others=",SEKIMORE_AGENT_SOCK,SEKIMORE_ALLOW_AGENT_FORWARD,SEKIMORE_ALLOW_CREDENTIAL_HELPER,SEKIMORE_SECRET_ENV,"
+dropped=
+for v in $(sed -n 's/^ *\(SEKIMORE_[A-Z_]*\)=.*/\1/p' .devcontainer/.env 2>/dev/null); do
+  case "$others" in *",$v,"*) continue ;; esac
+  case "$plist" in *",$v,"*) ;; *) dropped="$dropped $v" ;; esac
+done
+if [ -n "$dropped" ]; then
+  fail "${dropped# } is set in .env but missing from --preserve-env= in devcontainer.json postStartCommand. Run .devcontainer/sgw/post-start.sh from it instead (mise run upgrade says how)"
+else
+  ok "every setup-script variable in .env survives sudo"
+fi
+fi
+echo
+echo "== gateway: the secret store [operator.store]"
+# 0.2.19: the upstream API token lives in the store, so a locked one is not a note —
+# the relay cannot reach the GitHub API at all until someone unlocks it.
+# first line only: the state word. A later gateway may print more under it (0.2.39 did, and
+# this case statement then failed an unlocked store)
+state=$(bash "$SGW" gw sekimore-relay store-status 2>/dev/null | head -n1 || echo unavailable)
+[ -n "$state" ] || state=unavailable
+case "$state" in
+  unlocked) ok "unlocked" ;;
+  "not initialised") echo "note: no store yet. mise run gw:unlock sets the passphrase" ;;
+  *)
+    fail "the store is $state, so the relay cannot read the upstream API token. Run: mise run gw:unlock"
+    ;;
+esac
+echo
+echo "== dev: relay token (sekimore whoami) [dev.relay.api]"
+# kept whole: the permissions line picks the GitHub API call the probe below makes
+who=$(bash "$SGW" dev sekimore whoami 2>&1) || fail=1
+printf '%s\n' "$who"
+echo
+echo "== dev: git ls-remote through the relay (first repo of the project) [dev.relay.ssh, relay.ssh.upstream]"
+bash "$SGW" dev sh -c '. /etc/sekimore-agent/env && git ls-remote "git@$SEKIMORE_GIT_DOMAIN:$SEKIMORE_REPO.git" HEAD' || fail=1
+echo "== dev: a repository outside the project must be denied [dev.relay.ssh]"
+if bash "$SGW" dev sh -c '. /etc/sekimore-agent/env && git ls-remote "git@$SEKIMORE_GIT_DOMAIN:sekimore-test/not-in-project.git" HEAD' 2>&1 | grep -q "not in project"; then
+  ok "denied"
+else
+  fail "no 'not in project' denial"
+fi
+echo
+echo "== dev: HTTPS to a relayed domain must reach the upstream (through the upstream proxy when one is configured) [dev.passthrough, passthrough.upstream]"
+# git through the relay is SSH and never touches the upstream proxy, so it stays green while every
+# HTTPS path through the relay is dead (sgw-devcontainer-base#85). This goes the way the API does.
+hint="the relay cut the connection — mise run gw:logs for 'TLS to the proxy failed' or 'https_failed', then mise run gw:check (reach:)"
+targets=$(printf '%s\n' "$gwcheck" | sed -n 's/^ *443 target: *\([^ ]*\).*/\1/p')
+target=$(printf '%s\n' "$targets" | grep -x api.github.com | head -1)
+[ -n "$target" ] || target=$(printf '%s\n' "$targets" | grep -v '^$' | head -1)
+if [ -z "$target" ]; then
+  echo "SKIP: no 443 target configured"
+else
+  # the exit code is curl's own, kept apart from the status code it writes to stdout
+  code=$(bash "$SGW" dev curl -sS -m 10 -o /dev/null -w '%{http_code}' "https://$target/" 2>/dev/null); rc=$?
+  if [ "$rc" -eq 0 ] && [ -n "$code" ]; then
+    ok "https://$target/ answered HTTP $code (any status means the upstream was reached)"
+  else
+    fail "https://$target/ — curl exit $rc. $hint"
+  fi
+fi
+echo
+echo "== dev: one GitHub API call through the relay [dev.relay.api, relay.github.api]"
+# sekimore whoami answers out of the gateway's own state and calls no GitHub API; this one does.
+perms=$(printf '%s\n' "$who" | sed -n 's/^permissions[^:]*: *//p' | head -1)
+case " $perms " in
+  *" pr:read "*) probe="pr list --limit 1" ;;
+  *" issue:read "*) probe="issue list --limit 1" ;;
+  *" repo:read "*) probe="repo vocabulary" ;;
+  *) probe= ;;
+esac
+if [ -z "$probe" ]; then
+  echo "SKIP: the project grants no read permission to probe with"
+else
+  err=$(bash "$SGW" dev sekimore $probe 2>&1 >/dev/null); rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ok "sekimore $probe answered"
+  else
+    last=$(printf '%s\n' "$err" | grep -v '^$' | tail -1)
+    fail "sekimore $probe — exit $rc: $last. $hint"
+  fi
+fi
+echo
+echo "== dev: the gateway's API must not hand out the upstream proxy password [dev.webui]"
+# sekimore-gw#217: /api/config carried squid.config_text verbatim, and with a TLS upstream proxy
+# that text holds `login=<user>:<password>` — anything in dev could read it. Gateway 0.2.43 redacts
+# the password; the password itself still has to be rotated afterwards. Squid's other forms
+# (`login=PASS`, `login=NEGOTIATE`) carry no colon and no secret.
+body=$(bash "$SGW" dev curl -sS -m 5 http://sekimore-gw:8080/api/config 2>/dev/null || true)
+if [ -z "$body" ]; then
+  echo "SKIP: the gateway's API is not reachable from dev"
+else
+  # that field is JSON-escaped for quotes, backslashes and newlines only, so a redacted entry reads
+  # literally `login=user:***`. Any other value after the colon is the password itself.
+  leak=$(printf '%s' "$body" | grep -oE 'login=[^:"\ ]+:[^"\ ]+' | grep -v ':\*\*\*$' | head -1)
+  if [ -n "$leak" ]; then
+    fail "the upstream proxy password is readable from dev in /api/config (gateway 0.2.43 or later redacts it; rotate the password after upgrading)"
+  else
+    ok "no credential in /api/config"
+  fi
+fi
+echo
+echo "== dev: the upstream proxy is used for ordinary traffic (when one is configured) [dev.squid, dev.egress.direct]"
+# With `upstream_proxy` set, everything dev sends ought to go through the gateway's Squid and out
+# through that proxy. Nothing told dev so until base 0.2.40: HTTP_PROXY and friends now come from
+# agent-setup (/etc/profile.d/sekimore-proxy.sh, and rc.d sources it), and this checks both halves
+# — that dev has the variables, and that the way around them is closed (sgw-devcontainer-base#89).
+# jq is in the base image, but the gateway's answers are read with sed so a thinner dev works too.
+gwcfg=$(bash "$SGW" dev curl -sS -m 5 http://sekimore-gw:8080/api/config 2>/dev/null || true)
+gwpenv=$(bash "$SGW" dev curl -sS -m 5 http://sekimore-gw:8080/api/proxy-env 2>/dev/null || true)
+# "upstream_proxy": null is no proxy; a string is one. Either answer may carry it.
+upstream=$(printf '%s' "$gwpenv$gwcfg" | sed -n 's/.*"upstream_proxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+# direct_egress: "deny" or "allow". A gateway older than the one that added /api/proxy-env answers
+# nothing here — and that same gateway writes no HTTPS_PROXY into dev either, so both halves below
+# would fail for everyone still on it. Its silence is not a finding; the item is skipped instead.
+direct=$(printf '%s' "$gwpenv" | sed -n 's/.*"direct_egress"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+if [ -z "$upstream" ]; then
+  echo "SKIP: no upstream proxy configured"
+elif [ -z "$direct" ]; then
+  echo "SKIP: the gateway does not report its egress policy (needs gateway 0.2.42 or later)"
+else
+  devproxy=$(bash "$SGW" dev sh -lc 'printf %s "$HTTPS_PROXY"' 2>/dev/null || true)
+  if [ -n "$devproxy" ]; then
+    ok "dev has HTTPS_PROXY=$devproxy (upstream $upstream)"
+  else
+    fail "dev has no HTTPS_PROXY; recreate the dev container / re-run post-start so agent-setup writes it"
+  fi
+  # A wildcard entry (".example.com") is a suffix, not a host to connect to; take the first real one.
+  host=$(bash "$SGW" dev curl -sS -m 5 http://sekimore-gw:8080/api/domains/allowed 2>/dev/null |
+    tr ',[]' '\n\n\n' | sed -n 's/^[[:space:]]*"\([^".][^"]*\)"[[:space:]]*$/\1/p' | head -1)
+  if [ -z "$host" ]; then
+    echo "SKIP: no non-wildcard allow_domains entry to probe with"
+  else
+    # --noproxy '*' is the bypass itself: it goes straight out, ignoring HTTPS_PROXY.
+    bash "$SGW" dev curl --noproxy '*' -sS -m 8 -o /dev/null -w '%{http_code}' "https://$host/" >/dev/null 2>&1 && rc=0 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      if [ "$direct" = allow ]; then
+        echo "WARN: direct egress is allowed: dev's traffic to allow_domains bypasses the upstream (proxy.direct_egress: deny)"
+      else
+        fail "direct egress works although the gateway denies it (https://$host/ answered with --noproxy)"
+      fi
+    else
+      ok "direct egress to https://$host/ is closed; ordinary traffic goes through the upstream"
+    fi
+  fi
+fi
+echo
+echo "== dev: a root process must not route past the gateway (host-side FORWARD rules, gateway 0.2.37) [dev.egress.route_past_gateway]"
+# The bridge's .1 is Docker's own router. Without the gateway's rules in the host's DOCKER-USER
+# chain, a host route through it reaches the internet by Docker's NAT, around every filter.
+# The address is read from the JSON: mise would take a Go template's braces for its own.
+bridge_gw=$(docker network inspect "$(bash "$SGW" project 2>/dev/null)_internal-net" 2>/dev/null |
+  sed -n 's/.*"Gateway": *"\([0-9.]*\)".*/\1/p' | head -1)
+if [ -z "$bridge_gw" ]; then
+  fail "could not find the internal bridge's gateway address"
+else
+  # one shell in dev, so the route goes away with it whatever curl does
+  bypass=$(bash "$SGW" dev sh -c '
+    sudo ip route replace 1.1.1.1/32 via "$1" 2>/dev/null || { echo noroute; exit 0; }
+    trap "sudo ip route del 1.1.1.1/32 2>/dev/null" EXIT
+    if curl --noproxy "*" -m 5 -sS -o /dev/null http://1.1.1.1/ 2>/dev/null; then echo reached; else echo blocked; fi' sh "$bridge_gw" 2>/dev/null || echo "dev unavailable")
+  case "$bypass" in
+    blocked) ok "blocked (a host route via $bridge_gw leads nowhere)" ;;
+    reached)
+      fail "dev reached 1.1.1.1 via $bridge_gw, around the gateway. Add pid: host to the sekimore-gw service, then run: mise run gw:recreate"
+      ;;
+    noroute) fail "could not add the test route in dev (sudo ip route)" ;;
+    *) fail "$bypass" ;;
+  esac
+fi
+echo
+echo "== dev: the host itself must not answer dev (host-side INPUT rules, gateway 0.2.38) [dev.host_input]"
+# The same .1 is the host's own address on the bridge. Two INPUT rules keep it silent: replies to
+# connections the host opened are accepted, everything else from the bridge is dropped. Without
+# them dev reaches the host, every port a container on the machine publishes, and the VM's services.
+if [ -n "$bridge_gw" ]; then
+  if bash "$SGW" dev ping -c1 -W2 "$bridge_gw" >/dev/null 2>&1; then
+    fail "dev reached the host at $bridge_gw. Gateway 0.2.38 or later drops this; run: mise run gw:recreate"
+  else
+    ok "no answer from $bridge_gw"
+  fi
+fi
+echo
+[ "$fail" -eq 0 ] && printf '%srelay:verify: all checks passed%s\n' "$c_ok" "$c_off" ||
+  { printf '%srelay:verify: FAILED%s\n' "$c_bad" "$c_off"; exit 1; }
+'''

@@ -1,0 +1,25 @@
+{
+  "name": "sgw-sample | Secure Dev Environment",
+  "dockerComposeFile": ["docker-compose.yml", "docker-compose.relay.yml"],
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+  "customizations": {
+    "vscode": {
+      "extensions": ["Anthropic.claude-code", "esbenp.prettier-vscode"],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.visualBell": "both",
+        "accessibility.signals.terminalBell": {
+          "sound": "on",
+          "announcement": "auto"
+        },
+        "accessibility.signals.sounds.volume": 100,
+        "audioCues.terminalBell": "on",
+        "audioCues.volume": 100
+      }
+    }
+  },
+  "remoteUser": "vscode",
+  "postStartCommand": "sh /workspace/.devcontainer/sgw/post-start.sh",
+  "waitFor": "postStartCommand"
+}
