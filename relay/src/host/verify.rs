@@ -585,6 +585,21 @@ pub fn json_string_field(text: &str, key: &str) -> Option<String> {
     v.get(key)?.as_str().map(str::to_string)
 }
 
+/// A string at `path` (`["proxy", "upstream_proxy"]`) in a JSON object.
+pub fn json_nested_string(text: &str, path: &[&str]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let mut cur = &v;
+    for k in path {
+        cur = cur.get(k)?;
+    }
+    cur.as_str().map(str::to_string)
+}
+
+pub fn json_bool_field(text: &str, key: &str) -> Option<bool> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    v.get(key)?.as_bool()
+}
+
 /// The first allow_domains entry that is a host rather than a wildcard suffix.
 pub fn first_real_domain(text: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(text).ok()?;
@@ -612,8 +627,13 @@ fn upstream_proxy_used(ctx: &mut Ctx) -> anyhow::Result<()> {
     let penv = ctx
         .dev_curl(&["-sS", "-m", "5", "http://sekimore-gw:8080/api/proxy-env"])?
         .stdout;
-    let upstream = json_string_field(&penv, "upstream_proxy")
-        .or_else(|| json_string_field(&cfg, "upstream_proxy"));
+    // /api/config carries the URL under `proxy` (never the credential, #217); /api/proxy-env
+    // says whether it is in force (`configured`: proxy.enabled and an upstream) and the egress
+    // policy. The URL was once looked for at the top level of both, so this item skipped on
+    // every gateway that had a proxy.
+    let upstream = json_nested_string(&cfg, &["proxy", "upstream_proxy"])
+        .or_else(|| json_string_field(&cfg, "upstream_proxy"))
+        .filter(|u| !u.is_empty());
     // a gateway older than /api/proxy-env answers nothing here, and writes no HTTPS_PROXY into
     // dev either: its silence is not a finding
     let direct = json_string_field(&penv, "direct_egress");
@@ -621,6 +641,12 @@ fn upstream_proxy_used(ctx: &mut Ctx) -> anyhow::Result<()> {
         ctx.skip("no upstream proxy configured");
         return Ok(());
     };
+    if json_bool_field(&penv, "configured") == Some(false) {
+        ctx.skip(&format!(
+            "proxy.upstream_proxy is {upstream}, but proxy.enabled is false: dev is not sent through it"
+        ));
+        return Ok(());
+    }
     let Some(direct) = direct else {
         ctx.skip("the gateway does not report its egress policy (needs gateway 0.2.42 or later)");
         return Ok(());
@@ -841,6 +867,30 @@ mod tests {
             Some("api.anthropic.com")
         );
         assert_eq!(first_real_domain(r#"{"domains": [".x.org"]}"#), None);
+    }
+
+    #[test]
+    fn the_upstream_proxy_is_read_where_the_gateway_puts_it() {
+        // /api/config: under `proxy`, as the Web UI answers (#217 keeps the credential out)
+        let cfg = r#"{"versions": {}, "proxy": {"enabled": true, "port": 3128, "upstream_proxy": "https://gw.example:3129", "upstream_auth": "set"}}"#;
+        assert_eq!(
+            json_nested_string(cfg, &["proxy", "upstream_proxy"]).as_deref(),
+            Some("https://gw.example:3129")
+        );
+        assert_eq!(
+            json_string_field(cfg, "upstream_proxy"),
+            None,
+            "not at the top level"
+        );
+        // /api/proxy-env: whether it is in force, and the egress policy
+        let penv = r#"{"configured": true, "port": 3128, "no_proxy": ["api.github.com"], "direct_egress": "allow"}"#;
+        assert_eq!(json_bool_field(penv, "configured"), Some(true));
+        assert_eq!(
+            json_string_field(penv, "direct_egress").as_deref(),
+            Some("allow")
+        );
+        assert_eq!(json_nested_string(penv, &["proxy", "upstream_proxy"]), None);
+        assert_eq!(json_bool_field("not json", "configured"), None);
     }
 
     #[test]
