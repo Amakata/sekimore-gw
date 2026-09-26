@@ -20,7 +20,9 @@ RUN case "$TARGETARCH" in \
     esac
 # Layer that compiles only the dependencies (just Cargo.toml/lock, with a dummy src); src changes do not invalidate it
 COPY relay/Cargo.toml relay/Cargo.lock ./
-RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
+# (every [[bin]] needs a source file for the manifest to load, or this layer builds nothing)
+RUN mkdir -p src/bin && echo "fn main() {}" > src/main.rs \
+    && echo "fn main() {}" > src/bin/sgw.rs && echo "fn main() {}" > src/bin/sgw_agent.rs \
     && cargo zigbuild --release --locked --target "$(cat /tmp/t)" || true \
     && rm -rf src
 # Copy the real sources and do the real build (dependencies are cached above); drop the dummy artifacts so the binary is definitely rebuilt
@@ -30,9 +32,11 @@ COPY relay/src ./src
 COPY relay/share ./share
 COPY relay/locales ./locales
 RUN T="$(cat /tmp/t)" \
-    && rm -f "target/$T/release/deps/sekimore_relay"* "target/$T/release/sekimore-relay" 2>/dev/null || true; \
+    && rm -f "target/$T/release/deps/sekimore_relay"* "target/$T/release/sekimore-relay" \
+             "target/$T/release/deps/sgw_agent"* "target/$T/release/sgw-agent" 2>/dev/null || true; \
     cargo zigbuild --release --locked --target "$T" \
-    && install -m 0755 "target/$T/release/sekimore-relay" /sekimore-relay
+    && install -m 0755 "target/$T/release/sekimore-relay" /sekimore-relay \
+    && install -m 0755 "target/$T/release/sgw-agent" /sgw-agent
 
 # ---- gateway ----
 FROM python:3.13-slim@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0
@@ -152,6 +156,8 @@ RUN uv pip install --system --no-cache --no-deps . \
 
 # sekimore-relay binary (starts only when config.yml has a git-relay handler)
 COPY --from=relay-builder /sekimore-relay /usr/local/bin/sekimore-relay
+# the AI's command for the dev container (#257); the base image copies it out of here
+COPY --from=relay-builder /sgw-agent /usr/local/bin/sgw-agent
 
 # Create data directories (relay state lives under /data/relay on the gateway-data volume)
 RUN mkdir -p /data /data/relay /etc/sekimore /var/spool/squid /var/log/squid /var/log/ulog \

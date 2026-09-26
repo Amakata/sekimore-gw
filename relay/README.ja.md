@@ -110,10 +110,10 @@ GitHub の監査ログではエージェントの操作と人間の操作を区�
 
 - 使い捨て認証鍵 `~/.ssh/sekimore/id_ed25519` を生成します（既にあれば再利用します）。
 - `POST /bootstrap` で公開鍵を登録し、プロジェクトトークンを受け取ります。有効なトークンがある間は再発行を求めません。
-- `/etc/sekimore-agent/env`（0600）に接続情報を書き込みます。`sekimore` ラッパーはこのファイルを読み、トークンの期限が切れると自動で取り直します。
+- `/etc/sekimore-agent/env`（0600）に接続情報を書き込みます。`sgw-agent` はこのファイルを読み（旧名の `sekimore` はこれを exec します）、、トークンの期限が切れると自動で取り直します。
 - 上流ごとに、`~/.ssh/config` の `Host` ブロックと known_hosts のエントリを書き込みます。
 - コミット署名を設定します。どの鍵を使うかは `relay.signing_key`（後述）で決まります。
-- AI エージェント向けの使い方（`sekimore guide`）を、Claude Code の skill と Codex の `AGENTS.md` に配置します。
+- AI エージェント向けの使い方（`sgw-agent guide`）を、Claude Code の skill と Codex の `AGENTS.md` に配置します。
 
 調整用の環境変数:
 
@@ -211,16 +211,16 @@ sekimore issue unlabel --number 5 --labels bug   # issue unassign も同じ形
 sekimore ci rerun --run-id 123 [--all]           # ci cancel --run-id 123 もある。どちらも ci:rerun が要る
 ```
 
-AI エージェント向けの使い方は `sekimore guide` で表示できます。ガイドは CLI に埋め込まれており、正本は `relay/share/agent-guide.en.md` と `agent-guide.ja.md` です。
+AI エージェント向けの使い方は `sgw-agent guide` で表示できます。ガイドは CLI に埋め込まれており、正本は `relay/share/agent-guide.en.md` と `agent-guide.ja.md` です。
 agent-setup が同じ内容を Claude Code の skill（`~/.claude/skills/sekimore-relay/SKILL.md`）と Codex CLI の `~/.codex/AGENTS.md`（マーカー付きブロック）に配置するので、
-これらのツールは自動で読み込みます。他のツールでは、`sekimore guide` の出力を、そのツールの規約で決まっている場所に置いてください。`SEKIMORE_AGENT_INSTRUCTIONS=none` で配置を無効にでき、`claude` または `codex` を指定すると一方だけに配置します。
+これらのツールは自動で読み込みます。他のツールでは、`sgw-agent guide` の出力を、そのツールの規約で決まっている場所に置いてください。`SEKIMORE_AGENT_INSTRUCTIONS=none` で配置を無効にでき、`claude` または `codex` を指定すると一方だけに配置します。
 
-`sekimore` は `sekimore-relay agent` のラッパーです。リポジトリは `--repo Org/Repo` で指定します。上流が複数あるときは `host/Org/Repo` とも書けます。
+`sgw-agent` は `sekimore-relay agent` に env ファイルの読み込みとトークンの更新を組み込んだものです。旧名の `sekimore` もまだ使えます。リポジトリは `--repo Org/Repo` で指定します。上流が複数あるときは `host/Org/Repo` とも書けます。
 `--body` の値が `-` で始まるときは、`--body="…"` の形で書いてください。
 
-既定で拒否されるものは、プロジェクト外のリポジトリ、read-only のリポジトリへの push、`bases` に無い base への `refs/for`、`push` の範囲外への直接 push と `refs/pr/` のブランチ名、タグ、削除、設定で許可していない API 操作です。拒否の理由は stderr に `sekimore: …` として出力されます。
+既定で拒否されるものは、プロジェクト外のリポジトリ、read-only のリポジトリへの push、`bases` に無い base への `refs/for`、`push` の範囲外への直接 push と `refs/pr/` のブランチ名、タグ、削除、設定で許可していない API 操作です。拒否の理由は stderr に `sgw-agent: …` として出力されます。
 
-`sekimore whoami` は、read-write のリポジトリごとに、受け付けるブランチ名（`push`）、許可する base、各 ref の書き方がどのブランチと base になるかを表示します。そのため、エージェントは最初の push の前にこれらの規則を確認できます。
+`sgw-agent whoami` は、read-write のリポジトリごとに、受け付けるブランチ名（`push`）、許可する base、各 ref の書き方がどのブランチと base になるかを表示します。そのため、エージェントは最初の push の前にこれらの規則を確認できます。
 
 ## 設定リファレンス
 
@@ -327,8 +327,8 @@ relay:
 
 `refs/pr/` では base を指定できません。base を安全に埋め込む方法が無いためです。git が区切り文字として受け付ける文字は
 どれもブランチ名の中でも使え、git がブランチ名で禁止している文字（`:` `^` `~`）は refspec でも拒否されます。
-別の base に対して pull request を作るには、pull request を作らずに push してから `sekimore pr create --head <branch> --base <base>` を実行するか、
-後から `sekimore pr update --base <base>` で base を変更します。
+別の base に対して pull request を作るには、pull request を作らずに push してから `sgw-agent pr create --head <branch> --base <base>` を実行するか、
+後から `sgw-agent pr update --base <base>` で base を変更します。
 
 **`refs/pr/` を使うには、`bases` が未設定である必要があります。** `refs/pr/` の push は既定ブランチに対して pull request を作りますが、
 関所が既定ブランチを知るのは API からで、それは push の後です。`bases` を列挙しているリポジトリでは、ブランチが上流に届いた後でしか
@@ -404,7 +404,7 @@ sekimore release list --limit 10
   その後ろに追記されます。
 - `--title` の既定値はタグ名なので、Release に必ずタイトルが付きます。`--prerelease` を付けると prerelease になります。
 - `--draft` は未公開の状態で Release を作り、公開を人間に委ねます。既定では公開済みの状態で作られます。
-- `sekimore release edit --tag v0.2.6 --draft false` はその draft を公開します。これには `release:publish` が必要です。
+- `sgw-agent release edit --tag v0.2.6 --draft false` はその draft を公開します。これには `release:publish` が必要です。
   draft のまま編集する（`--title`、`--notes`、`--prerelease`）だけなら `release:create` で足ります。
 
 ### 持ち出し対策: 443 の送信上限と `https-relay`
@@ -450,9 +450,9 @@ SEKIMORE_LANG=ja sekimore-relay check    # 日本語
 sekimore guide --lang ja                 # ガイドだけを日本語で表示
 ```
 
-対象は、`--help`、運用者向けの出力、`sekimore guide` です。
+対象は、`--help`、運用者向けの出力、`sgw-agent guide` です。
 ガイドの言語は `--lang en|ja` で選べ、ガイドの正本は `relay/share/agent-guide.en.md` と `relay/share/agent-guide.ja.md` です。
-拒否理由（`sekimore: …`）と監査ログ `audit.jsonl` は、意図的に英語のままにしています。ツールやエージェントが文字列で照合できるようにするためです。
+拒否理由（`sgw-agent: …`）と監査ログ `audit.jsonl` は、意図的に英語のままにしています。ツールやエージェントが文字列で照合できるようにするためです。
 
 ## 運用（運用者）
 
@@ -489,7 +489,7 @@ Dev Containers 構成では、`mise run gw:tokens` / `gw:revoke-project` / `gw:a
 | `tag is not allowed for this repository` | タグの push は既定で拒否されます。 | そのリポジトリか上流の `tags` に glob を追加します。 |
 | `Permission denied (publickey)`（関所から） | エージェントの鍵が登録されていません。 | `sudo sekimore-agent-setup.sh` を実行するか、運用者が `add-key` を実行します。`bootstrap.disabled` の有無も確認します。 |
 | `! [remote rejected] … (sekimore: …)` | ポリシーが push を拒否しました。 | メッセージの案内に従います。 |
-| `denied: token expired at …` | プロジェクトトークンの期限が切れています。 | `sekimore` ラッパーが自動で取り直します。古い環境では `sudo sekimore-agent-setup.sh` を実行します。 |
+| `denied: token expired at …` | プロジェクトトークンの期限が切れています。 | `sgw-agent` が自動で取り直します。古い環境では `sudo sekimore-agent-setup.sh` を実行します。 |
 | `no upstream token … run sekimore-relay login` | device flow を実行していないか、logout した後です。 | `sekimore-relay login` を実行します。 |
 | `git ls-remote` が出力なしで止まる | DNS は関所を向いていますが、INPUT チェインでパケットが破棄されています。 | `iptables-legacy -S INPUT` に `--dport 22` があるかを確認します。無ければ関所が起動していません。 |
 | `https://github.com/…` が失敗する | `https` が `reject` に設定されているか、上流に届きません。 | 既定の `passthrough` に戻します。監査ログの `https_failed` を確認します。 |

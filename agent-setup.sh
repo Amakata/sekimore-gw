@@ -73,10 +73,10 @@ sekimore_signing_key_comment() {
   printf '%s' "$c"
 }
 
-# Put the agent guide (sekimore guide) where each tool reads it automatically.
+# Put the agent guide (sgw-agent guide) where each tool reads it automatically.
 #   Claude Code: <home>/.claude/skills/sekimore-relay/SKILL.md (loaded when the work is related)
 #   Codex CLI:   a marked block in <home>/.codex/AGENTS.md (always read, so it carries the essentials and points at the guide)
-# For any other tool, put the output of `sekimore guide` wherever that tool expects it.
+# For any other tool, put the output of `sgw-agent guide` wherever that tool expects it.
 # SEKIMORE_AGENT_INSTRUCTIONS=claude,codex (default), or none to disable. Idempotent: a re-run replaces the block.
 sekimore_agent_instructions() {
   local home=$1 own=$2 signing_mode=${3:-}
@@ -151,9 +151,9 @@ SIGNING_EOF
         echo "<!-- >>> sekimore-relay >>> -->"
         echo "## sekimore-relay (git and GitHub go through the relay)"
         echo
-        echo "In this environment git push, pull requests, CI checks and the GitHub API all go through sekimore-relay. Run \`sekimore guide\` before you start working."
-        echo "In short: push to \`HEAD:refs/heads/sekimore/<topic>\` (then \`sekimore pr create\`) or to \`HEAD:refs/for/<base>\`. Direct pushes to main, tags, deletions and HTTPS git are refused."
-        echo "Check your permissions and repositories with \`sekimore whoami\`. Denials are printed on stderr as \`sekimore: …\`. The operator's credentials are not in this environment; do not try to work around the relay."
+        echo "In this environment git push, pull requests, CI checks and the GitHub API all go through sekimore-relay. Run \`sgw-agent guide\` before you start working."
+        echo "In short: push to \`HEAD:refs/heads/sekimore/<topic>\` (then \`sgw-agent pr create\`) or to \`HEAD:refs/for/<base>\`. Direct pushes to main, tags, deletions and HTTPS git are refused."
+        echo "Check your permissions and repositories with \`sgw-agent whoami\`. Denials are printed on stderr as \`sgw-agent: …\`. The operator's credentials are not in this environment; do not try to work around the relay."
         if [ -n "$signing_note" ]; then
           echo "Every commit you push has to be signed; plain \`git commit\` signs here. If a push is refused for a missing signature, amend with \`git commit -S --amend --no-edit\` — never turn \`commit.gpgsign\` off."
         fi

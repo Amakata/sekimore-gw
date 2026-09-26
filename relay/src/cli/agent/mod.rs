@@ -12,6 +12,11 @@ pub mod client;
 pub mod cmd;
 pub mod dispatch;
 pub mod print;
+pub mod standalone;
+
+/// What the agent's own lines on stderr start with. `sgw-agent` from 0.2.50 (#257); the
+/// `sekimore` alias prints the same, so an agent that reads either name learns the new one.
+pub const NAME: &str = "sgw-agent";
 
 pub use client::{AgentClient, DEFAULT_ENDPOINT};
 pub use cmd::AgentCmd;
