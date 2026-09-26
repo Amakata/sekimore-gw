@@ -11,11 +11,21 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
-## Unreleased
+## 0.2.49（2026-09-26）
 
 ### Fix
 
 - `release edit` が draft の Release を見つけられるようにした。タグ引きは公開済みの Release しか返さないので、404 のときは Release 一覧に切り替える。workflow が作った draft は一覧には出る (#249)
+
+### Enhancement
+
+- sgw のコマンドを store / github / token / gw / dev のグループに分け、`--help` はグループごとに並べる。平らな名前は短縮形として残る。relay が出すヒントも mise のタスクではなく `sgw unlock` などを指す (#256)
+- sgw down が dev コンテナも含めてスタック全体を `--remove-orphans` で落とす。何も動いていないときは `<folder>_devcontainer` と名指しする。「network … already exists」からの出口 (#250)
+- sgw update が、gateway サービスの docker-compose.yml に `pid: host` が無いことを知らせる (#255)
+- sgw open が出すヒントが mise のタスクではなく sgw のコマンドを指す (#253)
+- README を読む人のために書き直した。7 手順で始める、設定とコマンド、Optional の節。base/README はイメージが抱えているものを書く (#248)
+- gateway、relay、base、sgw で変更履歴を 1 つにした (#254)
+- CI: 各 workflow は自分が読むファイルのときだけ走る。シェルのテストは base-tests.yml が持つ (#252)
 
 ## 0.2.48（2026-09-26）
 

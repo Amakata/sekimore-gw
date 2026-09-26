@@ -12,11 +12,21 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
-## Unreleased
+## 0.2.49 (2026-09-26)
 
 ### Fix
 
 - `release edit` finds a draft Release again: the by-tag lookup answers with published releases only, so a 404 now falls back to the release listing, where a workflow's draft is visible (#249)
+
+### Enhancement
+
+- sgw's commands come in groups — store, github, token, gw, dev — and `--help` lists them by group; the flat names stay as shortcuts, and the relay's own hints name `sgw unlock` and its kin, not the mise tasks (#256)
+- sgw down removes the whole stack, the dev container included, with `--remove-orphans`, and names it `<folder>_devcontainer` when nothing is running — the way out of "network … already exists" (#250)
+- sgw update says when docker-compose.yml lacks `pid: host` on the gateway service (#255)
+- sgw open's hints name sgw's commands, not the mise tasks (#253)
+- README written for the reader: get started in seven steps, the settings and the commands, an Optional section; base/README is what the image holds (#248)
+- one changelog for the gateway, the relay, the base and sgw (#254)
+- CI: each workflow runs for the files it reads, and base-tests.yml holds the shell tests (#252)
 
 ## 0.2.48 (2026-09-26)
 
