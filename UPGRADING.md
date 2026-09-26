@@ -762,10 +762,10 @@ curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/insta
 ```
 
 ```bash
-sgw check       # the gateway's state
-sgw verify      # the acceptance check
-sgw unlock      # unlock the store
-sgw recreate    # pull and re-create the gateway
+sgw check       # the relay's configuration and state
+sgw verify      # the project's acceptance check
+sgw unlock      # unlock the secret store
+sgw recreate    # pull the image and re-create the gateway
 sgw --help      # every subcommand
 ```
 
