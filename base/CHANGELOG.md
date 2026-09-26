@@ -19,6 +19,14 @@ Starts at 0.2.18. Releases before it are not written up here; the pull requests
 and the tag on each are the record. The gateway each of them took is at the
 bottom.
 
+## 0.2.46 (2026-09-26)
+
+### Enhancement
+
+- moved into the sekimore-gw repository as `base/`; the image is built from there and released from the gateway's tag, under its version number, so the base goes 0.2.43 → 0.2.46 (sekimore-gw#236)
+- `upgrade.sh` reads the distributed files from `base/share/sgw/` of the sekimore-gw tag and UPGRADING from its root; the sample's `gateway.mise.toml` is `../share`'s of the same commit (sekimore-gw#236)
+- licensed Apache-2.0 with the rest of the repository; it was MIT (sekimore-gw#236)
+
 ## 0.2.43 (2026-09-25)
 
 ### Enhancement

@@ -12,6 +12,14 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.46（2026-09-26）
+
+### Enhancement
+
+- リポジトリを 1 つに: sgw-devcontainer-base は `base/` に入り、そのイメージは同じタグから、この版番号で作って公開する。`UPGRADING.md` と `RELEASING.md` は最上位に置く (#236)
+- `tests/unit/test_base_versions.py` が `base/` 配下に書かれた版をすべて `pyproject.toml` の版に揃える。base 側の版を対にする 4 本のテストと「take」の手順は無くなった (#236)
+- `base/` も他と同じ Apache-2.0 にした。独立リポジトリのときは MIT だった (#236)
+
 ## 0.2.45（2026-09-25）
 
 ### Enhancement

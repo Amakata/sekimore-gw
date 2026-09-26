@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.46 (2026-09-26)
+
+### Enhancement
+
+- no change to the relay; 0.2.45 and 0.2.46 are the same binary. The release brings the dev-container base image into this repository (#236)
+
 ## 0.2.45 (2026-09-25)
 
 ### Enhancement

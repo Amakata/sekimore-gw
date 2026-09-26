@@ -13,6 +13,14 @@ the pull request.
 Starts at 0.2.18. Everything before it is in the relay's changelog, which
 carried the whole project until the two were separated.
 
+## 0.2.46 (2026-09-26)
+
+### Enhancement
+
+- one repository: sgw-devcontainer-base lives in `base/` and its image is built and published from the same tag, under this version number; `UPGRADING.md` and `RELEASING.md` sit at the top level (#236)
+- `tests/unit/test_base_versions.py` holds every version written under `base/` to `pyproject.toml`'s; the base's four version-pairing tests and the "take" step are gone (#236)
+- `base/` is Apache-2.0 like the rest of the repository; it was MIT on its own (#236)
+
 ## 0.2.45 (2026-09-25)
 
 ### Enhancement

@@ -14,6 +14,14 @@ DevContainer のベースイメージ — Dockerfile と焼き込む道具、同
 0.2.18 から始める。それ以前のリリースはここに書かない。各 PR とタグが記録。
 取り込んだ gateway の版だけは末尾にある。
 
+## 0.2.46（2026-09-26）
+
+### Enhancement
+
+- sekimore-gw リポジトリの `base/` に移った。イメージはそこから作り、ゲートウェイのタグで、その版番号で出す。base は 0.2.43 → 0.2.46 に飛ぶ (sekimore-gw#236)
+- `upgrade.sh` は配布ファイルを sekimore-gw のタグの `base/share/sgw/` から、UPGRADING をその最上位から取る。サンプルの `gateway.mise.toml` は同じコミットの `../share` のもの (sekimore-gw#236)
+- 他と同じ Apache-2.0 にした。以前は MIT だった (sekimore-gw#236)
+
 ## 0.2.43（2026-09-25）
 
 ### Enhancement
