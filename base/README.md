@@ -172,4 +172,4 @@ sgw-devcontainer-base      ── your .devcontainer/Dockerfile FROMs it
   - the gateway's [CHANGELOG](https://github.com/Amakata/sekimore-gw/blob/main/CHANGELOG.md)
   - the relay's [CHANGELOG](https://github.com/Amakata/sekimore-gw/blob/main/relay/CHANGELOG.md)
 - [RELEASING.md](RELEASING.md) — the release order, local builds and the tags pushed to GHCR, for maintainers
-- License: MIT ([LICENSE](LICENSE))
+- License: Apache-2.0 ([LICENSE](../LICENSE)), the same as the gateway

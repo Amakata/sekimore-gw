@@ -172,4 +172,4 @@ sgw-devcontainer-base  ── あなたの .devcontainer/Dockerfile が FROM す
   - [ゲートウェイの CHANGELOG](https://github.com/Amakata/sekimore-gw/blob/main/CHANGELOG.ja.md)
   - [関所の CHANGELOG](https://github.com/Amakata/sekimore-gw/blob/main/relay/CHANGELOG.ja.md)
 - [RELEASING.md](RELEASING.md) — リリースの順序、ローカルビルド、GHCR に push するタグ (保守者向け、英語)
-- ライセンス: MIT ([LICENSE](LICENSE))
+- ライセンス: Apache-2.0（[LICENSE](../LICENSE)。ゲートウェイと同じ）
