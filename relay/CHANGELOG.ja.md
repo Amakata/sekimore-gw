@@ -5,6 +5,12 @@
 **Security** / **Fix** / **Enhancement** に分け、重いものから並べる。
 各行は何が変わったかと、変えた PR だけを書く。理由は PR にある。
 
+## Unreleased
+
+### Fix
+
+- `release edit` が draft の Release を見つけられるようにした。タグ引きは公開済みの Release しか返さないので、404 のときは Release 一覧に切り替える。workflow が作った draft は一覧には出る (#249)
+
 ## 0.2.48（2026-09-26）
 
 ### Enhancement

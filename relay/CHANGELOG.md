@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## Unreleased
+
+### Fix
+
+- `release edit` finds a draft Release again: the by-tag lookup answers with published releases only, so a 404 now falls back to the release listing, where a workflow's draft is visible (#249)
+
 ## 0.2.48 (2026-09-26)
 
 ### Enhancement
