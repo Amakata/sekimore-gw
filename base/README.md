@@ -11,66 +11,65 @@ setup exists. It was a repository of its own until 0.2.45 (`Amakata/sgw-devconta
 
 ## Start a project
 
-A project starts as a copy of [`examples/sgw-sample/`](examples/sgw-sample/). It contains:
+`sgw`, the operator's tool, writes the project and runs the gateway from the host. The steps run
+on the host, in order. [`examples/sgw-sample/README.md`](examples/sgw-sample/README.md) describes
+the template `sgw init` writes.
 
-- the gateway and dev containers
-- the host-side mise tasks
-
-Run the steps on the host, in order.
-[`examples/sgw-sample/README.md`](examples/sgw-sample/README.md) describes each one in detail.
-
-1. Clone the repository:
+1. Install `sgw`:
    ```
-   git clone https://github.com/Amakata/sekimore-gw.git
+   curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh
    ```
-2. Copy the following into the project:
-   - `base/examples/sgw-sample/.devcontainer/`
-   - `base/examples/sgw-sample/mise.toml`
-3. Copy `.devcontainer/.env.sample` to `.devcontainer/.env`:
+2. Write the template:
    ```
-   cp .devcontainer/.env.sample .devcontainer/.env
+   sgw init --devcontainer my-project
+   cd my-project
    ```
-   Fill in the project name, the user name and the email address.
-4. Edit `.devcontainer/config/config.yml`:
+   It writes `.devcontainer/` (the gateway and dev containers, `config.yml`, the host-side files)
+   and `mise.toml`, and `.devcontainer/.env` from `.env.sample`.
+   Fill in `.devcontainer/.env`: the project name, the user name and the email address.
+3. Edit `.devcontainer/config/config.yml`:
    - Set `relay.project.repos` and `permissions`.
    - The file lists every key the gateway reads.
    - The consequential permissions are commented out.
-5. Quit VS Code completely, then run the following and select "Reopen in Container":
+4. Quit VS Code completely, then run the following and select "Reopen in Container":
    ```
-   mise run vscode
+   sgw open
    ```
-   The task opens VS Code without `SSH_AUTH_SOCK`.
+   It opens VS Code without `SSH_AUTH_SOCK`.
    The operator's ssh-agent does not reach the dev container.
-6. Unlock the secret store:
+5. Unlock the secret store:
    ```
-   mise run gw:unlock
+   sgw unlock
    ```
    - The first run sets the passphrase.
    - The store must be unlocked again every time the gateway is recreated.
    - To avoid that, run the following once:
      ```
-     mise run gw:keychain-set
+     sgw keychain-set
      ```
      It stores the passphrase on the host: in the macOS Keychain, the Secret Service or a root-owned file.
-     `gw:recreate` then unlocks the store automatically.
-7. Log in to GitHub (first time only):
+     `sgw recreate` then unlocks the store automatically.
+6. Log in to GitHub (first time only):
    ```
-   mise run gw:login
+   sgw login
    ```
    - It uses the device flow.
-   - It stores the upstream token and `known_hosts`.
+   - It stores the upstream token and `known_hosts`, asking before it saves a host key.
    - It requires an unlocked store.
-8. Print the signing key:
+7. Print the signing key:
    ```
-   mise run dev:signing-key
+   sgw signing-key
    ```
    Register the public key it prints on GitHub as a Signing Key.
    The agent's commits are signed with this key.
-9. Check the whole setup:
+8. Check the whole setup:
    ```
-   mise run relay:verify
+   sgw verify
    ```
    The setup is complete when it passes.
+
+The mise tasks in `.devcontainer/sgw/` do the same for a project that uses them
+(`mise run gw:unlock`, `mise run relay:verify` …); `mise tasks` lists them.
 
 ## Project Dockerfile
 
@@ -114,55 +113,53 @@ The sample's [Dockerfile](examples/sgw-sample/.devcontainer/Dockerfile) shows ho
 
 ## Ownership and keeping up to date
 
-Everything copied from the sample belongs to the project, except `.devcontainer/sgw/`.
+Everything `sgw init` wrote belongs to the project, except `.devcontainer/sgw/`.
 
-- `.devcontainer/sgw/` contains the host scripts and tasks.
-- `mise run upgrade:apply` replaces it. Do not edit it by hand.
+- `.devcontainer/sgw/` holds the host scripts and mise tasks of the way before `sgw`.
+  `sgw update --apply` (or `mise run upgrade:apply`) replaces it. Do not edit it by hand.
 - To change a distributed task, define a task with the same name in the project's `mise.toml`.
   That definition takes precedence.
-- `.devcontainer/sgw/gateway.mise.toml` holds the `gw:*` tasks.
-  The gateway image ships it in English and Japanese.
-  `mise run upgrade:sync` fetches the one for the current language.
-  The language comes from `SEKIMORE_LANG`, then `LC_ALL`, `LC_MESSAGES`, `LANG`.
-- Set `SGW_NO_AUTO_UNLOCK=1` to keep `gw:recreate` from unlocking the store with the stored passphrase.
+- The task files come in English and Japanese; `sgw update --sync` takes the ones for the
+  current language. The language comes from `SEKIMORE_LANG`, then `LC_ALL`, `LC_MESSAGES`, `LANG`.
+- `sgw recreate --no-unlock` (or `SGW_NO_AUTO_UNLOCK=1`) keeps the recreate from unlocking the store with the stored passphrase.
 - With `proxy.upstream_proxy` in `config.yml`, the gateway writes `HTTP_PROXY`, `HTTPS_PROXY` and
   `NO_PROXY` into dev and `10-sekimore-proxy.zsh` hands them to every shell.
-  A project that sets its own must remove them or keep them in step; `mise run relay:verify`
+  A project that sets its own must remove them or keep them in step; `sgw verify`
   says whether dev's ordinary traffic really takes the upstream (UPGRADING: base 0.2.40).
 
 ```bash
-mise run upgrade          # what is newer, which files it would change, what UPGRADING asks. Changes nothing
-mise run upgrade:apply    # move to it
+sgw update            # what is newer, which files it would change, what UPGRADING asks. Changes nothing
+sgw update --apply    # move to it
 ```
 
-`upgrade:apply` does the following:
+`sgw update --apply` does the following:
 
-1. Raises the gateway's `image:` tag and the `FROM` tag to the newest versions on GHCR.
-2. Replaces `.devcontainer/sgw/`.
+1. Raises the gateway's `image:` tag and the `FROM` tag to `sgw`'s own version. When GHCR has a
+   newer release than `sgw` itself, it says so and points at `install.sh` instead.
+2. Replaces `.devcontainer/sgw/` with the files of that version, which the binary carries.
 3. Recreates the gateway after asking.
 4. Unlocks it when the passphrase is stored.
 5. Lists what only the operator can do:
    - Rebuild Container when the base changed
-   - the [UPGRADING.md](../UPGRADING.md) sections the upgrade crosses
+   - the [UPGRADING.md](../UPGRADING.md) sections the upgrade crosses (`sgw update --notes`)
    - a commit
 
-It stops without writing if a file in `.devcontainer/sgw/` was edited by hand.
+It stops without writing if a file in `.devcontainer/sgw/` was edited by hand (`--force` overwrites).
 
-The three parts depend on one another.
-That is why a single command updates all of them:
+The parts depend on one another, and one version number covers them:
 
 ```
 sekimore-gw (the gateway)  ── this image copies the relay binaries out of it
         ↓
 sgw-devcontainer-base      ── your .devcontainer/Dockerfile FROMs it
         ↓
-.devcontainer/sgw/         ── the host scripts and tasks for both
+sgw / .devcontainer/sgw/   ── the operator's tool and the host-side files, of the same version
 ```
 
 - The `sekimore-relay` CLI and `sekimore-agent-setup.sh` in this image come from gateway `ghcr.io/amakata/sekimore-gw:0.2.47` (`ARG SEKIMORE_GW_IMAGE`).
-  Base and gateway are separate 0.2.x series.
+  The base carries the gateway's version number; the two are released from one tag.
 - The gateway a project runs is the `image:` tag in its compose file.
-  `mise run upgrade:apply` raises both.
+  `sgw update --apply` raises both.
 
 ## Links
 
@@ -172,5 +169,5 @@ sgw-devcontainer-base      ── your .devcontainer/Dockerfile FROMs it
 - [CHANGELOG.md](CHANGELOG.md) — this image, with the gateway version each release used. See also:
   - the gateway's [CHANGELOG](https://github.com/Amakata/sekimore-gw/blob/main/CHANGELOG.md)
   - the relay's [CHANGELOG](https://github.com/Amakata/sekimore-gw/blob/main/relay/CHANGELOG.md)
-- [RELEASING.md](RELEASING.md) — the release order, local builds and the tags pushed to GHCR, for maintainers
+- [RELEASING.md](../RELEASING.md) — how a release is cut, local builds and the tags pushed to GHCR, for maintainers
 - License: Apache-2.0 ([LICENSE](../LICENSE)), the same as the gateway
