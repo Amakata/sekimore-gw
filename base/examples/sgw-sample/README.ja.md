@@ -10,7 +10,7 @@
 ```
 sgw-sample/
 ├── README.md
-├── mise.toml                       # あなたのもの: .devcontainer/sgw/ を include し、自分のタスクを書く
+├── sgw.toml                        # sgw の記録: 各ファイルを書いたときの sha（編集しない）
 └── .devcontainer/
     ├── devcontainer.json
     ├── docker-compose.yml          # dev と sekimore-gw の 2 サービス
@@ -24,14 +24,6 @@ sgw-sample/
     │       └── squid.conf.template
     ├── scripts/
     │   └── post-create.sh          # zsh rc.d を展開し、agent 転送を検出する（ERROR で止まる）
-    ├── sgw/                        # 配布物: sgw update --apply が丸ごと入れ替える。編集しない
-    │   ├── tasks.mise.toml         # ホスト側の mise タスク（vscode / web / relay:verify / upgrade …）
-    │   ├── gateway.mise.toml       # ゲートウェイの mise タスク（gw:*）
-    │   ├── sgw.sh                  # compose のラベルで gateway / dev コンテナを見つけ docker exec する
-    │   ├── vscode.sh               # sgw open が実行するもの
-    │   ├── upgrade.sh              # mise run upgrade
-    │   ├── post-start.sh           # base 0.2.51 より前のやり方。いまの postStartCommand は sgw-post-start
-    │   └── MANIFEST                # sgw update / upgrade が最後に書いたもの。手の編集を見分ける
     └── zsh-config/
         └── rc.d/                   # プロジェクト自身の zsh 設定
 ```
@@ -43,12 +35,11 @@ sgw-sample/
 - `config.yml` に上流を足したり変えたりしたら: `sgw restart`、そのあと `sgw refresh`
 - 署名鍵の GitHub での題名は `sekimore-agent-signing: <project> / <name> <email>`。`.env` の `SEKIMORE_SIGNING_KEY_COMMENT` で変えられる
 - 案件が終わったら: `sgw revoke-project`
-- `.devcontainer/sgw/` の mise タスクは `sgw` のコマンドと同じことをする（`mise tasks` に一覧）
 
 ## 最新への追従
 
-`.devcontainer/sgw/` は配布物で、`sgw update --apply` が入れ替える。編集しない。タスクを変えたければ、
-`mise.toml` に同じ名前のタスクを書く。
+`sgw init` が書いたものはすべてあなたのもので、編集してよい。`sgw.toml` は sgw が書いたものの記録
+（各ファイルの sha）で、`sgw update` はこれで「あなたが編集したファイル」と「新しい版が変えるファイル」を見分ける。
 
 ```bash
 sgw update            # 何が新しいか、どのファイルが変わるか、UPGRADING が何を求めるか。何も変更しない
@@ -58,9 +49,11 @@ sgw update --apply    # 更新する
 `sgw update --apply` がすること:
 
 1. ゲートウェイの `image:` タグと `FROM` タグを `sgw` 自身の版に上げる
-2. `.devcontainer/sgw/` を入れ替える
+2. sgw が書いたままの雛形ファイルをこの版が変えるなら上書きする。あなたが編集したものは触らない。
+   両方なら、この版のファイルを `<file>.sgw-new` として隣に書く（取り込んだら消す。`--force` で上書き）
 3. 確認のうえ、ゲートウェイを作り直す
 4. パスフレーズが保存されていれば解錠する
 5. 運用者にしかできない作業を表示する: Rebuild Container、またぐ [UPGRADING.ja.md](../../../UPGRADING.ja.md) の節（`sgw update --notes`）、コミット
 
-`.devcontainer/sgw/` のファイルが手で書き換えられていれば止まる（`--force` で上書き）。
+0.2.52 より前のプロジェクトには `.devcontainer/sgw/`（mise の層）と、それを include する `mise.toml` がある。
+`sgw update --apply` がそのディレクトリと行を消し、自分のタスクは残す。

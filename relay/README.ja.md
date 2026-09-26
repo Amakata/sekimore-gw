@@ -85,19 +85,19 @@ relay:
 `domain_handlers` と `relay` の変更は、コンテナを再作成したときにだけ反映されます。hot reload では警告を出し、変更前の値を維持します。
 
 ```bash
-docker compose up -d --force-recreate sekimore-gw      # Dev Containers 構成なら: mise run gw:recreate
+docker compose up -d --force-recreate sekimore-gw      # Dev Containers 構成なら: sgw recreate
 docker compose exec sekimore-gw sekimore-relay check   # ポリシーと状態（agent / known_hosts / token / 鍵）
 ```
 
 ### 4. 上流に認証する（初回のみ）
 
 ```bash
-docker compose exec sekimore-gw sekimore-relay login   # Dev Containers 構成なら: mise run gw:login
+docker compose exec sekimore-gw sekimore-relay login   # Dev Containers 構成なら: sgw login
 #   Open: https://github.com/login/device
 #   Code: XXXX-XXXX          ← ブラウザでコードを承認する
 ```
 
-- トークンは秘密ストアに封じて保存されます（0.2.18）。そのため、ログインでトークンを保存するには、先に `mise run gw:unlock` でゲートウェイを解錠しておく必要があります。以前の版が残した `/data/relay/upstream_token` があれば、関所は最初にトークンを読むときにトークンをストアへ移し、ファイルを削除します。ログインでは、上流の SSH ホスト鍵も known_hosts に追加されます。
+- トークンは秘密ストアに封じて保存されます（0.2.18）。そのため、ログインでトークンを保存するには、先に `sgw unlock` でゲートウェイを解錠しておく必要があります。以前の版が残した `/data/relay/upstream_token` があれば、関所は最初にトークンを読むときにトークンをストアへ移し、ファイルを削除します。ログインでは、上流の SSH ホスト鍵も known_hosts に追加されます。
 - 上流が複数あるときは、`--upstream <domain>` を付けて上流ごとに実行します。`logout` と `whoami` も同様です。
 - `sekimore-relay whoami` で、関所がどの GitHub identity として動作するかを確認できます。
 
@@ -180,7 +180,7 @@ pack には、上流が持っていないオブジェクトだけが入ります
 
 そこで関所は、その境界で `GET /repos/{repo}/git/commits/{sha}` を送ります。pack に blob delta がいくつあっても、呼び出しは
 1 push あたり 1〜2 回で、その範囲はその push が既に通過した認可の内側に収まります。関所は、答えを得られなければ push を拒否します。
-そのため **`required` では、ゲートウェイの解錠（`mise run gw:unlock`）と login が必要です**。どちらかが欠けているときは、拒否メッセージがその旨を示します。
+そのため **`required` では、ゲートウェイの解錠（`sgw unlock`）と login が必要です**。どちらかが欠けているときは、拒否メッセージがその旨を示します。
 
 `relay.signing_key` を設定しなければ、従来の動作になります。`sgw-agent setup` が dev コンテナ内で `~/.ssh/sekimore/signing_ed25519` を生成し、
 人がその公開鍵を GitHub に「Signing Key」として手で登録する必要があります。公開鍵はログに表示されます。
@@ -249,7 +249,7 @@ AI エージェント向けの使い方は `sgw-agent guide` で表示できま�
 | `https` | `passthrough` | 443 番ポートの扱い。`reject` では接続を即座に切断します。 |
 | `https_max_upload_bytes` | `1048576` | 443 passthrough の送信上限の既定値（バイト）。`-1` で無制限です。上限を超えた接続は切断され、監査ログに `https_upload_capped` として記録されます。 |
 | `state_dir` | `/data/relay` | 状態ファイルの置き場所 |
-| `store.unlock` | `prompt` | 秘密ストアの解錠方法。`prompt` では、再起動のたびに人が `mise run gw:unlock` を実行し、パスフレーズはどこにも保存されません。`file`（`path:`）と `env`（`var:`）は、代わりにファイルまたは環境変数からパスフレーズを読みます。これらは、ゲートウェイを 1 時間に何度も再作成する**sekimore-gw 自体の開発用**です。パスフレーズを保存することになるので、関所は起動時にその旨をログに出します。`env` を `.devcontainer/.env` で設定してはいけません。このファイルはエージェントが書き込めるためです。 |
+| `store.unlock` | `prompt` | 秘密ストアの解錠方法。`prompt` では、再起動のたびに人が `sgw unlock` を実行し、パスフレーズはどこにも保存されません。`file`（`path:`）と `env`（`var:`）は、代わりにファイルまたは環境変数からパスフレーズを読みます。これらは、ゲートウェイを 1 時間に何度も再作成する**sekimore-gw 自体の開発用**です。パスフレーズを保存することになるので、関所は起動時にその旨をログに出します。`env` を `.devcontainer/.env` で設定してはいけません。このファイルはエージェントが書き込めるためです。 |
 | `token_ttl` | `12h` | プロジェクトトークンの寿命 |
 | `bootstrap` | `auto` | `POST /bootstrap` を許可するか。`manual` では運用者が鍵を登録します。 |
 | `ssh_options` | `[]` | 全上流に共通の `-o` オプション |
@@ -457,8 +457,8 @@ sekimore guide --lang ja                 # ガイドだけを日本語で表示
 ## 運用（運用者）
 
 Web UI の Relay タブで、設定、権限、トークン、アクセス履歴、ブロック履歴を確認できます。このタブは閲覧専用です。
-dev コンテナ構成では `mise run web` で Web UI を開けます。このタスクは、公開しているポートを動いているゲートウェイのコンテナから読み取ります。mise を使わず `docker compose` だけで動かしている場合は、compose ファイルが Web UI 用に公開しているポートを開いてください（ゲートウェイはコンテナ内の 8080 で待ち受け、サンプルの `docker-compose.yml` は `8080:8080` を公開しています）。
-Dev Containers 構成では、`mise run gw:tokens` / `gw:revoke-project` / `gw:audit` / `gw -- <args>` も使えます。
+dev コンテナ構成では `sgw web` で Web UI を開けます。このタスクは、公開しているポートを動いているゲートウェイのコンテナから読み取ります。mise を使わず `docker compose` だけで動かしている場合は、compose ファイルが Web UI 用に公開しているポートを開いてください（ゲートウェイはコンテナ内の 8080 で待ち受け、サンプルの `docker-compose.yml` は `8080:8080` を公開しています）。
+Dev Containers 構成では、`sgw tokens` / `sgw revoke-project` / `sgw audit` / `sgw relay <args>` も使えます。
 
 | コマンド | 用途 |
 |---|---|
@@ -494,7 +494,7 @@ Dev Containers 構成では、`mise run gw:tokens` / `gw:revoke-project` / `gw:a
 | `git ls-remote` が出力なしで止まる | DNS は関所を向いていますが、INPUT チェインでパケットが破棄されています。 | `iptables-legacy -S INPUT` に `--dport 22` があるかを確認します。無ければ関所が起動していません。 |
 | `https://github.com/…` が失敗する | `https` が `reject` に設定されているか、上流に届きません。 | 既定の `passthrough` に戻します。監査ログの `https_failed` を確認します。 |
 | HTTPS の git で `could not read Username` | 運用者の資格情報が関所を迂回しないよう、HTTPS 認証を意図的に塞いでいます。 | SSH（`git@github.com:`）を使います。 |
-| post-create の「ssh-agent が転送されています」という表示が消えない | macOS の `code` は launchd の環境を引き継ぎます。 | VS Code を完全に終了してから `mise run vscode` を実行します。 |
+| post-create の「ssh-agent が転送されています」という表示が消えない | macOS の `code` は launchd の環境を引き継ぎます。 | VS Code を完全に終了してから `sgw open` を実行します。 |
 
 ### dev から上流プロキシの経路を切り分ける
 

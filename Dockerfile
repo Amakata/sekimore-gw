@@ -149,8 +149,6 @@ COPY agent-setup.sh /usr/local/share/sekimore/agent-setup.sh
 # it) and includes it, so the tasks and the relay that serves them always come from one release.
 # Two languages, as with agent-guide.{en,ja}.md: the descriptions are what `mise tasks` prints on
 # the operator's terminal. The task set is the same in both, and a test holds them to that.
-COPY share/gateway.mise.en.toml /usr/local/share/sekimore/gateway.mise.en.toml
-COPY share/gateway.mise.ja.toml /usr/local/share/sekimore/gateway.mise.ja.toml
 RUN uv pip install --system --no-cache --no-deps . \
     && find /usr/local/lib/python3.13/site-packages /app/src -name '__pycache__' -type d -prune -exec rm -rf {} +
 

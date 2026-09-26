@@ -521,6 +521,33 @@ fn init_writes_the_template_and_the_project_is_then_found() {
     assert!(stdout.contains("sgw verify"), "{stdout}");
     assert!(dir.join(".devcontainer/config/config.yml").is_file());
     assert!(dir.join(".devcontainer/.env").is_file());
+    // no mise layer: sgw is the operator's tool (#234 stage 3)
+    assert!(
+        !dir.join(".devcontainer/sgw").exists(),
+        "no .devcontainer/sgw/"
+    );
+    assert!(!dir.join("mise.toml").exists(), "no mise.toml");
+    // sgw.toml records every template file as written
+    let toml = std::fs::read_to_string(dir.join("sgw.toml")).unwrap();
+    assert!(
+        toml.contains(&format!("version = \"{}\"", env!("CARGO_PKG_VERSION"))),
+        "{toml}"
+    );
+    for path in [
+        ".devcontainer/docker-compose.yml",
+        ".devcontainer/Dockerfile",
+        ".devcontainer/config/config.yml",
+        ".devcontainer/devcontainer.json",
+    ] {
+        assert!(
+            toml.contains(&format!("\"{path}\" = \"")),
+            "{path} in {toml}"
+        );
+    }
+    assert!(
+        !toml.contains(".devcontainer/.env\""),
+        "the .env copy is not a template file"
+    );
     // found from a subdirectory of it, like any project
     let sub = dir.join("src");
     std::fs::create_dir_all(&sub).unwrap();
@@ -544,8 +571,31 @@ fn init_writes_the_template_and_the_project_is_then_found() {
     assert!(!other.join(".devcontainer").exists());
 }
 
+fn sha(text: &str) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(text.as_bytes()))
+}
+
+/// sgw.toml with one file's recorded sha replaced: what an older sgw would have written.
+fn record(dir: &Path, path: &str, sha: &str) {
+    let toml = dir.join("sgw.toml");
+    let text = std::fs::read_to_string(&toml).unwrap();
+    let out: Vec<String> = text
+        .lines()
+        .map(|l| {
+            if l.starts_with(&format!("\"{path}\" = ")) {
+                format!("\"{path}\" = \"{sha}\"")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    std::fs::write(&toml, out.join("\n") + "\n").unwrap();
+}
+
 /// `update` on a project the same sgw wrote: everything current. With older pins: the tags
-/// move to this version and the distributed files follow, with a MANIFEST upgrade.sh can read.
+/// move to this version. A template file as sgw wrote it that this version changes is
+/// overwritten; one the project edited is left; one where both happened gets `.sgw-new`.
 #[test]
 fn update_reports_and_applies_against_the_embedded_template() {
     let f = fixture();
@@ -563,10 +613,11 @@ fn update_reports_and_applies_against_the_embedded_template() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Everything is up to date."), "{stdout}");
-    // an older project: pins behind, a distributed file behind, MANIFEST vouching for it
+
+    // an older project: pins behind, and three template files in three states
+    let version = env!("CARGO_PKG_VERSION");
     let compose = dir.join(".devcontainer/docker-compose.yml");
     let text = std::fs::read_to_string(&compose).unwrap();
-    let version = env!("CARGO_PKG_VERSION");
     std::fs::write(
         &compose,
         text.replace(&format!("sekimore-gw:{version}"), "sekimore-gw:0.2.40"),
@@ -582,27 +633,25 @@ fn update_reports_and_applies_against_the_embedded_template() {
         ),
     )
     .unwrap();
-    let old = "#!/usr/bin/env bash\n# vscode.sh base 0.2.38\n";
-    std::fs::write(dir.join(".devcontainer/sgw/vscode.sh"), old).unwrap();
-    let manifest = dir.join(".devcontainer/sgw/MANIFEST");
-    let m = std::fs::read_to_string(&manifest).unwrap();
-    let sha = {
-        use sha2::Digest;
-        hex::encode(sha2::Sha256::digest(old.as_bytes()))
-    };
-    let m: String = m
-        .lines()
-        .map(|l| {
-            if l.starts_with("file vscode.sh ") {
-                format!("file vscode.sh {sha}")
-            } else {
-                l.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    std::fs::write(&manifest, m).unwrap();
+    // "changes": post-create.sh is as an older sgw wrote it (recorded == current), and this
+    // version's differs — it is overwritten
+    let post_create = dir.join(".devcontainer/scripts/post-create.sh");
+    let older = "#!/bin/sh\n# post-create of an older version\n";
+    std::fs::write(&post_create, older).unwrap();
+    record(&dir, ".devcontainer/scripts/post-create.sh", &sha(older));
+    // "yours": config.yml edited, and this version's template is what was recorded — left alone
+    let config = dir.join(".devcontainer/config/config.yml");
+    let mine = std::fs::read_to_string(&config).unwrap() + "# mine\n";
+    std::fs::write(&config, &mine).unwrap();
+    // "conflict": the splash edited, and recorded as something else — .sgw-new beside it
+    let splash = dir.join(".devcontainer/zsh-config/rc.d/99-splash.zsh");
+    std::fs::write(&splash, "echo mine\n").unwrap();
+    record(
+        &dir,
+        ".devcontainer/zsh-config/rc.d/99-splash.zsh",
+        &sha("older\n"),
+    );
+
     let out = sgw(&f, &["update", "--offline"])
         .current_dir(&dir)
         .output()
@@ -612,7 +661,29 @@ fn update_reports_and_applies_against_the_embedded_template() {
         stdout.contains(&format!("gateway      0.2.40     {version}")),
         "{stdout}"
     );
-    assert!(stdout.contains("vscode.sh            changes"), "{stdout}");
+    let line = |path: &str| {
+        stdout
+            .lines()
+            .find(|l| l.trim_start().starts_with(path))
+            .unwrap_or_else(|| panic!("no line for {path} in {stdout}"))
+            .to_string()
+    };
+    assert!(
+        line(".devcontainer/scripts/post-create.sh").contains("changes"),
+        "{stdout}"
+    );
+    assert!(
+        line(".devcontainer/config/config.yml").contains("yours"),
+        "{stdout}"
+    );
+    assert!(
+        line(".devcontainer/zsh-config/rc.d/99-splash.zsh").contains(".sgw-new"),
+        "{stdout}"
+    );
+    assert!(
+        line(".devcontainer/docker-compose.yml").contains("yours"),
+        "the tag line: {stdout}"
+    );
     assert!(stdout.contains("To apply: sgw update --apply"), "{stdout}");
     // --notes: the UPGRADING sections crossed (0.2.44 and 0.2.45 are between 0.2.40 and now)
     let out = sgw(&f, &["update", "--notes", "--offline"])
@@ -637,9 +708,14 @@ fn update_reports_and_applies_against_the_embedded_template() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("wrote .devcontainer/sgw/vscode.sh"),
+        stdout.contains("wrote .devcontainer/scripts/post-create.sh"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("wrote .devcontainer/zsh-config/rc.d/99-splash.zsh.sgw-new"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("wrote sgw.toml"), "{stdout}");
     assert!(std::fs::read_to_string(&compose)
         .unwrap()
         .contains(&format!("sekimore-gw:{version}")));
@@ -647,46 +723,101 @@ fn update_reports_and_applies_against_the_embedded_template() {
         .unwrap()
         .contains(&format!("sgw-devcontainer-base:{version}")));
     assert_ne!(
-        std::fs::read_to_string(dir.join(".devcontainer/sgw/vscode.sh")).unwrap(),
-        old
+        std::fs::read_to_string(&post_create).unwrap(),
+        older,
+        "overwritten"
     );
-    assert!(std::fs::read_to_string(&manifest)
-        .unwrap()
-        .contains(&format!("gateway {version}")));
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        mine,
+        "left alone"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&splash).unwrap(),
+        "echo mine\n",
+        "left alone"
+    );
+    assert!(splash.with_extension("zsh.sgw-new").is_file());
     assert!(
         log(&f).contains(" up -d --force-recreate sekimore-gw"),
         "the gateway was recreated"
     );
     assert!(stdout.contains("Rebuild Container"), "{stdout}");
-    // and now everything is current again
+    assert!(
+        stdout.contains("99-splash.zsh.sgw-new"),
+        "the merge is left for the operator: {stdout}"
+    );
+    // and now: the edited files are "yours" against the new baseline, nothing to apply
     let out = sgw(&f, &["update", "--offline"])
         .current_dir(&dir)
         .output()
         .unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).contains("Everything is up to date."));
+    // --force overwrites the conflict instead
+    std::fs::write(&splash, "echo mine\n").unwrap();
+    record(
+        &dir,
+        ".devcontainer/zsh-config/rc.d/99-splash.zsh",
+        &sha("older\n"),
+    );
+    let out = sgw(&f, &["update", "--apply", "--offline", "--yes", "--force"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_ne!(std::fs::read_to_string(&splash).unwrap(), "echo mine\n");
 }
 
-/// A distributed file edited by hand stops --apply, and nothing is written.
+/// A project from the mise era: `.devcontainer/sgw/` and a mise.toml that includes it. `update
+/// --apply` removes the directory, takes the includes out and keeps the project's own task,
+/// writes sgw.toml — and refuses when the directory holds something sgw did not put there.
 #[test]
-fn update_refuses_to_overwrite_a_hand_edited_file() {
+fn update_moves_a_project_off_the_mise_layer() {
     let f = fixture();
-    let dir = f._tmp.path().join("edited");
+    let dir = f._tmp.path().join("old");
     sgw(&f, &["init", dir.to_str().unwrap()]).output().unwrap();
-    let sgw_sh = dir.join(".devcontainer/sgw/sgw.sh");
-    std::fs::write(&sgw_sh, "#!/usr/bin/env bash\necho mine\n").unwrap();
+    std::fs::remove_file(dir.join("sgw.toml")).unwrap();
+    let old = dir.join(".devcontainer/sgw");
+    std::fs::create_dir_all(&old).unwrap();
+    for name in [
+        "sgw.sh",
+        "vscode.sh",
+        "upgrade.sh",
+        "post-start.sh",
+        "tasks.mise.toml",
+        "gateway.mise.toml",
+        "MANIFEST",
+    ] {
+        std::fs::write(old.join(name), "old\n").unwrap();
+    }
+    let mise = dir.join("mise.toml");
+    std::fs::write(
+        &mise,
+        "# The day-to-day operations\n[task_config]\nincludes = [\".devcontainer/sgw/tasks.mise.toml\", \".devcontainer/sgw/gateway.mise.toml\"]\n\n[env]\nSGW = \"{{config_root}}/.devcontainer/sgw/sgw.sh\"\n\n[tasks.mine]\nrun = \"echo mine\"\n",
+    )
+    .unwrap();
+    // a file of the project's own in the directory stops the removal
+    std::fs::write(old.join("notes.txt"), "keep\n").unwrap();
+    let out = sgw(&f, &["update", "--offline"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(".devcontainer/sgw/ (the mise layer)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("notes.txt"), "{stdout}");
     let out = sgw(&f, &["update", "--apply", "--offline", "--yes"])
         .current_dir(&dir)
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("sgw.sh has been edited by hand"), "{err}");
-    assert_eq!(
-        std::fs::read_to_string(&sgw_sh).unwrap(),
-        "#!/usr/bin/env bash\necho mine\n"
-    );
-    // --force overwrites it
-    let out = sgw(&f, &["update", "--apply", "--offline", "--yes", "--force"])
+    assert!(String::from_utf8_lossy(&out.stderr).contains("notes.txt"));
+    assert!(old.is_dir() && mise.is_file());
+    std::fs::remove_file(old.join("notes.txt")).unwrap();
+    // now it goes
+    let out = sgw(&f, &["update", "--apply", "--offline", "--yes"])
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -695,8 +826,38 @@ fn update_refuses_to_overwrite_a_hand_edited_file() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_ne!(
-        std::fs::read_to_string(&sgw_sh).unwrap(),
-        "#!/usr/bin/env bash\necho mine\n"
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("removed .devcontainer/sgw/"), "{stdout}");
+    assert!(!old.exists());
+    let text = std::fs::read_to_string(&mise).unwrap();
+    assert!(!text.contains(".devcontainer/sgw/"), "{text}");
+    assert!(
+        text.contains("[tasks.mine]\nrun = \"echo mine\"\n"),
+        "{text}"
     );
+    assert!(
+        !stdout.contains("git rm mise.toml"),
+        "a task of its own stays: {stdout}"
+    );
+    assert!(dir.join("sgw.toml").is_file());
+    // a second update: nothing left to do
+    let out = sgw(&f, &["update", "--offline"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Everything is up to date."), "{stdout}");
+    // a mise.toml with nothing of its own is named for removal
+    let dir2 = f._tmp.path().join("old2");
+    sgw(&f, &["init", dir2.to_str().unwrap()]).output().unwrap();
+    std::fs::write(
+        dir2.join("mise.toml"),
+        "[task_config]\nincludes = [\".devcontainer/sgw/tasks.mise.toml\"]\n",
+    )
+    .unwrap();
+    let out = sgw(&f, &["update", "--apply", "--offline", "--yes"])
+        .current_dir(&dir2)
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("git rm mise.toml"));
 }

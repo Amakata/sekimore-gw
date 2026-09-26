@@ -34,6 +34,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.37 – 0.2.43 | [0.2.44](#0244-a-proxyjump-bastions-host-key-has-to-be-known), **only if an upstream uses a `ProxyJump` bastion** |
 | 0.2.44 | [0.2.45](#0245-gwlogin-asks-on-a-terminal-and-stops-without-a-host-key), **only if an upstream needs a host key the gateway has not saved** |
 | 0.2.45 – 0.2.50 | [0.2.51](#0251-poststartcommand-is-one-line-sgw-post-start), **everyone, one line in devcontainer.json** |
+| 0.2.51 | [0.2.52](#0252-the-mise-layer-is-gone-sgw-update---apply-removes-it), **everyone: `sgw update --apply`, then commit** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -790,4 +791,19 @@ to `sgw-post-start`. `.devcontainer/sgw/post-start.sh` can go once the line is c
 
 Nothing else changes for a project. `sekimore` keeps working as the former name of `sgw-agent`.
 Rebuild Container after moving the base pin, as always when the base changes.
+
+## 0.2.52 The mise layer is gone; `sgw update --apply` removes it
+
+**Every project: run `sgw update --apply`, then commit.** The host-side mise tasks
+(`.devcontainer/sgw/`: `tasks.mise.toml`, `gateway.mise.toml`, `sgw.sh`, `upgrade.sh`,
+`vscode.sh`, `post-start.sh`, `MANIFEST`) are no longer distributed. Everything they did is a
+`sgw` command (`sgw --help`). `sgw update --apply` on this version:
+
+- removes `.devcontainer/sgw/` (only when it holds nothing but those files)
+- takes the `includes` of `.devcontainer/sgw/` and the `SGW` line out of `mise.toml`; your own
+  tasks stay. When nothing of yours is left, it says so: `git rm mise.toml`
+- writes `sgw.toml` beside `.devcontainer/`: sgw's record of the template files as it wrote them,
+  so later updates can tell a file you edited from one a new version changes
+
+`mise run …` no longer exists on the host. The dev container's own `mise` is untouched.
 

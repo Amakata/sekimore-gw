@@ -136,8 +136,6 @@ macro_rules! passthrough {
             Update {
                 #[arg(long, help = t("sgw.cmd.update.apply"))]
                 apply: bool,
-                #[arg(long, help = t("sgw.cmd.update.sync"))]
-                sync: bool,
                 #[arg(long, help = t("sgw.cmd.update.notes"))]
                 notes: bool,
                 #[arg(long, help = t("sgw.cmd.update.owned"))]
@@ -333,7 +331,6 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
         Init { .. } => unreachable!("handled above"),
         Update {
             apply,
-            sync,
             notes,
             owned,
             yes,
@@ -345,8 +342,6 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
                 Mode::Owned
             } else if notes {
                 Mode::Notes
-            } else if sync {
-                Mode::Sync
             } else if apply {
                 Mode::Apply
             } else {

@@ -11,7 +11,7 @@ use std::process::Command;
 
 use anyhow::Context;
 
-const VSCODE_SH: &str = include_str!("../../../base/share/sgw/vscode.sh");
+const VSCODE_SH: &str = include_str!("../../share/vscode.sh");
 
 /// `mode`: None launches; `--check` and `--restore-agent-env` as the script takes them.
 pub fn run(project_root: &Path, mode: Option<&str>) -> anyhow::Result<i32> {

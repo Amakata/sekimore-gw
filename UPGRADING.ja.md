@@ -34,6 +34,7 @@
 | 0.2.37 〜 0.2.43 | [0.2.44](#0244-proxyjump-の踏み台のホスト鍵が必要になった)。**上流が `ProxyJump` の踏み台を使う場合だけ** |
 | 0.2.44 | [0.2.45](#0245-gwlogin-は端末で尋ねホスト鍵が無ければ止まる)。**ゲートウェイが保存していないホスト鍵が上流に要る場合だけ** |
 | 0.2.45 〜 0.2.50 | [0.2.51](#0251-poststartcommand-は-1-行-sgw-post-start-になった)。**すべてのプロジェクト。devcontainer.json の 1 行** |
+| 0.2.51 | [0.2.52](#0252-mise-の層が無くなった-sgw-update---apply-が消す)。**すべてのプロジェクト: `sgw update --apply` してコミット** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -757,4 +758,19 @@ known_hosts、`~/.ssh/config`、git の署名設定、エージェントのガ�
 
 プロジェクト側でほかに変わるものはありません。`sekimore` は `sgw-agent` の旧名として動き続けます。
 base の pin を上げたら、base が変わるときの常で Rebuild Container が要ります。
+
+## 0.2.52 mise の層が無くなった。`sgw update --apply` が消す
+
+**すべてのプロジェクト: `sgw update --apply` を実行して、コミットする。** ホスト側の mise タスク
+（`.devcontainer/sgw/` の `tasks.mise.toml`、`gateway.mise.toml`、`sgw.sh`、`upgrade.sh`、`vscode.sh`、
+`post-start.sh`、`MANIFEST`）は配布されなくなりました。していたことは全部 `sgw` のコマンドです（`sgw --help`）。
+この版の `sgw update --apply` は、
+
+- `.devcontainer/sgw/` を消す（それらのファイルしか無いときだけ）
+- `mise.toml` から `.devcontainer/sgw/` の `includes` と `SGW` の行を消す。自分のタスクは残る。
+  自分のものが何も残らなければそう言う: `git rm mise.toml`
+- `.devcontainer/` の隣に `sgw.toml` を書く。sgw が書いた雛形ファイルの記録で、以後の更新で
+  「あなたが編集したファイル」と「新しい版が変えるファイル」を見分ける
+
+ホストに `mise run …` はもうありません。dev コンテナの中の `mise` はそのままです。
 
