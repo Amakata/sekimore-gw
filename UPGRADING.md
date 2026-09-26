@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.47 -->
+<!-- reviewed-up-to: 0.2.48 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -520,7 +520,7 @@ docker compose exec sekimore-gw sekimore-relay keyscan <upstream-host> --port <p
 
 The second one goes through the bastion, so run it after the first.
 
-0.2.38 – 0.2.43 require no action. Neither does [0.2.46](#0246-the-base-image-moved-into-sekimore-gw); it only says where the files come from now. [0.2.47](#0247-sgw-is-available) requires no action either; it only adds `sgw` beside the mise tasks.
+0.2.38 – 0.2.43 require no action. Neither does [0.2.46](#0246-the-base-image-moved-into-sekimore-gw); it only says where the files come from now. [0.2.47](#0247-sgw-is-available) requires no action either; it only adds `sgw` beside the mise tasks. Nor does 0.2.48; it only fills in what 0.2.47 promised.
 
 ## 0.2.45 `gw:login` asks on a terminal and stops without a host key
 
@@ -770,4 +770,5 @@ sgw --help      # every subcommand
 ```
 
 `init` and `update` are not in this release; a project is still set up and upgraded with the mise
-tasks.
+tasks. From 0.2.48 the Release carries the binaries, so the install line above works, and
+`sgw init` / `sgw update` exist.

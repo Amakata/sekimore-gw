@@ -12,6 +12,15 @@ relay 自身の変更は [relay/CHANGELOG.ja.md](relay/CHANGELOG.ja.md) にあ�
 0.2.18 から始める。それ以前は relay の変更履歴にある。
 両者を分けるまで、あちらが全体を抱えていた。
 
+## 0.2.48（2026-09-26）
+
+### Enhancement
+
+- sgw init: バイナリに埋め込んだプロジェクトの雛形を書き出す。sgw update はその雛形からプロジェクトを最新に保つ（旧 upgrade.sh。もうタグから取ってこない） (#241)
+- README: sgw で始める手順、config.yml の各設定が何をするか、どの sgw コマンドが何をするか、DevContainer が立ち上がらないときに何が起きているか (#243)
+- macOS arm64 と Linux 向けの sgw バイナリが再び Release に載る。クレートが macOS でコンパイルできるようになり（O_PATH は Linux だけのもの）、CI が pull request ごとにそのビルドを確認する (#244)
+- README: プロキシのパスワードの行を Get started の下ではなくプロキシの設定のところに移した (#245)
+
 ## 0.2.47（2026-09-26）
 
 ### Enhancement

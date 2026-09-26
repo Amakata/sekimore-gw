@@ -77,7 +77,7 @@ The project's `.devcontainer/Dockerfile` needs only the following:
 
 ```dockerfile
 # a version, not latest: `mise run upgrade:apply` raises it
-FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.47
+FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.48
 
 # only what this project adds
 # e.g. mise use -g python@3.13.0 && mise reshim
@@ -156,7 +156,7 @@ sgw-devcontainer-base      ── your .devcontainer/Dockerfile FROMs it
 sgw / .devcontainer/sgw/   ── the operator's tool and the host-side files, of the same version
 ```
 
-- The `sekimore-relay` CLI and `sekimore-agent-setup.sh` in this image come from gateway `ghcr.io/amakata/sekimore-gw:0.2.47` (`ARG SEKIMORE_GW_IMAGE`).
+- The `sekimore-relay` CLI and `sekimore-agent-setup.sh` in this image come from gateway `ghcr.io/amakata/sekimore-gw:0.2.48` (`ARG SEKIMORE_GW_IMAGE`).
   The base carries the gateway's version number; the two are released from one tag.
 - The gateway a project runs is the `image:` tag in its compose file.
   `sgw update --apply` raises both.

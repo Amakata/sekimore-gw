@@ -19,6 +19,12 @@ Starts at 0.2.18. Releases before it are not written up here; the pull requests
 and the tag on each are the record. The gateway each of them took is at the
 bottom.
 
+## 0.2.48 (2026-09-26)
+
+### Enhancement
+
+- no change to the base image; released with the gateway. The sample's README describes what sgw init writes (sekimore-gw#243)
+
 ## 0.2.47 (2026-09-26)
 
 ### Enhancement

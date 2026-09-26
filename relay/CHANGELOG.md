@@ -6,6 +6,12 @@ Entries are grouped **Security**, **Fix**, **Enhancement** — most urgent first
 and say what changed, with the pull request that changed it. The reasoning is in
 the pull request.
 
+## 0.2.48 (2026-09-26)
+
+### Enhancement
+
+- no change to the relay; 0.2.47 and 0.2.48 are the same binary. The crate compiles on macOS now, for sgw (#244)
+
 ## 0.2.47 (2026-09-26)
 
 ### Enhancement
