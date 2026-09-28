@@ -101,6 +101,37 @@ pub async fn preflight_agent(sock: Option<&Path>) -> Result<usize, AgentError> {
         .map_err(|_| AgentError::Protocol("timed out waiting for the agent".into()))?
 }
 
+/// What `normalize_auth_sock_env` did: `(as the environment had it, what it is now)` when the
+/// variable named a directory, so `check` can say so; `None` when there was nothing to do.
+static NORMALIZED: std::sync::OnceLock<Option<(PathBuf, PathBuf)>> = std::sync::OnceLock::new();
+
+/// #272, #305: `SSH_AUTH_SOCK` naming a directory is resolved to `agent.sock` inside it **in the
+/// process environment**, once, at start. `auth_sock_from_env` resolved it for the relay's own
+/// agent client and for the git path, but `keyscan` / `login` through a ProxyJump bastion spawn
+/// `ssh` with the environment as it is, and that ssh found a directory where its agent should
+/// be: `Permission denied (publickey)` at the bastion, while `check` said the agent was fine.
+/// Setting the variable is what makes every child — ssh, ssh-keyscan, anything later — see the
+/// socket the relay sees.
+pub fn normalize_auth_sock_env() -> Option<(PathBuf, PathBuf)> {
+    NORMALIZED
+        .get_or_init(|| {
+            let raw = std::env::var_os("SSH_AUTH_SOCK").filter(|s| !s.is_empty())?;
+            let raw = PathBuf::from(raw);
+            let resolved = resolve_auth_sock(raw.clone());
+            if resolved == raw {
+                return None;
+            }
+            std::env::set_var("SSH_AUTH_SOCK", &resolved);
+            log::info!(
+                "SSH_AUTH_SOCK names a directory ({}); using {} inside it",
+                raw.display(),
+                resolved.display()
+            );
+            Some((raw, resolved))
+        })
+        .clone()
+}
+
 /// Read `SSH_AUTH_SOCK`, resolving a directory to the socket inside it (#272).
 pub fn auth_sock_from_env() -> Option<PathBuf> {
     std::env::var_os("SSH_AUTH_SOCK")
@@ -215,5 +246,36 @@ mod tests {
         let dir2 = tempfile::tempdir().unwrap();
         let p2 = fake_agent(dir2.path(), 2).await;
         assert_eq!(preflight_agent(Some(&p2)).await.unwrap(), 2);
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::*;
+
+    /// #305: a directory in the variable becomes the socket inside it, for the process and so
+    /// for every child; a file, or nothing, is left as it is. The variable is process-wide, so
+    /// this puts it back; `NORMALIZED` remembers the first call, which is why this is one test.
+    #[test]
+    fn a_directory_in_ssh_auth_sock_is_resolved_for_the_whole_process() {
+        let before = std::env::var_os("SSH_AUTH_SOCK");
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("SSH_AUTH_SOCK", dir.path());
+        let done = normalize_auth_sock_env();
+        assert_eq!(
+            done,
+            Some((dir.path().to_path_buf(), dir.path().join("agent.sock")))
+        );
+        assert_eq!(
+            std::env::var_os("SSH_AUTH_SOCK").map(PathBuf::from),
+            Some(dir.path().join("agent.sock")),
+            "what a child spawned now would see"
+        );
+        // remembered, not redone
+        assert_eq!(normalize_auth_sock_env(), done);
+        match before {
+            Some(v) => std::env::set_var("SSH_AUTH_SOCK", v),
+            None => std::env::remove_var("SSH_AUTH_SOCK"),
+        }
     }
 }

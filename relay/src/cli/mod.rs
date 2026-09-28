@@ -141,6 +141,8 @@ pub enum BootstrapAction {
 
 /// Runs the command and returns the exit code.
 pub async fn run(cli: Cli) -> i32 {
+    // #305: every ssh this process spawns must see the socket the relay sees
+    crate::git::agent_check::normalize_auth_sock_env();
     // #213: the operator's error lines are red on a terminal. The agent's are not: `sekimore`
     // runs `agent`, and what it prints is read by agents and scripts, never painted.
     let operator_side = !matches!(cli.cmd, Command::Agent { .. });
