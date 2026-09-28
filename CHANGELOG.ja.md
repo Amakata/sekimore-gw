@@ -11,6 +11,13 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.58（2026-09-28）
+
+### Fix
+
+- 雛形の `post-create.sh` のガードが、関所の signing agent を運用者の転送された鍵と取り違えなくなった。`ssh-add -l` が `SEKIMORE_SIGNING_KEY` 以外の鍵を列挙したときだけ止まるので、正しく構成したコンテナで `postStartCommand` が exit 1 で落ちなくなった (#308)
+- 同じガードは、agent の env ファイルが無いときも `post-create.sh` を黙って止めない (#308)
+
 ## 0.2.57（2026-09-28）
 
 ### Fix

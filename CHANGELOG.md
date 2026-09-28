@@ -12,6 +12,13 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.58 (2026-09-28)
+
+### Fix
+
+- The template's `post-create.sh` guard no longer takes the gateway's signing agent for the operator's forwarded key: it stops only when `ssh-add -l` lists a key other than `SEKIMORE_SIGNING_KEY`, so a correctly set up container starts again (#308)
+- That guard no longer stops `post-create.sh` silently when the agent env file is missing (#308)
+
 ## 0.2.57 (2026-09-28)
 
 ### Fix
