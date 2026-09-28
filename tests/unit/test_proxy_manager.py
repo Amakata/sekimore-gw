@@ -632,3 +632,102 @@ def describe_the_relay_reaches_the_upstream_proxy_through_squid():
         )
         ok, _ = _from_template(tmp_path, wrong, denied=["169.254.169.254/32"])
         assert ok is False
+
+
+def describe_the_store_hold():
+    """#275: with the upstream proxy's credential sealed in a locked store, Squid refuses
+    everything with a 503 that names `sgw unlock`, above every allow, so that nothing relays
+    the upstream's 407 to a client that would ask a person for the password."""
+
+    template = Path("config/squid/squid.conf.template")
+
+    def _generate(tmp_path, *, hold, upstream="gw.example.net:3129", tpl=None):
+        out = tmp_path / "squid.conf"
+        errors = tmp_path / "errors"
+        tpl_path = template
+        if tpl is not None:
+            tpl_path = tmp_path / "squid.conf.template"
+            tpl_path.write_text(tpl)
+        pm = ProxyManager(
+            config_template_path=str(tpl_path),
+            config_output_path=str(out),
+            cache_enabled=False,
+            upstream_proxy=upstream,
+            upstream_proxy_tls=True,
+            hold_for_store=hold,
+            error_template_dir=str(errors),
+        )
+        ok = pm.generate_config(["pypi.org", ".github.com"], ["github.com"])
+        return ok, (out.read_text() if out.exists() else ""), errors
+
+    def the_hold_is_the_first_rule_and_answers_with_its_own_page(tmp_path):
+        ok, content, errors = _generate(tmp_path, hold=True)
+        assert ok is True
+        assert "acl sekimore_store_locked src all" in content
+        assert "deny_info 503:ERR_SEKIMORE_STORE_LOCKED sekimore_store_locked" in content
+        deny = content.index("http_access deny sekimore_store_locked")
+        # Squid takes the first matching rule: the hold has to precede every allow, the relay's
+        # own (#205) included, so `check` sees why the route is closed
+        for later in (
+            "http_access deny !Safe_ports",
+            "http_access allow localhost manager",
+            "http_access allow relay_localhost",
+            "http_access allow allowed_domains",
+        ):
+            assert deny < content.index(later), later
+        assert content.index("acl sekimore_store_locked") < deny
+        # the page names the remedy and is where Squid looks for one
+        page = errors / "ERR_SEKIMORE_STORE_LOCKED"
+        assert page.exists()
+        assert "sgw unlock" in page.read_text()
+        assert "secret store is locked" in page.read_text()
+        # the peer stays, without login=: lifting the hold changes only the rule
+        assert "cache_peer gw.example.net parent 3129" in content
+
+    def without_the_hold_the_config_is_what_it_was(tmp_path):
+        ok, content, errors = _generate(tmp_path, hold=False)
+        assert ok is True
+        assert "sekimore_store_locked" not in content
+        assert "{STORE_HOLD_RULE}" not in content
+        assert not (errors / "ERR_SEKIMORE_STORE_LOCKED").exists()
+
+    def no_upstream_proxy_means_nothing_to_hold_for(tmp_path):
+        ok, content, _ = _generate(tmp_path, hold=True, upstream=None)
+        assert ok is True
+        assert "sekimore_store_locked" not in content
+
+    def an_outdated_template_gets_the_rule_above_the_port_checks(tmp_path):
+        old = """acl SSL_ports port 443
+acl Safe_ports port 443
+acl CONNECT method CONNECT
+{ALLOWED_DOMAINS_ACL}
+http_access deny !Safe_ports
+http_access allow allowed_domains
+http_access deny all
+http_port {PROXY_PORT}
+{CACHE_CONFIG}
+{UPSTREAM_PROXY_CONFIG}
+dns_nameservers {DNS_NAMESERVERS}
+"""
+        ok, content, _ = _generate(tmp_path, hold=True, tpl=old)
+        assert ok is True
+        assert content.index("http_access deny sekimore_store_locked") < content.index(
+            "http_access deny !Safe_ports"
+        )
+
+    def a_page_that_cannot_be_written_refuses_the_config(tmp_path):
+        # a hold whose page Squid cannot find would answer with Squid's generic 503, which
+        # says nothing about the store; better to keep the previous config and say so
+        out = tmp_path / "squid.conf"
+        blocker = tmp_path / "errors"
+        blocker.write_text("not a directory")
+        pm = ProxyManager(
+            config_template_path=str(template),
+            config_output_path=str(out),
+            cache_enabled=False,
+            upstream_proxy="gw.example.net:3129",
+            hold_for_store=True,
+            error_template_dir=str(blocker),
+        )
+        assert pm.generate_config(["pypi.org"], []) is False
+        assert not out.exists()

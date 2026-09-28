@@ -772,7 +772,16 @@ class SecurityGatewayOrchestrator:
                 # change and reload for nothing.
                 self._proxy_credential_state = "set"
                 self._proxy_credential_applied = (username, password)
+            # #275: with the credential sealed in a store nobody has unlocked, Squid starts
+            # holding every request rather than relaying the upstream's 407
+            hold = self._store_holds_the_credential()
+            if hold:
+                log_system_event(
+                    "Upstream proxy credential: the secret store is locked, so Squid answers "
+                    "503 (the store is locked; sgw unlock) instead of relaying the upstream's 407"
+                )
             self.proxy_manager = ProxyManager(
+                hold_for_store=hold,
                 cache_enabled=self.config.proxy.cache_enabled,
                 cache_size_mb=self.config.proxy.cache_size_mb,
                 upstream_proxy=self.config.proxy.upstream_proxy,
@@ -958,7 +967,12 @@ class SecurityGatewayOrchestrator:
             # the socket may simply not be bound yet. The two are indistinguishable from here, so
             # whether to come back and look again is decided by the config, not by this error.
             log_system_event(f"Secret store not reachable ({e}); using the configured credential")
+            self._proxy_credential_state = "unreachable"
             return configured
+        if isinstance(secret, Locked):
+            self._proxy_credential_state = "locked"
+        elif isinstance(secret, NotFound):
+            self._proxy_credential_state = "none"
         if isinstance(secret, str):
             try:
                 parsed = json.loads(secret)
@@ -1024,6 +1038,11 @@ class SecurityGatewayOrchestrator:
                 f"Upstream proxy credential: {self._proxy_credential_state} -> {state}"
             )
             self._proxy_credential_state = state
+        # #275: the hold follows the store. A credential about to be applied lifts it in the
+        # same reload; anything else is a reload of its own.
+        applying = state == "set" and credential is not None
+        applying = applying and credential != self._proxy_credential_applied
+        self._follow_store_hold(reload=not applying)
         if state != "set" or credential is None:
             # `locked` and `none` say nothing about what Squid should present. Leaving the
             # running config alone is deliberate — see the docstring.
@@ -1034,6 +1053,56 @@ class SecurityGatewayOrchestrator:
             return
         self._proxy_credential_applied = credential
         log_system_event("Upstream proxy credential applied to Squid")
+
+    def _store_holds_the_credential(self) -> bool:
+        """#275: whether Squid should refuse everything until the store opens.
+
+        True when an upstream proxy is configured, no credential is readable outside the store
+        (config.yml / the environment), none has been applied to Squid yet, and the store is
+        locked — or not reachable while a git-relay handler is declared, which is the few
+        seconds before the relay binds its socket. A store that answers `none` releases the
+        hold: nothing stored anywhere is how an upstream without authentication is configured.
+        "None applied yet" is what keeps the #193 rule: a working Squid is never flipped into
+        the hold by a relay restart.
+        """
+        proxy = self.config.proxy
+        if not proxy.upstream_proxy:
+            return False
+        if proxy.upstream_proxy_username and proxy.upstream_proxy_password:
+            return False
+        if self._proxy_credential_applied is not None:
+            return False
+        if self._proxy_credential_state == "locked":
+            return True
+        if self._proxy_credential_unusable_logged:
+            # a value is there, so the operator meant the store to hold it; forwarding without
+            # it would relay exactly the 407 the hold exists to stop
+            return True
+        return self._proxy_credential_state == "unreachable" and self.config.has_git_relay()
+
+    def _follow_store_hold(self, *, reload: bool) -> None:
+        """Put Squid into the hold, or take it out, when the store's state says so (#275)."""
+        pm = self.proxy_manager
+        if pm is None:
+            return
+        want = self._store_holds_the_credential()
+        if want == pm.hold_for_store:
+            return
+        pm.hold_for_store = want
+        if not reload:
+            # the credential being applied right after regenerates and reloads
+            return
+        if not self._regenerate_squid():
+            # so the next tick tries again
+            pm.hold_for_store = not want
+            return
+        if want:
+            log_system_event(
+                "Upstream proxy credential: the secret store is locked, so Squid answers 503 "
+                "(the store is locked; sgw unlock) instead of relaying the upstream's 407"
+            )
+        else:
+            log_system_event("Upstream proxy credential: the hold is lifted; Squid forwards again")
 
     def _read_proxy_credential_state(
         self,
@@ -1080,6 +1149,12 @@ class SecurityGatewayOrchestrator:
         username, password = credential
         self.proxy_manager.upstream_proxy_username = username
         self.proxy_manager.upstream_proxy_password = password
+        return self._regenerate_squid()
+
+    def _regenerate_squid(self) -> bool:
+        """Write Squid's config from the current settings and reload it. True when Squid took it."""
+        if self.proxy_manager is None:
+            return False
         if not self.proxy_manager.generate_config(
             self.config.proxy_allow_domains(), self.config.proxy_denied_domains()
         ):

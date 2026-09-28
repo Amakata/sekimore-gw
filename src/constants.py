@@ -17,6 +17,10 @@ ULOG_FILE_PATH = os.getenv("SEKIMORE_ULOG_PATH", "/var/log/ulog/firewall.log")
 # Squid configuration paths
 SQUID_CONFIG_PATH = os.getenv("SEKIMORE_SQUID_CONFIG", "/etc/squid/squid.conf")
 SQUID_TEMPLATE_PATH = os.getenv("SEKIMORE_SQUID_TEMPLATE", "/etc/squid/squid.conf.template")
+# #275: where Squid looks for an error page no language directory has (Debian's squid-common)
+SQUID_ERROR_TEMPLATE_DIR = os.getenv(
+    "SEKIMORE_SQUID_ERROR_TEMPLATES", "/usr/share/squid/errors/templates"
+)
 
 # Default network settings
 DEFAULT_LAN_SUBNETS = ["172.20.0.0/16", "192.168.0.0/16", "10.0.0.0/8"]

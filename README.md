@@ -140,6 +140,7 @@ First `sgw verify`. It names the item that fails and what to run.
 | A domain the agent needs is not resolved | Add it to `allow_domains`. The blocked access shows in `sgw web` |
 | The gateway is old after an update | `sgw recreate` |
 | "network … already exists" while starting | The previous dev container and gateway are still there. `sgw down` removes the whole stack; open again |
+| HTTP 503 "the secret store is locked" right after a start | The upstream proxy's password is in the secret store and the store is locked, so the gateway holds every request instead of letting a client ask you for that password. `sgw unlock` |
 | The dev container is old after an update | Rebuild Container in VS Code |
 
 ## License

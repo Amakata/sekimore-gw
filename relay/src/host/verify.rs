@@ -548,6 +548,8 @@ fn https_passthrough(ctx: &mut Ctx) -> anyhow::Result<()> {
         return Ok(());
     };
     let url = format!("https://{target}/");
+    // #275: Squid's own answer carries X-Squid-Error; a 503 with the gateway's page name is the
+    // store holding the credential, not the upstream answering
     let out = ctx.dev_curl(&[
         "-sS",
         "-m",
@@ -555,18 +557,53 @@ fn https_passthrough(ctx: &mut Ctx) -> anyhow::Result<()> {
         "-o",
         "/dev/null",
         "-w",
-        "%{http_code}",
+        "%{http_code} %header{x-squid-error}",
         &url,
     ])?;
-    let code = out.stdout.trim().to_string();
-    if out.code == 0 && !code.is_empty() {
-        ctx.ok(&format!(
+    let answer = out.stdout.trim().to_string();
+    let code = answer.split_whitespace().next().unwrap_or("").to_string();
+    match https_verdict(out.code, &answer) {
+        HttpsVerdict::Reached => ctx.ok(&format!(
             "{url} answered HTTP {code} (any status means the upstream was reached)"
-        ));
-    } else {
-        ctx.fail(&format!("{url} — curl exit {}. {HTTPS_HINT}", out.code));
+        )),
+        HttpsVerdict::StoreLocked => ctx.fail(&format!(
+            "{url} — the gateway's Squid holds every request: the upstream proxy's credential \
+             is in the secret store and the store is locked. Ask a human to run: sgw unlock"
+        )),
+        HttpsVerdict::SquidError(page) => ctx.fail(&format!(
+            "{url} — the gateway's Squid answered HTTP {code} ({page}) instead of the upstream. \
+             sgw check (reach:) says which hop failed"
+        )),
+        HttpsVerdict::Cut => ctx.fail(&format!("{url} — curl exit {}. {HTTPS_HINT}", out.code)),
     }
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum HttpsVerdict {
+    Reached,
+    StoreLocked,
+    SquidError(String),
+    Cut,
+}
+
+/// What curl's `%{http_code} %header{x-squid-error}` says about the HTTPS probe (#275).
+pub fn https_verdict(curl_exit: i32, answer: &str) -> HttpsVerdict {
+    let mut it = answer.split_whitespace();
+    let code = it.next().unwrap_or("");
+    if curl_exit != 0 || code.is_empty() || code == "000" {
+        return HttpsVerdict::Cut;
+    }
+    // `503:ERR_NAME 0` on Squid 6, `ERR_NAME 0` before; nothing when the upstream answered
+    let page = it
+        .next()
+        .map(|v| v.rsplit(':').next().unwrap_or(v).to_string())
+        .filter(|p| p.starts_with("ERR_"));
+    match page {
+        Some(p) if p == crate::netutil::STORE_LOCKED_PAGE => HttpsVerdict::StoreLocked,
+        Some(p) => HttpsVerdict::SquidError(p),
+        None => HttpsVerdict::Reached,
+    }
 }
 
 /// The read probe the project's permissions allow, from `sekimore whoami`'s permissions line.
@@ -1022,5 +1059,39 @@ mod tests {
             dropped_vars(dc_old, "SEKIMORE_lower=1\nSEKIMOREX=1\n").unwrap(),
             Vec::<String>::new()
         );
+    }
+}
+
+#[cfg(test)]
+mod https_verdict_tests {
+    use super::*;
+
+    /// #275: what curl's `%{http_code} %header{x-squid-error}` means. The upstream answering
+    /// with any status is a reached upstream; Squid answering for it is not.
+    #[test]
+    fn the_https_probe_tells_squid_apart_from_the_upstream() {
+        assert_eq!(https_verdict(0, "200 "), HttpsVerdict::Reached);
+        assert_eq!(https_verdict(0, "404"), HttpsVerdict::Reached);
+        // the upstream's own 503 has no X-Squid-Error, so it counts as reached
+        assert_eq!(https_verdict(0, "503"), HttpsVerdict::Reached);
+        assert_eq!(
+            https_verdict(0, "503 503:ERR_SEKIMORE_STORE_LOCKED 0"),
+            HttpsVerdict::StoreLocked
+        );
+        assert_eq!(
+            https_verdict(0, "503 ERR_SEKIMORE_STORE_LOCKED 0"),
+            HttpsVerdict::StoreLocked
+        );
+        assert_eq!(
+            https_verdict(0, "503 503:ERR_CONNECT_FAIL 111"),
+            HttpsVerdict::SquidError("ERR_CONNECT_FAIL".into())
+        );
+        // a curl that could not print %header{} on an old base leaves the literal; not an error
+        assert_eq!(
+            https_verdict(0, "200 %header{x-squid-error}"),
+            HttpsVerdict::Reached
+        );
+        assert_eq!(https_verdict(35, "000 "), HttpsVerdict::Cut);
+        assert_eq!(https_verdict(0, ""), HttpsVerdict::Cut);
     }
 }

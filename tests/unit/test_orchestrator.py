@@ -2133,10 +2133,13 @@ relay:
             m.return_value = Mock(returncode=0, stdout="", stderr="")
             with patch("src.orchestrator.get_secret", side_effect=boom):
                 orch = SecurityGatewayOrchestrator(config_path=config_file)
+        # #275: the hold Squid started with, so a tick only reloads when the store changes it
+        hold = orch.proxy_manager.hold_for_store if orch.proxy_manager else False
         if proxy_manager:
             orch.proxy_manager = Mock()
             orch.proxy_manager.generate_config.return_value = True
             orch.proxy_manager.reload_config.return_value = True
+            orch.proxy_manager.hold_for_store = hold
         else:
             orch.proxy_manager = None
         return orch
@@ -2207,7 +2210,9 @@ relay:
         orch = _orch(tmp_path)
         await _run_ticks(orch, [NotFound(), NotFound(), stored_json])
 
-        assert orch.proxy_manager.reload_config.call_count == 1
+        # #275: two reloads — the first `not_found` lifts the hold Squid started in (an empty
+        # store is an upstream without authentication), the value then puts the login in
+        assert orch.proxy_manager.reload_config.call_count == 2
         assert orch._proxy_credential_applied == ("stored", "sekret")
 
     @pytest.mark.asyncio
@@ -2258,7 +2263,10 @@ relay:
             await _run_ticks(orch, ["not json", "not json", "not json"])
 
         assert orch._proxy_credential_applied is None
+        # #275: a value that is there but unusable keeps the hold: the operator meant the store
+        # to hold it, and forwarding without it would relay the 407 the hold exists to stop
         assert not orch.proxy_manager.reload_config.called
+        assert orch.proxy_manager.hold_for_store is True
         assert mock_err.call_count == 1, "said once, not per tick"
 
     def it_is_not_started_without_a_relay(tmp_path):
@@ -2387,3 +2395,141 @@ def describe_direct_egress():
         old = Config(proxy={"enabled": True, "upstream_proxy": "p:8080"})
         new = Config(proxy={"enabled": True, "upstream_proxy": "p:8080", "no_proxy": [".test"]})
         assert _relay_settings_changed(old, new) is True
+
+
+def describe_the_store_hold():
+    """#275: while the upstream proxy's credential sits in a locked store, Squid refuses every
+    request with a 503 that names `sgw unlock`, instead of relaying the upstream's 407 — which
+    VS Code turns into a dialog asking a person for the proxy password."""
+
+    def _config(tmp_path, *, relay=True, configured_credential=False, upstream=True):
+        config_file = tmp_path / "config.yml"
+        # "github" is git-relay's normalized spelling, so no relay means no domain_handlers
+        proxy_lines = "  upstream_proxy: proxy.example:8080\n" if upstream else ""
+        if configured_credential:
+            proxy_lines += "  upstream_proxy_username: cfg\n  upstream_proxy_password: pw\n"
+        relay_lines = (
+            "relay:\n  project:\n    name: t\n    repos:\n      - name: Org/Repo\n        mode: read-write\n"
+            if relay
+            else ""
+        )
+        config_file.write_text(
+            "allow_domains:\n  - github.com\n"
+            + ("domain_handlers:\n  github.com:\n    handler: git-relay\n" if relay else "")
+            + f"proxy:\n  enabled: true\n{proxy_lines}"
+            + "network:\n  lan_subnets: []\ndatabase_path: /tmp/test.db\n"
+            + relay_lines
+        )
+        return config_file
+
+    def _orch_with_store(config_file, answer):
+        def reply(*_a, **_k):
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with patch("subprocess.run") as m:
+            m.return_value = Mock(returncode=0, stdout="", stderr="")
+            with patch("src.orchestrator.get_secret", side_effect=reply):
+                return SecurityGatewayOrchestrator(config_path=config_file)
+
+    def a_locked_store_starts_squid_in_the_hold(tmp_path):
+        from src.secret_store import Locked
+
+        orch = _orch_with_store(_config(tmp_path), Locked())
+        assert orch.proxy_manager is not None
+        assert orch.proxy_manager.hold_for_store is True
+        assert orch._proxy_credential_state == "locked"
+
+    def a_store_not_yet_reachable_holds_only_when_a_relay_is_declared(tmp_path):
+        from src.secret_store import SecretStoreError
+
+        with_relay = _orch_with_store(_config(tmp_path), SecretStoreError("not up yet"))
+        assert with_relay.proxy_manager.hold_for_store is True
+        # no git-relay handler: there is no store and never will be, so nothing to wait for
+        without = _orch_with_store(
+            _config(tmp_path, relay=False), SecretStoreError("no such socket")
+        )
+        assert without.proxy_manager.hold_for_store is False
+
+    def a_credential_outside_the_store_means_no_hold(tmp_path):
+        from src.secret_store import Locked
+
+        orch = _orch_with_store(_config(tmp_path, configured_credential=True), Locked())
+        assert orch.proxy_manager.hold_for_store is False
+        assert orch.proxy_manager.upstream_proxy_username == "cfg"
+
+    def no_upstream_proxy_means_no_hold(tmp_path):
+        from src.secret_store import Locked
+
+        orch = _orch_with_store(_config(tmp_path, upstream=False), Locked())
+        assert orch.proxy_manager.hold_for_store is False
+
+    def an_empty_store_starts_squid_forwarding(tmp_path):
+        # nothing stored anywhere is how an upstream without authentication is configured
+        from src.secret_store import NotFound
+
+        orch = _orch_with_store(_config(tmp_path), NotFound())
+        assert orch.proxy_manager.hold_for_store is False
+
+    def _mock_squid(orch, hold):
+        orch.proxy_manager = Mock()
+        orch.proxy_manager.generate_config.return_value = True
+        orch.proxy_manager.reload_config.return_value = True
+        orch.proxy_manager.hold_for_store = hold
+
+    def _tick(orch, answer):
+        def reply(*_a, **_k):
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with patch("src.orchestrator.get_secret", side_effect=reply):
+            orch._proxy_credential_tick()
+
+    def the_credential_lifts_the_hold_in_one_reload(tmp_path):
+        from src.secret_store import Locked
+
+        orch = _orch_with_store(_config(tmp_path), Locked())
+        _mock_squid(orch, True)
+        _tick(orch, Locked())
+        assert orch.proxy_manager.reload_config.call_count == 0, "still locked: nothing to do"
+        _tick(orch, '{"username": "stored", "password": "sekret"}')
+        assert orch.proxy_manager.hold_for_store is False
+        assert orch.proxy_manager.upstream_proxy_username == "stored"
+        assert orch.proxy_manager.reload_config.call_count == 1, "the hold and the login, together"
+
+    def an_empty_store_lifts_the_hold_on_its_own(tmp_path):
+        from src.secret_store import Locked, NotFound
+
+        orch = _orch_with_store(_config(tmp_path), Locked())
+        _mock_squid(orch, True)
+        with patch("src.orchestrator.log_system_event") as mock_log:
+            _tick(orch, NotFound())
+        assert orch.proxy_manager.hold_for_store is False
+        assert orch.proxy_manager.reload_config.call_count == 1
+        assert any("hold is lifted" in str(c.args) for c in mock_log.call_args_list)
+
+    def a_working_squid_is_not_flipped_into_the_hold_by_a_relay_restart(tmp_path):
+        # #193's rule: a credential Squid already has is never taken away by a locked store
+        from src.secret_store import Locked, SecretStoreError
+
+        orch = _orch_with_store(_config(tmp_path), '{"username": "s", "password": "p"}')
+        assert orch._proxy_credential_applied == ("s", "p")
+        _mock_squid(orch, False)
+        _tick(orch, SecretStoreError("relay restarting"))
+        _tick(orch, Locked())
+        assert orch.proxy_manager.hold_for_store is False
+        assert orch.proxy_manager.reload_config.call_count == 0
+
+    def a_failed_reload_is_retried_on_the_next_tick(tmp_path):
+        from src.secret_store import Locked, NotFound
+
+        orch = _orch_with_store(_config(tmp_path), Locked())
+        _mock_squid(orch, True)
+        orch.proxy_manager.reload_config.return_value = False
+        _tick(orch, NotFound())
+        assert orch.proxy_manager.hold_for_store is True, "not lifted: Squid did not take it"
+        orch.proxy_manager.reload_config.return_value = True
+        _tick(orch, NotFound())
+        assert orch.proxy_manager.hold_for_store is False

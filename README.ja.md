@@ -140,6 +140,7 @@ sekimore-gw（sgw）は、Docker で動く AI エージェントのためのネ�
 | エージェントに要るドメインが解決されない | `allow_domains` に足す。ブロックされた通信は `sgw web` で見える |
 | 版を上げたのにゲートウェイが古い | `sgw recreate` |
 | 起動時に「network … already exists」と出る | 前の dev コンテナとゲートウェイが残っている。`sgw down` で丸ごと消して開き直す |
+| 起動直後に HTTP 503「the secret store is locked」が返る | 上流 proxy のパスワードが秘密ストアにあり、ストアが locked。パスワードをクライアントに聞かせないためにゲートウェイが全要求を止めている。`sgw unlock` |
 | 版を上げたのに dev コンテナが古い | VS Code の Rebuild Container |
 
 ## ライセンス

@@ -328,6 +328,27 @@ pub struct SquidProbe {
     pub status: String,
     /// Squid's whole status line, for a failure worth quoting.
     pub status_line: String,
+    /// #275: the error page Squid answered with, from its `X-Squid-Error` header
+    /// (`ERR_SEKIMORE_STORE_LOCKED` is the gateway's own: the store holds the credential).
+    pub error_page: Option<String>,
+}
+
+/// #275: the page Squid serves while the upstream proxy's credential sits in the locked store
+/// (`src/proxy_manager.py`, `STORE_HOLD_PAGE`). Its name travels in `X-Squid-Error`.
+pub const STORE_LOCKED_PAGE: &str = "ERR_SEKIMORE_STORE_LOCKED";
+
+/// The page named by a response head's `X-Squid-Error` header (`503:ERR_X 0` or `ERR_X 0`).
+pub fn squid_error_page(head: &str) -> Option<String> {
+    head.lines().find_map(|l| {
+        let (name, value) = l.split_once(':')?;
+        if !name.trim().eq_ignore_ascii_case("x-squid-error") {
+            return None;
+        }
+        let first = value.split_whitespace().next()?;
+        // Squid 6 writes `503:ERR_NAME`; older ones `ERR_NAME`
+        let page = first.rsplit(':').next().unwrap_or(first);
+        (!page.is_empty()).then(|| page.to_string())
+    })
 }
 
 /// Sends one `CONNECT <target>:443` to the local Squid and reports its status line (#205).
@@ -361,18 +382,20 @@ pub async fn probe_via_squid_at(endpoint: &str, target: &str) -> Result<SquidPro
     s.write_all(req.as_bytes())
         .await
         .map_err(|e| e.to_string())?;
-    let line = read_status_line(&mut s).await?;
+    let head = read_head(&mut s).await?;
+    let line = head.lines().next().unwrap_or("").trim().to_string();
     let status = line.split_whitespace().nth(1).unwrap_or("").to_string();
     Ok(SquidProbe {
         endpoint: endpoint.to_string(),
         target: target.to_string(),
         status,
         status_line: line,
+        error_page: squid_error_page(&head),
     })
 }
 
-/// Reads up to the end of the response head and hands back its first line.
-async fn read_status_line<S: AsyncRead + Unpin>(s: &mut S) -> Result<String, String> {
+/// Reads up to the end of the response head and hands it back whole.
+async fn read_head<S: AsyncRead + Unpin>(s: &mut S) -> Result<String, String> {
     let mut buf = Vec::with_capacity(256);
     let mut byte = [0u8; 1];
     loop {
@@ -391,12 +414,7 @@ async fn read_status_line<S: AsyncRead + Unpin>(s: &mut S) -> Result<String, Str
             return Err("Squid's CONNECT response is too large".into());
         }
     }
-    Ok(String::from_utf8_lossy(&buf)
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string())
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// Asks the `openssl` CLI what an endpoint negotiates with it, as `Protocol version:` /
@@ -512,6 +530,15 @@ async fn connect_through<S: AsyncRead + AsyncWrite + Unpin>(
     }
     let head = String::from_utf8_lossy(&buf);
     let status = head.split_whitespace().nth(1).unwrap_or("");
+    // #275: the local Squid holds every request while the store has the credential and is
+    // locked. Say that, rather than quote a 503 that reads like the upstream being down.
+    if status == "503" && squid_error_page(&head).as_deref() == Some(STORE_LOCKED_PAGE) {
+        return Err(io::Error::other(format!(
+            "proxy refused CONNECT {host}:{port}: the gateway's secret store is locked, and the \
+             upstream proxy's credential is in it, so Squid holds every request until it is \
+             unlocked. Ask a human to run: sgw unlock"
+        )));
+    }
     if status == "407" {
         let line = head.lines().next().unwrap_or("");
         // #205: on the via-Squid route the relay presents nothing, by design — the credential is
@@ -1121,5 +1148,90 @@ mod tests {
                 "{url}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod store_hold_tests {
+    use super::*;
+
+    /// #275: the page name is read off `X-Squid-Error`, in both spellings Squid has used.
+    #[test]
+    fn the_squid_error_page_is_read_off_the_head() {
+        let six = "HTTP/1.1 503 Service Unavailable\r\nServer: squid/6.13\r\nX-Squid-Error: 503:ERR_SEKIMORE_STORE_LOCKED 0\r\n\r\n";
+        assert_eq!(squid_error_page(six).as_deref(), Some(STORE_LOCKED_PAGE));
+        let old = "HTTP/1.1 503 Service Unavailable\r\nx-squid-error: ERR_CONNECT_FAIL 111\r\n\r\n";
+        assert_eq!(squid_error_page(old).as_deref(), Some("ERR_CONNECT_FAIL"));
+        // the upstream's own 503 carries no such header
+        assert_eq!(
+            squid_error_page("HTTP/1.1 503 Service Unavailable\r\nServer: nginx\r\n\r\n"),
+            None
+        );
+    }
+
+    async fn one_connect_with(head: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 2048];
+            let _ = s.read(&mut buf).await.unwrap();
+            s.write_all(head.as_bytes()).await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    /// The tunnel says the store is locked, and names the remedy, instead of quoting a 503.
+    #[tokio::test]
+    async fn a_held_connect_names_the_store_and_the_remedy() {
+        let url = one_connect_with(
+            "HTTP/1.1 503 Service Unavailable\r\nX-Squid-Error: 503:ERR_SEKIMORE_STORE_LOCKED 0\r\n\r\n",
+        )
+        .await;
+        let spec = ProxySpec {
+            url,
+            username: None,
+            password: None,
+            stored: Default::default(),
+            via_squid: None,
+            direct_egress: crate::config::DirectEgress::Allow,
+        };
+        let err = http_connect_tunnel(&spec, "api.github.com", 443)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("secret store is locked"), "{err}");
+        assert!(err.contains("sgw unlock"), "{err}");
+        // a plain 503 is still a plain 503: nothing about the store is claimed
+        let url = one_connect_with("HTTP/1.1 503 Service Unavailable\r\n\r\n").await;
+        let spec = ProxySpec {
+            url,
+            username: None,
+            password: None,
+            stored: Default::default(),
+            via_squid: None,
+            direct_egress: crate::config::DirectEgress::Allow,
+        };
+        let err = http_connect_tunnel(&spec, "api.github.com", 443)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("secret store"), "{err}");
+        assert!(err.contains("503"), "{err}");
+    }
+
+    /// The probe `check` uses carries the page name too.
+    #[tokio::test]
+    async fn the_squid_probe_reports_the_page() {
+        let url = one_connect_with(
+            "HTTP/1.1 503 Service Unavailable\r\nX-Squid-Error: 503:ERR_SEKIMORE_STORE_LOCKED 0\r\n\r\n",
+        )
+        .await;
+        let endpoint = url.trim_start_matches("http://").to_string();
+        let p = probe_via_squid_at(&endpoint, "api.github.com")
+            .await
+            .unwrap();
+        assert_eq!(p.status, "503");
+        assert_eq!(p.error_page.as_deref(), Some(STORE_LOCKED_PAGE));
     }
 }
