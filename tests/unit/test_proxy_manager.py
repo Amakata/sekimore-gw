@@ -122,6 +122,30 @@ def describe_proxy_manager():
         assert "tls" not in result
         assert "login=user:pass" in result
 
+    def it_doubles_a_percent_in_the_login_credential():
+        """#271: Squid reads URL escapes in login=, so a literal % must be doubled."""
+        pm = ProxyManager(
+            upstream_proxy="proxy.example.com:8080",
+            upstream_proxy_username="ama%kata",
+            upstream_proxy_password="p%40ss",
+        )
+
+        result = pm._generate_upstream_proxy_config()
+
+        assert "login=ama%%kata:p%%40ss" in result
+
+    def it_leaves_a_credential_without_a_percent_alone():
+        """The doubling touches nothing else."""
+        pm = ProxyManager(
+            upstream_proxy="proxy.example.com:8080",
+            upstream_proxy_username="user",
+            upstream_proxy_password="pass",
+        )
+
+        result = pm._generate_upstream_proxy_config()
+
+        assert "login=user:pass" in result
+
     def it_generates_upstream_proxy_config_when_not_set():
         """Test _generate_upstream_proxy_config when upstream is not set."""
         pm = ProxyManager(upstream_proxy=None)

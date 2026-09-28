@@ -548,7 +548,12 @@ cache_mem 256 MB"""
         if self.upstream_proxy_tls:
             options += " tls"
         if self.upstream_proxy_username and self.upstream_proxy_password:
-            options += f" login={self.upstream_proxy_username}:{self.upstream_proxy_password}"
+            # #271: Squid reads URL escapes in `login=`, so a literal % has to be doubled. A
+            # password containing one is otherwise sent to the upstream silently changed, and
+            # the only symptom is a 407 that names nothing.
+            user = self.upstream_proxy_username.replace("%", "%%")
+            password = self.upstream_proxy_password.replace("%", "%%")
+            options += f" login={user}:{password}"
             log_system_event(
                 "Upstream proxy configured with Basic authentication",
                 host=host,

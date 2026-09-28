@@ -1800,10 +1800,16 @@ pub async fn proxy_credential_set(path: &Path) -> anyhow::Result<()> {
          unlocked (sgw unlock) before Squid and the relay can use it — until then\n\
          they fall back to SEKIMORE_UPSTREAM_PROXY_* or config.yml, if either has one."
     );
-    let user = store::control::prompt("Proxy username")?;
+    // #271: echo on for the username, and checked before the password is asked for, so a typo
+    // costs one line rather than the whole entry and a 407 from the upstream.
+    let user = store::control::prompt_visible("Proxy username")?;
+    if let Err(why) = usable_username(&user) {
+        bail!("{why}");
+    }
+    eprintln!("username: {user}");
     let pass = store::control::prompt("Proxy password")?;
     let value = serde_json::json!({
-        "username": String::from_utf8_lossy(user.as_bytes()),
+        "username": user,
         "password": String::from_utf8_lossy(pass.as_bytes()),
     })
     .to_string();
@@ -1819,10 +1825,34 @@ pub async fn proxy_credential_set(path: &Path) -> anyhow::Result<()> {
         bail!("the credential was not stored");
     }
     println!("{message}");
+    // #271: the old wording told people to run `sgw restart` — stale since #193, where the
+    // gateway's watcher took over and applies the credential to Squid on its own.
     println!(
-        "The relay picks it up within seconds of the store being unlocked. Squid does too, when \
-         it is unlocked; if it is unlocked already, `sgw restart` applies it to Squid now."
+        "Both the relay and Squid pick it up within seconds of the store being unlocked; \
+         nothing has to be restarted."
     );
+    Ok(())
+}
+
+/// Whether a string can be the upstream proxy's username (#271).
+///
+/// Squid puts it straight into `cache_peer ... login=<user>:<pass>`, a line of its config that
+/// has no quoting: a space or a tab would end the option, and anything outside printable ASCII is
+/// an IME conversion that came along for the ride. Refusing here is what the operator sees
+/// instead of a 407 from the upstream with no clue which of the two values was wrong.
+fn usable_username(username: &str) -> Result<(), String> {
+    if username.is_empty() {
+        return Err("the username is empty; nothing was stored".to_string());
+    }
+    if !username.chars().all(|c| c.is_ascii_graphic()) {
+        // Debug, not Display: a trailing space or a tab is invisible otherwise, and those are
+        // exactly the ones worth showing.
+        return Err(format!(
+            "the username {username:?} is not printable ASCII, so Squid cannot use it in \
+             `login=`. An IME left on during typing is the usual cause — turn it off and \
+             run this again. Nothing was stored"
+        ));
+    }
     Ok(())
 }
 
@@ -2653,6 +2683,34 @@ garbage line\n";
         // Nothing relayed at all: ask for the upstream proxy's own host, so Squid still has to
         // reach its peer to answer.
         assert_eq!(with(Vec::new()), "gw.example.net");
+    }
+
+    /// #271: a real gateway ended up with `login=<kana>amakata:...` because the username was read
+    /// with echo off and an IME conversion went in unseen.
+    #[test]
+    fn a_username_squid_can_use_is_printable_ascii() {
+        assert!(usable_username("amakata").is_ok());
+        assert!(
+            usable_username(r"DOMAIN\user").is_ok(),
+            "a backslash is 0x5C"
+        );
+        assert!(usable_username("a.b-c").is_ok());
+
+        assert!(usable_username("").is_err());
+        let ime = usable_username("\u{3042}\u{307e}amakata").unwrap_err();
+        assert!(
+            ime.contains("IME"),
+            "the message names the usual cause: {ime}"
+        );
+        assert!(
+            ime.contains("\u{3042}\u{307e}amakata"),
+            "the message shows the value: {ime}"
+        );
+        assert!(
+            usable_username("ama kata").is_err(),
+            "a space ends the option"
+        );
+        assert!(usable_username("ama\tkata").is_err(), "a tab does too");
     }
 
     #[test]
