@@ -9,7 +9,8 @@
 
 **Let an AI agent work on GitHub without handing over your account.**
 
-sekimore-gw (sgw) is a network gateway for AI agents in Docker.
+sekimore-gw (sgw) is a network gateway for AI agents in Docker. On the host you run `sgw`;
+inside the dev container the agent runs `sgw-agent` (`sgw-agent guide` prints how).
 
 - All in one container:
   - DNS filter
@@ -27,44 +28,70 @@ sekimore-gw (sgw) is a network gateway for AI agents in Docker.
 - A token narrows repositories, not actions
 - Nothing records what the agent did
 
+## How it works
+
+The dev container's only route out is the gateway.
+
+1. A domain not in `allow_domains` does not resolve
+2. A direct connection to an IP is dropped by the firewall
+3. The HTTP proxy checks the same list, so `http_proxy` is no way around it
+4. `github.com` resolves to the relay. It speaks git and the GitHub API to the upstream with
+   your ssh-agent on the host and a token from the device flow, both of which stay on the gateway
+5. The relay checks the project's repositories and permissions on every operation, and records it
+
+The agent sees one ssh host and one API endpoint, and holds no credential for either.
+
 ## Get started
+
+The supported setup is VS Code Dev Containers on macOS or Linux. Windows is not tested.
 
 You need:
 
-- Docker (Docker Desktop on macOS, Docker Engine on Linux)
+- Docker (Docker Desktop on macOS, Docker Engine on Linux). The gateway runs `privileged` with
+  `pid: host`: the rules that keep the dev container on the gateway live in the host's firewall
 - VS Code with the Dev Containers extension
 
-1. Install `sgw`:
+1. Install `sgw`, one binary at `~/.local/bin/sgw`. The script checks the sha256 the release
+   publishes; the [Releases page](https://github.com/Amakata/sekimore-gw/releases) has the same
+   archives to install by hand:
    ```bash
    curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh
    ```
-2. Write the template:
+2. Write the template into your repository (a new directory: `sgw init --devcontainer my-project`):
    ```bash
-   sgw init --devcontainer my-project
-   cd my-project
+   cd your-project
+   sgw init --devcontainer
    ```
-3. Fill in `.devcontainer/.env` and `.devcontainer/config/config.yml`
-4. Quit VS Code completely, open it again, and choose "Reopen in Container":
+3. Fill in the minimum. `.devcontainer/.env`: `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` (and the
+   committer pair), `DEVCONTAINER_ID`. `.devcontainer/config/config.yml`: `allow_domains`,
+   `relay.project.name`, `relay.project.repos`, `relay.project.permissions`.
+   [config.sample.yml](config/config.sample.yml) explains every other key
+4. Quit VS Code completely, then start it with `sgw open`. Choose "Reopen in Container":
    ```bash
    sgw open
    ```
-   ⚠️ VS Code is always started with `sgw open`
-5. Unlock the secret store:
+   ⚠️ Always `sgw open`: it keeps your ssh-agent out of the container
+5. Unlock the secret store, in a host terminal, with VS Code left running. The first run sets
+   the passphrase; later runs ask for it (`sgw keychain-set` stops the asking):
    ```bash
    sgw unlock
    ```
-   ⚠️ The passphrase set the first time unlocks it from then on
-6. Log in to GitHub:
+6. Log in to GitHub, once. The token goes into the secret store:
    ```bash
    sgw login
    ```
-   ⚠️ Once. The result goes into the secret store
 7. Check:
    ```bash
    sgw verify
    ```
+8. Try it, in the dev container's terminal:
+   ```bash
+   sgw-agent whoami            # the permissions: pr:create … and no pr:merge
+   sgw-agent pr merge --number 1
+   # sgw-agent: denied: pr:merge is not allowed by policy
+   ```
 
-## What you set, and what it does
+## Settings
 
 The settings are in `.devcontainer/config/config.yml`; [config.sample.yml](config/config.sample.yml) explains every key.
 
@@ -76,13 +103,15 @@ The settings are in `.devcontainer/config/config.yml`; [config.sample.yml](confi
 | `relay.project.permissions` | The actions it may take |
 | `network.allowed_ports` | The ports it may reach |
 
+## Commands
+
 | To | Run |
 |---|---|
 | Unlock the secret store (it is locked again whenever the gateway container is recreated) | `sgw unlock` |
 | Make the unlock automatic | `sgw keychain-set` |
 | Log in to GitHub | `sgw login` |
 | Check the setup | `sgw verify` |
-| Apply a change to `config.yml` | `sgw restart` |
+| Apply a change to `config.yml` | `sgw restart`. When you added or changed an upstream, then `sgw refresh` (it rewrites the agent's ssh config) |
 | Move to a newer release | `sgw update --apply` |
 | See allowed and blocked access in the Web UI | `sgw web` |
 | See what the agent did | `sgw audit` |
@@ -97,6 +126,7 @@ Everything else: `sgw --help`.
 | Reach GitHub through a bastion | `domain_handlers.<host>.ssh_options: [ProxyJump=…]` |
 | Use GitHub Enterprise | Add its host to `domain_handlers` (`ssh_port`, `api_base`) |
 | Have the agent's commits show as Verified on GitHub | Register the key `sgw signing-key` prints as a Signing Key |
+| Run the dev container on a Linux VM reached by Remote-SSH | [docs/remote-ssh.md](docs/remote-ssh.md) |
 
 ## Fits, does not fit
 
@@ -125,11 +155,11 @@ Does not fit when the agent should:
 - [config/config.sample.yml](config/config.sample.yml) — every key
 - [UPGRADING.md](UPGRADING.md) — what a release asks of a project
 - [CHANGELOG.md](CHANGELOG.md) — the changes
-- [docs/paths.md](docs/paths.md) — the path ledger
+- [docs/paths.md](docs/paths.md) — every path a request can take, who checks it, and what `sgw verify` probes
 - [docs/localization.md](docs/localization.md) — English and Japanese
 - [CONTRIBUTING.md](CONTRIBUTING.md), [RELEASING.md](RELEASING.md)
 
-## When the dev container does not come up right
+## Troubleshooting
 
 First `sgw verify`. It names the item that fails and what to run.
 

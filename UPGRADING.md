@@ -749,6 +749,10 @@ and this guide from its root. An `upgrade.sh` from 0.2.43 or earlier still looks
 holding the new files, so `mise run upgrade:apply` crosses over once and reads from the new place
 from then on.
 
+That crossing lands you on 0.2.46, which still has the mise layer. Move on with `mise run upgrade`
+/ `upgrade:apply` again to 0.2.51 or later, then [0.2.52](#0252-the-mise-layer-is-gone-sgw-update---apply-removes-it)
+replaces the mise layer with `sgw`: two steps from a project older than 0.2.44, not one.
+
 ## 0.2.47 sgw is available
 
 Nothing to do. The mise tasks keep working exactly as before; this release takes nothing away.
