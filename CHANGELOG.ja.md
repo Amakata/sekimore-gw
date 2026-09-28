@@ -11,6 +11,24 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.54（2026-09-28）
+
+### Security
+
+- 上流プロキシの資格情報が秘密ストアにあってストアが locked の間、Squid は上流の 407 を中継せず、全要求を `sgw unlock` を示す 503 で止める。407 は VS Code がプロキシのパスワードを人に聞くダイアログになっていた (#275)
+- `sgw verify` の HTTPS の項目が Squid 自身の応答と上流の応答を区別し（`X-Squid-Error`）、`sekimore-relay check` の `reach:` はストアが locked ならそう言う (#275)
+
+### Fix
+
+- `sgw-agent setup` は gateway を `SEKIMORE_GATEWAY_WAIT` 秒（既定 90）待つ。3 回で諦めなくなり、居ないときは対処を言う。`sgw recreate` は起動中の dev コンテナを新しい gateway に向け直す (#274)
+- `sgw verify` に `dev: /etc/resolv.conf names the gateway` が加わり、Docker の DNS のまま残った dev コンテナを、それが壊す項目より先に名指しする (#274)
+- `sgw proxy-credential set` はユーザー名を打ったまま表示し、表示できる ASCII 以外を拒む。資格情報の `%` は Squid の `login=` 向けにエスケープする (#271)
+
+### Enhancement
+
+- `relay.project.boards` の各ボードに `permissions` の差分を付けられる（`project:*` のみ）。指定したボードが最後に判定し、拒否はボード名を含む。`check` と `whoami` がボードごとの実効権限を出す (#277)
+- Linux ホストを Remote-SSH で使う: `SEKIMORE_AGENT_SOCK` に Mac の agent を転送するディレクトリを書ける。`sgw verify` がソケットと、VS Code サーバが `SSH_AUTH_SOCK` を持たないことを確かめる。手順は `docs/remote-ssh.md` (#272)
+
 ## 0.2.53（2026-09-27）
 
 ### Fix
