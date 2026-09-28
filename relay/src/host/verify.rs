@@ -49,6 +49,20 @@ pub const ITEMS: &[Item] = &[
         run: dev_dns,
     },
     Item {
+        name: "host_agent_socket",
+        title: "host: the operator's ssh-agent socket named in .env answers",
+        edges: &[],
+        applies: always,
+        run: host_agent_socket,
+    },
+    Item {
+        name: "vscode_server_env",
+        title: "host: a VS Code server on this host must not carry SSH_AUTH_SOCK",
+        edges: &[],
+        applies: always,
+        run: vscode_server_env,
+    },
+    Item {
         name: "signing_key_only",
         title: "dev: only the gateway's filtered signing key may be reachable",
         edges: &[paths::DEV_SIGNING],
@@ -342,6 +356,145 @@ fn dev_dns(ctx: &mut Ctx) -> anyhow::Result<()> {
              recreated since: run sgw refresh (or restart the dev container)",
             ips.join(" ")
         )),
+    }
+    Ok(())
+}
+
+/// The Docker Desktop default: the socket lives inside its VM, so there is nothing to look at
+/// on the Mac itself.
+pub const DOCKER_DESKTOP_AGENT_SOCK: &str = "/run/host-services/ssh-auth.sock";
+
+/// `KEY=value` from a .env file, unquoted, comments and blank lines skipped.
+pub fn dotenv_value(text: &str, key: &str) -> Option<String> {
+    text.lines().rev().find_map(|l| {
+        let l = l.trim();
+        if l.starts_with('#') {
+            return None;
+        }
+        let (k, v) = l.split_once('=')?;
+        if k.trim() != key {
+            return None;
+        }
+        let v = v.trim();
+        let v = v
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .or_else(|| v.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+            .unwrap_or(v);
+        Some(v.to_string())
+    })
+}
+
+/// `KEY=value` out of a process's environment block (`/proc/<pid>/environ`, NUL-separated).
+pub fn environ_value(environ: &[u8], key: &str) -> Option<String> {
+    environ.split(|b| *b == 0).find_map(|entry| {
+        let s = String::from_utf8_lossy(entry);
+        let (k, v) = s.split_once('=')?;
+        (k == key).then(|| v.to_string())
+    })
+}
+
+/// #272: on a Linux host the operator's agent arrives by `ssh -R` from their Mac into a fixed
+/// path, and the gateway mounts that path (or, better, its directory). Whether the socket is
+/// there and an agent answers behind it is a host-side fact, so it is checked here, where the
+/// three later items that depend on it fail for a reason none of them names.
+fn host_agent_socket(ctx: &mut Ctx) -> anyhow::Result<()> {
+    let env = std::fs::read_to_string(ctx.project.compose_dir.join(".env")).unwrap_or_default();
+    let named = dotenv_value(&env, "SEKIMORE_AGENT_SOCK")
+        .unwrap_or_else(|| DOCKER_DESKTOP_AGENT_SOCK.to_string());
+    let path = std::path::PathBuf::from(&named);
+    if !path.exists() {
+        if named == DOCKER_DESKTOP_AGENT_SOCK {
+            ctx.skip("Docker Desktop forwards the Mac's agent inside its own VM; nothing to look at on this host");
+        } else {
+            ctx.fail(&format!(
+                "{named} does not exist on this host. The forwarding session that creates it is not up: connect from the Mac with the Host that has RemoteForward (docs/remote-ssh.md)"
+            ));
+        }
+        return Ok(());
+    }
+    let sock = crate::git::agent_check::resolve_auth_sock(path);
+    if !sock.exists() {
+        ctx.fail(&format!(
+            "{} is a directory but holds no agent.sock: the forwarding session that creates it is not up (docs/remote-ssh.md)",
+            named
+        ));
+        return Ok(());
+    }
+    let out = std::process::Command::new("ssh-add")
+        .arg("-l")
+        .env("SSH_AUTH_SOCK", &sock)
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let n = String::from_utf8_lossy(&o.stdout).lines().count();
+            ctx.ok(&format!("{} identities at {}", n, sock.display()));
+        }
+        Ok(o) => ctx.fail(&format!(
+            "no agent answers at {}: {}. The session that owned it ended; reconnect from the Mac, then sgw recreate if {} is a file rather than a directory",
+            sock.display(),
+            String::from_utf8_lossy(&o.stderr).trim(),
+            named
+        )),
+        Err(e) => ctx.skip(&format!("ssh-add is not available on this host ({e})")),
+    }
+    Ok(())
+}
+
+/// #272: the Dev Containers extension forwards whatever `SSH_AUTH_SOCK` the VS Code server
+/// holds into dev, and the server keeps the environment of its first start across reconnects.
+/// So a server that has it is the operator's key reaching the AI, whatever the ssh config says
+/// now. Linux only: the server processes and `/proc` are what there is to read.
+fn vscode_server_env(ctx: &mut Ctx) -> anyhow::Result<()> {
+    if !std::path::Path::new("/proc/self/environ").exists() {
+        ctx.skip(
+            "no /proc on this host; VS Code servers run on a Linux host reached by Remote-SSH",
+        );
+        return Ok(());
+    }
+    let pids = match std::process::Command::new("pgrep")
+        .args(["-f", r"\.vscode-server/"])
+        .output()
+    {
+        Ok(o) => String::from_utf8_lossy(&o.stdout)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        Err(e) => {
+            ctx.skip(&format!("pgrep is not available on this host ({e})"));
+            return Ok(());
+        }
+    };
+    let me = std::process::id().to_string();
+    let pids: Vec<String> = pids.into_iter().filter(|p| *p != me).collect();
+    if pids.is_empty() {
+        ctx.skip("no VS Code server is running on this host");
+        return Ok(());
+    }
+    let mut carrying = Vec::new();
+    let mut read = 0usize;
+    for pid in &pids {
+        if let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) {
+            read += 1;
+            if let Some(v) = environ_value(&environ, "SSH_AUTH_SOCK") {
+                carrying.push(format!("pid {pid} ({v})"));
+            }
+        }
+    }
+    if read == 0 {
+        ctx.skip(&format!(
+            "{} VS Code server process(es), none readable from this user",
+            pids.len()
+        ));
+    } else if carrying.is_empty() {
+        ctx.ok(&format!(
+            "{read} VS Code server process(es) read, none carries SSH_AUTH_SOCK"
+        ));
+    } else {
+        ctx.fail(&format!(
+            "the VS Code server carries SSH_AUTH_SOCK, which the Dev Containers extension forwards into dev: {}. Connect through a Host with ForwardAgent no and remote.SSH.enableAgentForwarding false, then run \"Remote-SSH: Kill VS Code Server on Host\" once (docs/remote-ssh.md)",
+            carrying.join(", ")
+        ));
     }
     Ok(())
 }
@@ -901,6 +1054,38 @@ mod tests {
             dns_verdict(&[], &gw),
             Err("no nameserver line at all".into())
         );
+    }
+
+    /// #272: the host-side reads behind the two Remote-SSH items.
+    #[test]
+    fn dotenv_and_environ_are_read_the_way_the_files_are_written() {
+        let env = "# the socket\nSEKIMORE_AGENT_SOCK=/home/dev/.sekimore\nOTHER=x\n";
+        assert_eq!(
+            dotenv_value(env, "SEKIMORE_AGENT_SOCK").as_deref(),
+            Some("/home/dev/.sekimore")
+        );
+        assert_eq!(dotenv_value(env, "MISSING"), None);
+        // quotes come off, a commented line does not count, the last assignment wins
+        assert_eq!(
+            dotenv_value("A=\"q\"\n#A=no\nA='last'\n", "A").as_deref(),
+            Some("last")
+        );
+        assert_eq!(
+            dotenv_value("#SEKIMORE_AGENT_SOCK=/x\n", "SEKIMORE_AGENT_SOCK"),
+            None
+        );
+        // a key that merely starts the same is not the key
+        assert_eq!(
+            dotenv_value("SEKIMORE_AGENT_SOCK_X=1\n", "SEKIMORE_AGENT_SOCK"),
+            None
+        );
+        let environ = b"HOME=/home/dev\0SSH_AUTH_SOCK=/tmp/vscode-ssh-auth-1.sock\0LANG=C\0";
+        assert_eq!(
+            environ_value(environ, "SSH_AUTH_SOCK").as_deref(),
+            Some("/tmp/vscode-ssh-auth-1.sock")
+        );
+        assert_eq!(environ_value(b"HOME=/home/dev\0", "SSH_AUTH_SOCK"), None);
+        assert_eq!(environ_value(b"XSSH_AUTH_SOCK=/x\0", "SSH_AUTH_SOCK"), None);
     }
 
     #[test]

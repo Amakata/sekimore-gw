@@ -502,6 +502,8 @@ fn verify_reports_every_item_with_its_ledger_rows() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     for heading in [
         "== gateway: sekimore-relay check",
+        "== host: the operator's ssh-agent socket named in .env answers",
+        "== host: a VS Code server on this host must not carry SSH_AUTH_SOCK",
         "== dev: /etc/resolv.conf names the gateway [dev.dns]",
         "== dev: only the gateway's filtered signing key may be reachable [dev.signing]",
         "== gateway: the secret store [operator.store]",
