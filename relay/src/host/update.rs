@@ -90,6 +90,17 @@ pub fn pinned_base(dockerfile: &str) -> Option<String> {
 
 /// `image:from` → `image:to`, only where the version ends where the tag ends: moving 0.2.1 →
 /// 0.2.10 must leave an `0.2.19` alone.
+/// #300: this binary's template with its two pins set to `version`, i.e. the template as that
+/// version wrote it — exactly, when nothing else changed between the two.
+pub fn as_of_version(content: &str, version: &str) -> String {
+    retag(
+        &retag(content, GW_IMAGE, VERSION, version),
+        BASE_IMAGE,
+        VERSION,
+        version,
+    )
+}
+
 pub fn retag(text: &str, image: &str, from: &str, to: &str) -> String {
     let needle = format!("{image}:{from}");
     let mut out = String::with_capacity(text.len());
@@ -177,7 +188,17 @@ pub enum FileState {
 /// Three shas decide: `recorded` (sgw.toml, what sgw wrote last), `current` (disk), `new` (this
 /// version). No record is read as "this version is the baseline": a project that never had
 /// sgw.toml keeps its files, and only a later change to the template is a conflict.
-pub fn file_state(recorded: Option<&str>, current: Option<&str>, new: &str) -> FileState {
+/// #300: `old_like` is this version's template with its pins set back to the recorded version —
+/// what the recorded template looked like when the only thing that changed since is the pin.
+/// A record equal to it means the template did not change for the project's purposes: the pin
+/// is rewritten in the project's own file by `--apply` anyway, so the file is `Yours`, not a
+/// conflict with a `.sgw-new` that holds nothing to take.
+pub fn file_state(
+    recorded: Option<&str>,
+    current: Option<&str>,
+    new: &str,
+    old_like: Option<&str>,
+) -> FileState {
     let Some(cur) = current else {
         return FileState::Missing;
     };
@@ -186,7 +207,7 @@ pub fn file_state(recorded: Option<&str>, current: Option<&str>, new: &str) -> F
     }
     match recorded {
         None => FileState::Yours,
-        Some(r) if r == new => FileState::Yours,
+        Some(r) if r == new || Some(r) == old_like => FileState::Yours,
         Some(r) if r == cur => FileState::Changes,
         Some(_) => FileState::Conflict,
     }
@@ -558,7 +579,12 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
             .as_ref()
             .and_then(|r| r.files.get(tpl.path))
             .map(String::as_str);
-        let st = file_state(rec, current.as_deref(), &new);
+        // #300: the template as the recorded version wrote it, when the two differ only in the pins
+        let old_like = recorded
+            .as_ref()
+            .filter(|r| !r.version.is_empty() && r.version != VERSION)
+            .map(|r| sha256_hex(as_of_version(tpl.content, &r.version).as_bytes()));
+        let st = file_state(rec, current.as_deref(), &new, old_like.as_deref());
         let word = match st {
             FileState::Same => t("sgw.update.f_same"),
             FileState::Changes => t("sgw.update.f_changes"),
@@ -937,27 +963,39 @@ mod tests {
     #[test]
     fn three_shas_decide_what_update_does_with_a_file() {
         use FileState::*;
-        assert_eq!(file_state(None, None, "n"), Missing);
-        assert_eq!(file_state(Some("n"), Some("n"), "n"), Same);
+        assert_eq!(file_state(None, None, "n", None), Missing);
+        assert_eq!(file_state(Some("n"), Some("n"), "n", None), Same);
         assert_eq!(
-            file_state(Some("old"), Some("old"), "n"),
+            file_state(Some("old"), Some("old"), "n", None),
             Changes,
             "as written, template changed"
         );
         assert_eq!(
-            file_state(Some("n"), Some("mine"), "n"),
+            file_state(Some("n"), Some("mine"), "n", None),
             Yours,
             "edited, template unchanged"
         );
         assert_eq!(
-            file_state(None, Some("mine"), "n"),
+            file_state(None, Some("mine"), "n", None),
             Yours,
             "no record: this version is the baseline"
         );
         assert_eq!(
-            file_state(Some("old"), Some("mine"), "n"),
+            file_state(Some("old"), Some("mine"), "n", None),
             Conflict,
             "edited and changed"
+        );
+        // #300: the template changed only in its pin — the recorded sha is what this version's
+        // template looks like with the old pin — so the edited file is the project's
+        assert_eq!(
+            file_state(Some("old"), Some("mine"), "n", Some("old")),
+            Yours,
+            "edited, template changed only in the pin"
+        );
+        assert_eq!(
+            file_state(Some("older"), Some("mine"), "n", Some("old")),
+            Conflict,
+            "edited, and the template changed in more than the pin"
         );
     }
 
@@ -1072,5 +1110,35 @@ mod tests {
             "{:?}",
             owned_notes(tmp.path())
         );
+    }
+}
+
+#[cfg(test)]
+mod pin_only_tests {
+    use super::*;
+
+    /// #300: the template with its pins set back is the template of that version, byte for byte,
+    /// when the pins are all that moved.
+    #[test]
+    fn as_of_version_sets_both_pins_back() {
+        let dockerfile = templates::FILES
+            .iter()
+            .find(|t| t.path == ".devcontainer/Dockerfile")
+            .unwrap();
+        let old = as_of_version(dockerfile.content, "0.2.40");
+        assert!(old.contains("sgw-devcontainer-base:0.2.40"), "{old}");
+        assert!(!old.contains(&format!("sgw-devcontainer-base:{VERSION}")));
+        let compose = templates::FILES
+            .iter()
+            .find(|t| t.path == ".devcontainer/docker-compose.yml")
+            .unwrap();
+        let old = as_of_version(compose.content, "0.2.40");
+        assert!(old.contains("sekimore-gw:0.2.40"), "{old}");
+        // a file with no pin is itself
+        let cfg = templates::FILES
+            .iter()
+            .find(|t| t.path == ".devcontainer/config/config.yml")
+            .unwrap();
+        assert_eq!(as_of_version(cfg.content, "0.2.40"), cfg.content);
     }
 }

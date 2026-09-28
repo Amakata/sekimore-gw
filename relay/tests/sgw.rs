@@ -1028,3 +1028,67 @@ fn self_update_replaces_the_running_binary_from_the_release() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("sha256 mismatch"));
     assert_eq!(std::fs::read(&copy2).unwrap(), before);
 }
+
+// ---- #300: a template that changed only in its pin ----
+
+/// The project edited its Dockerfile and compose (most do), and the new version's template
+/// differs from the recorded one only in the version pin — which `--apply` rewrites in the
+/// project's files anyway. That is "yours", not a conflict, and no `.sgw-new` is written.
+#[test]
+fn a_template_that_changed_only_in_its_pin_leaves_an_edited_file_alone() {
+    let f = fixture();
+    let dir = f._tmp.path().join("pin");
+    let out = sgw(&f, &["init", dir.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success());
+    let version = env!("CARGO_PKG_VERSION");
+    // what the previous version's template was: this one with the pin set back
+    let dockerfile = dir.join(".devcontainer/Dockerfile");
+    let as_written = std::fs::read_to_string(&dockerfile).unwrap();
+    let previous = as_written.replace(
+        &format!("sgw-devcontainer-base:{version}"),
+        "sgw-devcontainer-base:0.2.40",
+    );
+    assert_ne!(previous, as_written, "the template carries the pin");
+    record(&dir, ".devcontainer/Dockerfile", &sha(&previous));
+    // sgw.toml says the previous version wrote it, and the project edited it since
+    let toml = dir.join("sgw.toml");
+    let text = std::fs::read_to_string(&toml).unwrap();
+    std::fs::write(
+        &toml,
+        text.replace(&format!("version = \"{version}\""), "version = \"0.2.40\""),
+    )
+    .unwrap();
+    std::fs::write(&dockerfile, format!("{previous}\n# mine: build deps\n")).unwrap();
+
+    let out = sgw(&f, &["update", "--offline"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout
+        .lines()
+        .find(|l| l.contains(".devcontainer/Dockerfile"))
+        .unwrap_or_else(|| panic!("no Dockerfile line in {stdout}"));
+    assert!(line.contains("yours"), "pin-only change is yours: {line}");
+    assert!(!line.contains("sgw-new"), "{line}");
+
+    let out = sgw(&f, &["update", "--apply", "--yes", "--offline"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !dir.join(".devcontainer/Dockerfile.sgw-new").exists(),
+        "nothing to take, nothing written beside"
+    );
+    let now = std::fs::read_to_string(&dockerfile).unwrap();
+    assert!(now.contains("# mine: build deps"), "the edit stays: {now}");
+    assert!(
+        now.contains(&format!("sgw-devcontainer-base:{version}")),
+        "the pin moved: {now}"
+    );
+}
