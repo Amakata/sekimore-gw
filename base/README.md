@@ -31,8 +31,17 @@ The template's [Dockerfile](../relay/templates/devcontainer/.devcontainer/Docker
 | Languages | `mise`. No language version |
 | AI | Claude Code CLI, OpenAI Codex CLI, the official Anthropic skills |
 | Cloud | AWS CLI v2, Docker CE with buildx and compose |
-| Gateway | `sgw-agent` (the AI's command; `sgw-agent setup` at every start), `sekimore-relay`, `sekimore` (the former name), `sgw-post-start` (what `postStartCommand` runs), copied out of `ghcr.io/amakata/sekimore-gw:0.2.54` |
+| Gateway | four tools copied out of `ghcr.io/amakata/sekimore-gw:0.2.54`, below |
 | zsh defaults | `/etc/skel/zsh-rc.d/`, copied into `~/.config/zsh/rc.d/` by post-create |
+
+From the gateway image:
+
+| Tool | Role |
+|---|---|
+| `sgw-agent` | the AI's command for git through the relay and the GitHub API; `sgw-agent setup` runs at every start and `sgw-agent guide` prints the usage |
+| `sekimore-relay` | the relay itself, for `sgw-agent setup` to talk to the gateway with |
+| `sekimore` | the former name of `sgw-agent`, kept as an alias; its removal will be announced in UPGRADING.md |
+| `sgw-post-start` | what `postStartCommand` runs: the setup, the inner Docker daemon, the project's post-create.sh |
 
 Not in the image:
 
@@ -61,5 +70,5 @@ base/tests/test_image.sh sgw-devcontainer-base:dev
 
 - [docs/template.md](../docs/template.md) — the template `sgw init` writes
 - [UPGRADING.md](../UPGRADING.md) — what a release asks of a project
-- [CHANGELOG.md](../CHANGELOG.md) — one for the gateway, the relay, the base and sgw; [base/CHANGELOG.md](CHANGELOG.md) is the base's own history up to 0.2.45
+- [CHANGELOG.md](../CHANGELOG.md) — one for the gateway, the relay, the base and sgw; [base/CHANGELOG.md](CHANGELOG.md) is the base's own history up to 0.2.43, its last release of its own (the gateway's 0.2.44 and 0.2.45 had no base release)
 - [RELEASING.md](../RELEASING.md)
