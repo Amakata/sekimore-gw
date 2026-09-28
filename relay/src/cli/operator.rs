@@ -732,6 +732,11 @@ fn keyscan_via_bastion(up: &OpenSshUpstream, host: &str, port: u16) -> anyhow::R
                 ("host", host),
                 ("port", &port.to_string()),
                 ("stderr", &errors.join("; ")),
+                (
+                    "sock",
+                    &std::env::var("SSH_AUTH_SOCK")
+                        .unwrap_or_else(|_| "(SSH_AUTH_SOCK unset)".into()),
+                ),
             ]
         ));
     }
@@ -1203,23 +1208,38 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
     println!("\n{}", t("op.check.state"));
     let sock = auth_sock_from_env();
     match preflight_agent(sock.as_deref()).await {
-        Ok(n) => println!(
-            "{}",
-            tf(
-                "op.check.agent_ok",
-                &[
-                    ("state", &paint(Tone::Good, &t("op.check.word.ok"))),
-                    ("n", &n.to_string()),
-                    (
-                        "sock",
-                        &sock
-                            .as_deref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_default()
-                    ),
-                ]
-            )
-        ),
+        Ok(n) => {
+            println!(
+                "{}",
+                tf(
+                    "op.check.agent_ok",
+                    &[
+                        ("state", &paint(Tone::Good, &t("op.check.word.ok"))),
+                        ("n", &n.to_string()),
+                        (
+                            "sock",
+                            &sock
+                                .as_deref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default()
+                        ),
+                    ]
+                )
+            );
+            // #305: the variable named a directory; say so, and that every ssh got the socket
+            if let Some((raw, resolved)) = crate::git::agent_check::normalize_auth_sock_env() {
+                println!(
+                    "{}",
+                    tf(
+                        "op.check.agent_dir",
+                        &[
+                            ("raw", &raw.display().to_string()),
+                            ("sock", &resolved.display().to_string()),
+                        ]
+                    )
+                );
+            }
+        }
         Err(e) => println!(
             "{}",
             tf(
