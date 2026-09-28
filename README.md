@@ -51,7 +51,7 @@ You need:
   `pid: host`: the rules that keep the dev container on the gateway live in the host's firewall
 - VS Code with the Dev Containers extension
 
-1. Install `sgw`, one binary at `~/.local/bin/sgw`. The script checks the sha256 the release
+1. Install `sgw`, one binary at `~/.local/bin/sgw` (put that directory on your PATH). The script checks the sha256 the release
    publishes; the [Releases page](https://github.com/Amakata/sekimore-gw/releases) has the same
    archives to install by hand:
    ```bash
@@ -63,7 +63,7 @@ You need:
    sgw init --devcontainer
    ```
 3. Fill in the minimum. `.devcontainer/.env`: `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` (and the
-   committer pair), `DEVCONTAINER_ID`. `.devcontainer/config/config.yml`: `allow_domains`,
+   committer pair), `DEVCONTAINER_ID` (a name unique on this host). `.devcontainer/config/config.yml`: `allow_domains`,
    `relay.project.name`, `relay.project.repos`, `relay.project.permissions`.
    [config.sample.yml](config/config.sample.yml) explains every other key
 4. Quit VS Code completely, then start it with `sgw open`. Choose "Reopen in Container":
@@ -98,6 +98,7 @@ The settings are in `.devcontainer/config/config.yml`; [config.sample.yml](confi
 | Setting | Effect |
 |---|---|
 | `allow_domains` | The destinations the agent may reach |
+| `relay.project.name` | The project's name: what the agent's token is issued for, and the label on the audit |
 | `domain_handlers` | The domains that go through the relay: git, the GitHub API, HTTPS |
 | `relay.project.repos` | The repositories the agent may touch |
 | `relay.project.permissions` | The actions it may take |
@@ -149,7 +150,7 @@ Does not fit when the agent should:
 ## Documentation
 
 - [docs/template.md](docs/template.md) — the files `sgw init` writes
-- [docs/remote-ssh.md](docs/remote-ssh.md) — a Linux host over Remote-SSH: the agent reaches the gateway, not dev
+- [docs/remote-ssh.md](docs/remote-ssh.md) — run the dev container on a Linux VM reached by Remote-SSH
 - [base/README.md](base/README.md) — what the dev container's image holds
 - [relay/README.md](relay/README.md) — the relay's configuration and the permission catalog
 - [config/config.sample.yml](config/config.sample.yml) — every key
@@ -171,7 +172,7 @@ First `sgw verify`. It names the item that fails and what to run.
 | A domain the agent needs is not resolved | Add it to `allow_domains`. The blocked access shows in `sgw web` |
 | The gateway is old after an update | `sgw recreate` |
 | "network … already exists" while starting | The previous dev container and gateway are still there. `sgw down` removes the whole stack; open again |
-| HTTP 503 "the secret store is locked" right after a start | The upstream proxy's password is in the secret store and the store is locked, so the gateway holds every request instead of letting a client ask you for that password. `sgw unlock` |
+| HTTP 503 "the secret store is locked" right after a start | The upstream proxy's password is in the locked store. `sgw unlock` |
 | The dev container is old after an update | Rebuild Container in VS Code |
 
 ## License
