@@ -28,7 +28,7 @@
 #         they sit in the same agent.
 #       - Without relay.signing_key, this volume goes unused (dev generates a key as before).
 #
-# Assumes the operator's agent is not forwarded into dev (`ssh-add -l` inside dev has to fail).
+# Assumes the operator's agent is not forwarded into dev (`ssh-add -l` inside dev lists the signing key alone).
 # How to stop the Dev Containers extension's implicit forwarding is in
 # doc/sgw-devcontainer-base/design/sekimore-relay-agent.md D-6.
 services:
