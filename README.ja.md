@@ -51,7 +51,7 @@ dev コンテナから外に出る道はゲートウェイだけです。
   dev コンテナをゲートウェイに縛る規則はホストのファイアウォールにあるため
 - VS Code と Dev Containers 拡張
 
-1. `sgw` を入れる。`~/.local/bin/sgw` にバイナリ 1 つ。スクリプトはリリースが公開する sha256 を照合する。
+1. `sgw` を入れる。`~/.local/bin/sgw` にバイナリ 1 つ（そのディレクトリを PATH に通す）。スクリプトはリリースが公開する sha256 を照合する。
    手で入れるなら [Releases](https://github.com/Amakata/sekimore-gw/releases) に同じアーカイブがある:
    ```bash
    curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh
@@ -62,7 +62,7 @@ dev コンテナから外に出る道はゲートウェイだけです。
    sgw init --devcontainer
    ```
 3. 最小限を埋める。`.devcontainer/.env`: `GIT_AUTHOR_NAME`、`GIT_AUTHOR_EMAIL`（COMMITTER も同じ）、
-   `DEVCONTAINER_ID`。`.devcontainer/config/config.yml`: `allow_domains`、`relay.project.name`、
+   `DEVCONTAINER_ID`（このホストで一意な名前）。`.devcontainer/config/config.yml`: `allow_domains`、`relay.project.name`、
    `relay.project.repos`、`relay.project.permissions`。残りのキーは [config.sample.yml](config/config.sample.yml)
 4. VS Code を完全に終了してから `sgw open` で起動し、「Reopen in Container」を選ぶ:
    ```bash
@@ -96,6 +96,7 @@ dev コンテナから外に出る道はゲートウェイだけです。
 | 設定 | 効果 |
 |---|---|
 | `allow_domains` | エージェントが届いてよい宛先 |
+| `relay.project.name` | プロジェクトの名前。エージェントのトークンはこれに対して発行され、監査の見出しになる |
 | `domain_handlers` | 関所を通すドメイン: git、GitHub API、HTTPS |
 | `relay.project.repos` | エージェントが触ってよいリポジトリ |
 | `relay.project.permissions` | 許す操作 |
@@ -147,7 +148,7 @@ dev コンテナから外に出る道はゲートウェイだけです。
 ## ドキュメント
 
 - [docs/template.ja.md](docs/template.ja.md) — `sgw init` が書くファイル
-- [docs/remote-ssh.ja.md](docs/remote-ssh.ja.md) — Linux ホストを Remote-SSH で使う（agent をゲートウェイに届け、dev には渡さない）
+- [docs/remote-ssh.ja.md](docs/remote-ssh.ja.md) — Remote-SSH で繋ぐ Linux VM の上で dev コンテナを動かす
 - [base/README.ja.md](base/README.ja.md) — dev コンテナのイメージの中身
 - [relay/README.ja.md](relay/README.ja.md) — 関所の設定と権限の一覧
 - [config/config.sample.yml](config/config.sample.yml) — すべてのキー
@@ -169,7 +170,7 @@ dev コンテナから外に出る道はゲートウェイだけです。
 | エージェントに要るドメインが解決されない | `allow_domains` に足す。ブロックされた通信は `sgw web` で見える |
 | 版を上げたのにゲートウェイが古い | `sgw recreate` |
 | 起動時に「network … already exists」と出る | 前の dev コンテナとゲートウェイが残っている。`sgw down` で丸ごと消して開き直す |
-| 起動直後に HTTP 503「the secret store is locked」が返る | 上流 proxy のパスワードが秘密ストアにあり、ストアが locked。パスワードをクライアントに聞かせないためにゲートウェイが全要求を止めている。`sgw unlock` |
+| 起動直後に HTTP 503「the secret store is locked」が返る | 上流 proxy のパスワードが locked のストアにある。`sgw unlock` |
 | 版を上げたのに dev コンテナが古い | VS Code の Rebuild Container |
 
 ## ライセンス
