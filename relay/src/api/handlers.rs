@@ -198,20 +198,31 @@ fn board_choices(boards: &[crate::api::ResolvedBoard]) -> String {
 /// #277: the board actually named decides last. `authorize` counted a key any board adds; here
 /// the board is known, and its own allow / deny settle it. Every Projects handler goes
 /// through this, so a board is never reached on the anchor repository's permissions alone.
-async fn board_scope(
-    ctx: &ApiContext,
-    gh: &GitHub,
+/// #291: the client it hands back is the board's upstream's, not the anchor repository's: a
+/// board on the GHE is asked on the GHE whatever `--repo` / `SEKIMORE_REPO` name.
+async fn board_scope<'a>(
+    ctx: &'a ApiContext,
     req: &ApiRequest,
     auth: &crate::policy::Authorized<'_>,
-) -> Result<String, ApiError> {
-    let board = resolve_board(ctx, gh, req).await?;
+) -> Result<(String, &'a GitHub), ApiError> {
+    let board = resolve_board(ctx, req).await?;
     ctx.project.authorize_board(auth, &board.label)?;
-    Ok(board.id)
+    let client = ctx
+        .githubs
+        .get(&board.upstream)
+        .map(|g| g.as_ref())
+        .ok_or_else(|| ApiError {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: format!(
+                "upstream API for {} (the upstream of project board {}) is not configured on the gateway",
+                board.upstream, board.label
+            ),
+        })?;
+    Ok((board.id, client))
 }
 
 async fn resolve_board(
     ctx: &ApiContext,
-    gh: &GitHub,
     req: &ApiRequest,
 ) -> Result<crate::api::ResolvedBoard, ApiError> {
     if ctx.project_boards.is_declared_empty() {
@@ -219,7 +230,7 @@ async fn resolve_board(
             "no project board is allowed; add relay.project.boards (the org / user and the number from the board's URL)",
         ));
     }
-    let boards = ctx.project_boards.get(gh).await;
+    let boards = ctx.project_boards.get(&ctx.githubs, &ctx.git_domain).await;
     if boards.is_empty() {
         // Declared but not resolvable. Saying "add relay.project.boards" here would send the
         // operator to a file that already has it; the usual reason is a locked secret store,
@@ -412,9 +423,11 @@ async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiE
         ctx.project.repos.first(),
     ) {
         (labels, Some(anchor)) if !labels.is_empty() => {
+            let upstreams = ctx.project_boards.declared_upstreams();
             let lines: Vec<String> = labels
                 .iter()
-                .map(|label| {
+                .zip(upstreams.iter())
+                .map(|(label, upstream)| {
                     let effective = ctx.project.effective_board_keys(anchor, label);
                     let mut delta: Vec<String> = effective
                         .iter()
@@ -427,10 +440,15 @@ async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiE
                             .filter(|k| k.starts_with("project:") && !effective.contains(k))
                             .map(|k| format!("-{k}")),
                     );
+                    // #291: a board on another upstream says so; the call goes there by itself
+                    let at = match upstream {
+                        Some(u) => format!(" (on {u})"),
+                        None => String::new(),
+                    };
                     if delta.is_empty() {
-                        label.clone()
+                        format!("{label}{at}")
                     } else {
-                        format!("{label} {}", delta.join(" "))
+                        format!("{label}{at} {}", delta.join(" "))
                     }
                 })
                 .collect();
@@ -1712,8 +1730,8 @@ async fn issue_unassign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespons
 
 async fn project_add_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need(!req.content_id.is_empty(), "content_id is required")?;
-    let (auth, client) = project_scope(ctx, req, Resource::Project, Action::AddItem)?;
-    let board = board_scope(ctx, client, req, &auth).await?;
+    let (auth, _) = project_scope(ctx, req, Resource::Project, Action::AddItem)?;
+    let (board, client) = board_scope(ctx, req, &auth).await?;
     let item = client
         .add_project_item(&auth, &board, &req.content_id)
         .await?;
@@ -1728,8 +1746,8 @@ async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRe
         !req.item_id.is_empty() && !req.field_id.is_empty(),
         "item_id and field_id are required",
     )?;
-    let (auth, client) = project_scope(ctx, req, Resource::Project, Action::UpdateItem)?;
-    let board = board_scope(ctx, client, req, &auth).await?;
+    let (auth, _) = project_scope(ctx, req, Resource::Project, Action::UpdateItem)?;
+    let (board, client) = board_scope(ctx, req, &auth).await?;
     let value = req.value.clone().unwrap_or(Value::Null);
     client
         .update_project_item_field(&auth, &board, &req.item_id, &req.field_id, value)
@@ -1738,8 +1756,8 @@ async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRe
 }
 
 async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = project_scope(ctx, req, Resource::Project, Action::Read)?;
-    let board = board_scope(ctx, client, req, &auth).await?;
+    let (auth, _) = project_scope(ctx, req, Resource::Project, Action::Read)?;
+    let (board, client) = board_scope(ctx, req, &auth).await?;
     let first = if req.first == 0 || req.first > 100 {
         20
     } else {
@@ -1754,8 +1772,8 @@ async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
 
 /// 0.2.7: the board's fields and their option ids, which `project update-item` needs.
 async fn project_fields(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = project_scope(ctx, req, Resource::Project, Action::Read)?;
-    let board = board_scope(ctx, client, req, &auth).await?;
+    let (auth, _) = project_scope(ctx, req, Resource::Project, Action::Read)?;
+    let (board, client) = board_scope(ctx, req, &auth).await?;
     let first = if req.first == 0 || req.first > 100 {
         50
     } else {

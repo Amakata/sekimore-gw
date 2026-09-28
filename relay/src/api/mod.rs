@@ -95,6 +95,7 @@ impl ProjectBoards {
                     org: None,
                     user: Some("test".into()),
                     number: b.number,
+                    upstream: None,
                     permissions: None,
                 })
                 .collect(),
@@ -114,28 +115,51 @@ impl ProjectBoards {
         self.declared.iter().map(|b| b.label()).collect()
     }
 
+    /// #291: the declared boards' upstreams, in the same order (`None` = the default upstream).
+    pub fn declared_upstreams(&self) -> Vec<Option<String>> {
+        self.declared.iter().map(|b| b.upstream.clone()).collect()
+    }
+
     /// The resolved boards, resolving them if this is the first call that needed them.
     ///
     /// Every board resolving is the success case. A partial result is returned rather than an
     /// error so that one bad entry does not take the others down, but it is not cached — see
     /// `resolved`.
-    pub async fn get(&self, gh: &crate::github::GitHub) -> Vec<ResolvedBoard> {
+    /// #291: each board is resolved on its own upstream (`boards[].upstream`, the default one when
+    /// unset), with that upstream's client, and remembers which it was.
+    pub async fn get(
+        &self,
+        githubs: &std::collections::HashMap<String, Arc<crate::github::GitHub>>,
+        default_domain: &str,
+    ) -> Vec<ResolvedBoard> {
         let mut slot = self.resolved.lock().await;
         if let Some(found) = slot.as_ref() {
             return found.clone();
         }
         let mut out = Vec::new();
         for b in &self.declared {
+            let upstream = b
+                .upstream
+                .clone()
+                .unwrap_or_else(|| default_domain.to_string());
+            let Some(gh) = githubs.get(&upstream) else {
+                log::warn!(
+                    "project board {} names upstream {upstream}, which has no API client; it stays refused",
+                    b.label()
+                );
+                continue;
+            };
             match gh
                 .resolve_project_board(b.org.as_deref(), b.user.as_deref(), b.number)
                 .await
             {
                 Ok(id) => {
-                    log::info!("project board {} → {id}", b.label());
+                    log::info!("project board {} → {id} ({upstream})", b.label());
                     out.push(ResolvedBoard {
                         id,
                         number: b.number,
                         label: b.label(),
+                        upstream,
                     });
                 }
                 Err(e) => log::warn!(
@@ -164,6 +188,8 @@ pub struct ResolvedBoard {
     pub number: u32,
     /// `orgs/<org>/projects/<n>` or `users/<user>/projects/<n>`, for messages
     pub label: String,
+    /// #291: the git-relay domain the board lives on; every call about it goes there
+    pub upstream: String,
 }
 
 pub const BOOTSTRAP_RATE_PER_MINUTE: usize = 10;

@@ -154,7 +154,7 @@
   "agent.issue.unassign.assignees": "Assignees to remove, comma separated",
   "agent.project.add_item": "Add an item to a project",
   "agent.project.update_item": "Update a field of a project item",
-  "agent.project.update_item.value": "JSON, or a string (a string becomes {\"text\": …})",
+  "agent.project.update_item.value": "The field's new value as JSON: a single select takes {\"singleSelectOptionId\":\"<option id from project fields>\"}, a number {\"number\": 3}, a date {\"date\":\"2026-01-31\"}, an iteration {\"iterationId\":\"…\"}; a bare string becomes {\"text\": …}",
   "agent.project.list": "List project items",
   "agent.project.project_id": "Project node ID. --board names the same board without one",
   "agent.project.board": "Board number, as config.yml and the URL write it (github.com/users/<user>/projects/<n>). The default when the project has one board",

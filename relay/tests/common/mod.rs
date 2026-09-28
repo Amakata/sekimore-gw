@@ -590,6 +590,9 @@ pub struct ApiFixture {
     pub addr: SocketAddr,
     pub ctx: Arc<ApiContext>,
     pub recorder: Recorder,
+    /// #291: what the second upstream (`ghe.example.com`) was asked; a board that lives there
+    /// is asked there, whatever the anchor repository's upstream is
+    pub ghe_recorder: Recorder,
     pub token: String,
     pub audit_path: std::path::PathBuf,
     /// The upstream token store, so a test can give the relay a token after start-up — which is
@@ -609,6 +612,7 @@ pub fn board(number: u32, id: &str) -> ResolvedBoard {
         id: id.to_string(),
         number,
         label: format!("users/tester/projects/{number}"),
+        upstream: "github.com".to_string(),
     }
 }
 
@@ -674,6 +678,20 @@ pub async fn start_api_full(
         store.clone(),
         audit.clone(),
     ));
+    // #291: a second upstream, so a board declared on it can be seen to be asked there
+    let (ghe_base, ghe_recorder) = mock_github().await;
+    let ghe_graphql = Url::parse(&format!(
+        "{}/graphql",
+        ghe_base.as_str().trim_end_matches("/api/v3").to_string() + "/api"
+    ))
+    .unwrap();
+    let ghe = Arc::new(GitHub::new(
+        ghe_base,
+        ghe_graphql,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        store.clone(),
+        audit.clone(),
+    ));
     let tokens = TokenStore::new(&dir.path().join("tokens.json"));
     let (token, _) = tokens
         .issue(&project.name, Duration::from_secs(3600))
@@ -681,7 +699,10 @@ pub async fn start_api_full(
     let ctx = Arc::new(ApiContext {
         project,
         tokens,
-        githubs: HashMap::from([("github.com".to_string(), gh)]),
+        githubs: HashMap::from([
+            ("github.com".to_string(), gh),
+            ("ghe.example.com".to_string(), ghe),
+        ]),
         audit,
         keys: Arc::new(AuthorizedKeys::new(&dir.path().join("authorized_keys"), 8)),
         bootstrap,
@@ -706,6 +727,7 @@ pub async fn start_api_full(
         addr,
         ctx,
         recorder,
+        ghe_recorder,
         token,
         audit_path,
         tokens: store,
