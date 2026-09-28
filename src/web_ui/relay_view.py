@@ -61,6 +61,8 @@ class RelayRepo(BaseModel):
     push: list[str] = []
     tags: list[str] = []  # tag globs allowed for push (empty = denied)
     delete: bool = False
+    # #289: whether a push may move a branch to a commit that does not descend from its tip
+    force_push: bool = False
     # 0.2.27 (#89): a pushed tag has to be an annotated tag object with a signature block
     signed_tags: bool = True
     # 0.2.29 (#59): required | optional | off — whether a push to a branch may carry an
@@ -348,6 +350,7 @@ def build_config(config: dict) -> RelayConfigResponse:
     if not default_tags and bool(relay.get("allow_tags", False)):
         default_tags = ["*"]
     default_delete = bool(project.get("delete", False)) or bool(relay.get("allow_delete", False))
+    default_force_push = bool(project.get("force_push", False))
     default_signed_tags = bool(project.get("signed_tags", True))
     default_signing = str(project.get("signing") or "optional")
     # 0.2.1: the upstream layer project.upstreams.<domain> (permission deltas, the
@@ -394,6 +397,9 @@ def build_config(config: dict) -> RelayConfigResponse:
         push_v = r.get("push") if r.get("push") is not None else l_push
         tags_v = r.get("tags") if r.get("tags") is not None else l_tags
         delete_v = r.get("delete") if r.get("delete") is not None else l_delete
+        force_v = (
+            r.get("force_push") if r.get("force_push") is not None else layer.get("force_push")
+        )
         signed_v = (
             r.get("signed_tags") if r.get("signed_tags") is not None else layer.get("signed_tags")
         )
@@ -407,6 +413,7 @@ def build_config(config: dict) -> RelayConfigResponse:
                 push=[str(p) for p in push_v] if push_v is not None else default_push,
                 tags=[str(t) for t in tags_v] if tags_v is not None else default_tags,
                 delete=bool(delete_v) if delete_v is not None else default_delete,
+                force_push=bool(force_v) if force_v is not None else default_force_push,
                 signed_tags=bool(signed_v) if signed_v is not None else default_signed_tags,
                 signing=str(signing_v) if signing_v is not None else default_signing,
                 permissions=effective,

@@ -326,6 +326,9 @@ pub struct RepoPolicy {
     /// Whether deleting branches and tags is allowed, and with it moving a tag that already
     /// exists upstream: delete-and-recreate and a forced update leave the same result
     pub delete: bool,
+    /// #289: whether a push may move a branch to a commit that does not descend from its current
+    /// tip — a rewrite of history people may already have pulled. False by default, like `delete`
+    pub force_push: bool,
     /// 0.2.9: delete the head branch once `pr merge` succeeds. Only the branch just merged, which
     /// is why it is not the same authority as `delete`
     pub delete_merged_branch: bool,
@@ -354,6 +357,7 @@ impl RepoPolicy {
             push: DEFAULT_PUSH_GLOBS.iter().map(|s| s.to_string()).collect(),
             tags: Vec::new(),
             delete: false,
+            force_push: false,
             delete_merged_branch: false,
             signed_tags: true,
             signing: SigningMode::default(),
@@ -537,6 +541,12 @@ pub enum Denied {
         sha: String,
         reason: String,
     },
+    /// #289: the push would move a branch to a commit that does not descend from its current
+    /// tip, and the repository does not allow that (`force_push: false`)
+    ForcePushNotAllowed {
+        name: String,
+        reason: String,
+    },
     /// Not a valid ref name
     InvalidRef {
         name: String,
@@ -598,10 +608,14 @@ impl fmt::Display for Denied {
             Denied::CommitNotSigned { name, sha, reason } => {
                 write!(
                     f,
-                    "pushing {name} is not allowed: commit {} {reason}. This project is signing: required, so every commit it receives has to carry one — sign it with `git commit -S --amend` (or rebase with `-S`) and push again; to accept unsigned commits, set signing: optional under relay.project (or per repo)",
+                    "pushing {name} is not allowed: commit {} {reason}. This project is signing: required, so every commit it receives has to carry one — sign it with `git commit -S --amend` (or rebase with `-S`) and push again — as a new branch (refs/for/<base>) if this one was pushed before, since that rewrites it; to accept unsigned commits, set signing: optional under relay.project (or per repo)",
                     crate::git::receive_pack::short_sha(sha)
                 )
             }
+            Denied::ForcePushNotAllowed { name, reason } => write!(
+                f,
+                "pushing {name} is not allowed: {reason}. This repository refuses a push that does not fast-forward (force_push: false under relay.project, per upstream or per repo). Merge the branch's tip instead of rebasing, or push a new branch through refs/for/<base>"
+            ),
             Denied::InvalidRef { name, reason } => write!(f, "invalid ref {name:?}: {reason}"),
         }
     }
@@ -626,6 +640,7 @@ impl Denied {
             Denied::TagUpdateNotAllowed { .. } => "tag_update_not_allowed",
             Denied::TagNotSigned { .. } => "tag_not_signed",
             Denied::CommitNotSigned { .. } => "commit_not_signed",
+            Denied::ForcePushNotAllowed { .. } => "force_push_not_allowed",
             Denied::InvalidRef { .. } => "invalid_ref",
         }
     }

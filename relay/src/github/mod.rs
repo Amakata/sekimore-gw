@@ -892,6 +892,46 @@ impl GitHub {
     /// about a commit in the repository this push was already allowed to write to, so
     /// `GitAuthorized` is exactly the proof it needs. Demanding `repo:read` instead would make
     /// `signing: required` refuse every push in a project that does not grant it.
+    /// #289: whether `base` is an ancestor of `head` (or the same commit), by the compare
+    /// endpoint: its `status` is `ahead` or `identical` exactly then. `per_page=1` keeps the
+    /// answer to a page of one commit — the body otherwise carries every commit and file of the
+    /// difference, which a large rewrite makes large. Two commits with no common history are a
+    /// 404 here, which is "no".
+    pub async fn is_ancestor(
+        &self,
+        auth: &crate::policy::GitAuthorized<'_>,
+        base: &str,
+        head: &str,
+    ) -> Result<bool, GhError> {
+        for sha in [base, head] {
+            if sha.len() != 40 || !sha.bytes().all(|c| c.is_ascii_hexdigit()) {
+                return Ok(false);
+            }
+        }
+        match self
+            .rest::<Value>(
+                "GET",
+                &format!(
+                    "/repos/{}/compare/{}...{}?per_page=1",
+                    auth.repo(),
+                    path_segment(base),
+                    path_segment(head)
+                ),
+                None,
+            )
+            .await
+        {
+            Ok(v) => Ok(matches!(
+                v.get("status").and_then(|s| s.as_str()),
+                Some("ahead" | "identical")
+            )),
+            Err(GhError::Status {
+                status: 404 | 422, ..
+            }) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     pub async fn commit_exists(
         &self,
         auth: &crate::policy::GitAuthorized<'_>,

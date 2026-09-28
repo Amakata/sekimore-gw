@@ -1158,13 +1158,14 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             rp.full_name.clone()
         };
         println!(
-            "  {:<40} {:<11} bases={:?} push={:?} tags={:?} delete={} signed_tags={}",
+            "  {:<40} {:<11} bases={:?} push={:?} tags={:?} delete={} force_push={} signed_tags={}",
             shown,
             rp.mode.as_str(),
             rp.bases,
             rp.push,
             rp.tags,
             rp.delete,
+            rp.force_push,
             rp.signed_tags
         );
         let eff = r.project.effective_keys(rp);

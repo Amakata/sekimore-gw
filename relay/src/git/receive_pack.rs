@@ -112,6 +112,20 @@ pub struct CommitCheck {
     pub sha: String,
 }
 
+/// #289: a branch this push moves whose new tip has to descend from the current one, judged once
+/// the pack has been read. Only made under `force_push: false`, for a branch the upstream
+/// advertises, when the tip actually changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfCheck {
+    /// The ref as the client wrote it, for the message
+    pub name: String,
+    /// The tip the upstream advertised — never the client's `old`, which a force push fills in
+    /// from that same advertisement
+    pub old: String,
+    /// The commit the ref would point at
+    pub new: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushPlan {
     pub commands: Vec<OwnedCommand>,
@@ -123,6 +137,8 @@ pub struct PushPlan {
     pub tag_checks: Vec<TagCheck>,
     /// 0.2.29 (#59): branches whose new commits must all be signed. Empty unless `signing: required`
     pub commit_checks: Vec<CommitCheck>,
+    /// #289: branches whose new tip has to descend from the advertised one. Empty under `force_push: true`
+    pub ff_checks: Vec<FfCheck>,
     /// The shas the upstream advertised. A commit walk stops at one of these: it is history the
     /// upstream already has, so this push did not bring it
     pub adv_shas: HashSet<String>,
@@ -187,6 +203,7 @@ pub fn plan_push(
     let mut prs = Vec::new();
     let mut tag_checks = Vec::new();
     let mut commit_checks = Vec::new();
+    let mut ff_checks = Vec::new();
     // Every upstream ref this plan will update, and the client ref it came from. Two updates
     // to one ref in a single section put the report-status rewriter into a state it cannot
     // represent — its map is one upstream ref to one client ref — so the ok/ng of one would
@@ -256,6 +273,14 @@ pub fn plan_push(
                 .get(&upstream_ref)
                 .cloned()
                 .unwrap_or_else(|| zero_like(u.old));
+            // #289: a branch the agent named before and moves now has to fast-forward too
+            if !policy.force_push && adv.contains_key(&upstream_ref) && old != u.new {
+                ff_checks.push(FfCheck {
+                    name: u.name.to_string(),
+                    old: old.clone(),
+                    new: u.new.to_string(),
+                });
+            }
             rewrites.insert(upstream_ref.clone(), u.name.to_string());
             prs.push(PrIntent {
                 client_ref: u.name.to_string(),
@@ -355,6 +380,19 @@ pub fn plan_push(
                 });
             }
             claim(u.name, u.name)?;
+            // #289: the advertised tip decides, not the client's `old`: `git push --force` fills
+            // that in from the advertisement it just received, so it always matches
+            if !u.is_delete() && !policy.force_push {
+                if let Some(cur) = adv.get(u.name) {
+                    if cur != u.new {
+                        ff_checks.push(FfCheck {
+                            name: u.name.to_string(),
+                            old: cur.clone(),
+                            new: u.new.to_string(),
+                        });
+                    }
+                }
+            }
             // Whether the commits are signed is in the pack, not here; stage C answers it.
             if !u.is_delete() && policy.signing == SigningMode::Required {
                 commit_checks.push(CommitCheck {
@@ -417,6 +455,7 @@ pub fn plan_push(
         prs,
         tag_checks,
         commit_checks,
+        ff_checks,
         adv_shas: adv.values().cloned().collect(),
     })
 }
@@ -430,6 +469,7 @@ pub async fn judge_pack(
     scanned: Result<Objects, PackError>,
     tags: &[TagCheck],
     commits: &[CommitCheck],
+    ffs: &[FfCheck],
     adv_shas: &HashSet<String>,
     upstream: &dyn UpstreamCommits,
 ) -> Result<(), Denied> {
@@ -440,6 +480,15 @@ pub async fn judge_pack(
                 return Err(Denied::TagNotSigned {
                     name: c.name.clone(),
                     reason: format!("the pack could not be read to find the tag object ({e})"),
+                });
+            }
+            // #289: a fast-forward that cannot be judged is refused the same way
+            if let Some(c) = ffs.first() {
+                return Err(Denied::ForcePushNotAllowed {
+                    name: c.name.clone(),
+                    reason: format!(
+                        "the pack could not be read to see where the branch goes ({e})"
+                    ),
                 });
             }
             // Nothing to judge means nothing to refuse. Stage C only reads the pack when there
@@ -457,7 +506,8 @@ pub async fn judge_pack(
         }
     };
     judge_tags(&objects, tags)?;
-    judge_commits(&objects, commits, adv_shas, upstream).await
+    judge_commits(&objects, commits, adv_shas, upstream).await?;
+    judge_fast_forward(&objects, ffs, upstream).await
 }
 
 /// How `judge_commits` asks the upstream whether a commit is already there.
@@ -469,6 +519,9 @@ pub trait UpstreamCommits: Sync {
     /// `Ok(true)` when the upstream holds this commit. An `Err` is "cannot tell", and the caller
     /// fails closed on it.
     async fn has_commit(&self, sha: &str) -> Result<bool, String>;
+    /// #289: `Ok(true)` when `base` is an ancestor of `head` (or the same commit) on the upstream.
+    /// An `Err` is "cannot tell", and the caller fails closed on it.
+    async fn is_ancestor(&self, base: &str, head: &str) -> Result<bool, String>;
 }
 
 /// The real one: the upstream's API, scoped by the authorization this push already passed.
@@ -487,6 +540,110 @@ impl UpstreamCommits for ApiUpstreamCommits<'_> {
             .await
             .map_err(|e| e.to_string())
     }
+    async fn is_ancestor(&self, base: &str, head: &str) -> Result<bool, String> {
+        let Some(gh) = self.github else {
+            return Err("this relay has no API client for the upstream".to_string());
+        };
+        gh.is_ancestor(self.auth, base, head)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// #289: every branch this push moves has to fast-forward, under `force_push: false`.
+///
+/// The walk starts at the new tip and follows parents inside the pack. Reaching the advertised
+/// tip is a fast-forward and needs nobody's help. Where the walk leaves the pack — a parent the
+/// pack does not hold, or the new tip itself when the pack is empty because it is another
+/// branch's tip — the commit is history the upstream has, and whether the advertised tip sits
+/// under it is the upstream's to answer (`is_ancestor`, one compare call per exit). Any exit
+/// that descends from the old tip makes the push a fast-forward; none does, and it is refused
+/// — a rebase, a reset, an amend of a pushed commit. "Cannot tell" fails closed, and the
+/// number of exits asked about is capped with the signing walk's budget.
+async fn judge_fast_forward(
+    objects: &Objects,
+    checks: &[FfCheck],
+    upstream: &dyn UpstreamCommits,
+) -> Result<(), Denied> {
+    let mut lookups = 0usize;
+    // one answer per (old, exit) across the branches of one push
+    let mut answered: HashMap<(String, String), bool> = HashMap::new();
+    for c in checks {
+        if c.old == c.new {
+            continue;
+        }
+        let mut queue: VecDeque<String> = VecDeque::from([c.new.clone()]);
+        let mut seen: HashSet<String> = HashSet::from([c.new.clone()]);
+        let mut exits: Vec<String> = Vec::new();
+        let mut reached = false;
+        while let Some(sha) = queue.pop_front() {
+            if sha == c.old {
+                reached = true;
+                break;
+            }
+            match objects.by_sha.get(&sha) {
+                Some(Object::Commit { parents, .. }) => {
+                    for p in parents {
+                        if seen.insert(p.clone()) {
+                            queue.push_back(p.clone());
+                        }
+                    }
+                }
+                // not a commit in the pack: a commit the upstream has (or a tag object, which
+                // no branch update names, or a delta the pack did not keep — neither reaches
+                // the old tip, so both are asked about and refused when the upstream says no)
+                _ => exits.push(sha),
+            }
+        }
+        if reached {
+            continue;
+        }
+        let mut fast_forward = false;
+        for exit in &exits {
+            let key = (c.old.clone(), exit.clone());
+            let yes = match answered.get(&key) {
+                Some(v) => *v,
+                None => {
+                    lookups += 1;
+                    if lookups > MAX_UPSTREAM_LOOKUPS {
+                        return Err(Denied::ForcePushNotAllowed {
+                            name: c.name.clone(),
+                            reason: format!(
+                                "its history leaves the pack in more than {MAX_UPSTREAM_LOOKUPS} places, more than this relay asks the upstream about for one push"
+                            ),
+                        });
+                    }
+                    let v = upstream.is_ancestor(&c.old, exit).await.map_err(|e| {
+                        Denied::ForcePushNotAllowed {
+                            name: c.name.clone(),
+                            reason: format!(
+                                "whether {} descends from the branch's current tip {} could not be settled with the upstream ({e})",
+                                short_sha(exit),
+                                short_sha(&c.old)
+                            ),
+                        }
+                    })?;
+                    answered.insert(key, v);
+                    v
+                }
+            };
+            if yes {
+                fast_forward = true;
+                break;
+            }
+        }
+        if !fast_forward {
+            return Err(Denied::ForcePushNotAllowed {
+                name: c.name.clone(),
+                reason: format!(
+                    "{} does not descend from the branch's current tip {}",
+                    short_sha(&c.new),
+                    short_sha(&c.old)
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// How many commits one push may make this relay ask the upstream about.
@@ -671,6 +828,7 @@ async fn copy_judging_pack<R, W>(
     seen: &AtomicU64,
     tags: &[TagCheck],
     commits: &[CommitCheck],
+    ffs: &[FfCheck],
     adv_shas: &HashSet<String>,
     upstream: &dyn UpstreamCommits,
 ) -> std::io::Result<(u64, Result<(), Denied>)>
@@ -703,6 +861,7 @@ where
                             scan.take().unwrap().finish(),
                             tags,
                             commits,
+                            ffs,
                             adv_shas,
                             upstream,
                         )
@@ -747,6 +906,7 @@ where
                 scan.take().unwrap().finish(),
                 tags,
                 commits,
+                ffs,
                 adv_shas,
                 upstream,
             )
@@ -1009,7 +1169,10 @@ pub async fn relay_receive_pack(
         auth,
     };
     let pack_fut = async {
-        if !plan.tag_checks.is_empty() || !plan.commit_checks.is_empty() {
+        if !plan.tag_checks.is_empty()
+            || !plan.commit_checks.is_empty()
+            || !plan.ff_checks.is_empty()
+        {
             // #89 / #59: read the pack on the way through and hold the trailer until it is judged
             let (n, verdict) = copy_judging_pack(
                 &leftover,
@@ -1019,6 +1182,7 @@ pub async fn relay_receive_pack(
                 &sent,
                 &plan.tag_checks,
                 &plan.commit_checks,
+                &plan.ff_checks,
                 &plan.adv_shas,
                 &upstream_commits,
             )
@@ -1583,7 +1747,7 @@ mod tests {
     }
 
     mod judging {
-        use super::super::{judge_pack, CommitCheck};
+        use super::super::{judge_pack, CommitCheck, FfCheck};
         use super::*;
         use crate::git::pack::testutil::{commit_body, pack, sha_of, tag_body, Entry, COMMIT};
         use crate::git::pack::{PackError, PackScan};
@@ -1596,6 +1760,8 @@ mod tests {
         /// An upstream that holds exactly the shas it was given, and can be made to fail.
         struct FakeUpstream {
             has: HashSet<String>,
+            // #289: (base, head) pairs where base is an ancestor of head
+            ancestors: HashSet<(String, String)>,
             error: Option<String>,
             asked: std::sync::Mutex<Vec<String>>,
         }
@@ -1604,6 +1770,7 @@ mod tests {
                 FakeUpstream {
                     has: shas.iter().map(|s| s.to_string()).collect(),
                     error: None,
+                    ancestors: HashSet::new(),
                     asked: std::sync::Mutex::new(Vec::new()),
                 }
             }
@@ -1611,11 +1778,17 @@ mod tests {
                 FakeUpstream {
                     has: HashSet::new(),
                     error: Some("the secret store is locked".into()),
+                    ancestors: HashSet::new(),
                     asked: std::sync::Mutex::new(Vec::new()),
                 }
             }
             fn asked(&self) -> Vec<String> {
                 self.asked.lock().unwrap().clone()
+            }
+            /// #289: teach the fake that `base` sits under `head`
+            fn with_ancestor(mut self, base: &str, head: &str) -> Self {
+                self.ancestors.insert((base.to_string(), head.to_string()));
+                self
             }
         }
         #[async_trait::async_trait]
@@ -1627,6 +1800,174 @@ mod tests {
                     None => Ok(self.has.contains(sha)),
                 }
             }
+            async fn is_ancestor(&self, base: &str, head: &str) -> Result<bool, String> {
+                self.asked.lock().unwrap().push(format!("{base}..{head}"));
+                match &self.error {
+                    Some(e) => Err(e.clone()),
+                    None => Ok(base == head
+                        || self
+                            .ancestors
+                            .contains(&(base.to_string(), head.to_string()))),
+                }
+            }
+        }
+
+        // ---- #289: the fast-forward judgement ----
+
+        fn ff(old: &str, new: &str) -> Vec<FfCheck> {
+            vec![FfCheck {
+                name: "refs/heads/sekimore/topic".into(),
+                old: old.into(),
+                new: new.into(),
+            }]
+        }
+        fn judge_ff(
+            scanned: Result<crate::git::pack::Objects, PackError>,
+            checks: &[FfCheck],
+            upstream: &FakeUpstream,
+        ) -> Result<(), Denied> {
+            block_on(judge_pack(
+                scanned,
+                &[],
+                &[],
+                checks,
+                &HashSet::new(),
+                upstream,
+            ))
+        }
+        fn why_ff(r: Result<(), Denied>) -> String {
+            match r {
+                Err(Denied::ForcePushNotAllowed { name, reason }) => {
+                    assert_eq!(name, "refs/heads/sekimore/topic");
+                    reason
+                }
+                other => panic!("expected ForcePushNotAllowed, got {other:?}"),
+            }
+        }
+
+        /// The ordinary push: the new commits sit on the old tip, which the walk reaches inside
+        /// the pack. Nobody is asked.
+        #[test]
+        fn a_push_on_top_of_the_old_tip_fast_forwards_without_asking() {
+            let old = format!("{:040x}", 0xabc);
+            let a = commit_body(&[&old], true, "a");
+            let b = commit_body(&[&sha_of("commit", &a)], true, "b");
+            let p = pack(&[Entry::Whole(1, &a), Entry::Whole(1, &b)]);
+            let up = FakeUpstream::holding(&[]);
+            assert_eq!(
+                judge_ff(scan(&p), &ff(&old, &sha_of("commit", &b)), &up),
+                Ok(())
+            );
+            assert!(up.asked().is_empty(), "{:?}", up.asked());
+            // a merge of the old tip and something else reaches it through the second parent
+            let other = format!("{:040x}", 0xdef);
+            let m = commit_body(&[&other, &old], true, "merge");
+            let p = pack(&[Entry::Whole(1, &m)]);
+            assert_eq!(
+                judge_ff(scan(&p), &ff(&old, &sha_of("commit", &m)), &up),
+                Ok(())
+            );
+            assert!(up.asked().is_empty());
+        }
+
+        /// A rebase: the new history leaves the pack at the base's tip, which does not descend
+        /// from the old tip. The upstream says so, and the push is refused naming the ref.
+        #[test]
+        fn a_rebased_branch_is_refused_when_the_upstream_says_the_old_tip_is_not_under_it() {
+            let old = format!("{:040x}", 0xabc);
+            let base_tip = format!("{:040x}", 0x111);
+            let a = commit_body(&[&base_tip], true, "a, rebased");
+            let p = pack(&[Entry::Whole(1, &a)]);
+            let up = FakeUpstream::holding(&[]);
+            let why = why_ff(judge_ff(scan(&p), &ff(&old, &sha_of("commit", &a)), &up));
+            assert!(
+                why.contains("does not descend from the branch's current tip"),
+                "{why}"
+            );
+            assert_eq!(up.asked(), vec![format!("{old}..{base_tip}")]);
+            let text = Denied::ForcePushNotAllowed {
+                name: "refs/heads/sekimore/topic".into(),
+                reason: why,
+            }
+            .to_string();
+            assert!(
+                text.contains("force_push: false") && text.contains("refs/for/<base>"),
+                "{text}"
+            );
+        }
+
+        /// The exit is not the old tip, but the old tip sits under it (a branch fast-forwarded
+        /// onto another branch's tip, then built on): the upstream's yes is a fast-forward.
+        #[test]
+        fn an_exit_the_old_tip_sits_under_is_a_fast_forward() {
+            let old = format!("{:040x}", 0xabc);
+            let other_tip = format!("{:040x}", 0x222);
+            let a = commit_body(&[&other_tip], true, "a");
+            let p = pack(&[Entry::Whole(1, &a)]);
+            let up = FakeUpstream::holding(&[]).with_ancestor(&old, &other_tip);
+            assert_eq!(
+                judge_ff(scan(&p), &ff(&old, &sha_of("commit", &a)), &up),
+                Ok(())
+            );
+            assert_eq!(up.asked(), vec![format!("{old}..{other_tip}")]);
+        }
+
+        /// `git push` of a branch moved to another branch's tip sends an empty pack: the new tip
+        /// itself is the exit, and it is asked about exactly once.
+        #[test]
+        fn an_empty_pack_asks_about_the_new_tip_itself() {
+            let old = format!("{:040x}", 0xabc);
+            let tip = format!("{:040x}", 0x333);
+            let p = pack(&[]);
+            let up = FakeUpstream::holding(&[]).with_ancestor(&old, &tip);
+            assert_eq!(judge_ff(scan(&p), &ff(&old, &tip), &up), Ok(()));
+            assert_eq!(up.asked(), vec![format!("{old}..{tip}")]);
+            let up = FakeUpstream::holding(&[]);
+            let why = why_ff(judge_ff(scan(&p), &ff(&old, &tip), &up));
+            assert!(why.contains("does not descend"), "{why}");
+            assert_eq!(up.asked().len(), 1);
+        }
+
+        /// "Cannot tell" is a refusal, with the upstream's reason in it.
+        #[test]
+        fn an_upstream_that_cannot_answer_fails_the_push_closed() {
+            let old = format!("{:040x}", 0xabc);
+            let a = commit_body(&[&format!("{:040x}", 0x444)], true, "a");
+            let p = pack(&[Entry::Whole(1, &a)]);
+            let why = why_ff(judge_ff(
+                scan(&p),
+                &ff(&old, &sha_of("commit", &a)),
+                &FakeUpstream::broken(),
+            ));
+            assert!(
+                why.contains("could not be settled") && why.contains("secret store is locked"),
+                "{why}"
+            );
+            // and a pack that could not be read is the same refusal
+            let why = why_ff(judge_ff(
+                Err(PackError::Truncated),
+                &ff(&old, &format!("{:040x}", 0x555)),
+                &FakeUpstream::holding(&[]),
+            ));
+            assert!(why.contains("could not be read"), "{why}");
+        }
+
+        /// Nothing to judge when the tip does not move, and one push cannot make the relay ask
+        /// without end.
+        #[test]
+        fn the_same_tip_is_nothing_and_the_lookups_are_capped() {
+            let old = format!("{:040x}", 0xabc);
+            let up = FakeUpstream::holding(&[]);
+            assert_eq!(judge_ff(scan(&pack(&[])), &ff(&old, &old), &up), Ok(()));
+            assert!(up.asked().is_empty());
+            // one merge commit with 40 parents nowhere in the pack: 40 exits
+            let parents: Vec<String> = (0..40).map(|i| format!("{:040x}", 0x1000 + i)).collect();
+            let refs: Vec<&str> = parents.iter().map(String::as_str).collect();
+            let m = commit_body(&refs, true, "octopus");
+            let p = pack(&[Entry::Whole(1, &m)]);
+            let why = why_ff(judge_ff(scan(&p), &ff(&old, &sha_of("commit", &m)), &up));
+            assert!(why.contains("more than"), "{why}");
+            assert_eq!(up.asked().len(), super::super::MAX_UPSTREAM_LOOKUPS);
         }
 
         /// The tag half of `judge_pack`, which is what these cases are about.
@@ -1637,6 +1978,7 @@ mod tests {
             block_on(judge_pack(
                 scanned,
                 checks,
+                &[],
                 &[],
                 &HashSet::new(),
                 &FakeUpstream::holding(&[]),
@@ -1658,7 +2000,7 @@ mod tests {
             upstream: &dyn super::super::UpstreamCommits,
         ) -> Result<(), Denied> {
             let adv: HashSet<String> = adv.iter().map(|s| s.to_string()).collect();
-            block_on(judge_pack(scanned, &[], checks, &adv, upstream))
+            block_on(judge_pack(scanned, &[], checks, &[], &adv, upstream))
         }
         /// These cases are about the judgement, not about concurrency; a current-thread runtime
         /// keeps them ordinary `#[test]`s.
@@ -2072,6 +2414,92 @@ mod tests {
         let data = section_of(lines);
         let sec = parse_receive_pack(&data).unwrap();
         plan_push(&p, &auth, &sec, adv)
+    }
+
+    /// #289: a plan under `force_push` as given, against the advertisement as given.
+    fn plan_force(
+        lines: &[String],
+        adv: &HashMap<String, String>,
+        force_push: bool,
+    ) -> Result<PushPlan, Denied> {
+        let mut p = project();
+        for r in &mut p.repos {
+            r.delete = true;
+            r.force_push = force_push;
+        }
+        let auth = p
+            .authorize_git(GitVerb::ReceivePack, "LibOrg/awesome-lib.git")
+            .unwrap();
+        let data = section_of(lines);
+        let sec = parse_receive_pack(&data).unwrap();
+        plan_push(&p, &auth, &sec, adv)
+    }
+
+    /// #289: which updates have to fast-forward. The advertised tip is what the check carries,
+    /// whatever `old` the client wrote: a force push fills that in from the advertisement it
+    /// just received, so it is never evidence of anything.
+    #[test]
+    fn a_moved_branch_queues_a_fast_forward_check_against_the_advertised_tip() {
+        let adv = HashMap::from([("refs/heads/sekimore/x".to_string(), SHA.to_string())]);
+        let pl = plan_force(
+            &[format!("{ZERO} {SHA2} refs/heads/sekimore/x")],
+            &adv,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            pl.ff_checks,
+            vec![FfCheck {
+                name: "refs/heads/sekimore/x".into(),
+                old: SHA.into(),
+                new: SHA2.into(),
+            }]
+        );
+        // creating a branch, deleting one, or leaving the tip where it is queues nothing
+        let pl = plan_force(
+            &[format!("{ZERO} {SHA2} refs/heads/sekimore/new")],
+            &adv,
+            false,
+        )
+        .unwrap();
+        assert!(pl.ff_checks.is_empty(), "create: {:?}", pl.ff_checks);
+        let pl = plan_force(
+            &[format!("{SHA} {ZERO} refs/heads/sekimore/x")],
+            &adv,
+            false,
+        )
+        .unwrap();
+        assert!(pl.ff_checks.is_empty(), "delete: {:?}", pl.ff_checks);
+        let pl = plan_force(&[format!("{SHA} {SHA} refs/heads/sekimore/x")], &adv, false).unwrap();
+        assert!(pl.ff_checks.is_empty(), "same tip: {:?}", pl.ff_checks);
+        // and force_push: true asks nothing of the pack
+        let pl = plan_force(
+            &[format!("{ZERO} {SHA2} refs/heads/sekimore/x")],
+            &adv,
+            true,
+        )
+        .unwrap();
+        assert!(pl.ff_checks.is_empty(), "allowed: {:?}", pl.ff_checks);
+    }
+
+    /// #289: `refs/for/<base>` that lands on a branch the agent named before moves that branch,
+    /// so it is held to the same rule.
+    #[test]
+    fn a_refs_for_rewrite_onto_an_existing_branch_queues_the_check_too() {
+        let head = format!("refs/heads/sekimore/main-{}", &SHA2[..7]);
+        let adv = HashMap::from([(head.clone(), SHA.to_string())]);
+        let pl = plan_force(&[format!("{ZERO} {SHA2} refs/for/main")], &adv, false).unwrap();
+        assert_eq!(pl.ff_checks.len(), 1, "{:?}", pl.ff_checks);
+        assert_eq!(pl.ff_checks[0].old, SHA);
+        assert_eq!(pl.ff_checks[0].new, SHA2);
+        assert_eq!(pl.ff_checks[0].name, "refs/for/main");
+        let pl = plan_force(
+            &[format!("{ZERO} {SHA2} refs/for/main")],
+            &HashMap::new(),
+            false,
+        )
+        .unwrap();
+        assert!(pl.ff_checks.is_empty(), "a new branch: {:?}", pl.ff_checks);
     }
 
     /// A plan with the project's branch naming and push globs set (#158).
