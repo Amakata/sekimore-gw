@@ -12,12 +12,12 @@
 #         inside the VM, /run/host-services/ssh-auth.sock. That is the default.
 #         `ssh-add -l` on the Mac has to list a key (add one with
 #         `ssh-add --apple-use-keychain ~/.ssh/<key>`).
-#       - Vagrant VM: put a socket at a fixed path and name it in SEKIMORE_AGENT_SOCK
-#         (e.g. from the Mac: `ssh -N -o StreamLocalBindUnlink=yes
-#          -R /home/vagrant/.ssh-agent/agent.sock:$SSH_AUTH_SOCK <vm>`, then
-#          SEKIMORE_AGENT_SOCK=/home/vagrant/.ssh-agent/agent.sock). Re-establishing the
-#          forward changes the socket's inode, which leaves the mount stale, so
-#          `docker compose up -d --force-recreate sekimore-gw` is needed.
+#       - Linux host / VM (docs/remote-ssh.md): the Mac forwards its agent into a fixed path
+#         (`RemoteForward /home/<user>/.sekimore/agent.sock ${SSH_AUTH_SOCK}`), and
+#         SEKIMORE_AGENT_SOCK names that DIRECTORY (/home/<user>/.sekimore). The gateway reads
+#         agent.sock inside it by name (#272), so the socket sshd recreates on every reconnect
+#         is picked up as it is. Naming the file instead pins its inode at start, and every
+#         reconnect then needs `sgw recreate`.
 #   * Keeps dev's disposable key (~/.ssh/sekimore) in a volume, so a rebuild does not change it.
 #   * Shares the signing key's socket between gateway and dev (sekimore-gw 0.2.29 and later, #59).
 #       - With relay.signing_key in config.yml, the gateway creates an agent socket at

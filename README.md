@@ -119,6 +119,7 @@ Does not fit when the agent should:
 ## Documentation
 
 - [docs/template.md](docs/template.md) — the files `sgw init` writes
+- [docs/remote-ssh.md](docs/remote-ssh.md) — a Linux host over Remote-SSH: the agent reaches the gateway, not dev
 - [base/README.md](base/README.md) — what the dev container's image holds
 - [relay/README.md](relay/README.md) — the relay's configuration and the permission catalog
 - [config/config.sample.yml](config/config.sample.yml) — every key

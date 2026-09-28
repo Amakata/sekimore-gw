@@ -101,11 +101,27 @@ pub async fn preflight_agent(sock: Option<&Path>) -> Result<usize, AgentError> {
         .map_err(|_| AgentError::Protocol("timed out waiting for the agent".into()))?
 }
 
-/// Read `SSH_AUTH_SOCK`.
+/// Read `SSH_AUTH_SOCK`, resolving a directory to the socket inside it (#272).
 pub fn auth_sock_from_env() -> Option<PathBuf> {
     std::env::var_os("SSH_AUTH_SOCK")
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+        .map(|s| resolve_auth_sock(PathBuf::from(s)))
+}
+
+/// The socket file `agent.sock` inside a directory, or the path as it is (#272).
+///
+/// On a Linux host the operator's agent arrives by `ssh -R` from their Mac, and sshd recreates
+/// the socket on every reconnect. A file bind-mount pins the inode the container started with,
+/// so the gateway kept talking to a dead socket until `sgw recreate`; and a path that did not
+/// exist at start became a directory Docker made. Mounting the socket's directory instead
+/// (`SEKIMORE_AGENT_SOCK=/home/<user>/.sekimore`) survives both: the directory is stable, and
+/// the socket inside it is looked up by name on every connection.
+pub fn resolve_auth_sock(path: PathBuf) -> PathBuf {
+    if path.is_dir() {
+        path.join("agent.sock")
+    } else {
+        path
+    }
 }
 
 #[cfg(test)]
@@ -141,6 +157,27 @@ mod tests {
             }
         });
         path
+    }
+
+    /// #272: a directory names the socket inside it; a file, or a path that is not there yet,
+    /// is taken as it is.
+    #[tokio::test]
+    async fn a_directory_resolves_to_the_socket_inside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_auth_sock(dir.path().to_path_buf()),
+            dir.path().join("agent.sock")
+        );
+        let sock = fake_agent(dir.path(), 2).await;
+        assert_eq!(resolve_auth_sock(sock.clone()), sock);
+        assert_eq!(
+            preflight_agent(Some(&resolve_auth_sock(dir.path().to_path_buf())))
+                .await
+                .unwrap(),
+            2
+        );
+        let missing = dir.path().join("not-yet");
+        assert_eq!(resolve_auth_sock(missing.clone()), missing);
     }
 
     #[tokio::test]

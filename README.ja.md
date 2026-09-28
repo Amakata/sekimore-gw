@@ -119,6 +119,7 @@ sekimore-gw（sgw）は、Docker で動く AI エージェントのためのネ�
 ## ドキュメント
 
 - [docs/template.ja.md](docs/template.ja.md) — `sgw init` が書くファイル
+- [docs/remote-ssh.ja.md](docs/remote-ssh.ja.md) — Linux ホストを Remote-SSH で使う（agent をゲートウェイに届け、dev には渡さない）
 - [base/README.ja.md](base/README.ja.md) — dev コンテナのイメージの中身
 - [relay/README.ja.md](relay/README.ja.md) — 関所の設定と権限の一覧
 - [config/config.sample.yml](config/config.sample.yml) — すべてのキー
