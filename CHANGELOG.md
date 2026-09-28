@@ -12,6 +12,24 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.54 (2026-09-28)
+
+### Security
+
+- while the upstream proxy's credential is in the locked secret store, Squid refuses every request with a 503 naming `sgw unlock` instead of relaying the upstream's 407, which VS Code turned into a dialog asking a person for the proxy password (#275)
+- `sgw verify`'s HTTPS item tells Squid's own answer apart from the upstream's (`X-Squid-Error`), and `sekimore-relay check`'s `reach:` line says the store is locked when that is why (#275)
+
+### Fix
+
+- `sgw-agent setup` waits for the gateway (`SEKIMORE_GATEWAY_WAIT` seconds, 90 by default) instead of giving up after three passes, and says what to do when it is not there; `sgw recreate` points a running dev container at the new gateway (#274)
+- `sgw verify` gets `dev: /etc/resolv.conf names the gateway`, so a dev container left on Docker's DNS is named before the items it breaks (#274)
+- `sgw proxy-credential set` shows the username as it is typed and refuses one that is not printable ASCII; `%` in the credential is escaped for Squid's `login=` (#271)
+
+### Enhancement
+
+- a board in `relay.project.boards` may carry its own `permissions` delta (`project:*` keys only); the board named decides last, a refusal names it, and `check` and `whoami` list each board's effective keys (#277)
+- a Linux host over Remote-SSH: `SEKIMORE_AGENT_SOCK` may name the directory the Mac's agent is forwarded into, `sgw verify` checks the socket and that no VS Code server carries `SSH_AUTH_SOCK`, and `docs/remote-ssh.md` has the setup (#272)
+
 ## 0.2.53 (2026-09-27)
 
 ### Fix
