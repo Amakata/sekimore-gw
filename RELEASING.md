@@ -15,8 +15,12 @@ of the same tag) and, later, the `sgw` binaries. One version number, `pyproject.
    `base/`, and the `reviewed-up-to` marker of `UPGRADING.md` / `UPGRADING.ja.md` after
    deciding whether the release asks anything of a project.
    `tests/unit/test_base_versions.py` fails until every one of them says the new version
-4. `docker build -t sekimore-gw:X.Y.Z-local .` must succeed before anything is tagged
-5. Open the release pull request, merge it, tag the merge commit (signed) and push the tag.
+4. Open the release pull request. Its CI builds what the tag will build: `base.yml` builds the gateway
+   image of that commit and the base image against it and runs `base/tests/test_image.sh`, and
+   `preview.yml` builds the arm64 gateway image — so a COPY that names a path that moved fails
+   here, not after the tag. No local image build is needed; to look at one anyway:
+   `docker build -t sekimore-gw:X.Y.Z-local .`
+5. Merge it, tag the merge commit (signed) and push the tag.
    `docker-publish.yml` builds the gateway image, then the base image, then the `sgw` binaries
    (macOS arm64, Linux x86_64 / arm64), and creates a **draft** Release with the binaries,
    their sha256 files and `install.sh` attached
