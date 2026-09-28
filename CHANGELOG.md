@@ -12,6 +12,18 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.55 (2026-09-28)
+
+### Security
+
+- the relay refuses a push that does not fast-forward (a rebase, a reset, an amend of a pushed commit) unless `force_push` allows it, deciding from the pack and a compare against the upstream; the refusal names the ref and the way out (#289)
+
+### Enhancement
+
+- a board in `relay.project.boards` may name its upstream; it is resolved and asked there whatever `--repo` names, `whoami` says where it lives, and the guide shows `--value` per field kind and where a content id comes from (#291)
+- the Claude Code skill is `~/.claude/skills/sgw-agent`; `sgw-agent setup` removes the one under the former name `sekimore-relay` when it is the one it wrote (#287)
+- README: How it works in five lines, an eighth step that tries `sgw-agent` in the dev container, precise Get started steps, Settings and Commands apart, and the usage guide's automatic installation explained (#283)
+
 ## 0.2.54 (2026-09-28)
 
 ### Security

@@ -11,6 +11,18 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.55（2026-09-28）
+
+### Security
+
+- 関所は fast-forward にならない push（rebase、reset、push 済みコミットの amend）を `force_push` が許可しない限り拒否する。判定はパックと上流への compare で行い、拒否文は ref 名と抜け道を言う (#289)
+
+### Enhancement
+
+- `relay.project.boards` のボードに上流を書ける（`upstream: ghe.example.com`）。`--repo` が何を指していてもその上流で解決・呼び出しされ、`whoami` がどこのボードか言い、ガイドがフィールド種別ごとの `--value` と content id の取り方を示す (#291)
+- Claude Code の skill は `~/.claude/skills/sgw-agent` になった。`sgw-agent setup` は旧名 `sekimore-relay` のものが自分の書いたものなら消す (#287)
+- README: 仕組みを 5 行で、dev コンテナで `sgw-agent` を試す 8 段目、精度を上げた Get started、Settings と Commands の分離、使い方ガイドの自動配置の説明 (#283)
+
 ## 0.2.54（2026-09-28）
 
 ### Security
