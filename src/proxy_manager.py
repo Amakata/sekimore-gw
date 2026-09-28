@@ -24,6 +24,8 @@ class ProxyManager:
         upstream_proxy_password: str | None = None,
         denied_destinations: list[str] | None = None,
         allowed_destinations: list[str] | None = None,
+        hold_for_store: bool = False,
+        error_template_dir: str | None = None,
     ):
         """Initialize the manager.
 
@@ -40,6 +42,8 @@ class ProxyManager:
             upstream_proxy_password: Password for upstream proxy authentication
             denied_destinations: Address ranges refused whatever a name resolves to (#178)
             allowed_destinations: Exceptions to denied_destinations
+            hold_for_store: Refuse every request with a 503 naming `sgw unlock` (#275)
+            error_template_dir: Where Squid's error page for that 503 is written
         """
         self.template_path = Path(config_template_path or constants.SQUID_TEMPLATE_PATH)
         self.output_path = Path(config_output_path or constants.SQUID_CONFIG_PATH)
@@ -55,6 +59,12 @@ class ProxyManager:
         # exceptions to that (the gateway's own network, an internal mirror a project names)
         self.denied_destinations: list[str] = list(denied_destinations or [])
         self.allowed_destinations: list[str] = list(allowed_destinations or [])
+        # #275: the upstream proxy's credential is in the secret store and the store is locked.
+        # Squid then refuses everything with a 503 that names `sgw unlock`, instead of relaying
+        # the upstream's 407 — which VS Code turns into a dialog asking a person for the proxy
+        # password, the one thing the store exists to keep out of the editor and the agent
+        self.hold_for_store = hold_for_store
+        self.error_template_dir = Path(error_template_dir or constants.SQUID_ERROR_TEMPLATE_DIR)
 
     def generate_config(
         self, allowed_domains: list[str], relayed_domains: list[str] | None = None
@@ -105,14 +115,21 @@ class ProxyManager:
             # the allow is already there, which is how #178 keeps outranking it (#205).
             template = self._ensure_relay_localhost_placeholders(template)
             template = self._ensure_destination_placeholders(template)
+            template = self._ensure_store_hold_placeholder(template)
 
             denied_acls, denied_rule = self._generate_denied_destinations()
 
             # #205: the relay's own way out through Squid, when an upstream proxy is configured
             localhost_acl, localhost_rule = self._generate_relay_localhost_allow()
 
+            # #275: the hold, and the page it answers with
+            hold_rule = self._generate_store_hold()
+            if hold_rule and not self._write_store_hold_page():
+                return False
+
             # Fill in the template
             config = template.format(
+                STORE_HOLD_RULE=hold_rule,
                 PROXY_PORT=str(self.port),
                 ALLOWED_DOMAINS_ACL=domain_acls,
                 RELAYED_DOMAINS_ACL=relayed_acls,
@@ -448,6 +465,63 @@ class ProxyManager:
         return f"""cache_dir ufs /var/spool/squid {self.cache_size_mb} 16 256
 maximum_object_size 100 MB
 cache_mem 256 MB"""
+
+    # #275: the name Squid's `X-Squid-Error` header carries, which the relay's `check` and
+    # `sgw verify` read to say "the store is locked" instead of quoting a bare 503
+    STORE_HOLD_PAGE = "ERR_SEKIMORE_STORE_LOCKED"
+    STORE_HOLD_HTML = (
+        "<html><head><title>sekimore-gw: the secret store is locked</title></head>\n"
+        "<body><h1>sekimore-gw: the secret store is locked</h1>\n"
+        "<p>The upstream proxy's credential is sealed in the gateway's secret store, and nobody "
+        "has unlocked it since the gateway started. Nothing is forwarded until then, so that no "
+        "program asks you for the proxy password: that password belongs in the store, not in "
+        "an editor or an agent.</p>\n"
+        "<p>Ask a human to run, on the host: <code>sgw unlock</code></p>\n"
+        "</body></html>\n"
+    )
+
+    def _generate_store_hold(self) -> str:
+        """The rule that refuses everything while the store holds the credential (#275).
+
+        Empty when there is nothing to hold for. Placed at the top of the `http_access` block
+        by the template, above #205's allow too: the relay's own probe has to see the hold, so
+        `check` can say why the route is closed.
+        """
+        if not (self.hold_for_store and self.upstream_proxy):
+            return ""
+        return (
+            "# #275: the upstream proxy's credential is in the locked secret store\n"
+            "acl sekimore_store_locked src all\n"
+            f"deny_info 503:{self.STORE_HOLD_PAGE} sekimore_store_locked\n"
+            "http_access deny sekimore_store_locked"
+        )
+
+    def _write_store_hold_page(self) -> bool:
+        """The error page the hold answers with, where Squid looks for one (#275)."""
+        path = self.error_template_dir / self.STORE_HOLD_PAGE
+        try:
+            if not (path.exists() and path.read_text() == self.STORE_HOLD_HTML):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(self.STORE_HOLD_HTML)
+            return True
+        except OSError as e:
+            log_error(ComponentType.PROXY, f"could not write Squid's error page {path}: {e}")
+            return False
+
+    @staticmethod
+    def _ensure_store_hold_placeholder(template: str) -> str:
+        """Add the hold placeholder to a template written before it existed (#275).
+
+        The template is bind-mounted by each deployment, the way `_ensure_relay_placeholders`
+        explains. The hold has to be the first `http_access` rule, so it goes above the
+        port checks; a template without those gets it above the allowlist's allow.
+        """
+        if "{STORE_HOLD_RULE}" in template:
+            return template
+        for anchor in ("http_access deny !Safe_ports", "http_access allow allowed_domains"):
+            if anchor in template:
+                return template.replace(anchor, "{STORE_HOLD_RULE}\n\n" + anchor, 1)
+        return template
 
     def _generate_upstream_proxy_config(self) -> str:
         """Build the upstream proxy configuration.

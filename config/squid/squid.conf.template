@@ -14,6 +14,11 @@ acl CONNECT method CONNECT
 # Domains another component owns (dynamically generated; empty when the relay is not in use)
 {RELAYED_DOMAINS_ACL}
 
+# #275: while the upstream proxy's credential sits in the locked secret store, every request is
+# refused with a 503 that names sgw unlock, so no client asks a person for the proxy password
+# (dynamically generated; empty once the store is unlocked, or when no upstream proxy is set)
+{STORE_HOLD_RULE}
+
 # Deny requests to non-safe ports
 http_access deny !Safe_ports
 http_access deny CONNECT !SSL_ports

@@ -2009,9 +2009,14 @@ fn squid_reach_line(outcome: &Result<crate::netutil::SquidProbe, String>) -> Str
         }
         Ok(p) => {
             let word = paint(Tone::Bad, &t("op.check.word.proxy_unreachable"));
-            // 502 / 503 is Squid saying it could not reach its peer — a different fault from
-            // "Squid refused this request", and a different place to look.
-            let key = if p.status.starts_with('5') {
+            // #275: Squid holding every request because the store has the credential and is
+            // locked is neither its peer failing nor a refusal of this request: the remedy is
+            // sgw unlock, and the line has to say so.
+            // Otherwise, 502 / 503 is Squid saying it could not reach its peer — a different
+            // fault from "Squid refused this request", and a different place to look.
+            let key = if p.error_page.as_deref() == Some(crate::netutil::STORE_LOCKED_PAGE) {
+                "op.check.proxy_reach_squid_locked"
+            } else if p.status.starts_with('5') {
                 "op.check.proxy_reach_squid_peer"
             } else {
                 "op.check.proxy_reach_squid_refused"
@@ -2535,6 +2540,7 @@ garbage line\n";
             target: "api.github.com".into(),
             status: status.into(),
             status_line: line.into(),
+            error_page: None,
         };
 
         let open = Ok(probe("200", "HTTP/1.1 200 Connection established"));
@@ -2560,6 +2566,19 @@ garbage line\n";
         let refused = Ok(probe("403", "HTTP/1.1 403 Forbidden"));
         let other = squid_reach_line(&refused);
         assert!(other.contains("403 Forbidden"), "{other}");
+        // #275: a 503 that carries the gateway's own page name is the store holding the
+        // credential: neither the peer nor a refusal, and the line names sgw unlock
+        let mut held = probe("503", "HTTP/1.1 503 Service Unavailable");
+        held.error_page = Some(crate::netutil::STORE_LOCKED_PAGE.into());
+        let held = Ok(held);
+        let locked = squid_reach_line(&held);
+        assert!(locked.contains("sgw unlock"), "{locked}");
+        assert!(locked.contains(&bad_word), "{locked}");
+        assert!(squid_probe_failed(&held));
+        assert_ne!(
+            locked.replace("503 Service Unavailable", ""),
+            line.replace("503 Service Unavailable", "")
+        );
         assert_ne!(
             line.replace("503 Service Unavailable", ""),
             other.replace("403 Forbidden", ""),
