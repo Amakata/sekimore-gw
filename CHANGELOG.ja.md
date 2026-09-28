@@ -11,6 +11,12 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.56（2026-09-28）
+
+### Enhancement
+
+- `sgw self-update` が動いている `sgw` を Release のバイナリに入れ替える（このマシン向けの asset、sha256 を照合、隣に書いて rename）。`sgw update --apply` は新しい版があれば先にこれを行い、新しいバイナリで自分を実行し直す (#294)
+
 ## 0.2.55（2026-09-28）
 
 ### Security
