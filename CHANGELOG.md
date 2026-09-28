@@ -12,6 +12,12 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.56 (2026-09-28)
+
+### Enhancement
+
+- `sgw self-update` replaces the running `sgw` with a release's binary (its sha256 checked, written beside and renamed over); `sgw update --apply` does it first when a newer release is out, then runs itself again as the new binary (#294)
+
 ## 0.2.55 (2026-09-28)
 
 ### Security
