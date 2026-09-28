@@ -242,6 +242,8 @@
   "op.check.upstreams": "上流の層 (案件既定と repo の間):",
   "op.check.no_overrides": "(上書きなし)",
   "op.check.repos": "リポジトリ (実効 = 案件既定 + 上流層 + repo の allow − deny):",
+  "op.check.boards": "ボード (Projects v2。実効の project:* = 先頭 repo の実効 + ボードの allow − deny):",
+  "op.check.board_permissions": "permissions: {perms}",
   "op.check.repo_permissions": "    権限: {perms}",
   "op.check.none": "(なし)",
   "op.check.state": "状態:",

@@ -195,11 +195,25 @@ fn board_choices(boards: &[crate::api::ResolvedBoard]) -> String {
 /// configured board is the default. Requiring `--project-id PVT_…` made the agent carry an id it
 /// has no way to obtain — the command that prints it is the operator's — while the relay had the
 /// mapping from start-up all along.
+/// #277: the board actually named decides last. `authorize` counted a key any board adds; here
+/// the board is known, and its own allow / deny settle it. Every Projects handler goes
+/// through this, so a board is never reached on the anchor repository's permissions alone.
+async fn board_scope(
+    ctx: &ApiContext,
+    gh: &GitHub,
+    req: &ApiRequest,
+    auth: &crate::policy::Authorized<'_>,
+) -> Result<String, ApiError> {
+    let board = resolve_board(ctx, gh, req).await?;
+    ctx.project.authorize_board(auth, &board.label)?;
+    Ok(board.id)
+}
+
 async fn resolve_board(
     ctx: &ApiContext,
     gh: &GitHub,
     req: &ApiRequest,
-) -> Result<String, ApiError> {
+) -> Result<crate::api::ResolvedBoard, ApiError> {
     if ctx.project_boards.is_declared_empty() {
         return Err(ApiError::forbidden(
             "no project board is allowed; add relay.project.boards (the org / user and the number from the board's URL)",
@@ -222,22 +236,18 @@ async fn resolve_board(
         (true, Some(n)) => boards
             .iter()
             .find(|b| b.number == n)
-            .map(|b| b.id.clone())
+            .cloned()
             .ok_or_else(|| {
                 ApiError::forbidden(format!(
                     "project board {n} is not in this project; this project has {}",
                     board_choices(&boards)
                 ))
             }),
-        (false, None) => boards
-            .iter()
-            .find(|b| b.id == id)
-            .map(|b| b.id.clone())
-            .ok_or_else(|| {
-                ApiError::forbidden(format!("project board {id} is not in this project"))
-            }),
+        (false, None) => boards.iter().find(|b| b.id == id).cloned().ok_or_else(|| {
+            ApiError::forbidden(format!("project board {id} is not in this project"))
+        }),
         (true, None) => match boards.as_slice() {
-            [only] => Ok(only.id.clone()),
+            [only] => Ok(only.clone()),
             _ => Err(ApiError::bad_request(format!(
                 "--board is required when the project has more than one board: {}",
                 board_choices(&boards)
@@ -394,8 +404,45 @@ async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiE
         }
         _ => String::new(),
     };
+    // #277: a board with a delta of its own says how its project:* keys differ from the
+    // project-wide ones, the way a repo line does. Without it an agent reads the permissions
+    // line, tries the board that is allowed less, and learns the answer from a refusal.
+    let boards = match (
+        ctx.project_boards.declared_labels(),
+        ctx.project.repos.first(),
+    ) {
+        (labels, Some(anchor)) if !labels.is_empty() => {
+            let lines: Vec<String> = labels
+                .iter()
+                .map(|label| {
+                    let effective = ctx.project.effective_board_keys(anchor, label);
+                    let mut delta: Vec<String> = effective
+                        .iter()
+                        .filter(|k| !perms.contains(k))
+                        .map(|k| format!("+{k}"))
+                        .collect();
+                    delta.extend(
+                        perms
+                            .iter()
+                            .filter(|k| k.starts_with("project:") && !effective.contains(k))
+                            .map(|k| format!("-{k}")),
+                    );
+                    if delta.is_empty() {
+                        label.clone()
+                    } else {
+                        format!("{label} {}", delta.join(" "))
+                    }
+                })
+                .collect();
+            format!(
+                "\nboards (--board <number>; a line's +/- adds or removes):\n  {}",
+                lines.join("\n  ")
+            )
+        }
+        _ => String::new(),
+    };
     let msg = format!(
-        "project={} token={} expires={}\npermissions (every repo; a repo line's +/- adds or removes): {}{signing}\nrepos:\n  {}",
+        "project={} token={} expires={}\npermissions (every repo; a repo line's +/- adds or removes): {}{signing}\nrepos:\n  {}{boards}",
         rec.project,
         rec.label,
         humantime::format_rfc3339_seconds(rec.expires_at),
@@ -1666,7 +1713,7 @@ async fn issue_unassign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespons
 async fn project_add_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need(!req.content_id.is_empty(), "content_id is required")?;
     let (auth, client) = project_scope(ctx, req, Resource::Project, Action::AddItem)?;
-    let board = resolve_board(ctx, client, req).await?;
+    let board = board_scope(ctx, client, req, &auth).await?;
     let item = client
         .add_project_item(&auth, &board, &req.content_id)
         .await?;
@@ -1682,7 +1729,7 @@ async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRe
         "item_id and field_id are required",
     )?;
     let (auth, client) = project_scope(ctx, req, Resource::Project, Action::UpdateItem)?;
-    let board = resolve_board(ctx, client, req).await?;
+    let board = board_scope(ctx, client, req, &auth).await?;
     let value = req.value.clone().unwrap_or(Value::Null);
     client
         .update_project_item_field(&auth, &board, &req.item_id, &req.field_id, value)
@@ -1692,7 +1739,7 @@ async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRe
 
 async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     let (auth, client) = project_scope(ctx, req, Resource::Project, Action::Read)?;
-    let board = resolve_board(ctx, client, req).await?;
+    let board = board_scope(ctx, client, req, &auth).await?;
     let first = if req.first == 0 || req.first > 100 {
         20
     } else {
@@ -1708,7 +1755,7 @@ async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
 /// 0.2.7: the board's fields and their option ids, which `project update-item` needs.
 async fn project_fields(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     let (auth, client) = project_scope(ctx, req, Resource::Project, Action::Read)?;
-    let board = resolve_board(ctx, client, req).await?;
+    let board = board_scope(ctx, client, req, &auth).await?;
     let first = if req.first == 0 || req.first > 100 {
         50
     } else {

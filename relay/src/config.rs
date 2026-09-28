@@ -249,7 +249,7 @@ impl Default for Limits {
 /// How API permissions are written: either `[pr:create, …]`, which is allow-only, or `{allow: […], deny: […]}`.
 /// Written on a repo it becomes a delta on the project defaults, and **a deny wins at whatever layer it is
 /// written** - the same direction as GitHub rulesets, which restrict even where write permission is granted.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum PermissionSpec {
     List(Vec<String>),
@@ -503,6 +503,12 @@ pub struct BoardRef {
     pub user: Option<String>,
     /// The number in the URL
     pub number: u32,
+    /// #277: this board's delta on the project's permissions, the way a repo's is written: a
+    /// plain list adds, `allow` / `deny` add and take away, and a deny wins at any layer. Only
+    /// `project:*` keys are accepted here. Omitted, the board takes the anchor repository's
+    /// effective permissions
+    #[serde(default)]
+    pub permissions: Option<PermissionSpec>,
 }
 
 impl BoardRef {
@@ -1237,6 +1243,23 @@ impl Loaded {
             pc.permissions.deny(),
         )
         .map_err(ConfigError::Invalid)?;
+        // #277: the boards' own deltas, validated to project:* keys
+        project
+            .set_boards(
+                relay
+                    .project
+                    .boards
+                    .iter()
+                    .filter_map(|b| {
+                        b.permissions.as_ref().map(|p| crate::policy::BoardPolicy {
+                            label: b.label(),
+                            allow: p.allow().to_vec(),
+                            deny: p.deny().to_vec(),
+                        })
+                    })
+                    .collect(),
+            )
+            .map_err(ConfigError::Invalid)?;
         project.set_default_host(&domain);
         project.branch = pc.branch.clone();
         if project.name.trim().is_empty() {
@@ -1712,6 +1735,63 @@ relay:
 
     /// 0.2.7: a Projects v2 board is written the way its URL reads, because the node id the API
     /// wants appears nowhere a person can copy it from.
+    /// #277: a board may carry its own permissions delta, project:* keys only.
+    #[test]
+    fn a_board_may_carry_a_permissions_delta_of_project_keys_only() {
+        let body = |boards: &str| {
+            format!(
+                r#"
+domain_handlers:
+  github.com: {{ handler: github }}
+relay:
+  project:
+    name: case-a
+    permissions: [project:read]
+    boards:
+{boards}
+    repos:
+      - {{ name: Org/App, mode: read-write, bases: [main] }}
+"#
+            )
+        };
+        let ok = p(&body(
+            "      - { org: acme, number: 3, permissions: [project:update_item] }\n      - { user: someone, number: 1, permissions: { deny: [project:read] } }\n      - { user: someone, number: 5 }",
+        ))
+        .expect("a list and allow/deny both parse")
+        .resolve()
+        .expect("and resolve");
+        let anchor = &ok.project.repos[0];
+        assert_eq!(
+            ok.project
+                .effective_board_keys(anchor, "orgs/acme/projects/3"),
+            vec!["project:read", "project:update_item"]
+        );
+        assert_eq!(
+            ok.project
+                .effective_board_keys(anchor, "users/someone/projects/1"),
+            Vec::<String>::new()
+        );
+        // no delta: the anchor's effective set, and no BoardPolicy entry
+        assert_eq!(
+            ok.project
+                .effective_board_keys(anchor, "users/someone/projects/5"),
+            vec!["project:read"]
+        );
+        assert_eq!(ok.project.boards.len(), 2);
+        // a key that is not project:* is a mistake found at start-up, with the board named
+        let err = p(&body(
+            "      - { org: acme, number: 3, permissions: [pr:merge] }",
+        ))
+        .expect("parses")
+        .resolve()
+        .expect_err("pr:merge on a board is refused");
+        let text = format!("{err}");
+        assert!(
+            text.contains("orgs/acme/projects/3") && text.contains("pr:merge"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn project_boards_are_written_as_owner_and_number() {
         let body = |boards: &str| {

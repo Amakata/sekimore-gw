@@ -102,6 +102,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 
 - Specify a board with `--board <number>`, in the same form as config.yml and the board URL (`github.com/users/<user>/projects/<n>`). If the project has only one board, that board is the default and you can omit the option. `--project-id PVT_…` is also accepted, but only the operator can run the command that prints that node ID, so you cannot look it up.
 - Passing both `--board` and `--project-id` is an error. If you specify a board that the project does not have, the denial lists the boards that it does have.
+- A board may allow less or more than the project does (`relay.project.boards[].permissions`). `sekimore whoami` lists each board with its `+`/`-` difference; a denial that names a board (`… is not allowed on project board users/x/projects/2`) means that board, not the permission in general.
 
 - The `issue` write commands (close, reopen, comment, label, assign and their inverses) require the **`pr:*` permission when the number refers to a pull request**. GitHub serves pull requests through the issues endpoints, so the relay looks up the number before it decides which permission applies. For example, with only `issue:close`, an attempt to close a pull request is refused, and the denial names `pr:close`.
 - Select the repository with `--repo Org/Repo`. If you omit the option, `SEKIMORE_REPO` is used. When there are several upstreams, you can prefix the host: `--repo ghe.example.com/Org/Repo`.

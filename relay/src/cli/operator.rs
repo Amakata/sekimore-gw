@@ -1177,6 +1177,28 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             println!("{}", tf("op.check.repo_permissions", &[("perms", &perms)]));
         }
     }
+    // #277: the boards, each with the project:* keys effective on it (against the first repo,
+    // the anchor a Projects call without --repo takes)
+    if !r.relay.project.boards.is_empty() {
+        println!("\n{}", t("op.check.boards"));
+        for b in &r.relay.project.boards {
+            let label = b.label();
+            let keys = match r.project.repos.first() {
+                Some(anchor) => r.project.effective_board_keys(anchor, &label),
+                None => Vec::new(),
+            };
+            let perms = if keys.is_empty() {
+                t("op.check.none")
+            } else {
+                keys.join(" ")
+            };
+            println!(
+                "  {:<40} {}",
+                label,
+                tf("op.check.board_permissions", &[("perms", &perms)])
+            );
+        }
+    }
     println!("\n{}", t("op.check.state"));
     let sock = auth_sock_from_env();
     match preflight_agent(sock.as_deref()).await {

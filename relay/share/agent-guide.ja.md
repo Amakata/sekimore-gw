@@ -102,6 +102,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 
 - ボードは `--board <番号>` で指定します。書き方は config.yml やボードの URL（`github.com/users/<user>/projects/<n>`）と同じです。案件のボードが 1 枚だけなら、そのボードが既定になるので省略できます。`--project-id PVT_…` も受け付けますが、その node ID を出力するコマンドは運用者しか実行できないため、あなたは調べられません。
 - `--board` と `--project-id` を両方渡すとエラーになります。案件にないボードを指定すると、案件にあるボードの一覧が拒否メッセージに表示されます。
+- ボードごとに案件より狭い・広い権限が付いていることがあります（`relay.project.boards[].permissions`）。`sekimore whoami` がボードごとの `+`/`-` の差分を並べます。ボード名を含む拒否（`… is not allowed on project board users/x/projects/2`）はそのボードだけの話で、権限そのものが無いという意味ではありません。
 
 - `issue` の書き込み系コマンド（close、reopen、comment、label、assign とその逆）は、**番号が PR を指している場合は `pr:*` の権限を要求します**。GitHub は PR を issues のエンドポイントでも返すため、関所は番号を照会してから、どの権限を適用するかを決めます。たとえば `issue:close` しか持たない状態で PR を閉じようとすると拒否され、拒否メッセージには `pr:close` が表示されます。
 - リポジトリは `--repo Org/Repo` で指定します。省略すると `SEKIMORE_REPO` が使われます。上流が複数ある場合は、`--repo ghe.example.com/Org/Repo` のようにホストを前に付けられます。

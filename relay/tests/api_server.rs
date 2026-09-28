@@ -3252,6 +3252,7 @@ async fn a_declared_board_is_resolved_on_first_use_not_at_start_up() {
             org: None,
             user: Some("Amakata".into()),
             number: 2,
+            permissions: None,
         }]),
     )
     .await;
@@ -3294,6 +3295,7 @@ async fn a_board_that_could_not_be_resolved_is_tried_again() {
             org: None,
             user: Some("Amakata".into()),
             number: 2,
+            permissions: None,
         }]),
     )
     .await;
@@ -3320,5 +3322,152 @@ async fn a_board_that_could_not_be_resolved_is_tried_again() {
         code, 200,
         "a failed resolve was remembered: {:?}",
         resp.error
+    );
+}
+
+// ---- #277: per-board permissions ----
+
+/// Two boards on one project: board 3 adds project:update_item, board 2 takes project:read away.
+fn project_with_board_deltas() -> sekimore_relay::policy::Project {
+    project_case_a(&["project:read"])
+        .with_board("users/tester/projects/2", &[], &["project:read"])
+        .with_board("users/tester/projects/3", &["project:update_item"], &[])
+}
+
+#[tokio::test]
+async fn a_board_may_allow_more_than_the_project_and_the_other_board_does_not_get_it() {
+    let f = start_api_with_boards(
+        project_with_board_deltas(),
+        BootstrapMode::Auto,
+        true,
+        vec![board(2, "PVT_two"), board(3, "PVT_three")],
+    )
+    .await;
+    let update = |n: u32| ApiRequest {
+        board: Some(n),
+        item_id: "PVTI_1".into(),
+        field_id: "PVTSSF_1".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/update-item", Some(&f.token), &update(3)).await;
+    assert_eq!(code, 200, "board 3 allows it: {:?}", resp.error);
+    assert!(
+        recorded(&f.recorder)
+            .iter()
+            .any(|c| c.path.contains("graphql")),
+        "the update reached upstream"
+    );
+    // the adversarial case is the other declared board, not a foreign one
+    let (code, resp) = post(f.addr, "/project/update-item", Some(&f.token), &update(2)).await;
+    assert_eq!(code, 403);
+    let msg = resp.error.unwrap_or_default();
+    assert!(
+        msg.contains("users/tester/projects/2") && msg.contains("project:update_item"),
+        "the refusal names the board and the key: {msg}"
+    );
+    assert_eq!(
+        recorded(&f.recorder)
+            .iter()
+            .filter(|c| c.path.contains("graphql"))
+            .count(),
+        1,
+        "nothing more reached upstream"
+    );
+}
+
+#[tokio::test]
+async fn a_board_deny_beats_the_project_wide_allow_by_number_and_by_id() {
+    let f = start_api_with_boards(
+        project_with_board_deltas(),
+        BootstrapMode::Auto,
+        true,
+        vec![board(2, "PVT_two"), board(3, "PVT_three")],
+    )
+    .await;
+    let by_number = ApiRequest {
+        board: Some(2),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &by_number).await;
+    assert_eq!(code, 403, "{:?}", resp.error);
+    assert!(
+        resp.error
+            .unwrap_or_default()
+            .contains("users/tester/projects/2"),
+        "names the board"
+    );
+    // --project-id takes the same gate as --board
+    let by_id = ApiRequest {
+        project_id: "PVT_two".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, _) = post(f.addr, "/project/list", Some(&f.token), &by_id).await;
+    assert_eq!(code, 403);
+    assert!(recorded(&f.recorder).is_empty(), "nothing reached upstream");
+    let other = ApiRequest {
+        board: Some(3),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &other).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+}
+
+#[tokio::test]
+async fn a_key_no_layer_grants_is_refused_before_any_board_is_named() {
+    // project:add_item is granted nowhere: the refusal is about the permission, and says nothing
+    // about boards (the_permission_is_checked_before_the_board, kept)
+    let f = start_api_with_boards(
+        project_with_board_deltas(),
+        BootstrapMode::Auto,
+        true,
+        vec![board(2, "PVT_two"), board(3, "PVT_three")],
+    )
+    .await;
+    let r = ApiRequest {
+        board: Some(3),
+        content_id: "I_1".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/add-item", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    let msg = resp.error.unwrap_or_default();
+    assert!(msg.contains("project:add_item"), "{msg}");
+    assert!(!msg.contains("projects/"), "no board is named: {msg}");
+}
+
+#[tokio::test]
+async fn whoami_lists_each_board_with_its_delta() {
+    let f = start_api_full(
+        project_with_board_deltas(),
+        BootstrapMode::Auto,
+        true,
+        vec![board(2, "PVT_two"), board(3, "PVT_three")],
+        Some(vec![
+            sekimore_relay::config::BoardRef {
+                org: None,
+                user: Some("tester".into()),
+                number: 2,
+                permissions: None,
+            },
+            sekimore_relay::config::BoardRef {
+                org: None,
+                user: Some("tester".into()),
+                number: 3,
+                permissions: None,
+            },
+        ]),
+    )
+    .await;
+    let (code, resp) = post(f.addr, "/whoami", Some(&f.token), &ApiRequest::default()).await;
+    assert_eq!(code, 200);
+    let msg = resp.message.unwrap_or_default();
+    assert!(msg.contains("boards (--board <number>"), "{msg}");
+    assert!(
+        msg.contains("users/tester/projects/2 -project:read"),
+        "{msg}"
+    );
+    assert!(
+        msg.contains("users/tester/projects/3 +project:update_item"),
+        "{msg}"
     );
 }
