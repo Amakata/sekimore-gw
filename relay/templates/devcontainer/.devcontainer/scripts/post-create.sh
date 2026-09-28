@@ -75,7 +75,7 @@ sed -i 's/^plugins=(git)$/plugins=(git zsh-completions zsh-autosuggestions zsh-s
 # The VS Code Dev Containers extension always forwards the agent into the container whenever VS Code
 # itself can use one (no setting turns it off: microsoft/vscode-remote-release#11413).
 # ---------------------------------------------------------------------------
-signing_fp=$(sed -n 's/^SEKIMORE_SIGNING_KEY=//p' /etc/sekimore-agent/env 2>/dev/null)
+signing_fp=$(sed -n 's/^SEKIMORE_SIGNING_KEY=//p' /etc/sekimore-agent/env 2>/dev/null) || true
 if keys=$(ssh-add -l 2>/dev/null) && printf '%s\n' "$keys" | awk -v fp="$signing_fp" '$2 != fp {bad=1} END {exit !bad}'; then
   if [ "${SEKIMORE_ALLOW_AGENT_FORWARD:-0}" = "1" ]; then
     echo "⚠️  Your Mac's SSH key (ssh-agent) is usable from this container. Continuing because SEKIMORE_ALLOW_AGENT_FORWARD=1, but the AI can use your key."
@@ -91,7 +91,7 @@ if keys=$(ssh-add -l 2>/dev/null) && printf '%s\n' "$keys" | awk -v fp="$signing
       echo "          cd <this project's folder> && mise run vscode"
       echo "        -> VS Code starts with no access to the SSH key"
       echo "     3. In that VS Code, run \"Dev Containers: Reopen in Container\""
-      echo "     4. Check: inside the container ssh-add -l lists no key but \"sekimore AI signing key\" (or fails)"
+      echo "     4. Check: inside the container ssh-add -l lists only the signing key (or fails)"
       echo ""
       echo "   Why: the VS Code Dev Containers extension always forwards the key into the container when VS Code itself can use it (no setting turns it off)."
       echo "        mise run vscode starts VS Code alone without showing it the SSH key. Docker Desktop (which hands the key to sekimore-gw) is unaffected."
