@@ -11,6 +11,18 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.57（2026-09-28）
+
+### Fix
+
+- `SSH_AUTH_SOCK` がディレクトリを指すとき、起動時に環境変数そのものを中の `agent.sock` に解決する。踏み台（ProxyJump）越しの `keyscan` / `login` が関所と同じ agent を見るようになり、`check` はディレクトリを指していたことを言う (#305)
+- `sgw update --apply` は、雛形の変更が版の pin だけ（`--apply` が書き換えるもの）のとき、編集済みの Dockerfile / compose の隣に `.sgw-new` を置かなくなった (#300)
+
+### Enhancement
+
+- CI: `cargo audit` はキャッシュした cargo-audit で走り（204 秒 → 22 秒）、base イメージは multi-arch の manifest を待たず自分のアーキの gateway digest から build する（リリースが約 45 秒短縮） (#299)
+- 依存: Rust の 34 crate と Python の 6 パッケージを最新の patch / minor に更新 (#303)
+
 ## 0.2.56（2026-09-28）
 
 ### Enhancement
