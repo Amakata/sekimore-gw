@@ -154,7 +154,7 @@
   "agent.issue.unassign.assignees": "外す担当者（カンマ区切り）",
   "agent.project.add_item": "Project にアイテムを追加する",
   "agent.project.update_item": "Project アイテムのフィールドを更新する",
-  "agent.project.update_item.value": "JSON か文字列（文字列は {\"text\": …} になる）",
+  "agent.project.update_item.value": "フィールドの新しい値の JSON: 単一選択は {\"singleSelectOptionId\":\"<project fields が出す option id>\"}、数値は {\"number\": 3}、日付は {\"date\":\"2026-01-31\"}、イテレーションは {\"iterationId\":\"…\"}。ただの文字列は {\"text\": …} になる",
   "agent.project.list": "Project のアイテム一覧",
   "agent.project.project_id": "Project の node ID。--board なら node ID なしで同じボードを指せる",
   "agent.project.board": "ボードの番号。config.yml と URL の書き方（github.com/users/<user>/projects/<n>）。ボードが1枚なら既定値",

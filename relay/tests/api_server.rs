@@ -3253,6 +3253,7 @@ async fn a_declared_board_is_resolved_on_first_use_not_at_start_up() {
             user: Some("Amakata".into()),
             number: 2,
             permissions: None,
+            upstream: None,
         }]),
     )
     .await;
@@ -3296,6 +3297,7 @@ async fn a_board_that_could_not_be_resolved_is_tried_again() {
             user: Some("Amakata".into()),
             number: 2,
             permissions: None,
+            upstream: None,
         }]),
     )
     .await;
@@ -3448,12 +3450,14 @@ async fn whoami_lists_each_board_with_its_delta() {
                 user: Some("tester".into()),
                 number: 2,
                 permissions: None,
+                upstream: None,
             },
             sekimore_relay::config::BoardRef {
                 org: None,
                 user: Some("tester".into()),
                 number: 3,
                 permissions: None,
+                upstream: None,
             },
         ]),
     )
@@ -3468,6 +3472,64 @@ async fn whoami_lists_each_board_with_its_delta() {
     );
     assert!(
         msg.contains("users/tester/projects/3 +project:update_item"),
+        "{msg}"
+    );
+}
+
+// ---- #291: a board on another upstream ----
+
+/// A board declared with `upstream: ghe.example.com` is resolved there and asked there, whatever
+/// `--repo` / `SEKIMORE_REPO` name (the anchor repository lives on github.com here). Before,
+/// the GraphQL call went to the anchor's upstream with the GHE's node id, and github.com
+/// answered "could not resolve to a node".
+#[tokio::test]
+async fn a_board_on_another_upstream_is_asked_there_whatever_repo_names() {
+    let f = start_api_full(
+        project_case_a(&["project:read"]),
+        BootstrapMode::Auto,
+        true,
+        vec![],
+        Some(vec![sekimore_relay::config::BoardRef {
+            org: Some("acme".into()),
+            user: None,
+            number: 1,
+            permissions: None,
+            upstream: Some("ghe.example.com".into()),
+        }]),
+    )
+    .await;
+    let r = ApiRequest {
+        board: Some(1),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let ghe = recorded(&f.ghe_recorder);
+    assert!(
+        ghe.iter().any(|c| c
+            .body
+            .to_string()
+            .contains("projectV2(number:$number){ id }")),
+        "the board is resolved on its own upstream"
+    );
+    assert!(
+        ghe.iter()
+            .any(|c| c.body.to_string().contains("PVT_board2")),
+        "and listed there: {ghe:?}"
+    );
+    assert!(
+        recorded(&f.recorder)
+            .iter()
+            .all(|c| !c.path.contains("graphql")),
+        "nothing about the board reaches the anchor repository's upstream: {:?}",
+        recorded(&f.recorder)
+    );
+    // whoami says where the board lives
+    let (code, resp) = post(f.addr, "/whoami", Some(&f.token), &ApiRequest::default()).await;
+    assert_eq!(code, 200);
+    let msg = resp.message.unwrap_or_default();
+    assert!(
+        msg.contains("orgs/acme/projects/1 (on ghe.example.com)"),
         "{msg}"
     );
 }

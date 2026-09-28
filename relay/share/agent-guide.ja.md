@@ -102,6 +102,9 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 
 - ボードは `--board <番号>` で指定します。書き方は config.yml やボードの URL（`github.com/users/<user>/projects/<n>`）と同じです。案件のボードが 1 枚だけなら、そのボードが既定になるので省略できます。`--project-id PVT_…` も受け付けますが、その node ID を出力するコマンドは運用者しか実行できないため、あなたは調べられません。
 - `--board` と `--project-id` を両方渡すとエラーになります。案件にないボードを指定すると、案件にあるボードの一覧が拒否メッセージに表示されます。
+- ボードは 1 つの上流に属します（`relay.project.boards[].upstream`。未指定なら既定の上流）。ボードへの呼び出しは自動でその上流に届くので、`--repo` や `SEKIMORE_REPO` が何を指していても `--board 1` で GHE のボードに届きます。`sekimore whoami` はそのボードの後ろに `(on <host>)` を出します。
+- `update-item --value` はフィールドの新しい値の JSON です。単一選択（Status）は `{"singleSelectOptionId":"<option id>"}`。`project fields --board N` が field id と、単一選択ごとの option id を出します。数値は `{"number": 3}`、日付は `{"date":"2026-01-31"}`、イテレーションは `{"iterationId":"…"}`。ただの文字列は `{"text": …}` になります。
+- `add-item --content-id` には Issue か PR の node id を渡します。`sekimore issue view --number N --json` と `sekimore pr view --number N --json` が `node_id` として出します。
 - ボードごとに案件より狭い・広い権限が付いていることがあります（`relay.project.boards[].permissions`）。`sekimore whoami` がボードごとの `+`/`-` の差分を並べます。ボード名を含む拒否（`… is not allowed on project board users/x/projects/2`）はそのボードだけの話で、権限そのものが無いという意味ではありません。
 
 - `issue` の書き込み系コマンド（close、reopen、comment、label、assign とその逆）は、**番号が PR を指している場合は `pr:*` の権限を要求します**。GitHub は PR を issues のエンドポイントでも返すため、関所は番号を照会してから、どの権限を適用するかを決めます。たとえば `issue:close` しか持たない状態で PR を閉じようとすると拒否され、拒否メッセージには `pr:close` が表示されます。

@@ -510,6 +510,12 @@ pub struct BoardRef {
     pub user: Option<String>,
     /// The number in the URL
     pub number: u32,
+    /// #291: the git-relay domain the board lives on, when it is not the default upstream
+    /// (`ghe.example.com` for a board on that GHE). Resolution and every Projects call go to
+    /// this upstream, so `--board` alone names the board wherever `--repo` / `SEKIMORE_REPO`
+    /// point
+    #[serde(default)]
+    pub upstream: Option<String>,
     /// #277: this board's delta on the project's permissions, the way a repo's is written: a
     /// plain list adds, `allow` / `deny` add and take away, and a deny wins at any layer. Only
     /// `project:*` keys are accepted here. Omitted, the board takes the anchor repository's
@@ -1287,6 +1293,18 @@ impl Loaded {
             }
         }
 
+        // #291: a board's upstream has to be one of the git-relay domains
+        for b in &relay.project.boards {
+            if let Some(u) = &b.upstream {
+                if !upstreams.iter().any(|x| x.domain.eq_ignore_ascii_case(u)) {
+                    return Err(ConfigError::Invalid(format!(
+                        "project board {}: upstream {u:?} is not a git-relay domain of this gateway ({})",
+                        b.label(),
+                        upstreams.iter().map(|x| x.domain.as_str()).collect::<Vec<_>>().join(", ")
+                    )));
+                }
+            }
+        }
         let https_targets = self.resolve_https_targets(&relay, &upstreams)?;
         let proxy = resolve_proxy(&self.gateway.proxy)?;
         let paths = Paths::under(&relay.state_dir);
@@ -1797,6 +1815,54 @@ relay:
         let text = format!("{err}");
         assert!(
             text.contains("orgs/acme/projects/3") && text.contains("pr:merge"),
+            "{text}"
+        );
+    }
+
+    /// #291: a board names its upstream, which has to be one of the gateway's git-relay domains.
+    #[test]
+    fn a_board_may_name_its_upstream_and_only_a_git_relay_domain_will_do() {
+        let body = |boards: &str| {
+            format!(
+                r#"
+domain_handlers:
+  github.com: {{ handler: git-relay }}
+  ghe.example.com: {{ handler: git-relay, ssh_port: 2222 }}
+relay:
+  project:
+    name: case-b
+    permissions: [project:read]
+    boards:
+{boards}
+    repos:
+      - {{ name: Org/App, mode: read-write, bases: [main] }}
+"#
+            )
+        };
+        let ok = p(&body(
+            "      - { org: acme, number: 1, upstream: ghe.example.com }\n      - { org: acme, number: 3 }",
+        ))
+        .expect("parses")
+        .resolve()
+        .expect("a git-relay domain resolves");
+        assert_eq!(
+            ok.relay.project.boards[0].upstream.as_deref(),
+            Some("ghe.example.com")
+        );
+        assert_eq!(
+            ok.relay.project.boards[1].upstream, None,
+            "the default upstream"
+        );
+        // a domain the gateway does not relay is a mistake found at start-up, with the board named
+        let err = p(&body(
+            "      - { org: acme, number: 1, upstream: gitlab.example.com }",
+        ))
+        .expect("parses")
+        .resolve()
+        .expect_err("not a git-relay domain");
+        let text = format!("{err}");
+        assert!(
+            text.contains("orgs/acme/projects/1") && text.contains("gitlab.example.com"),
             "{text}"
         );
     }
