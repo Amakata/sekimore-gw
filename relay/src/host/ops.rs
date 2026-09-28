@@ -121,6 +121,17 @@ pub fn restart(docker: &Docker) -> anyhow::Result<i32> {
 /// `SGW_NO_AUTO_UNLOCK` in the environment).
 pub fn recreate(docker: &Docker, project: &str, no_unlock: bool) -> anyhow::Result<i32> {
     docker.recreate_gateway()?;
+    // #274: a dev container already up keeps the old gateway's address in /etc/resolv.conf and
+    // its default route; Docker may hand the new container another one. The setup points dev
+    // at whatever answers on port 53 now. Before the unlock, because it needs no store, and a
+    // failed unlock returns before anything after it.
+    if docker.find_container(DEV).is_ok() {
+        println!("{}", t("sgw.recreate.dev_setup"));
+        match dev_sh(docker, SETUP_IN_DEV) {
+            Ok(0) => {}
+            _ => eprintln!("{}", t("sgw.recreate.dev_setup_failed")),
+        }
+    }
     if no_unlock || std::env::var_os("SGW_NO_AUTO_UNLOCK").is_some() {
         println!("{}", t("sgw.recreate.left_locked"));
         return Ok(0);

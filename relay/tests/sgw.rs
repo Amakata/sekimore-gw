@@ -302,6 +302,25 @@ fn recreate_names_every_compose_file_the_container_was_created_with() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("the store was left locked"), "{stdout}");
+    // #274: the running dev container (the fake docker lists one) is pointed at the new
+    // gateway by the setup, before the unlock and whatever --no-unlock says
+    let setup = log
+        .lines()
+        .position(|l| l.starts_with("exec -i -u vscode cid123 sh -c set -e"))
+        .unwrap_or_else(|| panic!("no setup in dev after the recreate: {log}"));
+    let up_at = log
+        .lines()
+        .position(|l| l.contains(" up -d --force-recreate sekimore-gw"))
+        .unwrap();
+    assert!(
+        setup > up_at,
+        "the setup runs after the gateway is up: {log}"
+    );
+    assert!(log.contains("sgw-agent setup"), "{log}");
+    assert!(
+        stdout.contains("pointing the running dev container at the new gateway"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -483,6 +502,7 @@ fn verify_reports_every_item_with_its_ledger_rows() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     for heading in [
         "== gateway: sekimore-relay check",
+        "== dev: /etc/resolv.conf names the gateway [dev.dns]",
         "== dev: only the gateway's filtered signing key may be reachable [dev.signing]",
         "== gateway: the secret store [operator.store]",
         "== dev: git ls-remote through the relay (first repo of the project) [dev.relay.ssh, relay.ssh.upstream]",

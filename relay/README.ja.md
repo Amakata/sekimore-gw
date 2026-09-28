@@ -122,6 +122,7 @@ GitHub の監査ログではエージェントの操作と人間の操作を区�
 | `SEKIMORE_BOOTSTRAP=manual` | 鍵の登録とトークンの発行を運用者が行います（`add-key` と `token`）。 |
 | `SEKIMORE_PROJECT` / `SEKIMORE_SIGNING_KEY_COMMENT` | 署名鍵のコメント（GitHub に登録するときの Title） |
 | `SEKIMORE_AGENT_USER` / `SEKIMORE_KEY_DIR` / `SEKIMORE_AGENT_ENV_FILE` | 対象ユーザーと保存先 |
+| `SEKIMORE_GATEWAY_WAIT` | setup がゲートウェイ（port 53）を探し続ける秒数。既定は 90。dev が先に起動していてもゲートウェイの pull や作り直しが終わるのを待てる長さ。使い切ると失敗を告げ、対処（`sgw refresh` か dev コンテナの再起動）を示す |
 
 ### 署名鍵（0.2.29、#59）
 

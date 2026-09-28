@@ -68,8 +68,24 @@ pub fn candidates(me: &Iface) -> Vec<Ipv4Addr> {
     v
 }
 
-async fn dns_open(ip: Ipv4Addr) -> bool {
-    let addr = SocketAddr::new(IpAddr::V4(ip), 53);
+/// How long `setup` keeps looking for the gateway: `SEKIMORE_GATEWAY_WAIT` in seconds, 90 by
+/// default. Compose starts dev after the gateway's healthcheck, but a gateway recreated or
+/// pulled while dev is already up takes longer than the three quick passes this used to make,
+/// and a dev container that gave up kept Docker's resolv.conf with nothing to fix it (#274).
+/// A minute and a half covers a pull on a slow link without holding postStart for ever.
+pub const WAIT_VAR: &str = "SEKIMORE_GATEWAY_WAIT";
+pub const DEFAULT_WAIT: Duration = Duration::from_secs(90);
+
+pub fn wait_from_env() -> Duration {
+    std::env::var(WAIT_VAR)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_WAIT)
+}
+
+async fn port_open(ip: Ipv4Addr, port: u16) -> bool {
+    let addr = SocketAddr::new(IpAddr::V4(ip), port);
     matches!(
         tokio::time::timeout(
             Duration::from_millis(300),
@@ -80,56 +96,87 @@ async fn dns_open(ip: Ipv4Addr) -> bool {
     )
 }
 
-/// The first candidate with port 53 open, three passes with a pause between them (the gateway
-/// may still be coming up when postStart runs).
-pub async fn scan(cands: &[Ipv4Addr]) -> Option<Ipv4Addr> {
-    for attempt in 0..3 {
-        if attempt > 0 {
-            tokio::time::sleep(Duration::from_millis(700)).await;
-        }
-        for chunk in cands.chunks(64) {
-            let mut set = tokio::task::JoinSet::new();
-            for ip in chunk {
-                let ip = *ip;
-                set.spawn(async move {
-                    if dns_open(ip).await {
-                        Some(ip)
-                    } else {
-                        None
-                    }
-                });
-            }
-            let mut found: Vec<Ipv4Addr> = Vec::new();
-            while let Some(r) = set.join_next().await {
-                if let Ok(Some(ip)) = r {
-                    found.push(ip);
+/// One pass over the candidates: the lowest address with `port` open, so the choice is stable
+/// when several answer.
+async fn pass(cands: &[Ipv4Addr], port: u16) -> Option<Ipv4Addr> {
+    for chunk in cands.chunks(64) {
+        let mut set = tokio::task::JoinSet::new();
+        for ip in chunk {
+            let ip = *ip;
+            set.spawn(async move {
+                if port_open(ip, port).await {
+                    Some(ip)
+                } else {
+                    None
                 }
+            });
+        }
+        let mut found: Vec<Ipv4Addr> = Vec::new();
+        while let Some(r) = set.join_next().await {
+            if let Ok(Some(ip)) = r {
+                found.push(ip);
             }
-            // the lowest address wins when several answer, so the choice is stable
-            found.sort();
-            if let Some(ip) = found.into_iter().next() {
-                return Some(ip);
-            }
+        }
+        found.sort();
+        if let Some(ip) = found.into_iter().next() {
+            return Some(ip);
         }
     }
     None
 }
 
-pub async fn gateway() -> anyhow::Result<Ipv4Addr> {
+/// The first candidate with `port` open, passes with a pause between them until `wait` is used
+/// up: the gateway may still be coming up when postStart runs. A line every ten seconds says
+/// the wait is deliberate, so postStart's output does not look hung.
+pub async fn scan(cands: &[Ipv4Addr], port: u16, wait: Duration) -> Option<Ipv4Addr> {
+    let started = std::time::Instant::now();
+    let mut said = Duration::ZERO;
+    let mut attempt = 0u32;
+    loop {
+        if let Some(ip) = pass(cands, port).await {
+            return Some(ip);
+        }
+        let used = started.elapsed();
+        if used >= wait {
+            return None;
+        }
+        if used - said >= Duration::from_secs(10) {
+            said = used;
+            println!(
+                "[agent] no gateway yet; still looking ({}s of {}s; {WAIT_VAR} changes the limit)",
+                used.as_secs(),
+                wait.as_secs()
+            );
+        }
+        attempt += 1;
+        // quick at first (a gateway a second behind dev), then every two seconds
+        let pause = if attempt < 3 {
+            Duration::from_millis(700)
+        } else {
+            Duration::from_secs(2)
+        };
+        tokio::time::sleep(pause.min(wait - used)).await;
+    }
+}
+
+pub async fn gateway(wait: Duration) -> anyhow::Result<Ipv4Addr> {
     let me = iface()?;
     println!(
-        "[agent] My IP: {}, Subnet: /{}; scanning for the gateway (port 53)",
-        me.ip, me.prefix
+        "[agent] My IP: {}, Subnet: /{}; scanning for the gateway (port 53, up to {}s)",
+        me.ip,
+        me.prefix,
+        wait.as_secs()
     );
     let cands = candidates(&me);
-    match scan(&cands).await {
+    match scan(&cands, 53, wait).await {
         Some(ip) => {
             println!("[agent] sekimore-gw IP (discovered): {ip}");
             Ok(ip)
         }
         None => bail!(
-            "could not find sekimore-gw: no host with port 53 open in the /{} subnet. Is the gateway container running?",
-            me.prefix
+            "no host with port 53 open in the /{} subnet after {}s",
+            me.prefix,
+            wait.as_secs()
         ),
     }
 }
@@ -189,5 +236,48 @@ mod tests {
         );
         assert!(c.len() > 1000 && c.len() <= 1024);
         assert!(parse_iface("").is_none());
+    }
+
+    /// #274: a gateway that comes up after the first pass is still found, within the budget.
+    #[tokio::test]
+    async fn the_scan_keeps_looking_until_the_gateway_appears() {
+        let lo = Ipv4Addr::LOCALHOST;
+        // an ephemeral port nobody listens on yet
+        let probe = std::net::TcpListener::bind((lo, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let opener = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(900)).await;
+            tokio::net::TcpListener::bind((lo, port)).await.unwrap()
+        });
+        let found = scan(&[lo], port, Duration::from_secs(10)).await;
+        assert_eq!(found, Some(lo));
+        drop(opener.await.unwrap());
+    }
+
+    /// The budget is the budget: nothing listening, the scan gives up when it is used up.
+    #[tokio::test]
+    async fn the_scan_gives_up_when_the_wait_is_used_up() {
+        let lo = Ipv4Addr::LOCALHOST;
+        let probe = std::net::TcpListener::bind((lo, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let started = std::time::Instant::now();
+        let found = scan(&[lo], port, Duration::from_millis(800)).await;
+        assert_eq!(found, None);
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(800), "{took:?}");
+        assert!(took < Duration::from_secs(5), "{took:?}");
+    }
+
+    #[test]
+    fn the_wait_comes_from_the_environment_with_a_default() {
+        // the variable is process-wide; the test only reads it through the parser's rules
+        std::env::set_var(WAIT_VAR, " 7 ");
+        assert_eq!(wait_from_env(), Duration::from_secs(7));
+        std::env::set_var(WAIT_VAR, "soon");
+        assert_eq!(wait_from_env(), DEFAULT_WAIT);
+        std::env::remove_var(WAIT_VAR);
+        assert_eq!(wait_from_env(), DEFAULT_WAIT);
     }
 }

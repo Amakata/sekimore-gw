@@ -118,6 +118,7 @@ edges:
     to: gateway.dns
     proto: dns/53
     resolves: gateway.dns
+    verify: "/etc/resolv.conf names the gateway"
     verifies_peer: none (the answer comes from the default route set by sgw-agent setup)
     presents: none
     audit: sqlite dns log
