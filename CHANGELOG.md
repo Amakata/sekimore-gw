@@ -12,6 +12,18 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.57 (2026-09-28)
+
+### Fix
+
+- `SSH_AUTH_SOCK` naming a directory is resolved to `agent.sock` inside it in the process environment at start, so `keyscan` and `login` through a ProxyJump bastion see the agent the relay sees; `check` says when the variable named a directory (#305)
+- `sgw update --apply` no longer writes `.sgw-new` beside an edited Dockerfile or compose file when the template changed only in its version pin, which `--apply` rewrites anyway (#300)
+
+### Enhancement
+
+- CI: `cargo audit` runs from a cached cargo-audit (204 s → 22 s), and the base image builds from its own architecture's gateway digest instead of waiting for the multi-arch manifest, which takes about 45 s off a release (#299)
+- dependencies: 34 Rust crates and 6 Python packages moved to their newest patch or minor versions (#303)
+
 ## 0.2.56 (2026-09-28)
 
 ### Enhancement
