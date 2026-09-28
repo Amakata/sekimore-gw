@@ -213,7 +213,7 @@ sekimore ci rerun --run-id 123 [--all]           # ci cancel --run-id 123 もあ
 ```
 
 AI エージェント向けの使い方は `sgw-agent guide` で表示できます。ガイドは CLI に埋め込まれており、正本は `relay/share/agent-guide.en.md` と `agent-guide.ja.md` です。
-`sgw-agent setup` が同じ内容を Claude Code の skill（`~/.claude/skills/sekimore-relay/SKILL.md`）と Codex CLI の `~/.codex/AGENTS.md`（マーカー付きブロック）に配置するので、
+`sgw-agent setup` が同じ内容を Claude Code の skill（`~/.claude/skills/sgw-agent/SKILL.md`）と Codex CLI の `~/.codex/AGENTS.md`（マーカー付きブロック）に配置するので、
 これらのツールは自動で読み込みます。他のツールでは、`sgw-agent guide` の出力を、そのツールの規約で決まっている場所に置いてください。`SEKIMORE_AGENT_INSTRUCTIONS=none` で配置を無効にでき、`claude` または `codex` を指定すると一方だけに配置します。
 
 `sgw-agent` は `sekimore-relay agent` に env ファイルの読み込みとトークンの更新を組み込んだものです。旧名の `sekimore` もまだ使えます。リポジトリは `--repo Org/Repo` で指定します。上流が複数あるときは `host/Org/Repo` とも書けます。

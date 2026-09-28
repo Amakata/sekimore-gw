@@ -27,9 +27,46 @@ this, the commit was made in a way that went around that setup (`-c commit.gpgsi
   operator's to fix, not something to work around.
 ";
 
+/// Where the Claude Code skill goes, under the agent's home. Named after the command the agent
+/// runs (#287); `OLD_SKILL_DIR` is the name it had until 0.2.54, which `sgw-agent setup` removes.
+pub const SKILL_DIR: &str = ".claude/skills/sgw-agent";
+pub const OLD_SKILL_DIR: &str = ".claude/skills/sekimore-relay";
+
+/// #287: the skill under its former name, when it is ours and holds nothing else. Left alone
+/// otherwise, with a line saying so: a directory with a person's files in it is not ours to
+/// delete because of a rename.
+fn remove_old_skill(home: &std::path::Path) {
+    let old = home.join(OLD_SKILL_DIR);
+    if !old.is_dir() {
+        return;
+    }
+    let entries: Vec<_> = match std::fs::read_dir(&old) {
+        Ok(rd) => rd.flatten().map(|e| e.file_name()).collect(),
+        Err(_) => return,
+    };
+    let ours = entries.len() == 1
+        && entries[0] == "SKILL.md"
+        && read_or_empty(&old.join("SKILL.md")).starts_with("---\nname: sekimore-relay\n");
+    if ours {
+        match std::fs::remove_dir_all(&old) {
+            Ok(()) => println!(
+                "[agent] relay: removed the skill under its former name, {}",
+                old.display()
+            ),
+            Err(e) => println!("[agent] WARNING: could not remove {}: {e}", old.display()),
+        }
+    } else {
+        println!(
+            "[agent] relay: {} is not the skill this wrote (or holds other files); left alone. The skill is now {}",
+            old.display(),
+            SKILL_DIR
+        );
+    }
+}
+
 pub fn skill_text(lang: Option<&str>, signing_required: bool) -> String {
     let mut s = format!(
-        "---\nname: sekimore-relay\ndescription: In this environment git push, pull requests, CI checks, issues and the GitHub API all go through sekimore-relay. Read this before pushing, opening a PR, checking CI or calling GitHub. sekimore-relay {}\n---\n\n{}",
+        "---\nname: sgw-agent\ndescription: In this environment git push, pull requests, CI checks, issues and the GitHub API all go through sekimore-relay. Read this before pushing, opening a PR, checking CI or calling GitHub. sekimore-relay {}\n---\n\n{}",
         env!("CARGO_PKG_VERSION"),
         guide_for(lang)
     );
@@ -69,7 +106,8 @@ pub fn write(
     }
     let home = &owner.home;
     if targets.contains(&"claude") {
-        let dir = home.join(".claude/skills/sekimore-relay");
+        let dir = home.join(SKILL_DIR);
+        remove_old_skill(home);
         ensure_dir(&dir, 0o755)?;
         write_atomic(
             &dir.join("SKILL.md"),

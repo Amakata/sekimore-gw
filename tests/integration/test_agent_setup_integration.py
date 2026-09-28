@@ -742,9 +742,9 @@ esac
         shim, log = _shims(tmp_path, valid_token=token)
         proc, home = _run(tmp_path, shim)
         assert proc.returncode == 0, proc.stdout + proc.stderr
-        skill = home / ".claude" / "skills" / "sekimore-relay" / "SKILL.md"
+        skill = home / ".claude" / "skills" / "sgw-agent" / "SKILL.md"
         text = skill.read_text()
-        assert text.startswith("---\nname: sekimore-relay\n")
+        assert text.startswith("---\nname: sgw-agent\n")
         assert (
             "sekimore-relay 9.9.9" in text and "# guide (shim)" in text and "Use sekimore." in text
         )
@@ -912,7 +912,7 @@ esac
                 )
                 proc, home = _run(run_dir, shim)
                 assert proc.returncode == 0, proc.stdout + proc.stderr
-                skill = (home / ".claude" / "skills" / "sekimore-relay" / "SKILL.md").read_text()
+                skill = (home / ".claude" / "skills" / "sgw-agent" / "SKILL.md").read_text()
                 codex = (home / ".codex" / "AGENTS.md").read_text()
                 assert ("Signing is required here" in skill) is expected, mode
                 assert ("git commit -S --amend" in skill) is expected, mode

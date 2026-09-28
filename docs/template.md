@@ -36,7 +36,7 @@ carries the same files, byte for byte. Do not copy them by hand.
 - After adding or changing an upstream in `config.yml`: `sgw restart`, then `sgw refresh`
 - The signing key's title on GitHub is `sekimore-agent-signing: <project> / <name> <email>`; `SEKIMORE_SIGNING_KEY_COMMENT` in `.env` changes it
 - When the project ends: `sgw revoke-project`
-- The relay's usage guide reaches the agent on its own: `sgw-agent setup` installs it at every start as the Claude Code skill `~/.claude/skills/sekimore-relay/SKILL.md` and into `~/.codex/AGENTS.md`. Nothing about the relay belongs in the project's `CLAUDE.md` / `AGENTS.md`; the skill is overwritten at every start, so do not edit it. For another agent tool, put the output of `sgw-agent guide` where that tool reads its instructions
+- The relay's usage guide reaches the agent on its own: `sgw-agent setup` installs it at every start as the Claude Code skill `~/.claude/skills/sgw-agent/SKILL.md` and into `~/.codex/AGENTS.md`. Nothing about the relay belongs in the project's `CLAUDE.md` / `AGENTS.md`; the skill is overwritten at every start, so do not edit it. For another agent tool, put the output of `sgw-agent guide` where that tool reads its instructions
 
 ## Keeping up to date
 

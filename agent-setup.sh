@@ -78,7 +78,7 @@ sekimore_signing_key_comment() {
 }
 
 # Put the agent guide (sgw-agent guide) where each tool reads it automatically.
-#   Claude Code: <home>/.claude/skills/sekimore-relay/SKILL.md (loaded when the work is related)
+#   Claude Code: <home>/.claude/skills/sgw-agent/SKILL.md (loaded when the work is related)
 #   Codex CLI:   a marked block in <home>/.codex/AGENTS.md (always read, so it carries the essentials and points at the guide)
 # For any other tool, put the output of `sgw-agent guide` wherever that tool expects it.
 # SEKIMORE_AGENT_INSTRUCTIONS=claude,codex (default), or none to disable. Idempotent: a re-run replaces the block.
@@ -128,11 +128,11 @@ SIGNING_EOF
   fi
   case ",$targets," in
     *,claude,*)
-      local skill_dir="$home/.claude/skills/sekimore-relay"
+      local skill_dir="$home/.claude/skills/sgw-agent"
       install -d -m 755 "$skill_dir"
       {
         echo "---"
-        echo "name: sekimore-relay"
+        echo "name: sgw-agent"
         echo "description: In this environment git push, pull requests, CI checks, issues and the GitHub API all go through sekimore-relay. Read this before pushing, opening a PR, checking CI or calling GitHub. sekimore-relay ${version:-unknown}"
         echo "---"
         echo

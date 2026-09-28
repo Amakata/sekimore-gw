@@ -225,7 +225,7 @@ sekimore ci rerun --run-id 123 [--all]           # also: ci cancel --run-id 123;
 ```
 
 `sgw-agent guide` prints the usage guide for AI agents. The guide is embedded in the CLI, and its sources are `relay/share/agent-guide.en.md` and `agent-guide.ja.md`.
-`sgw-agent setup` installs the same text as a Claude Code skill (`~/.claude/skills/sekimore-relay/SKILL.md`) and as a marked block in Codex CLI's `~/.codex/AGENTS.md`,
+`sgw-agent setup` installs the same text as a Claude Code skill (`~/.claude/skills/sgw-agent/SKILL.md`) and as a marked block in Codex CLI's `~/.codex/AGENTS.md`,
 so these tools read it automatically. For other tools, place the output of `sgw-agent guide` in the location that the tool's conventions specify. `SEKIMORE_AGENT_INSTRUCTIONS=none` disables the installation, and `claude` or `codex` limits it to one tool.
 
 `sgw-agent` is `sekimore-relay agent` with the env file and the token refresh built in; `sekimore` is its former name and still works. Specify a repository with `--repo Org/Repo`. When there is more than one upstream, you can also write `host/Org/Repo`.

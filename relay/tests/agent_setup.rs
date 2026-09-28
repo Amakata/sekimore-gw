@@ -130,6 +130,15 @@ async fn setup_writes_everything_and_a_second_run_changes_nothing() {
     let webui = fake_webui(configured.clone()).await;
     let b = bench();
 
+    // #287: the skill under its former name, as 0.2.53 wrote it, goes away with the rename
+    let old_skill = b.home.join(".claude/skills/sekimore-relay");
+    std::fs::create_dir_all(&old_skill).unwrap();
+    std::fs::write(
+        old_skill.join("SKILL.md"),
+        "---\nname: sekimore-relay\ndescription: old\n---\n",
+    )
+    .unwrap();
+
     let (code, out, err) = setup(&b, f.addr.port(), webui).await;
     assert_eq!(code, 0, "stdout: {out}\nstderr: {err}");
     assert!(
@@ -223,10 +232,18 @@ async fn setup_writes_everything_and_a_second_run_changes_nothing() {
     );
 
     // the guide for Claude Code and Codex
-    let skill = text(&b.home.join(".claude/skills/sekimore-relay/SKILL.md"));
+    let skill = text(&b.home.join(".claude/skills/sgw-agent/SKILL.md"));
     assert!(
-        skill.starts_with("---\nname: sekimore-relay\n") && skill.contains("sgw-agent whoami"),
+        skill.starts_with("---\nname: sgw-agent\n") && skill.contains("sgw-agent whoami"),
         "{skill}"
+    );
+    assert!(
+        !old_skill.exists(),
+        "the skill under its former name is removed (#287)"
+    );
+    assert!(
+        out.contains("removed the skill under its former name"),
+        "{out}"
     );
     assert!(
         !skill.contains("Signing is required here"),
@@ -263,6 +280,14 @@ async fn setup_writes_everything_and_a_second_run_changes_nothing() {
     );
 
     // ---- the second run: nothing changes, the token is kept, the proxy is gone ----
+    // #287: a directory under the former name that is not ours, or holds more, is left alone
+    std::fs::create_dir_all(&old_skill).unwrap();
+    std::fs::write(
+        old_skill.join("SKILL.md"),
+        "---\nname: sekimore-relay\n---\n",
+    )
+    .unwrap();
+    std::fs::write(old_skill.join("notes.md"), "mine\n").unwrap();
     configured.store(false, Ordering::SeqCst);
     let before = [
         text(&b.env_file),
@@ -289,6 +314,11 @@ async fn setup_writes_everything_and_a_second_run_changes_nothing() {
         text(&keydir.join("signing_ed25519.pub")),
     ];
     assert_eq!(before, after, "a second run must change nothing");
+    assert!(
+        old_skill.join("notes.md").is_file(),
+        "a directory with a person's file in it is not deleted for a rename (#287)"
+    );
+    assert!(out.contains("left alone"), "{out}");
     let global = text(&b.home.join(".gitconfig"));
     assert_eq!(
         global.matches("[include]").count(),

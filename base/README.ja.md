@@ -38,7 +38,7 @@ FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.54
 
 | ツール | 役割 |
 |---|---|
-| `sgw-agent` | AI のコマンド。関所経由の git と GitHub API。起動のたびに `sgw-agent setup` が走る: コンテナをゲートウェイに向け、proxy の環境を取り、使い捨て鍵を作ってプロジェクトのトークンを得て、`~/.ssh/config` と known_hosts を書き、コミット署名を設定し、使い方のガイドを `~/.claude/skills/sekimore-relay/SKILL.md` と `~/.codex/AGENTS.md` に置く（`SEKIMORE_AGENT_INSTRUCTIONS=none\|claude\|codex` で絞れる）。`sgw-agent guide` は同じガイドを出す |
+| `sgw-agent` | AI のコマンド。関所経由の git と GitHub API。起動のたびに `sgw-agent setup` が走る: コンテナをゲートウェイに向け、proxy の環境を取り、使い捨て鍵を作ってプロジェクトのトークンを得て、`~/.ssh/config` と known_hosts を書き、コミット署名を設定し、使い方のガイドを `~/.claude/skills/sgw-agent/SKILL.md` と `~/.codex/AGENTS.md` に置く（`SEKIMORE_AGENT_INSTRUCTIONS=none\|claude\|codex` で絞れる）。`sgw-agent guide` は同じガイドを出す |
 | `sekimore-relay` | 関所そのもの。`sgw-agent setup` がゲートウェイと話すのに使う |
 | `sekimore` | `sgw-agent` の旧名。別名として残す。外すときは UPGRADING.ja.md で予告する |
 | `sgw-post-start` | `postStartCommand` が実行するもの: setup、内側の Docker デーモン、プロジェクトの post-create.sh |
