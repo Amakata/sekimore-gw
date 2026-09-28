@@ -1119,11 +1119,25 @@ async fn signing_optional_takes_a_commit_either_way() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// #289: the relay refuses a push that does not fast-forward before the upstream sees it. With
+/// `force_push: true` it is the upstream's call, and its ng reaches the client through the
+/// sideband as before (receive.denyNonFastForwards).
 async fn non_fast_forward_ng_is_visible_through_sideband() {
     require_tools!();
-    let e = setup(&["pr:create"]).await;
-    seed_main(&e, "LibOrg/awesome-lib");
-    let work = clone(&e, "LibOrg/awesome-lib", "work");
+    for allowed in [false, true] {
+        let e = setup_tuned(&["pr:create"], |p| {
+            for r in &mut p.repos {
+                r.force_push = allowed;
+            }
+        })
+        .await;
+        non_fast_forward_case(&e, allowed);
+    }
+}
+
+fn non_fast_forward_case(e: &E2e, allowed: bool) {
+    seed_main(e, "LibOrg/awesome-lib");
+    let work = clone(e, "LibOrg/awesome-lib", "work");
     e.commit_file(&work, "a.txt", b"a\n");
     e.ok(&work, &["push", "origin", "HEAD:refs/heads/sekimore/topic"]);
     // Rewind history, make a different commit, then force push; the upstream returns ng via receive.denyNonFastForwards
@@ -1140,10 +1154,21 @@ async fn non_fast_forward_ng_is_visible_through_sideband() {
     );
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success(), "{err}");
-    assert!(
-        err.contains("remote rejected") && err.contains("non-fast-forward"),
-        "ng from upstream must reach the client: {err}"
-    );
+    if allowed {
+        assert!(
+            err.contains("remote rejected") && err.contains("non-fast-forward"),
+            "ng from upstream must reach the client: {err}"
+        );
+    } else {
+        assert!(
+            err.contains("does not fast-forward") && err.contains("force_push"),
+            "the relay's refusal must reach the client: {err}"
+        );
+        assert!(
+            !err.contains("non-fast-forward"),
+            "the upstream's own ng never came: {err}"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

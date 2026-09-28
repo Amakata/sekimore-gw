@@ -295,6 +295,8 @@ pub struct RepoConfig {
     pub tags: Option<Vec<String>>,
     /// Whether deleting branches and tags is allowed. Defaults to the project's `delete`
     pub delete: Option<bool>,
+    /// #289: whether a push may move a branch to a commit that does not descend from its tip. Defaults to the project's `force_push`
+    pub force_push: Option<bool>,
     /// 0.2.9: delete the head branch after a merge through `pr merge`. Defaults to the project's
     /// `delete_merged_branch`. Unrelated to `delete` above, which is about git-level ref deletion
     pub delete_merged_branch: Option<bool>,
@@ -316,6 +318,7 @@ pub struct UpstreamPolicyConfig {
     pub push: Option<Vec<String>>,
     pub tags: Option<Vec<String>>,
     pub delete: Option<bool>,
+    pub force_push: Option<bool>,
     pub delete_merged_branch: Option<bool>,
     pub signed_tags: Option<bool>,
     pub signing: Option<SigningMode>,
@@ -346,6 +349,10 @@ pub struct ProjectConfig {
     /// Default for deleting branches and tags; false when unset
     #[serde(default)]
     pub delete: bool,
+    /// #289: default for moving a branch to a commit that does not descend from its current tip;
+    /// false when unset. Overridable per upstream and per repo
+    #[serde(default)]
+    pub force_push: bool,
     /// 0.2.9: after `pr merge` succeeds, delete the branch that was merged. False when unset.
     ///
     /// A forge can be configured to do this itself, and many are; this is for the ones that are
@@ -1198,6 +1205,7 @@ impl Loaded {
             let l_push = layer.and_then(|l| l.push.clone());
             let l_tags = layer.and_then(|l| l.tags.clone());
             let l_delete = layer.and_then(|l| l.delete);
+            let l_force = layer.and_then(|l| l.force_push);
             let l_dmb = layer.and_then(|l| l.delete_merged_branch);
             let l_signed = layer.and_then(|l| l.signed_tags);
             let l_signing = layer.and_then(|l| l.signing);
@@ -1215,6 +1223,7 @@ impl Loaded {
                 .or(l_tags)
                 .unwrap_or_else(|| default_tags.clone());
             rp.delete = r.delete.or(l_delete).unwrap_or(default_delete);
+            rp.force_push = r.force_push.or(l_force).unwrap_or(pc.force_push);
             rp.delete_merged_branch = r
                 .delete_merged_branch
                 .or(l_dmb)
@@ -2295,6 +2304,58 @@ relay:
             pr.find_repo("ghe.example.com/Corp/Strict")
                 .unwrap()
                 .signed_tags
+        );
+    }
+
+    /// #289: `force_push` is off by default and folds through the layers the way `delete` does.
+    #[test]
+    fn force_push_is_off_by_default_and_folds_like_delete() {
+        let text = r#"
+domain_handlers:
+  github.com: { handler: git-relay }
+  ghe.example.com: { handler: git-relay, ssh_port: 2222 }
+relay:
+  project:
+    name: case-f
+    permissions: [pr:read]
+    upstreams:
+      ghe.example.com:
+        force_push: true
+        repos:
+          - { name: Corp/Loose, mode: read-write }
+          - { name: Corp/Strict, mode: read-write, force_push: false }
+    repos:
+      - { name: Org/App, mode: read-write }
+      - { name: Org/Rewrite, mode: read-write, force_push: true }
+"#;
+        let pr = p(text).unwrap().resolve().unwrap().project;
+        assert!(!pr.find_repo("Org/App").unwrap().force_push, "the default");
+        assert!(
+            pr.find_repo("Org/Rewrite").unwrap().force_push,
+            "repo override"
+        );
+        assert!(
+            pr.find_repo("ghe.example.com/Corp/Loose")
+                .unwrap()
+                .force_push,
+            "upstream layer default"
+        );
+        assert!(
+            !pr.find_repo("ghe.example.com/Corp/Strict")
+                .unwrap()
+                .force_push,
+            "repo wins over its upstream layer"
+        );
+        let on = text.replace(
+            "    permissions: [pr:read]\n",
+            "    permissions: [pr:read]\n    force_push: true\n",
+        );
+        let pr = p(&on).unwrap().resolve().unwrap().project;
+        assert!(pr.find_repo("Org/App").unwrap().force_push);
+        assert!(
+            !pr.find_repo("ghe.example.com/Corp/Strict")
+                .unwrap()
+                .force_push
         );
     }
 

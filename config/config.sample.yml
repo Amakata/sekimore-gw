@@ -264,6 +264,8 @@ database_path: "/data/security_gateway.db"
 #     tags: []                                  # default globs of tags that may be pushed (empty = denied). Override per repo with repos[].tags
 #     delete: false                             # default for deleting branches and tags, and for moving a tag that is
 #                                               # already upstream — the two leave the same result. Override with repos[].delete
+#     force_push: false                         # 0.2.55+ whether a push may move a branch to a commit that does not descend
+#                                               # from its current tip (rebase, reset, amend of a pushed commit). Override with repos[].force_push
 #     delete_merged_branch: false               # 0.2.9+ whether `pr merge --delete-branch` may remove the branch it
 #                                               # just merged. Only that branch, so it is not the same authority as
 #                                               # `delete` above. Leave it off where the forge already does this

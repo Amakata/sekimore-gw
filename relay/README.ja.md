@@ -269,6 +269,7 @@ AI エージェント向けの使い方は `sgw-agent guide` で表示できま�
 | `push` | `["sekimore/*"]` | 直接 push を許すブランチの glob |
 | `tags` | `[]` | push を許すタグの glob。空の場合、タグの push はすべて拒否されます。 |
 | `delete` | `false` | ブランチとタグの削除、および上流に既にあるタグの移動を許可するか。タグを削除して作り直すことと強制更新は同じ結果になるので、同じ権限にしています。まだ存在しないタグを作るだけなら `tags` で足ります。 |
+| `force_push` | `false` | ブランチを、今の先端の子孫でないコミットに動かす push（rebase、reset、push 済みコミットの amend）を許すか。関所はパックから判定し、新しい履歴がパックの外に出る先について上流に尋ね（`GET …/compare`）、拒否するときは ref 名を言います。rebase ではなく先端を merge するか、`refs/for/<base>` で新しいブランチを押してください。上流ごと・リポジトリごとに上書きできます。 |
 | `delete_merged_branch` | `false` | `pr merge --delete-branch` が、マージしたそのブランチを削除してよいか。対象はそのブランチだけなので、`delete` とは別の権限です。forge 側でマージ済みブランチを自動削除している場合は不要です。 |
 | `signing` | `optional` | 0.2.29（#59）: ブランチへの push が署名の無いコミットを含んでよいか — `required` \| `optional` \| `off`。`required` では、`refs/heads/*`、`refs/for/*`、`refs/pr/*` への push に署名の無いコミットが 1 つでもあれば拒否します。`signed_tags` と同じく、署名の有無だけを確認し、正しさは検証しません。**上流 API を使う**（「`signing: required` は上流 API に 1 回問い合わせる」を参照）ので、ストアの解錠と login が必要です。既定は `optional` なので、既存のプロジェクトの動作は変わりません。上流ごと、リポジトリごとに上書きできます。 |
 | `branch` | 後述 | 0.3.0（#158）: `refs/for/<base>` で関所が作るブランチの名前の付け方 |

@@ -21,7 +21,7 @@ This container is already set up to sign: plain `git commit` signs. So if a push
 this, the commit was made in a way that went around that setup (`-c commit.gpgsign=false`, a
 `--no-gpg-sign`, or a commit written by a tool of its own).
 
-- Fix the tip with `git commit -S --amend --no-edit`, and older commits with `git rebase --exec 'git commit -S --amend --no-edit' <base>`.
+- Fix the tip with `git commit -S --amend --no-edit`, and older commits with `git rebase --exec 'git commit -S --amend --no-edit' <base>`. That rewrites the commits, so if they were pushed already, push the result as a new branch (`refs/for/<base>`): a push that does not fast-forward is refused unless the repository allows it (`force_push`).
 - **Do not turn signing off.** `git config commit.gpgsign false` makes every later commit fail
   the same check, one at a time. If signing itself is broken, say so and stop; it is the
   operator's to fix, not something to work around.

@@ -35,6 +35,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.44 | [0.2.45](#0245-gwlogin-asks-on-a-terminal-and-stops-without-a-host-key), **only if an upstream needs a host key the gateway has not saved** |
 | 0.2.45 – 0.2.50 | [0.2.51](#0251-poststartcommand-is-one-line-sgw-post-start), **everyone, one line in devcontainer.json** |
 | 0.2.51 | [0.2.52](#0252-the-mise-layer-is-gone-sgw-update---apply-removes-it), **everyone: `sgw update --apply`, then commit** |
+| 0.2.52 – 0.2.54 | [0.2.55](#0255-a-push-that-does-not-fast-forward-is-refused), **only if the agent rewrites branches it pushed** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -813,3 +814,20 @@ Rebuild Container after moving the base pin, as always when the base changes.
 
 `mise run …` no longer exists on the host. The dev container's own `mise` is untouched.
 
+
+## 0.2.55 A push that does not fast-forward is refused
+
+The relay refuses a push that moves a branch to a commit that does not descend from its current
+tip — a rebase, a reset, an amend of a commit already pushed — unless the repository allows it.
+Before, it let every such push through and left it to the upstream's branch protection.
+
+Nothing to do unless the agent rewrites branches it pushed. Where it does, either push the
+rewritten history as a new branch (`refs/for/<base>` makes one), or allow it:
+
+```yaml
+relay:
+  project:
+    force_push: true        # or per upstream / per repo, like delete
+```
+
+`sekimore-relay check` shows `force_push=` per repository.
