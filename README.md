@@ -10,7 +10,9 @@
 **Let an AI agent work on GitHub without handing over your account.**
 
 sekimore-gw (sgw) is a network gateway for AI agents in Docker. On the host you run `sgw`;
-inside the dev container the agent runs `sgw-agent` (`sgw-agent guide` prints how).
+inside the dev container the agent runs `sgw-agent`. Its usage guide is installed at every start as a
+Claude Code skill and into Codex's `AGENTS.md`, so the agent reads it without being told;
+`sgw-agent guide` prints the same text.
 
 - All in one container:
   - DNS filter
