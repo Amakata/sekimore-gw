@@ -489,6 +489,33 @@ pub fn prompt(label: &str) -> anyhow::Result<Secret> {
     Ok(secret)
 }
 
+/// Read one line from the terminal with echo left ON.
+///
+/// #271: the upstream proxy's username is not a secret, and reading it with echo off hid an IME
+/// conversion that ended up in Squid's `cache_peer` as `login=<kana>amakata:...`. The upstream
+/// answered 407 and nothing on screen said which value was wrong. What is typed here is meant to
+/// be read back by the person typing it; only the password keeps `prompt`.
+pub fn prompt_visible(label: &str) -> anyhow::Result<String> {
+    use std::io::{BufRead, Write};
+
+    if !is_terminal(libc::STDIN_FILENO) {
+        anyhow::bail!(
+            "the value has to be typed, and stdin is not a terminal. Run this without piping it"
+        );
+    }
+    eprint!("{label}: ");
+    io::stderr().flush()?;
+
+    // No termios here, and no `eprintln!` afterwards: the terminal echoed the line along with the
+    // Enter that ended it, so the cursor already sits on the next row.
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+    while matches!(line.as_bytes().last(), Some(b'\n' | b'\r')) {
+        line.pop();
+    }
+    Ok(line)
+}
+
 /// The most a passphrase may be when it arrives on stdin. A pipe cannot be seen, so the wrong
 /// file redirected into `unlock --stdin` would otherwise be sent to the control socket whole.
 const MAX_STDIN_PASSPHRASE: usize = 1024;
