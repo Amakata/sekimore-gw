@@ -397,7 +397,9 @@ def build_config(config: dict) -> RelayConfigResponse:
         push_v = r.get("push") if r.get("push") is not None else l_push
         tags_v = r.get("tags") if r.get("tags") is not None else l_tags
         delete_v = r.get("delete") if r.get("delete") is not None else l_delete
-        force_v = r.get("force_push") if r.get("force_push") is not None else layer.get("force_push")
+        force_v = (
+            r.get("force_push") if r.get("force_push") is not None else layer.get("force_push")
+        )
         signed_v = (
             r.get("signed_tags") if r.get("signed_tags") is not None else layer.get("signed_tags")
         )
