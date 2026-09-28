@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.57 -->
+<!-- reviewed-up-to: 0.2.58 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -36,6 +36,7 @@
 | 0.2.45 〜 0.2.50 | [0.2.51](#0251-poststartcommand-は-1-行-sgw-post-start-になった)。**すべてのプロジェクト。devcontainer.json の 1 行** |
 | 0.2.51 | [0.2.52](#0252-mise-の層が無くなった-sgw-update---apply-が消す)。**すべてのプロジェクト: `sgw update --apply` してコミット** |
 | 0.2.52 〜 0.2.54 | 下の 0.2.55。**エージェントが push 済みのブランチを書き換える場合だけ** |
+| 0.2.55 〜 0.2.57 | 下の 0.2.58。**`post-create.sh` を編集した場合だけ** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -795,3 +796,13 @@ relay:
 ```
 
 `sekimore-relay check` が repo ごとに `force_push=` を出します。
+
+## 0.2.58 post-create.sh のガードが署名鍵を通す
+
+雛形の `.devcontainer/scripts/post-create.sh` は、正しく構成したコンテナをすべて止めていました。
+ガードが、AI の署名鍵を列挙する関所の signing agent を運用者の転送された鍵と取り違え、
+`postStartCommand` が exit 1 で終わっていました。いまのガードは `SEKIMORE_SIGNING_KEY` 以外の鍵でだけ止まります。
+
+`post-create.sh` を編集していなければ作業はありません。編集していないものは `sgw update --apply` が置き換えます。
+編集したものには新しい雛形が `post-create.sh.sgw-new` として隣に置かれます。ガードの `signing_fp=` と
+`if keys=…` の行を手で取り込み、`.sgw-new` を消してください。

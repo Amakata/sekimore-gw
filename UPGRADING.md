@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.57 -->
+<!-- reviewed-up-to: 0.2.58 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -36,6 +36,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.45 – 0.2.50 | [0.2.51](#0251-poststartcommand-is-one-line-sgw-post-start), **everyone, one line in devcontainer.json** |
 | 0.2.51 | [0.2.52](#0252-the-mise-layer-is-gone-sgw-update---apply-removes-it), **everyone: `sgw update --apply`, then commit** |
 | 0.2.52 – 0.2.54 | [0.2.55](#0255-a-push-that-does-not-fast-forward-is-refused), **only if the agent rewrites branches it pushed** |
+| 0.2.55 – 0.2.57 | [0.2.58](#0258-the-post-createsh-guard-lets-the-signing-key-through), **only if you edited `post-create.sh`** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -831,3 +832,14 @@ relay:
 ```
 
 `sekimore-relay check` shows `force_push=` per repository.
+
+## 0.2.58 The post-create.sh guard lets the signing key through
+
+The template's `.devcontainer/scripts/post-create.sh` stopped every correctly set up container:
+its guard took the gateway's signing agent, which lists the AI signing key, for the operator's
+forwarded key, and `postStartCommand` exited 1. The guard now stops only on a key other than
+`SEKIMORE_SIGNING_KEY`.
+
+Nothing to do unless you edited `post-create.sh`: `sgw update --apply` replaces an unedited one.
+An edited one gets the new template beside it as `post-create.sh.sgw-new`; merge the guard's
+`signing_fp=` and `if keys=…` lines into yours by hand, then delete the `.sgw-new` file.
