@@ -242,6 +242,8 @@
   "op.check.upstreams": "upstreams (layer between project defaults and repos):",
   "op.check.no_overrides": "(no overrides)",
   "op.check.repos": "repos (effective = project defaults + upstream layer + repo allow - deny):",
+  "op.check.boards": "boards (Projects v2; effective project:* = the first repo's + board allow - deny):",
+  "op.check.board_permissions": "permissions: {perms}",
   "op.check.repo_permissions": "    permissions: {perms}",
   "op.check.none": "(none)",
   "op.check.state": "state:",

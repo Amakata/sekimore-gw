@@ -95,6 +95,7 @@ impl ProjectBoards {
                     org: None,
                     user: Some("test".into()),
                     number: b.number,
+                    permissions: None,
                 })
                 .collect(),
             resolved: tokio::sync::Mutex::new(Some(boards)),
@@ -105,6 +106,12 @@ impl ProjectBoards {
     /// tell "none configured" apart from "configured but not resolvable yet".
     pub fn is_declared_empty(&self) -> bool {
         self.declared.is_empty()
+    }
+
+    /// #277: the declared boards' labels, in the order written, for `whoami` to list them with
+    /// their permissions. Readable without the upstream, like `is_declared_empty`.
+    pub fn declared_labels(&self) -> Vec<String> {
+        self.declared.iter().map(|b| b.label()).collect()
     }
 
     /// The resolved boards, resolving them if this is the first call that needed them.

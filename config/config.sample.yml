@@ -252,6 +252,8 @@ database_path: "/data/security_gateway.db"
 #     # boards:                 # 0.2.7+ the Projects v2 boards this project may touch. Written the way the URL reads,
 #     #   - { org: acme, number: 3 }      #   github.com/orgs/acme/projects/3
 #     #   - { user: someone, number: 1 }  #   github.com/users/someone/projects/1
+#     #   - { org: acme, number: 5, permissions: [project:update_item] }   # 0.2.54+ a board's own delta, project:* keys
+#     #   - { user: someone, number: 7, permissions: { deny: [project:add_item] } }  #   only; a plain list adds, deny wins
 #     # Omitted or empty refuses every Projects operation: a board's node id is opaque and says nothing
 #     # about its owner, so without this list any board the upstream token can see would be reachable.
 #     # branch:                                 # 0.2.32+ how refs/for/<base> names the branch it creates

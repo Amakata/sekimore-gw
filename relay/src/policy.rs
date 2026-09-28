@@ -439,11 +439,26 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
+/// #277: a Projects v2 board's own delta on the permissions. Only `project:*` keys are meaningful
+/// here; `Project::set_boards` refuses the others, so a typo is found at start-up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoardPolicy {
+    /// `orgs/<org>/projects/<n>` or `users/<user>/projects/<n>`, the way `BoardRef::label` and
+    /// `ResolvedBoard::label` write it
+    pub label: String,
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+}
+
 /// The unit of isolation: a project.
 #[derive(Debug, Clone)]
 pub struct Project {
     pub name: String,
     pub repos: Vec<RepoPolicy>,
+    /// #277: the Projects v2 boards with a permissions delta of their own, keyed by the label
+    /// `relay.project.boards` resolves to (`orgs/acme/projects/3`). A board without a delta
+    /// has no entry: it takes the anchor repository's effective permissions as before
+    pub boards: Vec<BoardPolicy>,
     /// Permissions the project allows by default
     perms: HashSet<(Resource, Action)>,
     /// Permissions the project denies by default; these beat a repo's allow
@@ -493,6 +508,12 @@ pub enum Denied {
         name: String,
         branch: String,
     },
+    /// #277: the operation is allowed in the project but not on this board
+    BoardNotPermitted {
+        board: String,
+        resource: &'static str,
+        action: &'static str,
+    },
     /// Deletion is denied by default
     DeleteNotAllowed {
         name: String,
@@ -540,6 +561,14 @@ impl fmt::Display for Denied {
             Denied::NotPermitted { resource, action } => {
                 write!(f, "{resource}:{action} is not allowed by policy")
             }
+            Denied::BoardNotPermitted {
+                board,
+                resource,
+                action,
+            } => write!(
+                f,
+                "{resource}:{action} is not allowed on project board {board} (relay.project.boards[].permissions)"
+            ),
             Denied::UnsupportedCommand { cmdline } => write!(f, "unsupported command: {cmdline}"),
             Denied::RefNotAllowed { name, reason } => {
                 write!(f, "push to {name} is not allowed: {reason}")
@@ -589,6 +618,7 @@ impl Denied {
             Denied::BaseNotAllowed { .. } => "base_not_allowed",
             Denied::HeadNotAllowed { .. } => "head_not_allowed",
             Denied::NotPermitted { .. } => "not_permitted",
+            Denied::BoardNotPermitted { .. } => "board_not_permitted",
             Denied::UnsupportedCommand { .. } => "unsupported_command",
             Denied::RefNotAllowed { .. } => "ref_not_allowed",
             Denied::BranchExists { .. } => "branch_exists",
@@ -689,6 +719,7 @@ impl Project {
         Project {
             name: name.into(),
             repos: Vec::new(),
+            boards: Vec::new(),
             perms: HashSet::new(),
             denies: HashSet::new(),
             default_host: String::new(),
@@ -833,6 +864,116 @@ impl Project {
         self.repos
             .iter()
             .any(|r| self.effective(r).contains(&(resource, action)))
+            || self.some_board_adds(resource, action)
+    }
+
+    // ---- #277: the board layer ----
+
+    /// #277: boards with a delta, validated: every key parses and is a `project:*` one.
+    pub fn set_boards(&mut self, boards: Vec<BoardPolicy>) -> Result<(), String> {
+        for b in &boards {
+            for spec in b.allow.iter().chain(b.deny.iter()) {
+                let (r, _) = parse_permission(spec)
+                    .map_err(|e| format!("project board {}: {e}", b.label))?;
+                if r != Resource::Project {
+                    return Err(format!(
+                        "project board {}: {spec:?} is not a project:* permission; a board's permissions can only add or take away project:read, project:add_item and project:update_item",
+                        b.label
+                    ));
+                }
+            }
+        }
+        self.boards = boards;
+        Ok(())
+    }
+
+    /// For the tests: a board with a delta, the way `relay.project.boards[].permissions` gives one.
+    pub fn with_board(mut self, label: &str, allow: &[&str], deny: &[&str]) -> Self {
+        let mut boards = self.boards.clone();
+        boards.push(BoardPolicy {
+            label: label.to_string(),
+            allow: allow.iter().map(|s| s.to_string()).collect(),
+            deny: deny.iter().map(|s| s.to_string()).collect(),
+        });
+        self.set_boards(boards)
+            .expect("invalid board permission spec");
+        self
+    }
+
+    pub fn board_policy(&self, label: &str) -> Option<&BoardPolicy> {
+        self.boards.iter().find(|b| b.label == label)
+    }
+
+    /// Whether any board's own `allow` adds this, short of a deny above it: the project's
+    /// defaults saying no wins over a board saying yes.
+    fn some_board_adds(&self, resource: Resource, action: Action) -> bool {
+        resource == Resource::Project
+            && !self.denies.contains(&(resource, action))
+            && self.boards.iter().any(|b| {
+                b.allow
+                    .iter()
+                    .any(|s| parse_permission(s) == Ok((resource, action)))
+            })
+    }
+
+    /// Effective permissions on one board: the anchor repository's effective set, plus what the
+    /// board allows, minus what any layer denies. A key the project or the repository denies is
+    /// not added back by a board.
+    pub fn effective_board(
+        &self,
+        repo: &RepoPolicy,
+        board: Option<&BoardPolicy>,
+    ) -> HashSet<(Resource, Action)> {
+        let mut set = self.effective(repo);
+        let Some(board) = board else {
+            return set;
+        };
+        for s in &board.allow {
+            if let Ok(k) = parse_permission(s) {
+                if !self.denies.contains(&k)
+                    && !repo.deny.iter().any(|d| parse_permission(d) == Ok(k))
+                {
+                    set.insert(k);
+                }
+            }
+        }
+        for s in &board.deny {
+            if let Ok(k) = parse_permission(s) {
+                set.remove(&k);
+            }
+        }
+        set
+    }
+
+    /// The `project:*` keys effective on a board, as "resource:action", for `check` and `whoami`.
+    pub fn effective_board_keys(&self, repo: &RepoPolicy, label: &str) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .effective_board(repo, self.board_policy(label))
+            .iter()
+            .filter(|(r, _)| *r == Resource::Project)
+            .map(|(r, a)| format!("{}:{}", r.as_str(), a.as_str()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The second gate of a Projects call: the proof came from `authorize` against the anchor
+    /// repository, which counts a key any board adds; now the board is known, and its own delta
+    /// decides. Only a `project:*` proof reaches this.
+    pub fn authorize_board(&self, auth: &Authorized<'_>, label: &str) -> Result<(), Denied> {
+        let key = (auth.resource, auth.action);
+        if self
+            .effective_board(auth.repo, self.board_policy(label))
+            .contains(&key)
+        {
+            Ok(())
+        } else {
+            Err(Denied::BoardNotPermitted {
+                board: label.to_string(),
+                resource: auth.resource.as_str(),
+                action: auth.action.as_str(),
+            })
+        }
     }
 
     /// Looks up a repository in the project. Anything else is denied - this is the only barrier that keeps
@@ -939,8 +1080,15 @@ impl Project {
         resource: Resource,
         action: Action,
     ) -> Result<Authorized<'p>, Denied> {
-        // 3. the repo's effective permissions (project defaults + repo allow − deny; a deny wins)
-        if !self.effective(found).contains(&(resource, action)) {
+        // 3. the repo's effective permissions (project defaults + repo allow − deny; a deny wins).
+        //    #277: a Projects key that some board adds passes here, short of a deny by the
+        //    project or this repository; `authorize_board` decides for the board actually named
+        let added_by_a_board = self.some_board_adds(resource, action)
+            && !found
+                .deny
+                .iter()
+                .any(|d| parse_permission(d) == Ok((resource, action)));
+        if !self.effective(found).contains(&(resource, action)) && !added_by_a_board {
             return Err(Denied::NotPermitted {
                 resource: resource.as_str(),
                 action: action.as_str(),
@@ -1447,6 +1595,126 @@ mod tests {
             assert!(all_permission_keys().contains(&k.to_string()), "{k}");
         }
         assert!(all_permission_keys().contains(&"release:create".to_string()));
+    }
+
+    // ---- #277: the board layer ----
+
+    fn boards() -> Project {
+        Project::new("boards")
+            .with_repo("LibOrg/awesome-lib", Mode::ReadWrite, &["main"])
+            .grant("project:read")
+            .with_board("users/tester/projects/2", &[], &["project:read"])
+            .with_board("users/tester/projects/3", &["project:update_item"], &[])
+    }
+
+    #[test]
+    fn a_board_allow_passes_the_repo_gate_and_only_that_board_takes_it() {
+        let p = boards();
+        // phase 1: the repo does not grant update_item, a board does, so the proof is issued
+        let auth = p
+            .authorize("LibOrg/awesome-lib", Resource::Project, Action::UpdateItem)
+            .expect("a key some board adds passes the anchor");
+        // phase 2: the board named decides. The *other* declared board, not a foreign one
+        assert_eq!(p.authorize_board(&auth, "users/tester/projects/3"), Ok(()));
+        let denied = p
+            .authorize_board(&auth, "users/tester/projects/2")
+            .unwrap_err();
+        assert_eq!(
+            denied,
+            Denied::BoardNotPermitted {
+                board: "users/tester/projects/2".into(),
+                resource: "project",
+                action: "update_item",
+            }
+        );
+        assert!(
+            denied.to_string().contains("users/tester/projects/2"),
+            "{denied}"
+        );
+        // a board with no delta at all takes the repo's effective set, which lacks it
+        assert!(p.authorize_board(&auth, "users/tester/projects/9").is_err());
+    }
+
+    #[test]
+    fn a_board_deny_beats_the_project_wide_allow() {
+        let p = boards();
+        let auth = p
+            .authorize("LibOrg/awesome-lib", Resource::Project, Action::Read)
+            .unwrap();
+        assert!(p.authorize_board(&auth, "users/tester/projects/3").is_ok());
+        assert!(matches!(
+            p.authorize_board(&auth, "users/tester/projects/2"),
+            Err(Denied::BoardNotPermitted { .. })
+        ));
+        assert_eq!(
+            p.effective_board_keys(&p.repos[0], "users/tester/projects/2"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            p.effective_board_keys(&p.repos[0], "users/tester/projects/3"),
+            vec!["project:read", "project:update_item"]
+        );
+    }
+
+    #[test]
+    fn a_deny_above_the_board_is_not_added_back_by_the_board() {
+        // the project denies it: the board's allow changes nothing, at either gate
+        let p = Project::try_new_rules(
+            "x",
+            vec![RepoPolicy::new("LibOrg/awesome-lib", Mode::ReadWrite)],
+            &["project:read".into()],
+            &["project:add_item".into()],
+        )
+        .unwrap()
+        .with_board("users/tester/projects/3", &["project:add_item"], &[]);
+        assert!(matches!(
+            p.authorize("LibOrg/awesome-lib", Resource::Project, Action::AddItem),
+            Err(Denied::NotPermitted { .. })
+        ));
+        // the anchor repository denies it: same
+        let mut repo = RepoPolicy::new("LibOrg/awesome-lib", Mode::ReadWrite);
+        repo.deny = vec!["project:add_item".into()];
+        let p = Project::try_new_rules("x", vec![repo], &["project:read".into()], &[])
+            .unwrap()
+            .with_board("users/tester/projects/3", &["project:add_item"], &[]);
+        assert!(matches!(
+            p.authorize("LibOrg/awesome-lib", Resource::Project, Action::AddItem),
+            Err(Denied::NotPermitted { .. })
+        ));
+    }
+
+    #[test]
+    fn a_board_cannot_widen_anything_but_project_keys() {
+        let mut p = Project::new("x").with_repo("LibOrg/awesome-lib", Mode::ReadWrite, &[]);
+        let err = p
+            .set_boards(vec![BoardPolicy {
+                label: "users/tester/projects/3".into(),
+                allow: vec!["pr:merge".into()],
+                deny: vec![],
+            }])
+            .unwrap_err();
+        assert!(
+            err.contains("users/tester/projects/3") && err.contains("pr:merge"),
+            "{err}"
+        );
+        assert!(p.boards.is_empty(), "nothing is kept from a refused set");
+        let err = p
+            .set_boards(vec![BoardPolicy {
+                label: "users/tester/projects/3".into(),
+                allow: vec![],
+                deny: vec!["project:delete".into()],
+            }])
+            .unwrap_err();
+        assert!(
+            err.contains("users/tester/projects/3") && err.contains("delete"),
+            "{err}"
+        );
+        // and a permission the project never granted anywhere stays refused at the first gate,
+        // before any board is looked at
+        assert!(matches!(
+            p.authorize("LibOrg/awesome-lib", Resource::Pr, Action::Merge),
+            Err(Denied::NotPermitted { .. })
+        ));
     }
 }
 
