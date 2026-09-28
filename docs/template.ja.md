@@ -35,6 +35,7 @@
 - `config.yml` に上流を足したり変えたりしたら: `sgw restart`、そのあと `sgw refresh`
 - 署名鍵の GitHub での題名は `sekimore-agent-signing: <project> / <name> <email>`。`.env` の `SEKIMORE_SIGNING_KEY_COMMENT` で変えられる
 - 案件が終わったら: `sgw revoke-project`
+- 関所の使い方はエージェントに自動で届く。`sgw-agent setup` が起動のたびに Claude Code の skill `~/.claude/skills/sekimore-relay/SKILL.md` と `~/.codex/AGENTS.md` に置く。プロジェクトの `CLAUDE.md` / `AGENTS.md` に関所のことを書く必要はない。skill は毎起動で上書きされるので編集しない。他のエージェントツールには `sgw-agent guide` の出力を、そのツールが指示を読む場所に置く
 
 ## 最新への追従
 

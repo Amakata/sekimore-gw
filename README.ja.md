@@ -10,7 +10,8 @@
 **アカウントを渡さずに、AI エージェントに GitHub 上の作業をさせる。**
 
 sekimore-gw（sgw）は、Docker で動く AI エージェントのためのネットワークゲートウェイです。ホストでは `sgw`、
-dev コンテナの中でエージェントが使うのは `sgw-agent`（使い方は `sgw-agent guide` が出す）。
+dev コンテナの中でエージェントが使うのは `sgw-agent`。使い方のガイドは起動のたびに Claude Code の skill と
+Codex の `AGENTS.md` に置かれるので、エージェントは言われなくても読む。`sgw-agent guide` は同じ文を出す。
 
 - 1 つのコンテナに全部入り:
   - DNS フィルタ
