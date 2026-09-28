@@ -364,6 +364,8 @@
   "sgw.no_port": "サービス '{service}' はコンテナのポート {port} をホストに公開していません",
   "sgw.waiting": "ゲートウェイの起動を待っています",
   "sgw.recreated": "完了。Web UI の Relay タブを再読み込みしてください（または sgw check）",
+  "sgw.recreate.dev_setup": "== dev: 起動中の dev コンテナを新しいゲートウェイに向け直す（sgw-agent setup）",
+  "sgw.recreate.dev_setup_failed": "dev の setup が最後まで動きませんでした。dev が古いゲートウェイを向いたままかもしれません。sgw refresh（または dev コンテナの再起動）を実行してください",
   "sgw.recreate.left_locked": "ストアは施錠したままです。解錠は: sgw unlock",
   "sgw.recreate.unlock_failed": "ゲートウェイは作り直しましたが、自動の解錠に失敗しました。解錠は: sgw unlock",
   "sgw.unlock_auto.none": "このホストに '{project}' のパスフレーズは保存されていません{asked}。保存するには: sgw keychain-set   （手で解錠するなら: sgw unlock）",

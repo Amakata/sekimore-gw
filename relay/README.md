@@ -123,6 +123,7 @@ Environment variables for tuning:
 | `SEKIMORE_BOOTSTRAP=manual` | The operator registers the key and issues the token (`add-key` and `token`). |
 | `SEKIMORE_PROJECT` / `SEKIMORE_SIGNING_KEY_COMMENT` | The signing key's comment (the Title when the key is registered on GitHub) |
 | `SEKIMORE_AGENT_USER` / `SEKIMORE_KEY_DIR` / `SEKIMORE_AGENT_ENV_FILE` | The target user and the storage locations |
+| `SEKIMORE_GATEWAY_WAIT` | How many seconds the setup keeps looking for the gateway (port 53) before it gives up; 90 by default. Long enough for a gateway pulled or recreated while dev is already up; when it runs out, the setup says so and names the remedy (`sgw refresh`, or restart the dev container) |
 
 ### Signing key (0.2.29, #59)
 

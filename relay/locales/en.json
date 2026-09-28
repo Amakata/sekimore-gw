@@ -364,6 +364,8 @@
   "sgw.no_port": "service '{service}' publishes no host port for {port}",
   "sgw.waiting": "waiting for the gateway",
   "sgw.recreated": "done. reload the Web UI's Relay tab (or run: sgw check)",
+  "sgw.recreate.dev_setup": "== dev: pointing the running dev container at the new gateway (sgw-agent setup)",
+  "sgw.recreate.dev_setup_failed": "the setup in dev did not finish; dev may still name the old gateway. Run: sgw refresh (or restart the dev container)",
   "sgw.recreate.left_locked": "the store was left locked. Unlock it with: sgw unlock",
   "sgw.recreate.unlock_failed": "the gateway was recreated, but the automatic unlock failed. Unlock it with: sgw unlock",
   "sgw.unlock_auto.none": "no passphrase stored for '{project}' on this host{asked}. Store one with: sgw keychain-set   (or unlock by hand with: sgw unlock)",

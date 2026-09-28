@@ -112,7 +112,19 @@ pub async fn run(opts: Options) -> anyhow::Result<i32> {
             if !is_root() {
                 bail!("setup has to run as root (sudo -E sgw-agent setup): it writes /etc/resolv.conf, the default route and the agent's files");
             }
-            let ip = discover::gateway().await?;
+            let ip = match discover::gateway(discover::wait_from_env()).await {
+                Ok(ip) => ip,
+                Err(e) => {
+                    // #274: without this, dev keeps Docker's resolv.conf and nothing outside
+                    // resolves, and nothing on the screen said what to do about it
+                    println!();
+                    println!("❌ sgw-agent setup: could not find the gateway: {e:#}");
+                    println!("   This container keeps Docker's DNS (127.0.0.11), so no outside name resolves.");
+                    println!("   On the host: sgw check (is the gateway up?), then sgw refresh, or restart this dev container.");
+                    println!();
+                    bail!("the gateway was not found");
+                }
+            };
             discover::point_at(ip)?;
             ip
         }
