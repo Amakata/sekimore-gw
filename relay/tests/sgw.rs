@@ -903,3 +903,128 @@ fn update_moves_a_project_off_the_mise_layer() {
         .unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).contains("git rm mise.toml"));
 }
+
+// ---- #294: sgw self-update ----
+
+/// A one-member tar.gz the way the release workflow writes it (`tar czf … sgw`).
+fn release_archive(body: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut header = vec![0u8; 512];
+    header[..3].copy_from_slice(b"sgw");
+    header[100..107].copy_from_slice(b"0000755");
+    header[124..135].copy_from_slice(format!("{:011o}", body.len()).as_bytes());
+    header[156] = b'0';
+    header[148..156].copy_from_slice(b"        ");
+    let sum: u32 = header.iter().map(|b| *b as u32).sum();
+    header[148..155].copy_from_slice(format!("{sum:06o}\0").as_bytes());
+    let mut tar = header;
+    tar.extend_from_slice(body);
+    tar.resize(512 + body.len().div_ceil(512) * 512, 0);
+    tar.extend_from_slice(&[0u8; 1024]);
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&tar).unwrap();
+    gz.finish().unwrap()
+}
+
+/// A release server of one version: answers the archive and its .sha256, records the paths.
+fn release_server(
+    archive: Vec<u8>,
+    sha_line: String,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen2 = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut s = stream;
+            let mut buf = vec![0u8; 4096];
+            let n = s.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let path = req
+                .lines()
+                .next()
+                .unwrap_or("")
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("")
+                .to_string();
+            seen2.lock().unwrap().push(path.clone());
+            let (status, body): (&str, Vec<u8>) = if path.ends_with(".tar.gz.sha256") {
+                ("200 OK", sha_line.as_bytes().to_vec())
+            } else if path.ends_with(".tar.gz") {
+                ("200 OK", archive.clone())
+            } else {
+                ("404 Not Found", Vec::new())
+            };
+            let head = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = s.write_all(head.as_bytes());
+            let _ = s.write_all(&body);
+        }
+    });
+    (format!("http://{addr}/releases"), seen)
+}
+
+/// The whole thing against a server of the test's own: the copy of sgw that ran the command is
+/// the file that gets replaced, the digest is checked, and the paths are install.sh's.
+#[test]
+fn self_update_replaces_the_running_binary_from_the_release() {
+    use sha2::Digest;
+    let f = fixture();
+    let copy = f.bin.join("sgw-copy");
+    std::fs::copy(env!("CARGO_BIN_EXE_sgw"), &copy).unwrap();
+    let fake = b"#!/bin/sh\necho 'sgw 9.9.9 (fake)'\n".to_vec();
+    let archive = release_archive(&fake);
+    let sum = hex::encode(sha2::Sha256::digest(&archive));
+    let (base, seen) = release_server(archive.clone(), format!("{sum}  sgw-x.tar.gz\n"));
+    let out = Command::new(&copy)
+        .args(["self-update", "--version", "9.9.9"])
+        .env("SGW_RELEASES_URL", &base)
+        .env("SEKIMORE_LANG", "en")
+        .env_remove("DEVCONTAINER")
+        .current_dir(&f.project)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stdout}\n{stderr}");
+    assert_eq!(
+        std::fs::read(&copy).unwrap(),
+        fake,
+        "the running binary was replaced"
+    );
+    assert!(stdout.contains("→ sgw 9.9.9 (fake)"), "{stdout}");
+    let paths = seen.lock().unwrap().clone();
+    assert!(
+        paths
+            .iter()
+            .any(|p| p.ends_with("/releases/download/v9.9.9/sgw-")
+                || p.contains("/releases/download/v9.9.9/sgw-")),
+        "the asset path is install.sh's: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p.ends_with(".tar.gz.sha256")),
+        "{paths:?}"
+    );
+
+    // a wrong digest leaves the binary alone
+    let copy2 = f.bin.join("sgw-copy2");
+    std::fs::copy(env!("CARGO_BIN_EXE_sgw"), &copy2).unwrap();
+    let before = std::fs::read(&copy2).unwrap();
+    let (base, _) = release_server(archive, format!("{}  sgw-x.tar.gz\n", "0".repeat(64)));
+    let out = Command::new(&copy2)
+        .args(["self-update", "--version", "9.9.9"])
+        .env("SGW_RELEASES_URL", &base)
+        .env("SEKIMORE_LANG", "en")
+        .env_remove("DEVCONTAINER")
+        .current_dir(&f.project)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("sha256 mismatch"));
+    assert_eq!(std::fs::read(&copy2).unwrap(), before);
+}

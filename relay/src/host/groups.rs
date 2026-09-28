@@ -32,6 +32,7 @@ const fn leaf(name: &'static str, flat: &'static str, key: &'static str) -> Leaf
 pub const TOP: &[Leaf] = &[
     leaf("init", "init", "sgw.cmd.init"),
     leaf("update", "update", "sgw.cmd.update"),
+    leaf("self-update", "self-update", "sgw.cmd.self_update"),
     leaf("open", "open", "sgw.cmd.open"),
     leaf("verify", "verify", "sgw.cmd.verify"),
     leaf("check", "check", "sgw.cmd.check"),

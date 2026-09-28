@@ -147,6 +147,11 @@ macro_rules! passthrough {
                 #[arg(long, help = t("sgw.cmd.update.offline"))]
                 offline: bool,
             },
+            #[command(hide = true, name = "self-update", about = t("sgw.cmd.self_update"))]
+            SelfUpdate {
+                #[arg(long, value_name = "X.Y.Z", help = t("sgw.cmd.self_update.version"))]
+                version: Option<String>,
+            },
             #[command(hide = true, about = t("sgw.cmd.open"))]
             Open {
                 #[arg(long, help = t("sgw.cmd.open.check"))]
@@ -242,6 +247,10 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
     if let Cmd::Init { target, force, dir } = &cli.cmd {
         return init(target, *force, dir.as_deref().unwrap_or(&cwd));
     }
+    // #294: neither does replacing this binary
+    if let Cmd::SelfUpdate { version } = &cli.cmd {
+        return super::selfupdate::run(version.as_deref());
+    }
     let proj = project::discover(cli.project.as_deref(), &cwd, env)?;
     let docker = Docker::new(proj.compose_dir.clone());
     let no_tty = cli.no_tty;
@@ -329,6 +338,7 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
         }
         Down => ops::down(&docker, &proj),
         Init { .. } => unreachable!("handled above"),
+        SelfUpdate { .. } => unreachable!("handled above"),
         Update {
             apply,
             notes,

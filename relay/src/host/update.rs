@@ -466,6 +466,34 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         }
     }
 
+    // #294: a newer release means a newer sgw. With --apply, become it first and run this
+    // command again as it, so the pins are raised by the sgw of the release the project moves
+    // to. A self-update that fails leaves the note below and the old behaviour.
+    if opts.mode == Mode::Apply && !super::selfupdate::already_updated() {
+        if let Some(v) = &newer_sgw {
+            println!(
+                "{}",
+                tf(
+                    "sgw.update.self_updating",
+                    &[("version", v), ("sgw", VERSION)]
+                )
+            );
+            match super::selfupdate::run(Some(v)) {
+                Ok(_) => {
+                    let exe = super::selfupdate::current_exe()?;
+                    return Err(super::selfupdate::reexec(&exe));
+                }
+                Err(e) => eprintln!(
+                    "{}",
+                    tf(
+                        "sgw.update.self_update_failed",
+                        &[("error", &format!("{e:#}"))]
+                    )
+                ),
+            }
+        }
+    }
+
     let toml_path = root.join(super::sgwtoml::NAME);
     let recorded = std::fs::read_to_string(&toml_path)
         .ok()

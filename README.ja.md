@@ -112,7 +112,7 @@ dev コンテナから外に出る道はゲートウェイだけです。
 | GitHub にログインする | `sgw login` |
 | 構成を確認する | `sgw verify` |
 | `config.yml` の変更を反映する | `sgw restart`。上流を足した・変えたときは続けて `sgw refresh`（エージェントの ssh 設定を書き直す） |
-| 新しい版に上げる | `sgw update --apply` |
+| 新しい版に上げる | `sgw update --apply`（新しい `sgw` があれば先にそれを入れる） |
 | 許可・ブロックされた通信を Web UI で見る | `sgw web` |
 | エージェントの操作記録を見る | `sgw audit` |
 
