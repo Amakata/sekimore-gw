@@ -264,6 +264,18 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
             ]),
         );
     }
+    // 0.2.59: #409's line comment, whose review conversation the GraphQL mock puts on the second
+    // page of `reviewThreads`. Its thread id is reachable only once the relay follows the cursor.
+    if method == "GET" && p.ends_with("/pulls/409/comments") {
+        return (
+            StatusCode::OK,
+            serde_json::json!([
+                {"id": 7777, "user": {"login": "alice"}, "body": "and this one too",
+                 "created_at": "2026-09-17T10:06:00Z", "path": "src/main.rs", "line": 80,
+                 "pull_request_review_id": 902}
+            ]),
+        );
+    }
     if method == "GET" && p.ends_with("/issues/7/comments") {
         return (
             StatusCode::OK,
@@ -471,23 +483,71 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
         // comment the REST mock serves at /pulls/7/comments (2451) and is already settled, so the
         // renderer's "(resolved)" marker has something to mark. PRRT_two holds a comment id that
         // is in no REST page, which is the case where the join finds nothing.
-        if query.contains("reviewThreads(first:") {
-            // #7 fits on one page. #408 is the pull request whose conversations do not, so the
-            // relay has to say it could not see far enough rather than that the thread is foreign.
-            let more = body
+        if query.contains("reviewThreads(") {
+            let number = body
                 .pointer("/variables/number")
                 .and_then(|n| n.as_u64())
-                .is_some_and(|n| n == 408);
+                .unwrap_or(0);
+            // The cursor the relay sends back. Null on the first page of a walk.
+            let after = body.pointer("/variables/after").and_then(|a| a.as_str());
+            let first_page = serde_json::json!([
+                {"id": "PRRT_one", "isResolved": true,
+                 "comments": {"nodes": [{"databaseId": 555}, {"databaseId": 2451}]}},
+                {"id": "PRRT_two", "isResolved": false,
+                 "comments": {"nodes": [{"databaseId": 9999}]}}
+            ]);
+            // #408 never runs out: every page says there is another one and hands back a fresh
+            // cursor, so the walk ends only at the relay's own page budget. That is the pull
+            // request where the relay has to say it could not see far enough rather than that
+            // the thread is foreign.
+            if number == 408 {
+                let n: u32 = after
+                    .and_then(|c| c.strip_prefix("CUR_408_"))
+                    .and_then(|c| c.parse().ok())
+                    .unwrap_or(0);
+                return (
+                    StatusCode::OK,
+                    serde_json::json!({"data": {"repository": {"pullRequest": {"reviewThreads": {
+                        "pageInfo": {"hasNextPage": true, "endCursor": format!("CUR_408_{}", n + 1)},
+                        "nodes": first_page,
+                    }}}}}),
+                );
+            }
+            // #409 has two pages. PRRT_page2 is on the second, and holds the comment the REST
+            // mock serves at /pulls/409/comments (7777): a conversation that exists only past
+            // the first page still has to be joinable and resolvable.
+            if number == 409 {
+                return (
+                    StatusCode::OK,
+                    match after {
+                        None => {
+                            serde_json::json!({"data": {"repository": {"pullRequest": {"reviewThreads": {
+                                "pageInfo": {"hasNextPage": true, "endCursor": "CUR_409_1"},
+                                "nodes": first_page,
+                            }}}}})
+                        }
+                        Some("CUR_409_1") => {
+                            serde_json::json!({"data": {"repository": {"pullRequest": {"reviewThreads": {
+                                "pageInfo": {"hasNextPage": false, "endCursor": "CUR_409_2"},
+                                "nodes": [
+                                    {"id": "PRRT_page2", "isResolved": false,
+                                     "comments": {"nodes": [{"databaseId": 7777}]}}
+                                ],
+                            }}}}})
+                        }
+                        Some(other) => serde_json::json!({"errors": [
+                            {"message": format!("the mock was handed an unknown cursor {other:?}")}
+                        ]}),
+                    },
+                );
+            }
+            // Everything else fits on one page, and says so.
             return (
                 StatusCode::OK,
                 serde_json::json!({"data": {"repository": {"pullRequest": {"reviewThreads": {
-                    "pageInfo": {"hasNextPage": more},
-                    "nodes": [
-                    {"id": "PRRT_one", "isResolved": true,
-                     "comments": {"nodes": [{"databaseId": 555}, {"databaseId": 2451}]}},
-                    {"id": "PRRT_two", "isResolved": false,
-                     "comments": {"nodes": [{"databaseId": 9999}]}}
-                ]}}}}}),
+                    "pageInfo": {"hasNextPage": false, "endCursor": serde_json::Value::Null},
+                    "nodes": first_page,
+                }}}}}),
             );
         }
         if query.contains("resolveReviewThread(input:") {

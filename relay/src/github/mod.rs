@@ -44,9 +44,17 @@ const PR_FILES_PAGES: u32 = 10;
 /// #173: the most diff lines one `pr diff` page returns, matching the cap on a CI log page.
 const PR_DIFF_MAX_LINES: usize = 2000;
 
-/// 0.2.59: review conversations read in one `reviewThreads` query. GitHub's own maximum for the
+/// 0.2.59: review conversations read per `reviewThreads` query. GitHub's own maximum for the
 /// connection, and not derived from a caller's comment limit: the two count different things.
 const THREADS_PER_PAGE: u32 = 100;
+/// 0.2.59: how many such pages are walked. A pull request with more than a hundred review
+/// conversations is ordinary, not an edge case, and a conversation the relay never read is one
+/// the agent cannot settle — so the read follows the cursor instead of stopping at the first
+/// page. 100 × 10 = 1000 conversations, the same shape as `PR_FILES_PAGES`, and far past any
+/// review still being worked through one thread at a time. It costs nothing in the usual case:
+/// the walk ends as soon as a page says there is no next one, so a pull request whose
+/// conversations fit on one page is still one request.
+const THREADS_PAGES: u32 = 10;
 
 #[derive(Debug)]
 pub enum GhError {
@@ -2522,9 +2530,12 @@ impl GitHub {
         //
         // Asked for by the page, not by `limit`: `limit` counts comments and this counts threads,
         // and a comment that came back with no thread beside it reads as one that cannot be
-        // resolved. Better to fetch as many threads as GitHub will give at once.
+        // resolved. So the walk follows the cursor to its budget rather than being cut to the
+        // caller's number, and costs the one request when one page holds them all.
         if out.iter().any(|c| c.kind == "inline") {
-            let threads = self.review_threads(auth, number, THREADS_PER_PAGE).await?;
+            let threads = self
+                .review_threads(auth, number, THREADS_PAGES, THREADS_PER_PAGE)
+                .await?;
             for c in out.iter_mut().filter(|c| c.kind == "inline") {
                 if let Some((tid, done)) = c.id.and_then(|id| threads.get(&id)) {
                     c.thread_id = Some(tid.clone());
@@ -2547,31 +2558,42 @@ impl GitHub {
     ///
     /// `pr:read`, not `pr:resolve` — this only reads, and `pr comments` is what calls it.
     ///
-    /// One page. A pull request with more review conversations than that has the rest left out,
-    /// and `fetch_review_threads` reports whether that happened so a caller that must not guess
-    /// — the ownership check in `resolve_review_thread` — can say so instead of refusing wrongly.
+    /// Walked to `pages`. A pull request with more review conversations than the budget covers
+    /// has the rest left out, and `fetch_review_threads` reports whether that happened so a
+    /// caller that must not guess — the ownership check in `resolve_review_thread` — can say so
+    /// instead of refusing wrongly. A reader has nothing to do with that flag: a thread it did
+    /// not receive is one it simply does not show.
     pub async fn review_threads(
         &self,
         auth: &Authorized<'_>,
         number: u64,
-        first: u32,
+        pages: u32,
+        per_page: u32,
     ) -> Result<HashMap<u64, (String, bool)>, GhError> {
         auth.ensure(Resource::Pr, Action::Read)?;
-        Ok(self.fetch_review_threads(auth, number, first).await?.0)
+        Ok(self
+            .fetch_review_threads(auth, number, pages, per_page)
+            .await?
+            .0)
     }
 
     /// The query behind `review_threads`, without a permission check of its own, and with the
-    /// "there were more than this page" flag that `review_threads` drops.
+    /// "there are conversations past the budget" flag that `review_threads` drops.
     ///
     /// `resolve_review_thread` needs the same answer to decide whether the thread it was handed is
     /// on the pull request the caller named, and its proof is `pr:resolve`, not `pr:read`. This is
     /// the same shape `own_comment` has: the check that makes a write safe is not a second
     /// permission the caller has to hold, it is part of the write.
+    ///
+    /// `pages` bounds the walk, the way it does in `pull_request_files_paged`. The connection is
+    /// followed by its cursor, and the flag means "GitHub still had more when the budget ran
+    /// out" — not "there was a second page", which is the usual case and is read.
     async fn fetch_review_threads(
         &self,
         auth: &Authorized<'_>,
         number: u64,
-        first: u32,
+        pages: u32,
+        per_page: u32,
     ) -> Result<(HashMap<u64, (String, bool)>, bool), GhError> {
         let (owner, name) = auth
             .repo()
@@ -2580,42 +2602,63 @@ impl GitHub {
         /// Comments read per thread. A conversation longer than this has its tail left without a
         /// thread id; the earlier comments in it still carry one, and it is the same id.
         const COMMENTS_PER_THREAD: u32 = 100;
-        const Q: &str = "query($owner:String!,$name:String!,$number:Int!,$first:Int!,$comments:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ reviewThreads(first:$first){ pageInfo{ hasNextPage } nodes{ id isResolved comments(first:$comments){ nodes{ databaseId } } } } } } }";
-        let out = self
-            .graphql(
-                Q,
-                json!({"owner": owner, "name": name, "number": number, "first": first.clamp(1, 100), "comments": COMMENTS_PER_THREAD}),
-            )
-            .await?;
+        // `$after` is the cursor of the page before. Null on the first request, which GraphQL
+        // reads as "from the start" — the same query serves the whole walk.
+        const Q: &str = "query($owner:String!,$name:String!,$number:Int!,$first:Int!,$after:String,$comments:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ reviewThreads(first:$first,after:$after){ pageInfo{ hasNextPage endCursor } nodes{ id isResolved comments(first:$comments){ nodes{ databaseId } } } } } } }";
         let mut map = HashMap::new();
-        let nodes = out
-            .pointer("/data/repository/pullRequest/reviewThreads/nodes")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for t in nodes {
-            let Some(id) = t.get("id").and_then(Value::as_str) else {
-                continue;
-            };
-            let done = t
-                .get("isResolved")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            for c in t
-                .pointer("/comments/nodes")
+        let mut after = Value::Null;
+        for _ in 0..pages {
+            let out = self
+                .graphql(
+                    Q,
+                    json!({"owner": owner, "name": name, "number": number, "first": per_page.clamp(1, 100), "after": after, "comments": COMMENTS_PER_THREAD}),
+                )
+                .await?;
+            let nodes = out
+                .pointer("/data/repository/pullRequest/reviewThreads/nodes")
                 .and_then(Value::as_array)
-                .unwrap_or(&Vec::new())
-            {
-                if let Some(db) = c.get("databaseId").and_then(Value::as_u64) {
-                    map.insert(db, (id.to_string(), done));
+                .cloned()
+                .unwrap_or_default();
+            for t in nodes {
+                let Some(id) = t.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let done = t
+                    .get("isResolved")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                for c in t
+                    .pointer("/comments/nodes")
+                    .and_then(Value::as_array)
+                    .unwrap_or(&Vec::new())
+                {
+                    if let Some(db) = c.get("databaseId").and_then(Value::as_u64) {
+                        map.insert(db, (id.to_string(), done));
+                    }
                 }
             }
+            let page = out.pointer("/data/repository/pullRequest/reviewThreads/pageInfo");
+            let next = page
+                .and_then(|p| p.get("hasNextPage"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !next {
+                // The common case, and the cheap one: the first page said it was the only one.
+                return Ok((map, false));
+            }
+            match page
+                .and_then(|p| p.get("endCursor"))
+                .and_then(Value::as_str)
+            {
+                Some(c) => after = Value::from(c),
+                // More to come and nothing to ask with. Not expected — GitHub gives a cursor on
+                // any page that has a next one — but guessing would re-read the same page for
+                // the rest of the budget, so it stops and says there is more, which is true.
+                None => return Ok((map, true)),
+            }
         }
-        let has_more = out
-            .pointer("/data/repository/pullRequest/reviewThreads/pageInfo/hasNextPage")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        Ok((map, has_more))
+        // A budget spent with GitHub still holding more
+        Ok((map, true))
     }
 
     /// 0.2.59: settle a review conversation, or open it again.
@@ -2636,7 +2679,7 @@ impl GitHub {
     ) -> Result<bool, GhError> {
         auth.ensure(Resource::Pr, Action::Resolve)?;
         let (on_this_pr, more) = self
-            .fetch_review_threads(auth, number, THREADS_PER_PAGE)
+            .fetch_review_threads(auth, number, THREADS_PAGES, THREADS_PER_PAGE)
             .await?;
         if !on_this_pr.values().any(|(id, _)| id == thread_id) {
             // Refusing is the safe direction either way, but the two cases need different words:
@@ -2645,9 +2688,10 @@ impl GitHub {
             // someone hunting for a mistake they did not make.
             return Err(GhError::Refused(if more {
                 format!(
-                    "thread {thread_id} is not among the first {THREADS_PER_PAGE} review \
-                     conversations of #{number}, and this relay reads no further, so it cannot \
-                     tell that the thread is on this pull request"
+                    "thread {thread_id} is not among the first {} review conversations of \
+                     #{number}, and this relay reads no further, so it cannot tell that the \
+                     thread is on this pull request",
+                    THREADS_PAGES * THREADS_PER_PAGE
                 )
             } else {
                 format!("thread {thread_id} is not a review conversation on #{number}")

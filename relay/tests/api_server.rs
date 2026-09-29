@@ -1657,6 +1657,21 @@ async fn a_review_with_no_line_comments_sends_no_comments_key() {
 
 // ---- resolving a review conversation (0.2.59) ----
 
+/// The `reviewThreads` read queries the relay sent, in the order it sent them. The mutations and
+/// the unrelated GraphQL calls are not reads, and the walk's shape is counted in reads.
+fn reads(rec: &[common::Recorded]) -> Vec<&serde_json::Value> {
+    rec.iter()
+        .filter(|c| c.path.contains("graphql"))
+        .filter(|c| {
+            c.body
+                .get("query")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|q| q.contains("reviewThreads("))
+        })
+        .map(|c| &c.body)
+        .collect()
+}
+
 /// The whole point: the id an agent needs in order to settle a conversation reaches it through
 /// `pr comments`, which is where the guide already sends it to read the review. Without this the
 /// command would exist with nothing to feed it — REST carries no thread id anywhere.
@@ -1806,11 +1821,12 @@ async fn pr_comment_does_not_carry_pr_resolve() {
     );
 }
 
-/// The ownership check reads one page of conversations. On a pull request with more than that,
-/// a thread the relay did not see is still refused — but it must not be called foreign, because
-/// the relay does not know that it is. The two refusals have to read differently.
+/// The ownership check follows the cursor, but not forever. On a pull request with more
+/// conversations than the page budget covers, a thread the relay did not see is still refused —
+/// but it must not be called foreign, because the relay does not know that it is. The two
+/// refusals have to read differently.
 #[tokio::test]
-async fn a_thread_past_the_first_page_is_refused_as_unseen_not_as_foreign() {
+async fn a_thread_past_the_page_budget_is_refused_as_unseen_not_as_foreign() {
     let f = start_api(project_case_a(&["pr:resolve"]), BootstrapMode::Auto, true).await;
     let r = ApiRequest {
         number: 408,
@@ -1828,11 +1844,107 @@ async fn a_thread_past_the_first_page_is_refused_as_unseen_not_as_foreign() {
         !err.contains("is not a review conversation on"),
         "and does not claim the thread belongs elsewhere: {err}"
     );
+    // The mock's #408 never runs out of pages, so the walk stopped at the budget and not before:
+    // it spent the whole budget and then gave up, rather than reading one page and calling it a day.
+    let rec = common::recorded(&f.recorder);
+    assert_eq!(
+        reads(&rec).len(),
+        10,
+        "the walk stops at the page budget, having asked for every page of it: {rec:?}"
+    );
     // still nothing written
-    assert!(common::recorded(&f.recorder)
+    assert!(rec
         .iter()
         .filter_map(|c| c.body.get("query").and_then(|q| q.as_str()))
         .all(|q| !q.starts_with("mutation")));
+}
+
+/// The regression the outer paging exists for: a conversation that GitHub puts on the second
+/// page of `reviewThreads`. Before the relay followed the cursor it saw only the first page, so
+/// such a thread could never be resolved — the ownership check refused it as one it could not
+/// see. It has to be found, and settled.
+#[tokio::test]
+async fn a_thread_on_the_second_page_is_found_and_resolved() {
+    let f = start_api(project_case_a(&["pr:resolve"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 409,
+        thread_id: "PRRT_page2".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/resolve", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(
+        resp.message.unwrap_or_default(),
+        "resolved PRRT_page2 on #409"
+    );
+
+    // Two reads, and the second one carried the first one's cursor: that is what makes it the
+    // *next* page rather than the same page asked for twice.
+    let rec = common::recorded(&f.recorder);
+    let pages = reads(&rec);
+    assert_eq!(pages.len(), 2, "{rec:?}");
+    assert!(
+        pages[0]
+            .pointer("/variables/after")
+            .is_none_or(serde_json::Value::is_null),
+        "the first page starts from the beginning: {:?}",
+        pages[0]
+    );
+    assert_eq!(
+        pages[1].pointer("/variables/after"),
+        Some(&serde_json::Value::from("CUR_409_1")),
+        "the second page is asked for from where the first one ended: {:?}",
+        pages[1]
+    );
+}
+
+/// The walk costs one request when one request is enough. `pr comments` is a read an agent runs
+/// constantly, and most pull requests have their conversations on a single page.
+#[tokio::test]
+async fn a_pull_request_whose_threads_fit_on_one_page_asks_once() {
+    let f = start_api(project_case_a(&["pr:resolve"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        thread_id: "PRRT_one".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/resolve", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let rec = common::recorded(&f.recorder);
+    assert_eq!(
+        reads(&rec).len(),
+        1,
+        "a full first page that says there is no next one ends the walk: {rec:?}"
+    );
+}
+
+/// The ids have to reach the reader, not only the ownership check: a conversation on the second
+/// page is one the agent has to be able to see a thread id for in `pr comments`, or it has
+/// nothing to pass to `pr resolve`.
+#[tokio::test]
+async fn a_thread_id_from_the_second_page_reaches_pr_comments() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 409,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/comments", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let raw = resp.raw.clone().expect("raw comments");
+    let line = raw
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == 7777)
+        .expect("the line comment whose thread is on the second page");
+    assert_eq!(line["thread_id"], "PRRT_page2");
+    assert_eq!(line["resolved"], false);
+    assert!(
+        resp.message
+            .unwrap_or_default()
+            .contains("thread PRRT_page2"),
+        "and a person reading the review sees it too"
+    );
 }
 
 #[tokio::test]
