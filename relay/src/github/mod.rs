@@ -1542,7 +1542,16 @@ impl GitHub {
         if !comments.is_empty() {
             payload["comments"] = json!(comments
                 .iter()
-                .map(|c| json!({"path": c.path, "line": c.line, "body": c.body}))
+                .map(|c| {
+                    let mut note = json!({"path": c.path, "line": c.line, "body": c.body});
+                    // 0.2.59: a note over a range names its first line as well, `line` being its
+                    // last. Sent only when there is one, for the same reason as above: an absent
+                    // key is not a null one, and GitHub refuses start_line on a single line
+                    if let Some(start) = c.start_line {
+                        note["start_line"] = json!(start);
+                    }
+                    note
+                })
                 .collect::<Vec<_>>());
         }
         self.rest::<Value>(

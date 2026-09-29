@@ -1576,12 +1576,20 @@ async fn a_review_carries_its_line_comments_upstream() {
             sekimore_relay::api::types::ReviewComment {
                 path: "src/main.rs".into(),
                 line: 40,
+                start_line: None,
                 body: "this should be >=".into(),
             },
             sekimore_relay::api::types::ReviewComment {
                 path: "src/lib.rs".into(),
                 line: 7,
+                start_line: None,
                 body: "see RFC 3339: the offset is required".into(),
+            },
+            sekimore_relay::api::types::ReviewComment {
+                path: "src/api.rs".into(),
+                line: 212,
+                start_line: Some(207),
+                body: "the whole match is unreachable".into(),
             },
         ],
         ..req("LibOrg/awesome-lib")
@@ -1598,11 +1606,21 @@ async fn a_review_carries_its_line_comments_upstream() {
     let sent = call.body["comments"]
         .as_array()
         .expect("comments were sent");
-    assert_eq!(sent.len(), 2, "{:?}", call.body);
+    assert_eq!(sent.len(), 3, "{:?}", call.body);
     assert_eq!(sent[0]["path"], "src/main.rs");
     assert_eq!(sent[0]["line"], 40);
     // A body with a colon in it survives; prose about code is full of them.
     assert_eq!(sent[1]["body"], "see RFC 3339: the offset is required");
+    // 0.2.59: a note over a range names both ends. A note on one line names neither, because
+    // GitHub reads start_line: null as a range and refuses it.
+    assert_eq!(sent[2]["start_line"], 207);
+    assert_eq!(sent[2]["line"], 212);
+    for one_line in [&sent[0], &sent[1]] {
+        assert!(
+            one_line.get("start_line").is_none(),
+            "a single-line note must not carry the key at all: {one_line:?}"
+        );
+    }
 }
 
 /// Without comments the request must not grow an empty array: to GitHub that is not the same as

@@ -241,12 +241,21 @@ pub struct GitDomain {
 pub struct ReviewComment {
     pub path: String,
     pub line: u64,
+    /// 0.2.59: the first line of a range, when the note covers several lines; `line` is then its
+    /// last. Absent for a note on a single line — an absent key is not the same as a null one to
+    /// GitHub, so it is left out rather than sent empty
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<u64>,
     pub body: String,
 }
 
 impl ReviewComment {
     /// `path:line:body` — the form `--comment` takes. Split from the left twice and no further,
     /// so a body may contain colons, which prose about code invariably does.
+    ///
+    /// The line field is either `N` or `START-END`, the second a note that covers the whole
+    /// range. A range whose ends are equal is one line, and GitHub refuses a range that says so,
+    /// so it becomes a plain single-line note rather than an error the caller can do nothing with.
     pub fn parse(s: &str) -> Result<Self, String> {
         let (path, rest) = s
             .split_once(':')
@@ -257,18 +266,35 @@ impl ReviewComment {
         if path.is_empty() {
             return Err(format!("no path in {s:?}"));
         }
-        let line: u64 = line
-            .parse()
-            .map_err(|_| format!("line {line:?} is not a number, in {s:?}"))?;
-        if line == 0 {
-            return Err(format!("line 0 does not exist, in {s:?}"));
-        }
+        let num = |n: &str| -> Result<u64, String> {
+            let v: u64 = n
+                .parse()
+                .map_err(|_| format!("line {n:?} is not a number, in {s:?}"))?;
+            if v == 0 {
+                return Err(format!("line 0 does not exist, in {s:?}"));
+            }
+            Ok(v)
+        };
+        let (start_line, line) = match line.split_once('-') {
+            Some((start, end)) => {
+                let (start, end) = (num(start)?, num(end)?);
+                if start > end {
+                    return Err(format!(
+                        "line range {line:?} ends before it starts, in {s:?}"
+                    ));
+                }
+                // One line is not a range: GitHub refuses start_line == line
+                (if start == end { None } else { Some(start) }, end)
+            }
+            None => (None, num(line)?),
+        };
         if body.trim().is_empty() {
             return Err(format!("no comment body in {s:?}"));
         }
         Ok(ReviewComment {
             path: path.to_string(),
             line,
+            start_line,
             body: body.to_string(),
         })
     }
@@ -296,14 +322,51 @@ mod review_comment_parsing {
     }
 
     #[test]
+    fn one_line_carries_no_range() {
+        let c = ReviewComment::parse("src/main.rs:212:this should be >=").unwrap();
+        assert_eq!(c.line, 212);
+        assert_eq!(c.start_line, None, "a single line is not a range");
+    }
+
+    #[test]
+    fn a_range_is_its_first_and_last_line() {
+        let c = ReviewComment::parse("src/main.rs:207-212:the whole match is unreachable").unwrap();
+        assert_eq!(c.path, "src/main.rs");
+        assert_eq!(c.start_line, Some(207), "start_line is the range's first");
+        assert_eq!(c.line, 212, "line is the range's last");
+    }
+
+    #[test]
+    fn a_body_may_contain_colons_with_a_range_too() {
+        let c = ReviewComment::parse("src/main.rs:207-212:see RFC 3339: required").unwrap();
+        assert_eq!((c.start_line, c.line), (Some(207), 212));
+        assert_eq!(c.body, "see RFC 3339: required");
+    }
+
+    #[test]
+    fn a_range_of_one_line_is_one_line() {
+        // GitHub refuses start_line == line. The caller said a range covering a single line,
+        // which is what a single-line note is, so it becomes one instead of an error.
+        let c = ReviewComment::parse("src/main.rs:40-40:x").unwrap();
+        assert_eq!((c.start_line, c.line), (None, 40));
+    }
+
+    #[test]
     fn what_is_refused() {
         for bad in [
-            "src/main.rs",         // no line, no body
-            "src/main.rs:40",      // no body
-            "src/main.rs:forty:x", // line is not a number
-            "src/main.rs:0:x",     // there is no line 0
-            ":40:x",               // no path
-            "src/main.rs:40:   ",  // a body of spaces says nothing
+            "src/main.rs",           // no line, no body
+            "src/main.rs:40",        // no body
+            "src/main.rs:forty:x",   // line is not a number
+            "src/main.rs:0:x",       // there is no line 0
+            ":40:x",                 // no path
+            "src/main.rs:40:   ",    // a body of spaces says nothing
+            "src/main.rs:212-207:x", // a range that ends before it starts
+            "src/main.rs:0-212:x",   // there is no line 0, at either end
+            "src/main.rs:207-0:x",
+            "src/main.rs:207-x:x", // the end is not a number
+            "src/main.rs:x-212:x", // nor is the start
+            "src/main.rs:207-:x",  // no end at all
+            "src/main.rs:-212:x",  // no start at all
         ] {
             assert!(
                 ReviewComment::parse(bad).is_err(),

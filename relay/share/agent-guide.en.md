@@ -63,6 +63,7 @@ sekimore pr comment-delete --number N --comment-id C            [pr:comment_dele
 sekimore pr review --number N --event APPROVE                 [pr:review]  submit a review
 sekimore pr review --number N --event REQUEST_CHANGES \\        [pr:review]  submit a review with line comments
   --comment "src/main.rs:40:this should be >="                #   path:line:body; repeat for more comments
+                                                              #   path:start-end:body for a range of lines
                                                               #   --comments-file f.json for long bodies
 sekimore pr request-review --number N --reviewers alice,bob   [pr:request_review]  request a review from others
 sekimore ci runs --ref <tag|branch|sha>                       [ci:read]  workflow runs for a ref
