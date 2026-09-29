@@ -56,6 +56,10 @@ sekimore pr close --number N                                  [pr:close]
 sekimore pr reopen --number N                                 [pr:close]  the inverse of close
 sekimore pr comment --number N --body="…"                     [pr:comment]
 sekimore pr reply --number N --comment-id C --body="…"          [pr:comment]  reply to a line comment in its thread
+sekimore pr resolve --number N --thread-id T                  [pr:resolve]  mark a review conversation as settled
+sekimore pr unresolve --number N --thread-id T                [pr:resolve]  the inverse of resolve
+                                                              #   T is the id `pr comments` prints after `thread`
+                                                              #   a conversation it already prints as (resolved) is settled
 sekimore pr comment-edit --number N --comment-id C --body="…"   [pr:comment_update]  edit your own comment
 sekimore pr comment-delete --number N --comment-id C            [pr:comment_delete]  delete your own comment
                                                               #   add --inline when the id is a line comment
@@ -115,6 +119,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 - To wait for CI, run `sgw-agent pr status --number N` every 30 seconds. If CI fails, read `sgw-agent ci log --number N`, fix the cause and push again.
 
 - `sgw-agent pr comments` groups each review with the line comments submitted with it, and prints an id (`#2451`) on each comment that you can reply to. Reply to such a comment with `sgw-agent pr reply --comment-id 2451`. A comment without an id belongs to the conversation, so reply to it with `sgw-agent pr comment`.
+- The first comment of each review conversation also carries its thread (`thread PRRT_…`), and `(resolved)` when that conversation is already settled. Once you have dealt with a note, close it out with `sgw-agent pr resolve --number N --thread-id PRRT_…`. Answering a note and declaring it settled are different permissions, so `pr resolve` may be refused where `pr reply` is not.
 - Read a line before you comment on it. `sgw-agent pr files --number N` lists the files that the pull request changes, and `sgw-agent pr diff --number N --path <path>` prints one of them with line numbers. The number in the left column is the `line` in `pr review --comment <path>:<line>:<body>`. A deleted line has no number because it does not exist in the new file, so you cannot comment on it. If a file does not fit on one page, read the rest with `--before <the previous end>`.
 
 ## The usual flow

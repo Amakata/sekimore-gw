@@ -277,7 +277,7 @@ Each key is a fully qualified domain name and must match exactly. Configuring `g
 | Key | Default | Meaning |
 |---|---|---|
 | `name` | required | The project name. It appears in tokens and logs. |
-| `permissions` | `[]` | The project's default permissions, as either `[…]` or `{allow, deny}`. A permission that no layer allows is denied. The 33 keys are listed under [How permissions are resolved](#how-permissions-are-resolved). |
+| `permissions` | `[]` | The project's default permissions, as either `[…]` or `{allow, deny}`. A permission that no layer allows is denied. The 34 keys are listed under [How permissions are resolved](#how-permissions-are-resolved). |
 | `push` | `["sekimore/*"]` | Branch globs that the agent can push to directly |
 | `tags` | `[]` | Tag globs that the agent can push. An empty list denies all tag pushes. |
 | `delete` | `false` | Whether the agent can delete branches and tags, and move a tag that already exists upstream. Deleting and recreating a tag has the same result as a forced update, so both require the same permission. Creating a tag that does not exist yet requires only `tags`. |
@@ -357,11 +357,11 @@ specifies the base in the ref and is checked before the push is sent.
 
 - Effective permissions = (project allow ∪ upstream allow ∪ repo allow) − (project deny ∪ upstream deny ∪ repo deny). A deny takes precedence at any layer.
 - `push` / `tags` / `delete` are overridden in the order project → upstream → repo. Globs support `*` and `?`.
-- There are 33 permission keys, grouped by resource. `sekimore-relay check` prints the ones that a configuration grants.
+- There are 34 permission keys, grouped by resource. `sekimore-relay check` prints the ones that a configuration grants.
 
   ```
   pr:      create  read  comment  comment_update  comment_delete  review  request_review
-           label  assign  close  merge
+           resolve  label  assign  close  merge
   issue:   create  read  update  comment  comment_update  comment_delete  label  assign  close
   ci:      read  rerun  dispatch          security: read  dismiss
   release: create  read  publish          project:  read  add_item  update_item
@@ -370,6 +370,7 @@ specifies the base in the ref and is checked before the push is sent.
 
 - `pr:read` covers the state, the CI checks, the description and the comments. `issue:read` is a separate permission, so an agent can file bugs without being able to read a private tracker. `search:read` is a separate resource because a search is not addressed to a single repository.
 - `pr:review` submits a review, and `pr:request_review` requests a review from someone else. They are separate because the first records an opinion and the second notifies a person.
+- `pr:resolve` marks a review conversation as settled, and opens one again. It is not part of `pr:comment`: resolving closes out someone else's review note, which is a different authority from posting one. A project can want the agent to answer review notes without letting it declare them settled.
 - `ci:rerun` re-runs and cancels workflow runs. It is not part of `ci:read`, because a re-run consumes Actions minutes and executes workflow code that has access to the repository's secrets.
 - `release:publish` publishes a draft release. `release create --draft` exists so that publishing can be left to a human; folding publishing into `release:create` would remove that separation. Editing a release that remains a draft requires only `release:create`.
 - Closing and reopening share one permission (`pr:close` / `issue:close`), because reopening undoes a close rather than granting a new capability. Likewise, adding and removing a label or an assignee share one permission (`issue:label` / `issue:assign`). Editing a pull request's title or body requires `pr:create`, but a new base is checked again against the repository's `bases`.

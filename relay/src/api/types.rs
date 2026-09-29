@@ -66,6 +66,15 @@ pub struct ApiRequest {
     /// other, so the caller has to say which
     #[serde(default, skip_serializing_if = "is_false")]
     pub inline: bool,
+    /// 0.2.59: the review conversation `pr resolve` settles, as a GraphQL node id. `pr comments`
+    /// prints it beside the line comment it belongs to; it is the only place to get one, because
+    /// REST never carries it
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub thread_id: String,
+    /// 0.2.59: open the conversation again instead of settling it. A flag on the same request
+    /// rather than a second one, the way `pr_draft` carries which way `pr draft` / `pr ready` move
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unresolve: bool,
     /// 0.2.33 (#168): the workflow file `ci dispatch` starts
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub workflow: String,

@@ -150,6 +150,17 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     }
                     leaf
                 }
+                PrCmd::Resolve { number, thread_id } => {
+                    req.number = number;
+                    req.thread_id = thread_id;
+                    leaf
+                }
+                PrCmd::Unresolve { number, thread_id } => {
+                    req.number = number;
+                    req.thread_id = thread_id;
+                    req.unresolve = true;
+                    leaf
+                }
                 PrCmd::Merge {
                     number,
                     method,

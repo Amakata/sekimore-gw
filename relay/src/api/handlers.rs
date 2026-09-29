@@ -285,6 +285,7 @@ pub async fn dispatch(
         "/pr/draft" => pr_draft(ctx, req).await,
         "/ci/dispatch" => ci_dispatch(ctx, req).await,
         "/pr/review" => pr_review(ctx, req).await,
+        "/pr/resolve" => pr_resolve(ctx, req).await,
         "/pr/merge" => pr_merge(ctx, req).await,
         "/pr/close" => pr_close(ctx, req).await,
         "/pr/reopen" => pr_reopen(ctx, req).await,
@@ -647,6 +648,35 @@ async fn pr_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
     Ok(ApiResponse::default())
 }
 
+/// 0.2.59: settle a review conversation, or open it again.
+///
+/// `pr:resolve` rather than `pr:comment`: resolving closes out someone else's review note, which
+/// is a different authority from answering one. The thread id comes from `pr comments`, which is
+/// the only place that has it, and the client checks it really is on `number` before it writes.
+async fn pr_resolve(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need_repo(req)?;
+    need(req.number != 0, "number is required")?;
+    need(
+        !req.thread_id.trim().is_empty(),
+        "thread-id is required; `pr comments` prints it beside each line comment",
+    )?;
+    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Resolve)?;
+    let want = !req.unresolve;
+    let now = client
+        .resolve_review_thread(&auth, req.number, req.thread_id.trim(), want)
+        .await?;
+    Ok(ApiResponse {
+        number: Some(req.number),
+        message: Some(format!(
+            "{} {} on #{}",
+            if now { "resolved" } else { "unresolved" },
+            req.thread_id.trim(),
+            req.number
+        )),
+        ..ApiResponse::ok()
+    })
+}
+
 /// Nothing, or the string — so a handler can tell "leave it alone" from "set it to empty".
 fn opt(s: &str) -> Option<&str> {
     if s.is_empty() {
@@ -810,16 +840,31 @@ fn comment_lines(items: &[crate::github::CommentItem]) -> String {
         |c: &crate::github::CommentItem| c.created_at.split('T').next().unwrap_or("").to_string();
     // Where an inline comment sits, and the id `pr reply` needs. The id appears only on the
     // lines that can be answered, so its presence is what says a reply is possible.
-    let inline_tail = |c: &crate::github::CommentItem| {
+    // 0.2.59: and the conversation it sits in, which `pr resolve` takes. A thread id is long and
+    // every comment in a thread repeats it, so it is printed once — on the first comment of that
+    // thread this rendering reaches. Not on the thread's root: with a limit in play the root can
+    // fall outside the page while a reply is inside it, and then the id would never be shown.
+    // Only a settled thread is marked; an unmarked one is open.
+    let mut seen_threads: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut inline_tail = |c: &crate::github::CommentItem| {
         let where_ = match (&c.path, c.line) {
             (Some(p), Some(l)) => format!("{p}:{l}"),
             (Some(p), None) => p.clone(),
             _ => "[inline]".to_string(),
         };
-        match c.id {
+        let mut s = match c.id {
             Some(id) => format!("{where_}  #{id}"),
             None => where_,
+        };
+        if let Some(t) = c.thread_id.as_deref() {
+            if seen_threads.insert(t.to_string()) {
+                s.push_str(&format!("  thread {t}"));
+                if c.resolved == Some(true) {
+                    s.push_str(" (resolved)");
+                }
+            }
         }
+        s
     };
 
     let mut out = String::new();
@@ -2042,6 +2087,8 @@ mod comment_rendering {
             in_reply_to_id: None,
             id: None,
             review_id: None,
+            thread_id: None,
+            resolved: None,
         }
     }
     fn review(author: &str, state: &str, body: &str, rid: u64) -> CommentItem {
@@ -2134,6 +2181,60 @@ mod comment_rendering {
         assert!(
             out.contains("pack.rs:1  #99"),
             "its comments must still show:\n{out}"
+        );
+    }
+
+    /// 0.2.59: `pr resolve` takes a thread id, and this is the only place one is shown. It is
+    /// printed once per conversation — a node id is long and every reply in a thread repeats it —
+    /// and on the first comment of the thread that is rendered rather than on the thread's root,
+    /// because a limit can leave the root out while a reply is still on the page.
+    #[test]
+    fn a_thread_id_is_printed_once_per_conversation_with_its_state() {
+        let threaded = |mut c: CommentItem, tid: &str, done: bool| {
+            c.thread_id = Some(tid.into());
+            c.resolved = Some(done);
+            c
+        };
+        let items = vec![
+            threaded(
+                inline("bob", "pack.rs", 7, "why?", 42, None),
+                "PRRT_a",
+                false,
+            ),
+            threaded(
+                inline("bob", "pack.rs", 7, "and also", 43, None),
+                "PRRT_a",
+                false,
+            ),
+            threaded(
+                inline("carol", "policy.rs", 9, "settled", 44, None),
+                "PRRT_b",
+                true,
+            ),
+            // No thread at all: the join found nothing, and the line still prints as before.
+            inline("dave", "main.rs", 1, "orphan", 45, None),
+        ];
+        let out = super::comment_lines(&items);
+        assert!(
+            out.contains("pack.rs:7  #42  thread PRRT_a"),
+            "the first comment of a conversation carries its id:\n{out}"
+        );
+        assert_eq!(
+            out.matches("PRRT_a").count(),
+            1,
+            "a thread id is not repeated on every reply:\n{out}"
+        );
+        assert!(
+            out.contains("policy.rs:9  #44  thread PRRT_b (resolved)"),
+            "a settled conversation says so:\n{out}"
+        );
+        assert!(
+            !out.contains("PRRT_a (resolved)"),
+            "an open one is left unmarked:\n{out}"
+        );
+        assert!(
+            out.contains("main.rs:1  #45\n"),
+            "a comment with no thread prints as it always did:\n{out}"
         );
     }
 

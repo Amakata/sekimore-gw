@@ -265,7 +265,7 @@ AI エージェント向けの使い方は `sgw-agent guide` で表示できま�
 | キー | 既定 | 意味 |
 |---|---|---|
 | `name` | 必須 | プロジェクト名。トークンとログに表示されます。 |
-| `permissions` | `[]` | プロジェクトの既定の権限。`[…]` または `{allow, deny}` で書きます。どの層でも許可されていない権限は拒否されます。33 個の権限キーは[権限の決まり方](#権限の決まり方)に一覧があります。 |
+| `permissions` | `[]` | プロジェクトの既定の権限。`[…]` または `{allow, deny}` で書きます。どの層でも許可されていない権限は拒否されます。34 個の権限キーは[権限の決まり方](#権限の決まり方)に一覧があります。 |
 | `push` | `["sekimore/*"]` | 直接 push を許すブランチの glob |
 | `tags` | `[]` | push を許すタグの glob。空の場合、タグの push はすべて拒否されます。 |
 | `delete` | `false` | ブランチとタグの削除、および上流に既にあるタグの移動を許可するか。タグを削除して作り直すことと強制更新は同じ結果になるので、同じ権限にしています。まだ存在しないタグを作るだけなら `tags` で足ります。 |
@@ -341,11 +341,11 @@ base を検査できません。そのため関所は、そのようなリポジ
 
 - 実効権限 = (プロジェクト allow ∪ 上流 allow ∪ repo allow) − (プロジェクト deny ∪ 上流 deny ∪ repo deny)。deny はどの層に書いても優先されます。
 - `push` / `tags` / `delete` は、プロジェクト → 上流 → repo の順で上書きされます。glob では `*` と `?` が使えます。
-- 権限キーは 33 個あり、リソースごとに次のとおりです。設定が許可している権限は `sekimore-relay check` で表示できます。
+- 権限キーは 34 個あり、リソースごとに次のとおりです。設定が許可している権限は `sekimore-relay check` で表示できます。
 
   ```
   pr:      create  read  comment  comment_update  comment_delete  review  request_review
-           label  assign  close  merge
+           resolve  label  assign  close  merge
   issue:   create  read  update  comment  comment_update  comment_delete  label  assign  close
   ci:      read  rerun  dispatch          security: read  dismiss
   release: create  read  publish          project:  read  add_item  update_item
@@ -354,6 +354,7 @@ base を検査できません。そのため関所は、そのようなリポジ
 
 - `pr:read` は、状態と CI チェックに加えて、本文とコメントも対象にします。`issue:read` は別の権限なので、非公開のトラッカーを読ませずに bug を登録させることができます。`search:read` は、検索が 1 つのリポジトリに宛てた操作ではないため、独立したリソースです。
 - `pr:review` はレビューを提出する権限、`pr:request_review` は他の人にレビューを依頼する権限です。前者は意見を記録し、後者は人に通知するので、分けています。
+- `pr:resolve` は、レビューのやり取りを解決済みにする（および未解決に戻す）権限です。`pr:comment` には含めていません。解決済みにすることは、他の人が書いた指摘を終わったことにする操作であり、指摘に返信することとは別の権限だからです。返信はさせたいが、解決済みにするかどうかは人が決めたい、というプロジェクトがあります。
 - `ci:rerun` は workflow run の再実行と中止の権限です。再実行は Actions の時間を消費し、リポジトリの secret にアクセスできる workflow のコードを実行するので、`ci:read` には含めていません。
 - `release:publish` は、draft の Release を公開する権限です。`release create --draft` は公開を人間に委ねるためにあるので、公開を `release:create` に含めると、その区別が失われます。draft のまま編集するだけなら `release:create` で足ります。
 - 閉じることと開き直すことは同じ権限です（`pr:close` / `issue:close`）。開き直すことは閉じたことの取り消しであり、新しい能力を与えるものではないためです。同様に、ラベルと担当者の追加と削除も、それぞれ 1 つの権限です（`issue:label` / `issue:assign`）。PR のタイトルや本文の編集には `pr:create` が必要です。ただし、新しい base は、そのリポジトリの `bases` に対して改めて検査されます。

@@ -467,6 +467,47 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
                 serde_json::json!({"data": {owner: {"projectV2": {"id": "PVT_board2"}}}}),
             );
         }
+        // 0.2.59: the review conversations of a pull request. Thread PRRT_one holds the line
+        // comment the REST mock serves at /pulls/7/comments (2451) and is already settled, so the
+        // renderer's "(resolved)" marker has something to mark. PRRT_two holds a comment id that
+        // is in no REST page, which is the case where the join finds nothing.
+        if query.contains("reviewThreads(first:") {
+            // #7 fits on one page. #408 is the pull request whose conversations do not, so the
+            // relay has to say it could not see far enough rather than that the thread is foreign.
+            let more = body
+                .pointer("/variables/number")
+                .and_then(|n| n.as_u64())
+                .is_some_and(|n| n == 408);
+            return (
+                StatusCode::OK,
+                serde_json::json!({"data": {"repository": {"pullRequest": {"reviewThreads": {
+                    "pageInfo": {"hasNextPage": more},
+                    "nodes": [
+                    {"id": "PRRT_one", "isResolved": true,
+                     "comments": {"nodes": [{"databaseId": 555}, {"databaseId": 2451}]}},
+                    {"id": "PRRT_two", "isResolved": false,
+                     "comments": {"nodes": [{"databaseId": 9999}]}}
+                ]}}}}}),
+            );
+        }
+        if query.contains("resolveReviewThread(input:") {
+            // Both mutations match; the key the relay reads back is the one it asked for.
+            let field = if query.contains("unresolveReviewThread(input:") {
+                "unresolveReviewThread"
+            } else {
+                "resolveReviewThread"
+            };
+            let thread = body
+                .pointer("/variables/thread")
+                .and_then(|t| t.as_str())
+                .unwrap_or("PRRT_one");
+            return (
+                StatusCode::OK,
+                serde_json::json!({"data": {field: {"thread": {
+                    "id": thread, "isResolved": field == "resolveReviewThread"
+                }}}}),
+            );
+        }
         let asks_for_fields = query.contains(" fields(first:");
         if asks_for_fields {
             return (

@@ -72,6 +72,11 @@ pub enum Action {
     /// 0.2.34 (#172): withdraw a comment the agent posted. Its own key because it destroys a
     /// record, which nothing else here does — a project can well allow correction and refuse this
     CommentDelete,
+    /// 0.2.59: mark a review conversation as settled, or open it again. Separate from `Comment`:
+    /// resolving closes out someone else's review note, which is a different authority from
+    /// posting one — a project can want the agent to answer review notes without letting it
+    /// declare them settled
+    Resolve,
 }
 
 impl Resource {
@@ -106,6 +111,7 @@ impl Resource {
                 RequestReview,
                 CommentUpdate,
                 CommentDelete,
+                Resolve,
             ],
             Resource::Issue => &[
                 Create,
@@ -158,6 +164,7 @@ impl Action {
             Action::Update => "update",
             Action::CommentUpdate => "comment_update",
             Action::CommentDelete => "comment_delete",
+            Action::Resolve => "resolve",
             Action::Dismiss => "dismiss",
         }
     }
@@ -202,6 +209,7 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "update" => Action::Update,
         "comment_update" => Action::CommentUpdate,
         "comment_delete" => Action::CommentDelete,
+        "resolve" => Action::Resolve,
         "dismiss" => Action::Dismiss,
         other => return Err(format!("unknown action {other:?}")),
     };
@@ -1273,6 +1281,44 @@ mod tests {
         assert!(auth.ensure(Resource::Pr, Action::Merge).is_err());
     }
 
+    /// 0.2.59: settling a review conversation is its own key. A project that grants `pr:comment`
+    /// so the agent can answer a review note has not thereby let it declare the note settled.
+    #[test]
+    fn pr_resolve_is_its_own_key_and_not_implied_by_pr_comment() {
+        assert_eq!(
+            parse_permission("pr:resolve"),
+            Ok((Resource::Pr, Action::Resolve))
+        );
+        assert_eq!(Action::Resolve.as_str(), "resolve");
+        // round trip: the string the parser takes is the string as_str writes
+        let (r, a) = parse_permission("pr:resolve").unwrap();
+        assert_eq!(format!("{}:{}", r.as_str(), a.as_str()), "pr:resolve");
+        // it belongs to pull requests only
+        assert!(parse_permission("issue:resolve").is_err());
+
+        let commenter = Project::new("commenter")
+            .with_repo("LibOrg/awesome-lib", Mode::ReadWrite, &["main"])
+            .grant("pr:comment");
+        let auth = commenter
+            .authorize("LibOrg/awesome-lib", Resource::Pr, Action::Comment)
+            .unwrap();
+        assert!(auth.ensure(Resource::Pr, Action::Comment).is_ok());
+        assert!(
+            auth.ensure(Resource::Pr, Action::Resolve).is_err(),
+            "pr:comment must not carry pr:resolve"
+        );
+        assert!(commenter
+            .authorize("LibOrg/awesome-lib", Resource::Pr, Action::Resolve)
+            .is_err());
+
+        let resolver = Project::new("resolver")
+            .with_repo("LibOrg/awesome-lib", Mode::ReadWrite, &["main"])
+            .grant("pr:resolve");
+        assert!(resolver
+            .authorize("LibOrg/awesome-lib", Resource::Pr, Action::Resolve)
+            .is_ok());
+    }
+
     #[test]
     fn out_of_project_repo_is_denied() {
         let p = case_a();
@@ -1591,7 +1637,8 @@ mod tests {
         //   re-running something that already happened here cannot)
         // + pr:comment_update, pr:comment_delete, issue:comment_update, issue:comment_delete
         //   (#172: posting is not the authority to rewrite or remove)
-        assert_eq!(all_permission_keys().len(), 33);
+        // + pr:resolve (0.2.59: settling someone else's review note is not answering it)
+        assert_eq!(all_permission_keys().len(), 34);
         // dismissing is not a kind of reading, and reading is not a kind of dismissing
         assert!(parse_permission("security:close").is_err());
         assert!(parse_permission("pr:dismiss").is_err());
@@ -1606,6 +1653,7 @@ mod tests {
             "pr:label",
             "pr:assign",
             "issue:update",
+            "pr:resolve",
         ] {
             assert!(all_permission_keys().contains(&k.to_string()), "{k}");
         }
