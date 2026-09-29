@@ -59,7 +59,8 @@ services:
       - SEKIMORE_ALLOW_CREDENTIAL_HELPER=${SEKIMORE_ALLOW_CREDENTIAL_HELPER:-0}
       # The signing key's comment (the Title it gets when registered on GitHub as a Signing Key).
       # Default: "sekimore-agent-signing: <project> / <git user.name> <user.email>"
-      - SEKIMORE_PROJECT=${SEKIMORE_PROJECT:-sgw-sample}
+      # <project> is SEKIMORE_PROJECT, the project's own name set in .env; it is optional
+      - SEKIMORE_PROJECT=${SEKIMORE_PROJECT:-}
       - SEKIMORE_SIGNING_KEY_COMMENT=${SEKIMORE_SIGNING_KEY_COMMENT:-}
 
 volumes:
