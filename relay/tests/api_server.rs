@@ -1947,6 +1947,74 @@ async fn a_thread_id_from_the_second_page_reaches_pr_comments() {
     );
 }
 
+/// The inner window and the display window have to be the same size, pointed at the same end.
+///
+/// `pr comments` asks REST for one page of at most a hundred line comments and sends no ordering,
+/// so it gets the oldest ones on the pull request. The join asks GraphQL for the first hundred
+/// comments of each conversation — the same end. That pairing is why a comment a reader is shown
+/// always carries a thread id, however long the conversation behind it ran: a displayed comment
+/// has fewer than a hundred line comments older than it anywhere on the pull request, so it has
+/// fewer than that many older than it inside its own thread.
+///
+/// #410 is one conversation of 151 comments, longer than either window. The mock honours the
+/// count and the end the query names, so reading the wrong end of it shows up here: every
+/// displayed comment would come back without an id while the ids sat on comments no reader can
+/// reach, and the conversation could not be settled from what `pr comments` printed.
+#[tokio::test]
+async fn a_long_conversation_keeps_a_thread_id_on_what_is_displayed() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 410,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/comments", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+
+    let raw = resp.raw.clone().expect("raw comments");
+    let shown: Vec<&serde_json::Value> = raw
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["kind"] == "inline")
+        .collect();
+    assert!(!shown.is_empty(), "the mock served a page of line comments");
+    // Not "most of them": every single one, because every single one is on the page a reader got.
+    for c in &shown {
+        assert_eq!(
+            c["thread_id"], "PRRT_long",
+            "a displayed comment with no thread id cannot be resolved from what was printed: {c}"
+        );
+        assert_eq!(c["resolved"], false);
+    }
+    // and in what a person reads, not only in the JSON
+    assert!(
+        resp.message
+            .unwrap_or_default()
+            .contains("thread PRRT_long"),
+        "the id reaches the rendered review too"
+    );
+    // still one request: matching the windows costs no extra round trip
+    let rec = common::recorded(&f.recorder);
+    assert_eq!(reads(&rec).len(), 1, "{rec:?}");
+}
+
+/// And the id that reached the reader is one `pr resolve` accepts: the point of printing it.
+#[tokio::test]
+async fn a_long_conversation_can_still_be_settled() {
+    let f = start_api(project_case_a(&["pr:resolve"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 410,
+        thread_id: "PRRT_long".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/resolve", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(
+        resp.message.unwrap_or_default(),
+        "resolved PRRT_long on #410"
+    );
+}
+
 #[tokio::test]
 async fn resolving_without_a_thread_id_says_where_to_find_one() {
     let f = start_api(project_case_a(&["pr:resolve"]), BootstrapMode::Auto, true).await;
