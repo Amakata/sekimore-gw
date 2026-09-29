@@ -133,6 +133,13 @@ pub fn upstream_holds_commit(sha: &str) {
         .insert(sha.to_ascii_lowercase());
 }
 
+/// 0.2.59: the comment ids of #410's one long review conversation, oldest first — 9000, which
+/// opened it, and 150 replies. Longer than the hundred either window reads, so which end is read
+/// decides which of them come back joined.
+fn long_thread_ids() -> impl Iterator<Item = u64> {
+    9000..=9150
+}
+
 fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, serde_json::Value) {
     let decoded = percent_decode(path);
     let p = decoded.split('?').next().unwrap_or(&decoded);
@@ -275,6 +282,35 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
                  "pull_request_review_id": 902}
             ]),
         );
+    }
+    // 0.2.59: #410 is one long review conversation — a root and 150 replies, more than either
+    // window holds. REST serves a page of the oldest ones, ascending by id, which is what GitHub
+    // does when a caller sends neither `sort` nor `direction`. Every one of them has to come back
+    // with a thread id, because every one of them is a comment a reader is shown.
+    if method == "GET" && p.ends_with("/pulls/410/comments") {
+        // From `decoded`, not `p`: `p` has the query string cut off, and the page size is the
+        // whole point here — the window the reader opened is what the join has to cover.
+        let per: usize = decoded
+            .split("per_page=")
+            .nth(1)
+            .and_then(|v| v.split('&').next())
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+        let page: Vec<serde_json::Value> = long_thread_ids()
+            .take(per)
+            .map(|id| {
+                serde_json::json!({
+                    "id": id, "user": {"login": "alice"},
+                    "body": format!("reply {id}"),
+                    "created_at": "2026-09-17T10:07:00Z",
+                    "path": "src/main.rs", "line": 120,
+                    // Everything after the first comment is a reply in the same conversation.
+                    "in_reply_to_id": if id == 9000 { serde_json::Value::Null } else { 9000.into() },
+                    "pull_request_review_id": 902
+                })
+            })
+            .collect();
+        return (StatusCode::OK, serde_json::Value::Array(page));
     }
     if method == "GET" && p.ends_with("/issues/7/comments") {
         return (
@@ -539,6 +575,35 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
                             {"message": format!("the mock was handed an unknown cursor {other:?}")}
                         ]}),
                     },
+                );
+            }
+            // #410: one conversation, longer than any window either side asks for. The mock reads
+            // `$comments` and honours the end the query asked for, so a test can tell `first`
+            // from `last` — a mock that ignored the variable would pass under either, and the
+            // whole question here is which end of a long thread the join reads.
+            if number == 410 {
+                let want = body
+                    .pointer("/variables/comments")
+                    .and_then(|c| c.as_u64())
+                    .unwrap_or(100) as usize;
+                let all: Vec<u64> = long_thread_ids().collect();
+                let slice = if query.contains("comments(last:") {
+                    &all[all.len().saturating_sub(want)..]
+                } else {
+                    &all[..want.min(all.len())]
+                };
+                let nodes: Vec<serde_json::Value> = slice
+                    .iter()
+                    .map(|id| serde_json::json!({"databaseId": id}))
+                    .collect();
+                return (
+                    StatusCode::OK,
+                    serde_json::json!({"data": {"repository": {"pullRequest": {"reviewThreads": {
+                        "pageInfo": {"hasNextPage": false, "endCursor": serde_json::Value::Null},
+                        "nodes": [
+                            {"id": "PRRT_long", "isResolved": false, "comments": {"nodes": nodes}}
+                        ],
+                    }}}}}),
                 );
             }
             // Everything else fits on one page, and says so.

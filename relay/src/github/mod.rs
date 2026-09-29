@@ -44,6 +44,11 @@ const PR_FILES_PAGES: u32 = 10;
 /// #173: the most diff lines one `pr diff` page returns, matching the cap on a CI log page.
 const PR_DIFF_MAX_LINES: usize = 2000;
 
+/// The most comments one `pr comments` read returns from each of its three REST sources, and
+/// GitHub's own maximum for a REST page. `pull_request_comments` asks for one page and no more,
+/// so this is the whole window a reader ever sees.
+const COMMENTS_PER_PAGE: u32 = 100;
+
 /// 0.2.59: review conversations read per `reviewThreads` query. GitHub's own maximum for the
 /// connection, and not derived from a caller's comment limit: the two count different things.
 const THREADS_PER_PAGE: u32 = 100;
@@ -2433,7 +2438,10 @@ impl GitHub {
     ) -> Result<Vec<CommentItem>, GhError> {
         auth.ensure(Resource::Pr, Action::Read)?;
         let repo = auth.repo();
-        let per = limit.clamp(1, 100);
+        // One page of each source, oldest first: GitHub orders these ascending and the relay asks
+        // for no other order. `COMMENTS_PER_THREAD` is matched to this cap so that every line
+        // comment this returns is inside the slice of its thread that the join below reads.
+        let per = limit.clamp(1, COMMENTS_PER_PAGE);
         let mut out: Vec<CommentItem> = Vec::new();
 
         let conv: Value = self
@@ -2599,9 +2607,30 @@ impl GitHub {
             .repo()
             .split_once('/')
             .ok_or_else(|| GhError::Parse(format!("{:?} is not owner/name", auth.repo())))?;
-        /// Comments read per thread. A conversation longer than this has its tail left without a
-        /// thread id; the earlier comments in it still carry one, and it is the same id.
-        const COMMENTS_PER_THREAD: u32 = 100;
+        /// Comments read per thread, from the start of the conversation — which is the end the
+        /// reader is at, and that is what makes a hundred enough rather than merely generous.
+        ///
+        /// `pull_request_comments` asks REST for a single page of at most `COMMENTS_PER_PAGE`
+        /// line comments and sends neither `sort` nor `direction`, so it gets the *oldest* ones
+        /// on the whole pull request. A comment it displays therefore has fewer than
+        /// `COMMENTS_PER_PAGE` line comments older than it anywhere on the pull request, so it
+        /// has fewer than that many older than it inside its own thread — it is within the first
+        /// `COMMENTS_PER_PAGE` comments of that thread, which is exactly what this asks for.
+        /// Every comment a reader can see carries its thread id, however long the conversation
+        /// ran. Matching the two windows is the point, so this is that constant and not a 100 of
+        /// its own.
+        ///
+        /// What is left out is the tail of a conversation past its hundredth comment. Those
+        /// comments get no thread id here, and they are also comments `pr comments` cannot
+        /// reach, so nothing that is shown is missing one. `pr resolve` does not depend on this
+        /// at all: it needs the thread in the map, and a thread's first comment is the one that
+        /// opened it, so every thread is in the map whatever this number is.
+        ///
+        /// The invariant is the pairing, not the value. If `pull_request_comments` ever pages
+        /// its line comments, or asks for them newest first, the window moves and this has to
+        /// move with it — `a_long_conversation_keeps_a_thread_id_on_what_is_displayed` is the
+        /// guard that fails when it does not.
+        const COMMENTS_PER_THREAD: u32 = COMMENTS_PER_PAGE;
         // `$after` is the cursor of the page before. Null on the first request, which GraphQL
         // reads as "from the start" — the same query serves the whole walk.
         const Q: &str = "query($owner:String!,$name:String!,$number:Int!,$first:Int!,$after:String,$comments:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ reviewThreads(first:$first,after:$after){ pageInfo{ hasNextPage endCursor } nodes{ id isResolved comments(first:$comments){ nodes{ databaseId } } } } } } }";
