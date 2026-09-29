@@ -63,6 +63,7 @@ sekimore pr comment-delete --number N --comment-id C            [pr:comment_dele
 sekimore pr review --number N --event APPROVE                 [pr:review]  レビューを提出する
 sekimore pr review --number N --event REQUEST_CHANGES \\        [pr:review]  行コメント付きでレビューを提出する
   --comment "src/main.rs:40:this should be >="                #   path:line:body。複数ある場合は繰り返す
+                                                              #   複数行にまたがるときは path:start-end:body
                                                               #   長い本文は --comments-file f.json
 sekimore pr request-review --number N --reviewers alice,bob   [pr:request_review]  他の人にレビューを依頼する
 sekimore ci runs --ref <tag|branch|sha>                       [ci:read]  ref に対応する workflow run の一覧

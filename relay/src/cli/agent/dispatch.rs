@@ -142,7 +142,9 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                             .with_context(|| format!("reading {comments_file}"))?;
                         let from_file: Vec<crate::api::types::ReviewComment> =
                             serde_json::from_str(&text).with_context(|| {
-                                format!("{comments_file} is not [{{path, line, body}}, …]")
+                                format!(
+                                    "{comments_file} is not [{{path, line, body, start_line?}}, …]"
+                                )
                             })?;
                         req.comments.extend(from_file);
                     }
