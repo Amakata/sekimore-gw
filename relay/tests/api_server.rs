@@ -1760,7 +1760,10 @@ async fn a_thread_from_somewhere_else_is_refused_before_the_mutation() {
         ..req("LibOrg/awesome-lib")
     };
     let (code, resp) = post(f.addr, "/pr/resolve", Some(&f.token), &r).await;
-    assert_ne!(code, 200);
+    assert_eq!(
+        code, 403,
+        "the relay refused it, as with a foreign comment id"
+    );
     let err = resp.error.unwrap_or_default();
     assert!(
         err.contains("PRRT_elsewhere") && err.contains("#7"),
@@ -1815,7 +1818,7 @@ async fn a_thread_past_the_first_page_is_refused_as_unseen_not_as_foreign() {
         ..req("LibOrg/awesome-lib")
     };
     let (code, resp) = post(f.addr, "/pr/resolve", Some(&f.token), &r).await;
-    assert_ne!(code, 200);
+    assert_eq!(code, 403);
     let err = resp.error.unwrap_or_default();
     assert!(
         err.contains("reads no further"),
@@ -2887,6 +2890,7 @@ async fn the_new_operations_all_refuse_a_repository_outside_the_project() {
             "pr:merge",
             "pr:close",
             "pr:create",
+            "pr:resolve",
             "issue:close",
             "issue:label",
             "issue:assign",
@@ -2903,6 +2907,14 @@ async fn the_new_operations_all_refuse_a_repository_outside_the_project() {
             "/pr/merge",
             ApiRequest {
                 number: 1,
+                ..req("Other/Secret")
+            },
+        ),
+        (
+            "/pr/resolve",
+            ApiRequest {
+                number: 1,
+                thread_id: "PRRT_x".into(),
                 ..req("Other/Secret")
             },
         ),
