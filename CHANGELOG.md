@@ -12,6 +12,18 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.59 (2026-09-29)
+
+### Fix
+
+- a project that leaves `SEKIMORE_PROJECT` unset no longer registers its AI signing key under the sample's name: the template's default is empty rather than `sgw-sample`, and the variable stays optional (#312)
+
+### Enhancement
+
+- `pr resolve` and `pr unresolve` settle a review conversation and open one again, under a new permission key `pr:resolve`; `pr comments` prints each conversation's thread id and marks the ones already settled (#314)
+- `pr review --comment` takes `path:start-end:body`, so a note can cover a range of lines instead of being anchored at the last one (#313)
+- review conversations past the first hundred are read by following the cursor, up to a thousand, so a long review's threads can be settled too; a pull request that fits on one page still costs one request (#315)
+
 ## 0.2.58 (2026-09-28)
 
 ### Fix

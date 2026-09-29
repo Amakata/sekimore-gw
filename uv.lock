@@ -931,7 +931,7 @@ wheels = [
 
 [[package]]
 name = "sekimore-gw"
-version = "0.2.58"
+version = "0.2.59"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
