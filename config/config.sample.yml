@@ -245,6 +245,9 @@ database_path: "/data/security_gateway.db"
 #                             # withdraw a comment the agent posted. Both off by default, and separate from
 #                             # pr:comment: saying something is not the authority to rewrite or erase it.
 #                             # Only the agent's own comments — a person's is refused whatever is allowed
+#                             # 0.2.59+ pr:resolve marks a review conversation as settled, and opens one again.
+#                             # Off by default, and separate from pr:comment: answering someone's review note
+#                             # is not the authority to declare it dealt with
 #                             # 0.2.33+ ci:dispatch starts a workflow_dispatch run. Off by default and separate from
 #                             # ci:rerun: a re-run repeats what already happened here, a dispatch can start a deploy
 #                             # 0.2.28+ security:read / security:dismiss read and dismiss Dependabot alerts. The upstream

@@ -1162,9 +1162,11 @@ async fn pr_comments_merges_the_three_sources_in_order() {
     );
 
     // All three endpoints were asked, and none of them left the project's repository.
-    let paths: Vec<String> = recorded(&f.recorder)
+    let calls = recorded(&f.recorder);
+    let paths: Vec<String> = calls
         .iter()
         .map(|c| c.path.clone())
+        .filter(|p| !p.contains("graphql"))
         .collect();
     assert_eq!(paths.len(), 3, "{paths:?}");
     for p in &paths {
@@ -1173,6 +1175,15 @@ async fn pr_comments_merges_the_three_sources_in_order() {
             "{p} is outside the project"
         );
     }
+    // 0.2.59: plus the one query for the review conversations, which REST cannot answer. It names
+    // no repository in its path, so the repository it names in its variables is what is checked.
+    let gql: Vec<_> = calls
+        .iter()
+        .filter(|c| c.path.contains("graphql"))
+        .collect();
+    assert_eq!(gql.len(), 1, "{calls:?}");
+    assert_eq!(gql[0].body["variables"]["owner"], "LibOrg");
+    assert_eq!(gql[0].body["variables"]["name"], "awesome-lib");
 
     let msg = resp.message.unwrap_or_default();
     assert!(msg.contains("review CHANGES_REQUESTED"), "{msg}");
@@ -1644,6 +1655,198 @@ async fn a_review_with_no_line_comments_sends_no_comments_key() {
     assert!(call.body.get("comments").is_none(), "{:?}", call.body);
 }
 
+// ---- resolving a review conversation (0.2.59) ----
+
+/// The whole point: the id an agent needs in order to settle a conversation reaches it through
+/// `pr comments`, which is where the guide already sends it to read the review. Without this the
+/// command would exist with nothing to feed it — REST carries no thread id anywhere.
+#[tokio::test]
+async fn pr_comments_carries_the_thread_id_a_resolve_needs() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/comments", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+
+    let raw = resp.raw.clone().expect("raw comments");
+    let line = raw
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "inline")
+        .expect("the line comment");
+    assert_eq!(line["id"], 2451);
+    // joined from GraphQL on databaseId, which is the same number REST calls id
+    assert_eq!(line["thread_id"], "PRRT_one");
+    assert_eq!(
+        line["resolved"], true,
+        "a reader must be able to see a conversation is already settled"
+    );
+
+    // and it is in what a person reads, not only in the JSON
+    let msg = resp.message.unwrap_or_default();
+    assert!(msg.contains("thread PRRT_one (resolved)"), "{msg}");
+
+    // the join costs exactly one extra call, and only because there was a line comment to join to
+    let rec = common::recorded(&f.recorder);
+    assert_eq!(
+        rec.iter().filter(|c| c.path.contains("graphql")).count(),
+        1,
+        "{rec:?}"
+    );
+}
+
+#[tokio::test]
+async fn resolving_and_unresolving_send_the_two_different_mutations() {
+    let f = start_api(project_case_a(&["pr:resolve"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        thread_id: "PRRT_one".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/resolve", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(
+        resp.message.unwrap_or_default(),
+        "resolved PRRT_one on #7",
+        "the answer says what the thread now is"
+    );
+
+    let mutation = |rec: &[common::Recorded]| -> String {
+        rec.iter()
+            .filter(|c| c.path.contains("graphql"))
+            .filter_map(|c| c.body.get("query").and_then(|q| q.as_str()))
+            .find(|q| q.starts_with("mutation"))
+            .unwrap_or_default()
+            .to_string()
+    };
+    let sent = mutation(&common::recorded(&f.recorder));
+    assert!(
+        sent.contains("resolveReviewThread(input:{threadId:$thread})")
+            && !sent.contains("unresolveReviewThread"),
+        "{sent}"
+    );
+
+    // the other direction is the other mutation, not the same one with a flag
+    let f = start_api(project_case_a(&["pr:resolve"]), BootstrapMode::Auto, true).await;
+    let back = ApiRequest {
+        unresolve: true,
+        ..r.clone()
+    };
+    let (code, resp) = post(f.addr, "/pr/resolve", Some(&f.token), &back).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(
+        resp.message.unwrap_or_default(),
+        "unresolved PRRT_one on #7"
+    );
+    let sent = mutation(&common::recorded(&f.recorder));
+    assert!(
+        sent.contains("unresolveReviewThread(input:{threadId:$thread})"),
+        "{sent}"
+    );
+}
+
+/// A thread id is a global node id: it names its object without naming a repository. An agent
+/// holding `pr:resolve` on one pull request must not be able to settle a conversation on another
+/// one, so the thread is looked up on the number the caller named before anything is written.
+#[tokio::test]
+async fn a_thread_from_somewhere_else_is_refused_before_the_mutation() {
+    let f = start_api(project_case_a(&["pr:resolve"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        thread_id: "PRRT_elsewhere".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/resolve", Some(&f.token), &r).await;
+    assert_ne!(code, 200);
+    let err = resp.error.unwrap_or_default();
+    assert!(
+        err.contains("PRRT_elsewhere") && err.contains("#7"),
+        "the refusal names the thread and the pull request: {err}"
+    );
+    let rec = common::recorded(&f.recorder);
+    assert!(
+        rec.iter()
+            .filter_map(|c| c.body.get("query").and_then(|q| q.as_str()))
+            .all(|q| !q.contains("Mutation") && !q.starts_with("mutation")),
+        "nothing was written upstream: {rec:?}"
+    );
+}
+
+/// `pr:comment` lets the agent answer a review note. Declaring the note settled is a different
+/// authority, so it has a key of its own and this is the proof that it is not folded in.
+#[tokio::test]
+async fn pr_comment_does_not_carry_pr_resolve() {
+    let f = start_api(
+        project_case_a(&["pr:comment", "pr:read"]),
+        BootstrapMode::Auto,
+        true,
+    )
+    .await;
+    let r = ApiRequest {
+        number: 7,
+        thread_id: "PRRT_one".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/resolve", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    let err = resp.error.unwrap_or_default();
+    assert!(
+        err.contains("pr:resolve"),
+        "the denial names the key: {err}"
+    );
+    assert!(
+        common::recorded(&f.recorder).is_empty(),
+        "a refused call reaches no upstream"
+    );
+}
+
+/// The ownership check reads one page of conversations. On a pull request with more than that,
+/// a thread the relay did not see is still refused — but it must not be called foreign, because
+/// the relay does not know that it is. The two refusals have to read differently.
+#[tokio::test]
+async fn a_thread_past_the_first_page_is_refused_as_unseen_not_as_foreign() {
+    let f = start_api(project_case_a(&["pr:resolve"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 408,
+        thread_id: "PRRT_far_down".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/resolve", Some(&f.token), &r).await;
+    assert_ne!(code, 200);
+    let err = resp.error.unwrap_or_default();
+    assert!(
+        err.contains("reads no further"),
+        "the refusal says the relay could not see far enough: {err}"
+    );
+    assert!(
+        !err.contains("is not a review conversation on"),
+        "and does not claim the thread belongs elsewhere: {err}"
+    );
+    // still nothing written
+    assert!(common::recorded(&f.recorder)
+        .iter()
+        .filter_map(|c| c.body.get("query").and_then(|q| q.as_str()))
+        .all(|q| !q.starts_with("mutation")));
+}
+
+#[tokio::test]
+async fn resolving_without_a_thread_id_says_where_to_find_one() {
+    let f = start_api(project_case_a(&["pr:resolve"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        number: 7,
+        thread_id: "   ".into(),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/pr/resolve", Some(&f.token), &r).await;
+    assert_eq!(code, 400);
+    let err = resp.error.unwrap_or_default();
+    assert!(err.contains("pr comments"), "{err}");
+    assert!(common::recorded(&f.recorder).is_empty());
+}
+
 /// GitHub refuses a review that says nothing, with a message that does not say which half is
 /// missing; the relay answers before spending the call.
 #[tokio::test]
@@ -1897,11 +2100,13 @@ async fn pr_comments_renders_one_entry_per_block() {
     // owns the line comments submitted with it, so they are nested rather than listed beside it,
     // and each carries the id `pr reply` needs. The empty COMMENTED review is kept here because
     // it has one; with none it would print nothing.
+    // 0.2.59: and the conversation it belongs to, which is what `pr resolve` takes. This one is
+    // already settled upstream, so it is marked — an unmarked conversation is still open.
     assert_eq!(
         msg,
         "2026-09-17 carol  [comment]\n  first\n\n\
          2026-09-17 alice  review CHANGES_REQUESTED\n  the null check is inverted\n\n\
-         2026-09-17 alice  review COMMENTED\n    src/main.rs:40  #2451\n      this should be >=\n\n\
+         2026-09-17 alice  review COMMENTED\n    src/main.rs:40  #2451  thread PRRT_one (resolved)\n      this should be >=\n\n\
          2026-09-17 bob    [comment]\n  CI is red"
     );
 }

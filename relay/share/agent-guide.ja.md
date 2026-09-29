@@ -56,6 +56,10 @@ sekimore pr close --number N                                  [pr:close]
 sekimore pr reopen --number N                                 [pr:close]  close の逆
 sekimore pr comment --number N --body="…"                     [pr:comment]
 sekimore pr reply --number N --comment-id C --body="…"          [pr:comment]  行コメントのスレッドに返信する
+sekimore pr resolve --number N --thread-id T                  [pr:resolve]  レビューのやり取りを解決済みにする
+sekimore pr unresolve --number N --thread-id T                [pr:resolve]  resolve の逆
+                                                              #   T は `pr comments` が `thread` の後に表示する id
+                                                              #   (resolved) と表示されているものは、すでに解決済み
 sekimore pr comment-edit --number N --comment-id C --body="…"   [pr:comment_update]  自分のコメントを編集する
 sekimore pr comment-delete --number N --comment-id C            [pr:comment_delete]  自分のコメントを削除する
                                                               #   id が行コメントのものなら --inline を付ける
@@ -115,6 +119,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 - CI を待つときは、`sgw-agent pr status --number N` を 30 秒間隔で実行します。CI が失敗したら `sgw-agent ci log --number N` で原因を読み、修正して再度 push します。
 
 - `sgw-agent pr comments` は、各レビューを、そのレビューと一緒に投稿された行コメントとまとめて表示し、返信できるコメントには id（`#2451`）を付けます。そのコメントには `sgw-agent pr reply --comment-id 2451` で返信します。id のないコメントは会話欄のものなので、`sgw-agent pr comment` で返信します。
+- 各やり取りの最初のコメントには、そのスレッド（`thread PRRT_…`）も表示されます。すでに解決済みなら `(resolved)` が付きます。指摘に対応し終えたら `sgw-agent pr resolve --number N --thread-id PRRT_…` で解決済みにします。返信することと解決済みにすることは別の権限なので、`pr reply` が通っても `pr resolve` は拒否されることがあります。
 - 行にコメントする前に、その行を読んでください。`sgw-agent pr files --number N` は PR が変更したファイルを一覧表示し、`sgw-agent pr diff --number N --path <path>` はそのうち 1 つを行番号付きで表示します。左の列の番号が、`pr review --comment <path>:<line>:<body>` の `line` です。削除された行は新しいファイルに存在しないため番号がなく、コメントを付けられません。1 ページに収まらない場合は、`--before <前ページの end>` で続きを読みます。
 
 ## 標準的な流れ

@@ -15,6 +15,7 @@ pub mod device_flow;
 pub mod http;
 pub mod upstream_token;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -42,6 +43,10 @@ const PR_FILES_PER_PAGE: u32 = 30;
 const PR_FILES_PAGES: u32 = 10;
 /// #173: the most diff lines one `pr diff` page returns, matching the cap on a CI log page.
 const PR_DIFF_MAX_LINES: usize = 2000;
+
+/// 0.2.59: review conversations read in one `reviewThreads` query. GitHub's own maximum for the
+/// connection, and not derived from a caller's comment limit: the two count different things.
+const THREADS_PER_PAGE: u32 = 100;
 
 #[derive(Debug)]
 pub enum GhError {
@@ -287,6 +292,15 @@ pub struct CommentItem {
     /// comments repeat it, which is what lets one submission be shown as one thing
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_id: Option<u64>,
+    /// 0.2.59: the review conversation this comment sits in, as `pr resolve` takes it. It is a
+    /// GraphQL node id, and REST does not carry it, so it is joined on from a second query; the
+    /// key is absent when that join found nothing rather than being sent empty
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    /// 0.2.59: whether that conversation is already settled. Present exactly when `thread_id` is,
+    /// so a reader never has to take an absent key for "open"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<bool>,
 }
 
 /// 0.2.8: one line of `issue list`.
@@ -2433,6 +2447,8 @@ impl GitHub {
                 in_reply_to_id: None,
                 id: None,
                 review_id: None,
+                thread_id: None,
+                resolved: None,
             });
         }
 
@@ -2466,6 +2482,8 @@ impl GitHub {
                 in_reply_to_id: None,
                 id: None,
                 review_id: r.get("id").and_then(Value::as_u64),
+                thread_id: None,
+                resolved: None,
             });
         }
 
@@ -2492,13 +2510,161 @@ impl GitHub {
                 in_reply_to_id: c.get("in_reply_to_id").and_then(Value::as_u64),
                 id: c.get("id").and_then(Value::as_u64),
                 review_id: c.get("pull_request_review_id").and_then(Value::as_u64),
+                thread_id: None,
+                resolved: None,
             });
+        }
+
+        // 0.2.59: a line comment's review conversation. REST knows nothing about one — it has no
+        // thread id in any of its payloads — so it comes from GraphQL and is joined on the
+        // comment's own numeric id, which GraphQL repeats as `databaseId`. Only asked for when
+        // there are line comments to attach it to: a pull request with none needs no second call.
+        //
+        // Asked for by the page, not by `limit`: `limit` counts comments and this counts threads,
+        // and a comment that came back with no thread beside it reads as one that cannot be
+        // resolved. Better to fetch as many threads as GitHub will give at once.
+        if out.iter().any(|c| c.kind == "inline") {
+            let threads = self.review_threads(auth, number, THREADS_PER_PAGE).await?;
+            for c in out.iter_mut().filter(|c| c.kind == "inline") {
+                if let Some((tid, done)) = c.id.and_then(|id| threads.get(&id)) {
+                    c.thread_id = Some(tid.clone());
+                    c.resolved = Some(*done);
+                }
+            }
         }
 
         // One timeline across the three sources. The timestamps are RFC 3339 in UTC, so they sort
         // as strings; an entry without one (a pending review) sorts first rather than being dropped.
         out.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         Ok(out)
+    }
+
+    /// 0.2.59: the review conversations of a pull request, as `comment id -> (thread id, settled)`.
+    ///
+    /// GraphQL-only, because REST has no notion of a thread: it serves the comments flat and the
+    /// `in_reply_to_id` chain between them, and never the id that `resolveReviewThread` takes.
+    /// `databaseId` is the same number REST calls `id`, which is what lets the two be joined.
+    ///
+    /// `pr:read`, not `pr:resolve` — this only reads, and `pr comments` is what calls it.
+    ///
+    /// One page. A pull request with more review conversations than that has the rest left out,
+    /// and `fetch_review_threads` reports whether that happened so a caller that must not guess
+    /// — the ownership check in `resolve_review_thread` — can say so instead of refusing wrongly.
+    pub async fn review_threads(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        first: u32,
+    ) -> Result<HashMap<u64, (String, bool)>, GhError> {
+        auth.ensure(Resource::Pr, Action::Read)?;
+        Ok(self.fetch_review_threads(auth, number, first).await?.0)
+    }
+
+    /// The query behind `review_threads`, without a permission check of its own, and with the
+    /// "there were more than this page" flag that `review_threads` drops.
+    ///
+    /// `resolve_review_thread` needs the same answer to decide whether the thread it was handed is
+    /// on the pull request the caller named, and its proof is `pr:resolve`, not `pr:read`. This is
+    /// the same shape `own_comment` has: the check that makes a write safe is not a second
+    /// permission the caller has to hold, it is part of the write.
+    async fn fetch_review_threads(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        first: u32,
+    ) -> Result<(HashMap<u64, (String, bool)>, bool), GhError> {
+        let (owner, name) = auth
+            .repo()
+            .split_once('/')
+            .ok_or_else(|| GhError::Parse(format!("{:?} is not owner/name", auth.repo())))?;
+        /// Comments read per thread. A conversation longer than this has its tail left without a
+        /// thread id; the earlier comments in it still carry one, and it is the same id.
+        const COMMENTS_PER_THREAD: u32 = 100;
+        const Q: &str = "query($owner:String!,$name:String!,$number:Int!,$first:Int!,$comments:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ reviewThreads(first:$first){ pageInfo{ hasNextPage } nodes{ id isResolved comments(first:$comments){ nodes{ databaseId } } } } } } }";
+        let out = self
+            .graphql(
+                Q,
+                json!({"owner": owner, "name": name, "number": number, "first": first.clamp(1, 100), "comments": COMMENTS_PER_THREAD}),
+            )
+            .await?;
+        let mut map = HashMap::new();
+        let nodes = out
+            .pointer("/data/repository/pullRequest/reviewThreads/nodes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for t in nodes {
+            let Some(id) = t.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let done = t
+                .get("isResolved")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            for c in t
+                .pointer("/comments/nodes")
+                .and_then(Value::as_array)
+                .unwrap_or(&Vec::new())
+            {
+                if let Some(db) = c.get("databaseId").and_then(Value::as_u64) {
+                    map.insert(db, (id.to_string(), done));
+                }
+            }
+        }
+        let has_more = out
+            .pointer("/data/repository/pullRequest/reviewThreads/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        Ok((map, has_more))
+    }
+
+    /// 0.2.59: settle a review conversation, or open it again.
+    ///
+    /// GraphQL-only: REST cannot resolve a thread at all.
+    ///
+    /// The mutation takes a global node id, and a node id names its object without naming a
+    /// repository: an agent holding `pr:resolve` on one repository could otherwise hand in a
+    /// thread from any repository the upstream token can reach, and the relay would pass it on.
+    /// So the thread is looked up on the pull request the caller named first, and refused when it
+    /// is not there — the same shape as `own_comment` (#172), and for the same reason.
+    pub async fn resolve_review_thread(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        thread_id: &str,
+        resolved: bool,
+    ) -> Result<bool, GhError> {
+        auth.ensure(Resource::Pr, Action::Resolve)?;
+        let (on_this_pr, more) = self
+            .fetch_review_threads(auth, number, THREADS_PER_PAGE)
+            .await?;
+        if !on_this_pr.values().any(|(id, _)| id == thread_id) {
+            // Refusing is the safe direction either way, but the two cases need different words:
+            // one says the caller is reaching outside the pull request, the other says the relay
+            // could not see far enough to tell. Saying the first when it is the second sends
+            // someone hunting for a mistake they did not make.
+            return Err(GhError::Refused(if more {
+                format!(
+                    "thread {thread_id} is not among the first {THREADS_PER_PAGE} review \
+                     conversations of #{number}, and this relay reads no further, so it cannot \
+                     tell that the thread is on this pull request"
+                )
+            } else {
+                format!("thread {thread_id} is not a review conversation on #{number}")
+            }));
+        }
+        const Q_RESOLVE: &str = "mutation($thread:ID!){ resolveReviewThread(input:{threadId:$thread}){ thread{ id isResolved } } }";
+        const Q_UNRESOLVE: &str = "mutation($thread:ID!){ unresolveReviewThread(input:{threadId:$thread}){ thread{ id isResolved } } }";
+        let (q, field) = if resolved {
+            (Q_RESOLVE, "resolveReviewThread")
+        } else {
+            (Q_UNRESOLVE, "unresolveReviewThread")
+        };
+        let out = self.graphql(q, json!({"thread": thread_id})).await?;
+        // What the thread now is, as the upstream reports it, rather than what was asked for.
+        out.pointer(&format!("/data/{field}/thread/isResolved"))
+            .and_then(Value::as_bool)
+            .ok_or_else(|| GhError::Graphql("no thread in the response".into()))
     }
 
     /// One issue. GitHub also serves pull requests here, so the caller is told which it got.
@@ -2623,6 +2789,8 @@ impl GitHub {
                 in_reply_to_id: None,
                 id: None,
                 review_id: None,
+                thread_id: None,
+                resolved: None,
             })
             .collect())
     }

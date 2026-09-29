@@ -203,6 +203,18 @@ endpoints! {
             #[arg(long = "comments-file", default_value = "", help = t("agent.pr.review.comments_file"))]
             comments_file: String,
         },
+        Resolve("/pr/resolve") = t("agent.pr.resolve") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long = "thread-id", help = t("agent.pr.thread_id"))]
+            thread_id: String,
+        },
+        Unresolve("/pr/resolve") = t("agent.pr.unresolve") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long = "thread-id", help = t("agent.pr.thread_id"))]
+            thread_id: String,
+        },
         Merge("/pr/merge") = t("agent.pr.merge") => {
             #[arg(long, help = t("agent.number"))]
             number: u64,
