@@ -1965,6 +1965,10 @@ async fn a_long_conversation_keeps_a_thread_id_on_what_is_displayed() {
     let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, true).await;
     let r = ApiRequest {
         number: 410,
+        // The widest window a caller can open, which is the one the two constants are matched at.
+        // Asking for the default thirty would leave the interesting boundary untested: the join
+        // could be cut to any number above thirty and nothing here would notice.
+        first: 100,
         ..req("LibOrg/awesome-lib")
     };
     let (code, resp) = post(f.addr, "/pr/comments", Some(&f.token), &r).await;
@@ -1977,7 +1981,11 @@ async fn a_long_conversation_keeps_a_thread_id_on_what_is_displayed() {
         .iter()
         .filter(|i| i["kind"] == "inline")
         .collect();
-    assert!(!shown.is_empty(), "the mock served a page of line comments");
+    assert_eq!(
+        shown.len(),
+        100,
+        "the reader got a full window, so the join is tested at the size it is matched at"
+    );
     // Not "most of them": every single one, because every single one is on the page a reader got.
     for c in &shown {
         assert_eq!(

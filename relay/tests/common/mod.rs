@@ -288,7 +288,9 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
     // does when a caller sends neither `sort` nor `direction`. Every one of them has to come back
     // with a thread id, because every one of them is a comment a reader is shown.
     if method == "GET" && p.ends_with("/pulls/410/comments") {
-        let per: usize = p
+        // From `decoded`, not `p`: `p` has the query string cut off, and the page size is the
+        // whole point here — the window the reader opened is what the join has to cover.
+        let per: usize = decoded
             .split("per_page=")
             .nth(1)
             .and_then(|v| v.split('&').next())
