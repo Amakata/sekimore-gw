@@ -12,6 +12,13 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.61 (2026-09-30)
+
+### Fix
+
+- `sgw-agent setup` rewrites `/etc/resolv.conf` and the default route on every start again: it took the stale `SEKIMORE_IP` in the env file as `--gateway`, so a restarted dev container kept 127.0.0.11 through `sgw refresh` / `sgw recreate` (#320)
+- After `sgw login` (or a logout) the running relay uses the new upstream token at once, instead of the old one until a restart or the two-hour `upstream_token_cache_ttl` (#322)
+
 ## 0.2.60 (2026-09-30)
 
 ### Fix

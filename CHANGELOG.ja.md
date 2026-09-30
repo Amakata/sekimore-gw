@@ -11,6 +11,13 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.61（2026-09-30）
+
+### Fix
+
+- `sgw-agent setup` が起動のたびに `/etc/resolv.conf` と既定経路を書き直すように戻った。env ファイルに残った前回の `SEKIMORE_IP` を `--gateway` として受け取って飛ばしていたため、再起動した dev は Docker の 127.0.0.11 のままになり、`sgw refresh` / `sgw recreate` でも直らなかった (#320)
+- `sgw login`（や logout）のあと、動いている関所がすぐ新しい上流トークンを使う。これまでは restart するか `upstream_token_cache_ttl`（既定 2 時間）が切れるまで古いトークンを使っていた (#322)
+
 ## 0.2.60（2026-09-30）
 
 ### Fix
