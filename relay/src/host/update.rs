@@ -57,12 +57,82 @@ pub fn upgrading(lang: &str) -> &'static str {
 
 // ---- versions -------------------------------------------------------------------------------
 
-fn ver_key(v: &str) -> Option<(u64, u64, u64)> {
-    let mut it = v.split('.').map(|p| p.parse::<u64>().ok());
-    match (it.next(), it.next(), it.next(), it.next()) {
-        (Some(Some(a)), Some(Some(b)), Some(Some(c)), None) => Some((a, b, c)),
-        _ => None,
+/// A SemVer version: `X.Y.Z`, or a prerelease `X.Y.Z-alpha.1` (#325, the 0.3 line on `next`).
+/// Build metadata (`+…`) is not a tag GHCR or git can carry, so it is not a version here.
+#[derive(Debug, PartialEq, Eq)]
+struct Ver {
+    core: (u64, u64, u64),
+    pre: Vec<Ident>,
+}
+
+/// A prerelease identifier. SemVer orders numeric ones numerically and below alphanumeric ones;
+/// the derived order does both, since `Num` comes first.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Ident {
+    Num(u64),
+    Alnum(String),
+}
+
+impl Ord for Ver {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // A prerelease sorts below its release: 0.3.0-alpha.1 < 0.3.0
+        self.core
+            .cmp(&other.core)
+            .then_with(|| match (self.pre.is_empty(), other.pre.is_empty()) {
+                (true, true) => std::cmp::Ordering::Equal,
+                (true, false) => std::cmp::Ordering::Greater,
+                (false, true) => std::cmp::Ordering::Less,
+                (false, false) => self.pre.cmp(&other.pre),
+            })
     }
+}
+
+impl PartialOrd for Ver {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn num(p: &str) -> Option<u64> {
+    // SemVer forbids leading zeros; `01` is not the same version as `1`
+    if p.is_empty() || !p.bytes().all(|c| c.is_ascii_digit()) || (p.len() > 1 && p.starts_with('0'))
+    {
+        return None;
+    }
+    p.parse().ok()
+}
+
+fn ver_key(v: &str) -> Option<Ver> {
+    let (core, pre) = match v.split_once('-') {
+        Some((c, p)) => (c, Some(p)),
+        None => (v, None),
+    };
+    let mut it = core.split('.').map(num);
+    let core = match (it.next(), it.next(), it.next(), it.next()) {
+        (Some(Some(a)), Some(Some(b)), Some(Some(c)), None) => (a, b, c),
+        _ => return None,
+    };
+    let pre = match pre {
+        None => Vec::new(),
+        Some(p) => p
+            .split('.')
+            .map(|id| {
+                if id.is_empty() || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-') {
+                    None
+                } else if id.bytes().all(|c| c.is_ascii_digit()) {
+                    num(id).map(Ident::Num)
+                } else {
+                    Some(Ident::Alnum(id.to_string()))
+                }
+            })
+            .collect::<Option<Vec<_>>>()?,
+    };
+    Some(Ver { core, pre })
+}
+
+/// `v` is a prerelease (`0.3.0-alpha.1`), not a release.
+pub fn is_prerelease(v: &str) -> bool {
+    ver_key(v).is_some_and(|k| !k.pre.is_empty())
 }
 
 /// `a` is an older version than `b`.
@@ -117,7 +187,8 @@ pub fn retag(text: &str, image: &str, from: &str, to: &str) -> String {
         let after = &rest[i + needle.len()..];
         let ends = match after.chars().next() {
             None => true,
-            Some(c) => !(c.is_ascii_digit() || c == '.'),
+            // `-` and letters too: moving 0.3.0 must leave an `0.3.0-alpha.1` alone (#325)
+            Some(c) => !(c.is_ascii_alphanumeric() || c == '.' || c == '-'),
         };
         out.push_str(&rest[..i]);
         if ends {
@@ -355,12 +426,15 @@ pub fn owned_notes(root: &Path) -> Vec<String> {
 
 // ---- GHCR: is there a newer release than this sgw? ------------------------------------------
 
-/// The newest `X.Y.Z` among tags (`latest`, `0.2`, `sha256-…`, `0.2.11-rc1` are not versions).
-pub fn newest_tag(tags: &[String]) -> Option<String> {
+/// The newest version among tags (`latest`, `0.2`, `sha256-…` are not versions). A prerelease
+/// (`0.3.0-alpha.1`) counts only with `pre`, for an sgw that is one itself: a 0.2 sgw is never
+/// told to move to the 0.3 line while that line is in alpha (#325).
+pub fn newest_tag(tags: &[String], pre: bool) -> Option<String> {
     tags.iter()
-        .filter(|t| ver_key(t).is_some())
-        .max_by_key(|t| ver_key(t))
-        .cloned()
+        .filter_map(|t| ver_key(t).map(|k| (k, t)))
+        .filter(|(k, _)| pre || k.pre.is_empty())
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, t)| t.clone())
 }
 
 /// The `rel="next"` target of a Link header.
@@ -421,7 +495,7 @@ pub async fn newest_on_ghcr(image: &str) -> anyhow::Result<Option<String>> {
             }
         });
     }
-    Ok(newest_tag(&tags))
+    Ok(newest_tag(&tags, is_prerelease(VERSION)))
 }
 
 // ---- the run ---------------------------------------------------------------------------------
@@ -966,12 +1040,103 @@ mod tests {
                     "0.2.11-rc1",
                     "sha256-abc"
                 ]
-                .map(String::from)
+                .map(String::from),
+                false
             )
             .as_deref(),
             Some("0.2.10")
         );
-        assert_eq!(newest_tag(&[]), None);
+        assert_eq!(newest_tag(&[], false), None);
+    }
+
+    // #325: the 0.3 line ships prereleases from `next` while 0.2 ships from `main`
+    #[test]
+    fn a_prerelease_sorts_below_its_release_and_by_semver() {
+        let order = [
+            "0.2.61",
+            "0.3.0-alpha.1",
+            "0.3.0-alpha.2",
+            "0.3.0-alpha.10",
+            "0.3.0-alpha.beta",
+            "0.3.0-beta.1",
+            "0.3.0-rc.1",
+            "0.3.0",
+            "0.3.1",
+        ];
+        for w in order.windows(2) {
+            assert!(ver_lt(w[0], w[1]), "{} < {}", w[0], w[1]);
+            assert!(!ver_lt(w[1], w[0]), "!({} < {})", w[1], w[0]);
+        }
+        assert!(!ver_lt("0.3.0-alpha.1", "0.3.0-alpha.1"));
+        assert!(is_prerelease("0.3.0-alpha.1"));
+        assert!(!is_prerelease("0.3.0"));
+        // Not versions: an empty or odd identifier, a leading zero, build metadata, a short core
+        for bad in [
+            "0.3.0-",
+            "0.3.0-alpha..1",
+            "0.3.0-alpha.01",
+            "0.3.0-al_pha",
+            "0.3.0+build",
+            "0.3-alpha.1",
+            "00.3.0",
+        ] {
+            assert!(ver_key(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_release_sgw_is_not_offered_a_prerelease_and_a_prerelease_sgw_is() {
+        let tags = [
+            "0.2.61",
+            "0.2.62",
+            "0.3.0-alpha.1",
+            "0.3.0-alpha.2",
+            "0.2",
+            "latest",
+        ]
+        .map(String::from);
+        assert_eq!(newest_tag(&tags, false).as_deref(), Some("0.2.62"));
+        assert_eq!(newest_tag(&tags, true).as_deref(), Some("0.3.0-alpha.2"));
+        // Once 0.3.0 is out, it outranks every alpha
+        let tags = ["0.3.0-alpha.2", "0.3.0", "0.3.0-rc.1"].map(String::from);
+        assert_eq!(newest_tag(&tags, true).as_deref(), Some("0.3.0"));
+    }
+
+    #[test]
+    fn a_prerelease_pin_is_read_and_moved_whole() {
+        let compose = "    image: ghcr.io/amakata/sekimore-gw:0.3.0-alpha.1 # pinned\n";
+        assert_eq!(pinned_gateway(compose).as_deref(), Some("0.3.0-alpha.1"));
+        let dockerfile = "FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.1\n";
+        assert_eq!(pinned_base(dockerfile).as_deref(), Some("0.3.0-alpha.1"));
+        assert_eq!(
+            retag(compose, GW_IMAGE, "0.3.0-alpha.1", "0.3.0-alpha.2"),
+            "    image: ghcr.io/amakata/sekimore-gw:0.3.0-alpha.2 # pinned\n"
+        );
+        // Moving 0.3.0 must not rewrite the release's prefix inside an alpha pin, nor alpha.1
+        // inside alpha.10
+        let s = "a: ghcr.io/amakata/sekimore-gw:0.3.0-alpha.1\nb: ghcr.io/amakata/sekimore-gw:0.3.0-alpha.10\n";
+        assert_eq!(retag(s, GW_IMAGE, "0.3.0", "0.3.1"), s);
+        assert_eq!(
+            retag(s, GW_IMAGE, "0.3.0-alpha.1", "0.3.0"),
+            "a: ghcr.io/amakata/sekimore-gw:0.3.0\nb: ghcr.io/amakata/sekimore-gw:0.3.0-alpha.10\n"
+        );
+    }
+
+    #[test]
+    fn the_sections_up_to_a_prerelease() {
+        let upg = "## 0.2.62 last of 0.2\n## 0.3.0-alpha.1 first alpha\n## 0.3.0-alpha.2 second\n## 0.3.0 release\n";
+        let heads = sections(
+            upg,
+            "0.2.61",
+            "0.3.0-alpha.2",
+            "0.2.61",
+            "0.3.0-alpha.2",
+            false,
+        );
+        assert_eq!(
+            heads,
+            "0.2.62 last of 0.2\n0.3.0-alpha.1 first alpha\n0.3.0-alpha.2 second\n"
+        );
     }
 
     #[test]

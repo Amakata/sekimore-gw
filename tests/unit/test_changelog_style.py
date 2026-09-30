@@ -42,6 +42,15 @@ CATEGORIES = ["Security", "Fix", "Enhancement"]
 _REF = re.compile(r" \(#\d+\)$")
 
 
+def _semver(v: str) -> tuple:
+    """A SemVer sort key: a prerelease (0.3.0-alpha.1, #325) sorts below its release."""
+    core, _, pre = v.partition("-")
+    nums = tuple(int(n) for n in core.split("."))
+    if not pre:
+        return (nums, (1,))
+    return (nums, (0, *((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split("."))))
+
+
 def _releases(path: Path) -> dict[str, list[str]]:
     """Map each release heading to its bullets, in file order."""
     out: dict[str, list[str]] = {}
@@ -87,7 +96,7 @@ def _orphan_bullets(path: Path) -> list[str]:
 
 # `## 0.2.8 (2026-09-17)`, or the Japanese `## 0.2.8（2026-09-17）` with no space before the
 # bracket. A range like `## 0.1.0 – 0.1.2 (2026-09-08 – 13)` covers the entries written in one go.
-_V = r"\d+(?:\.\d+)*"
+_V = r"\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?"  # a prerelease too: 0.3.0-alpha.1 (#325)
 _VER = _V + r"(?: [–〜] " + _V + r")?"
 # A date, or a range whose second half may be shortened: `2026-09-08 – 13`
 _DATE = r"\d{4}-\d{2}-\d{2}(?: [–〜] [\d-]+)?"
@@ -163,6 +172,22 @@ def describe_changelog_style():
         }
         assert crowded == {}, f"{path.name}: too many entries in one release: {crowded}"
 
+    def it_takes_a_prerelease_of_the_03_line_as_a_version():
+        # #325: `next` ships v0.3.0-alpha.N while `main` ships 0.2.x
+        assert _HEADING.fullmatch("## 0.3.0-alpha.1 (2026-10-01)")
+        assert _HEADING.fullmatch("## 0.3.0-alpha.1（2026-10-01）")
+        assert not _HEADING.fullmatch("## 0.3.0-alpha.1 first alpha (2026-10-01)")
+        order = [
+            "0.2.61",
+            "0.3.0-alpha.1",
+            "0.3.0-alpha.2",
+            "0.3.0-alpha.10",
+            "0.3.0-beta",
+            "0.3.0",
+        ]
+        scrambled = [order[i] for i in (5, 3, 0, 4, 1, 2)]
+        assert sorted(scrambled, key=_semver) == order
+
     @pytest.mark.parametrize("path", [p for _, p in FILES], ids=[n for n, _ in FILES])
     def it_heads_a_release_with_a_version_and_a_date_only(path):
         # `## 0.2.8 (2026-09-17)` — a heading that also summarises the release duplicates the
@@ -188,9 +213,9 @@ def describe_changelog_style():
     @pytest.mark.parametrize("path", [p for _, p in FILES], ids=[n for n, _ in FILES])
     def it_leads_with_the_newest_release(path):
         versions = [
-            tuple(int(n) for n in v.split("."))
+            _semver(v)
             for v in _releases(path)
-            if re.fullmatch(r"\d+\.\d+\.\d+", v)
+            if re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", v)
         ]
         assert versions == sorted(versions, reverse=True), (
             f"{path.name}: releases should be newest first: {versions}"

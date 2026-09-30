@@ -20,12 +20,19 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = [ROOT.parent / "UPGRADING.md", ROOT.parent / "UPGRADING.ja.md"]
 DOCKERFILE = ROOT / "Dockerfile"
 
-_MARKER = re.compile(r"^<!-- reviewed-up-to: (\d+(?:\.\d+)*) -->")
-_PINNED = re.compile(r"^ARG SEKIMORE_GW_IMAGE=\S+:(\d+(?:\.\d+)*)\s*$", re.M)
+_MARKER = re.compile(r"^<!-- reviewed-up-to: (\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?) -->")
+_PINNED = re.compile(r"^ARG SEKIMORE_GW_IMAGE=\S+:(\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?)\s*$", re.M)
 
 
-def version(s: str) -> tuple[int, ...]:
-    return tuple(int(n) for n in s.split("."))
+def version(s: str) -> tuple:
+    """A SemVer sort key: a prerelease (0.3.0-alpha.1, #325) sorts below its release, and its
+    identifiers compare numerically when numeric and below any alphanumeric one."""
+    core, _, pre = s.partition("-")
+    nums = tuple(int(n) for n in core.split("."))
+    if not pre:
+        return (nums, (1,))
+    ids = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split("."))
+    return (nums, (0, *ids))
 
 
 def main() -> int:

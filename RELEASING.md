@@ -40,6 +40,11 @@ of the same tag) and, later, the `sgw` binaries. One version number, `pyproject.
   `sgw update` keep handing out 0.2.
 - Fixes land on `main` first. Merge `main` into `next` from time to time; do not rebase `next`.
 - Pull requests for the 0.3 line use `--base next`.
+- A prerelease is spelled the SemVer way everywhere a person writes it: `0.3.0-alpha.1` in
+  `pyproject.toml`, `relay/Cargo.toml`, the pins, the CHANGELOG heading, the UPGRADING marker and
+  the tag. `uv.lock` records it as `0.3.0a1`; that is uv normalising it (PEP 440), not a mismatch.
+- `sgw update` on a 0.2 sgw never offers a prerelease; on a prerelease sgw it offers the newest
+  version, alpha or release, and moves the pins as for any version.
 
 ## Tags pushed to GHCR
 
