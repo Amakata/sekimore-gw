@@ -288,12 +288,13 @@ docker pull ghcr.io/Amakata/sekimore-gw:latest
 
 ### Preview images
 
-Pull requests and pushes to `main` build an image for verification. **These images are not
+Pull requests and pushes to `main` and `next` build an image for verification. **These images are not
 releases.**
 
 ```bash
 docker pull ghcr.io/Amakata/sekimore-gw:pr-61   # the image for that pull request
 docker pull ghcr.io/Amakata/sekimore-gw:main    # the tip of main
+docker pull ghcr.io/Amakata/sekimore-gw:next    # the tip of next (the 0.3 line)
 ```
 
 Preview images are built for `linux/arm64` only. The next push overwrites the tag, so no

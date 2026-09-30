@@ -8,7 +8,7 @@ name: Base image
 # from; the shell tests of the files under base/ are base-tests.yml.
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     paths:
       - "base/Dockerfile"
       - "base/scripts/**"

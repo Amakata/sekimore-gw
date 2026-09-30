@@ -4,7 +4,7 @@ name: Base files
 # Neither needs Docker; the image build is base.yml.
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     paths:
       - "base/**"
       - "!base/**.md"

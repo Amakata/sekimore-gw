@@ -30,11 +30,23 @@ of the same tag) and, later, the `sgw` binaries. One version number, `pyproject.
    ```
    (`release create` would collide with the draft the workflow made)
 
+## Two lines: 0.2 on `main`, 0.3 on `next`
+
+- `main` carries the 0.2 line and releases `vX.Y.Z` as above.
+- `next` carries the 0.3 line. Until 0.3.0, it releases prereleases only: `v0.3.0-alpha.N`.
+  Tag the merge commit on `next` the same way.
+- A prerelease tag publishes its own version tag on GHCR and nothing else (`0.3`, `0`, `latest`
+  stay on the 0.2 line), and its Release is marked prerelease, so `releases/latest/download/` and
+  `sgw update` keep handing out 0.2.
+- Fixes land on `main` first. Merge `main` into `next` from time to time; do not rebase `next`.
+- Pull requests for the 0.3 line use `--base next`.
+
 ## Tags pushed to GHCR
 
 | Trigger | Gateway image | Base image |
 | --- | --- | --- |
 | Push of a `vX.Y.Z` tag | `X.Y.Z`, `X.Y`, `X`, `latest` | the same |
+| Push of a `vX.Y.Z-pre` tag (0.3 line) | `X.Y.Z-pre` only | the same |
 
 ## Release assets
 

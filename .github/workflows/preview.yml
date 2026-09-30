@@ -25,7 +25,7 @@ on:
       - ".github/workflows/docker-publish.yml"
       - ".github/dependabot.yml"
   push:
-    branches: [main]
+    branches: [main, next]
     paths-ignore:
       - "**.md"
       - "docs/**"
@@ -81,7 +81,7 @@ jobs:
           if [ "${{ github.event_name }}" = pull_request ]; then
             echo "PREVIEW_TAG=pr-${{ github.event.number }}" >> "$GITHUB_ENV"
           else
-            echo "PREVIEW_TAG=main" >> "$GITHUB_ENV"
+            echo "PREVIEW_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"   # main, or next for the 0.3 line
           fi
 
       - name: Set up Docker Buildx
