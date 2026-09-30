@@ -144,17 +144,20 @@ impl Response {
 ///
 /// The socket is replaced on start-up: a stale one from a killed process would otherwise make bind
 /// fail and leave the store unreachable for good.
-/// Run when the key is dropped — `lock`, and `import`, which replaces the store and drops it too.
+/// Run when the key is dropped — `lock`, and `import`, which replaces the store and drops it too —
+/// and when a secret is written or deleted through this socket.
 ///
 /// Whatever caches a decrypted secret has to be told, or a `lock` leaves that secret usable for
 /// however long the cache holds it. The upstream token's cache is two hours by default, which is
-/// a long time for a lock that has been reported as done.
-pub type OnLock = Arc<dyn Fn() + Send + Sync>;
+/// a long time for a lock that has been reported as done. A write is the same gap the other way
+/// round: `sekimore-relay login` is another process, so the token it stores here would wait out
+/// the relay's cache behind the old one (#322).
+pub type ForgetCaches = Arc<dyn Fn() + Send + Sync>;
 
 pub async fn serve(
     path: PathBuf,
     store: Arc<Mutex<SecretStore>>,
-    on_lock: OnLock,
+    forget_caches: ForgetCaches,
 ) -> io::Result<()> {
     if path.exists() {
         std::fs::remove_file(&path)?;
@@ -167,9 +170,9 @@ pub async fn serve(
     loop {
         let (stream, _) = listener.accept().await?;
         let store = store.clone();
-        let on_lock = on_lock.clone();
+        let forget_caches = forget_caches.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle(stream, store, on_lock).await {
+            if let Err(e) = handle(stream, store, forget_caches).await {
                 log::warn!("control connection: {e}");
             }
         });
@@ -184,7 +187,7 @@ const MAX_REQUEST: u64 = 8 * 1024 * 1024;
 async fn handle(
     stream: UnixStream,
     store: Arc<Mutex<SecretStore>>,
-    on_lock: OnLock,
+    forget_caches: ForgetCaches,
 ) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -193,7 +196,7 @@ async fn handle(
         Response::err(format!("request is longer than {MAX_REQUEST} bytes"))
     } else {
         match serde_json::from_str::<Request>(&line) {
-            Ok(req) => apply(req, &store, &on_lock).await,
+            Ok(req) => apply(req, &store, &forget_caches).await,
             Err(e) => Response::err(format!("bad request: {e}")),
         }
     };
@@ -216,7 +219,11 @@ fn parse_kdf(name: Option<&str>) -> Result<super::crypto::Kdf, Response> {
     }
 }
 
-async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>, on_lock: &OnLock) -> Response {
+async fn apply(
+    req: Request,
+    store: &Arc<Mutex<SecretStore>>,
+    forget_caches: &ForgetCaches,
+) -> Response {
     let mut store = store.lock().await;
     match req {
         Request::Status => {
@@ -284,7 +291,7 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>, on_lock: &OnLock) 
         }
         Request::Lock => {
             store.lock();
-            on_lock();
+            forget_caches();
             log::info!("secret store locked");
             Response::ok("locked")
         }
@@ -308,7 +315,7 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>, on_lock: &OnLock) 
             Ok(()) => {
                 // `import` drops the DEK as well, so anything holding a decrypted secret from the
                 // store that was just replaced is holding one from a store that no longer exists.
-                on_lock();
+                forget_caches();
                 log::info!("secret store replaced by an import");
                 // `import` drops the DEK, so this is the state whatever the store was before.
                 Response::ok("imported; the store is locked, unlock it with the passphrase the export was taken under")
@@ -339,6 +346,7 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>, on_lock: &OnLock) 
             let secret = Secret::new(value.into_bytes());
             match store.set(&namespace, &name, secret.as_bytes()) {
                 Ok(()) => {
+                    forget_caches();
                     log::info!("secret {namespace}/{name} written");
                     Response::ok(format!("wrote {namespace}/{name}"))
                 }
@@ -347,6 +355,7 @@ async fn apply(req: Request, store: &Arc<Mutex<SecretStore>>, on_lock: &OnLock) 
         }
         Request::Delete { namespace, name } => match store.delete(&namespace, &name) {
             Ok(true) => {
+                forget_caches();
                 log::info!("secret {namespace}/{name} deleted");
                 Response::ok(format!("deleted {namespace}/{name}"))
             }

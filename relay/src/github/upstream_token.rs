@@ -14,6 +14,7 @@
 //! ssh-agent's `-t`.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -217,6 +218,9 @@ pub struct UpstreamTokenStore {
     source: SecretSource,
     cache_ttl: Duration,
     cache: std::sync::Mutex<Option<(String, Instant)>>,
+    /// Bumped by `forget`. A `token` that read the store before a `forget` and finishes after it
+    /// holds the value that was just replaced, and must not put it back in the cache (#322).
+    generation: AtomicU64,
 }
 
 impl UpstreamTokenStore {
@@ -227,6 +231,7 @@ impl UpstreamTokenStore {
             source,
             cache_ttl,
             cache: std::sync::Mutex::new(None),
+            generation: AtomicU64::new(0),
         }
     }
 
@@ -347,7 +352,7 @@ impl UpstreamTokenStore {
     /// Look in the cache, then the store. If neither has a token, return an error with
     /// instructions for the operator.
     pub async fn token(&self) -> Result<String, TokenError> {
-        {
+        let generation = {
             let mut c = self.cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some((tok, at)) = c.as_ref() {
                 if at.elapsed() < self.cache_ttl {
@@ -355,7 +360,8 @@ impl UpstreamTokenStore {
                 }
                 *c = None;
             }
-        }
+            self.generation.load(Ordering::SeqCst)
+        };
         let st = self.load().await?.ok_or_else(|| {
             TokenError::Missing(format!(
                 "no upstream token for {}: run `docker compose exec sekimore-gw sekimore-relay login`",
@@ -363,7 +369,9 @@ impl UpstreamTokenStore {
             ))
         })?;
         let mut c = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-        *c = Some((st.token.clone(), Instant::now()));
+        if self.generation.load(Ordering::SeqCst) == generation {
+            *c = Some((st.token.clone(), Instant::now()));
+        }
         Ok(st.token)
     }
 
@@ -373,7 +381,9 @@ impl UpstreamTokenStore {
     /// token readable for the rest of the cache TTL — two hours by default — is a lock that does
     /// not lock. Nothing awaits inside the critical section, so a plain mutex is enough.
     pub fn forget(&self) {
-        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let mut c = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        *c = None;
     }
 
     pub fn host(&self) -> &str {
@@ -641,14 +651,14 @@ mod tests {
                 Duration::from_secs(3600),
             ));
             let caches = vec![store.clone()];
-            let on_lock: store::control::OnLock = Arc::new(move || {
+            let forget_caches: store::control::ForgetCaches = Arc::new(move || {
                 for c in &caches {
                     c.forget();
                 }
             });
             let served = inner.clone();
             let s = sock.clone();
-            tokio::spawn(async move { store::control::serve(s, served, on_lock).await });
+            tokio::spawn(async move { store::control::serve(s, served, forget_caches).await });
             for _ in 0..50 {
                 if sock.exists() {
                     break;
@@ -665,6 +675,61 @@ mod tests {
             match store.token().await {
                 Err(TokenError::Locked(_)) => {}
                 other => panic!("the cache survived a lock: {other:?}"),
+            }
+        }
+
+        /// #322: `sekimore-relay login` is its own process with its own store object. The token
+        /// it writes through the socket has to be the relay's next one, not the one the relay's
+        /// cache holds for the rest of its TTL; and one it deletes has to stop being used.
+        #[tokio::test]
+        async fn a_token_written_or_deleted_by_another_process_is_not_served_from_the_cache() {
+            let dir = tempfile::tempdir().unwrap();
+            let sock = dir.path().join("control.sock");
+            let mut inner = SecretStore::open(&dir.path().join("secrets.db")).unwrap();
+            inner
+                .initialise(&Secret::new(b"pw".to_vec()), Kdf::Argon2id, fast())
+                .unwrap();
+            let inner = Arc::new(AsyncMutex::new(inner));
+            let over_socket = || {
+                Arc::new(UpstreamTokenStore::new(
+                    "github.com",
+                    &dir.path().join("upstream_token"),
+                    SecretSource::ControlSocket(sock.clone()),
+                    Duration::from_secs(3600),
+                ))
+            };
+            let relay = over_socket();
+            let login = over_socket();
+            let caches = vec![relay.clone()];
+            let forget_caches: store::control::ForgetCaches = Arc::new(move || {
+                for c in &caches {
+                    c.forget();
+                }
+            });
+            let served = inner.clone();
+            let s = sock.clone();
+            tokio::spawn(async move { store::control::serve(s, served, forget_caches).await });
+            for _ in 0..50 {
+                if sock.exists() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+
+            login.save("github.com", "gho_old", "repo").await.unwrap();
+            assert_eq!(relay.token().await.unwrap(), "gho_old", "cached now");
+
+            login.save("github.com", "gho_new", "repo").await.unwrap();
+            assert_eq!(
+                relay.token().await.unwrap(),
+                "gho_new",
+                "the relay kept the token that login replaced"
+            );
+
+            assert!(login.delete().await.unwrap());
+            match relay.token().await {
+                Err(TokenError::Missing(_)) => {}
+                other => panic!("the relay kept a token that was deleted: {other:?}"),
             }
         }
 
