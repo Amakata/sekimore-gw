@@ -869,6 +869,10 @@ git commit
 `sgw.toml` records the sample in place of `config.yml`, which it should never have recorded: the
 sha it held was the template's while your file differed, so `config.yml` read as changed for ever.
 
+If a `.devcontainer/config/config.yml.sgw-new` is sitting beside your file from an earlier
+update, delete it. That is what `update` used to leave when the template's `config.yml` had
+moved and yours had too; the sample takes its place and is kept current from now on.
+
 From here on, diff the two after an upgrade to see what a version added:
 
 ```
