@@ -350,3 +350,38 @@ async fn without_a_relay_setup_still_writes_the_proxy_environment_and_exits_zero
     assert!(b.root.join("etc/profile.d/sekimore-proxy.sh").exists());
     assert!(!b.env_file.exists());
 }
+
+/// #320: the env file the last run wrote names the gateway (`SEKIMORE_IP`), and sgw-agent loads
+/// that file into its environment before parsing. Taking it as `--gateway` skipped
+/// /etc/resolv.conf on every start after the first, so a restarted dev kept Docker's 127.0.0.11.
+/// Without the flag, setup goes to the scan, which needs root: a non-root run stops there.
+#[test]
+fn the_env_files_sekimore_ip_is_not_taken_as_the_gateway() {
+    if sekimore_relay::agent_setup::files::is_root() {
+        eprintln!("skipped: as root this would scan and write /etc/resolv.conf");
+        return;
+    }
+    let b = bench();
+    std::fs::create_dir_all(b.env_file.parent().unwrap()).unwrap();
+    std::fs::write(&b.env_file, "SEKIMORE_IP=127.0.0.1\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_sgw-agent"))
+        .env_remove("SEKIMORE_ENV_OVERRIDE")
+        .env("SEKIMORE_IP", "127.0.0.1")
+        .env("SEKIMORE_AGENT_ENV_FILE", &b.env_file)
+        .env("HOME", &b.home)
+        .env("SEKIMORE_LANG", "en")
+        .arg("setup")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("setup has to run as root"),
+        "went past the scan with a gateway it was never given: {stdout}\n{stderr}"
+    );
+}

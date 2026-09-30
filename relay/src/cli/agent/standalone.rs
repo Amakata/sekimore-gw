@@ -36,7 +36,10 @@ pub enum Top {
     /// What the dev container needs from the gateway, on every start (run as root by postStart)
     #[command(about = t("cli.agent.setup"))]
     Setup {
-        #[arg(long, value_name = "IP", env = "SEKIMORE_IP", help = t("cli.agent.setup.gateway"))]
+        // #320: no `env = "SEKIMORE_IP"`. The env file, loaded into the environment before this
+        // parse, carries the last run's address, and taking it skipped /etc/resolv.conf on every
+        // start after the first
+        #[arg(long, value_name = "IP", help = t("cli.agent.setup.gateway"))]
         gateway: Option<std::net::Ipv4Addr>,
     },
     #[command(flatten)]

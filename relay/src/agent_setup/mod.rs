@@ -99,7 +99,8 @@ impl Settings {
 }
 
 pub struct Options {
-    /// The gateway's address, when known: skips the scan, /etc/resolv.conf and the route
+    /// The gateway's address from `--gateway` alone (tests): skips the scan, /etc/resolv.conf
+    /// and the route. Never the env file's `SEKIMORE_IP`, which is the last run's (#320)
     pub gateway: Option<Ipv4Addr>,
 }
 
