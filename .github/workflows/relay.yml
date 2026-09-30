@@ -2,7 +2,7 @@ name: Relay (Rust)
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, next]
     paths:
       - "relay/**"
       - "!relay/**.md"

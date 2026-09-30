@@ -134,10 +134,15 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # A prerelease (v0.3.0-alpha.1, the 0.3 line cut from `next`) gets its own version tag and
+          # nothing else: `0.3`, `0` and `latest` stay where the 0.2 line left them. metadata-action
+          # already skips them for a prerelease; the explicit enable= and latest=false say so here
+          flavor: |
+            latest=${{ !contains(github.ref_name, '-') && 'auto' || 'false' }}
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}},enable=${{ !contains(github.ref_name, '-') }}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Create and push manifest list
@@ -310,8 +315,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The same tags the gateway gets (X.Y.Z, X.Y, X, latest), from VERSION rather than from
-      # the git ref, so a dispatch on main tags the same way a tag push does
+      # The same tags the gateway gets (X.Y.Z, X.Y, X, latest; a prerelease X.Y.Z-pre alone), from
+      # VERSION rather than from the git ref, so a dispatch on main tags the same way a tag push does
       - name: Create and push manifest list
         working-directory: /tmp/digests
         run: |
@@ -320,7 +325,11 @@ jobs:
           n=$(ls | wc -l); test "$n" -eq 2 || { echo "expected 2 digests, got $n"; ls; exit 1; }
           case "$VERSION" in *.*.*) ;; *) echo "VERSION '$VERSION' is not X.Y.Z"; exit 1 ;; esac
           major=${VERSION%%.*}; minor=${VERSION%.*}
-          for TAG in "$REPO:$VERSION" "$REPO:$minor" "$REPO:$major" "$REPO:latest"; do
+          case "$VERSION" in
+            *-*) tags="$REPO:$VERSION" ;;
+            *) tags="$REPO:$VERSION $REPO:$minor $REPO:$major $REPO:latest" ;;
+          esac
+          for TAG in $tags; do
             # shellcheck disable=SC2046
             docker buildx imagetools create -t "$TAG" $(printf "${REPO}@sha256:%s " *)
           done
@@ -413,5 +422,8 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber
           else
-            gh release create "$tag" --draft --title "sekimore-gw ${tag#v}" --notes "(notes follow)" dist/*
+            # A prerelease never becomes GitHub's latest Release, so releases/latest/download/ (install.sh,
+            # sgw self-update) keeps handing out the 0.2 line while the 0.3 line is in alpha
+            pre=; case "$tag" in *-*) pre=--prerelease ;; esac
+            gh release create "$tag" --draft $pre --title "sekimore-gw ${tag#v}" --notes "(notes follow)" dist/*
           fi
