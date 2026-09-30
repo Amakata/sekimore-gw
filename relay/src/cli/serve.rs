@@ -293,13 +293,13 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     if let Some(store) = secret_store {
         let sock = r.paths.control_sock.clone();
         let caches = token_caches;
-        let on_lock: store::control::OnLock = Arc::new(move || {
+        let forget_caches: store::control::ForgetCaches = Arc::new(move || {
             for c in &caches {
                 c.forget();
             }
         });
         tokio::spawn(async move {
-            if let Err(e) = store::control::serve(sock, store, on_lock).await {
+            if let Err(e) = store::control::serve(sock, store, forget_caches).await {
                 log::error!("control socket: {e}");
             }
         });
