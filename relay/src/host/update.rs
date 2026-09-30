@@ -4,12 +4,16 @@
 //! the only question that needs the network is "is there a release newer than this sgw?", and
 //! the answer to that is "install the newer sgw first", never a file fetched from a tag.
 //!
-//! The project's own files (`mise.toml`, `devcontainer.json`, `config.yml`) are never written —
-//! not with `--force` either, because none of them is in `templates::FILES`: what they need is
-//! said at the end, the way `upgrade.sh --owned` did. `config.yml` is the one with a template,
-//! and the template is the file beside it, `config.sample.yml` (`templates::FROM_SAMPLE`):
-//! `update` keeps the sample current so a project can diff its own file against this version's
-//! menu, and `init` writes both.
+//! The project's own files (`mise.toml`, `config.yml`) are never written — not with `--force`
+//! either, because neither is in `templates::FILES`: what they need is said at the end, the way
+//! `upgrade.sh --owned` did. `config.yml` is the one with a template, and the template is the
+//! file beside it, `config.sample.yml` (`templates::FROM_SAMPLE`): `update` keeps the sample
+//! current so a project can diff its own file against this version's menu, and `init` writes
+//! both.
+//!
+//! `devcontainer.json` is not in that list: it is a template file like any other, and `--force`
+//! overwrites an edited one. What `update` does to it of its own accord is the one line a
+//! project owns there, `postStartCommand`, rewritten in place by the migration.
 
 use std::io::Write;
 use std::path::Path;
