@@ -4,8 +4,16 @@
 //! the only question that needs the network is "is there a release newer than this sgw?", and
 //! the answer to that is "install the newer sgw first", never a file fetched from a tag.
 //!
-//! The project's own files (`mise.toml`, `devcontainer.json`, `config.yml`) are never written:
-//! what they need is said at the end, the way `upgrade.sh --owned` did.
+//! The project's own files (`mise.toml`, `config.yml`) are never written — not with `--force`
+//! either, because neither is in `templates::FILES`: what they need is said at the end, the way
+//! `upgrade.sh --owned` did. `config.yml` is the one with a template, and the template is the
+//! file beside it, `config.sample.yml` (`templates::FROM_SAMPLE`): `update` keeps the sample
+//! current so a project can diff its own file against this version's menu, and `init` writes
+//! both.
+//!
+//! `devcontainer.json` is not in that list: it is a template file like any other, and `--force`
+//! overwrites an edited one. What `update` does to it of its own accord is the one line a
+//! project owns there, `postStartCommand`, rewritten in place by the migration.
 
 use std::io::Write;
 use std::path::Path;
@@ -291,6 +299,16 @@ pub fn compose_has_pid_host(compose: &str) -> bool {
         }
     }
     false
+}
+
+/// `path` is the sample of a file the project already has (`templates::FROM_SAMPLE`). A project
+/// that predates the split has `config.yml` and no `config.sample.yml`, and the sample is what
+/// it diffs its own file against, so `update` writes the missing one. Without the owned file
+/// there is nothing to diff, and a missing template file is the project's own choice to make.
+pub fn is_wanted_sample(root: &Path, path: &str) -> bool {
+    templates::FROM_SAMPLE
+        .iter()
+        .any(|(own, sample)| *sample == path && root.join(own).exists())
 }
 
 /// What the project's own files need; `update` never writes them.
@@ -596,6 +614,9 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
                     t("sgw.update.f_conflict")
                 }
             }
+            // a sample of a file the project has, and no sample yet: every project that
+            // predates the split is in this state, and the sample is what it diffs against
+            FileState::Missing if is_wanted_sample(root, tpl.path) => t("sgw.update.f_sample_new"),
             FileState::Missing => t("sgw.update.f_missing"),
         };
         println!("  {:<46} {word}", tpl.path);
@@ -649,8 +670,10 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
 
     let to_write: Vec<&templates::Template> = states
         .iter()
-        .filter(|(_, st, _)| {
-            *st == FileState::Changes || (*st == FileState::Conflict && opts.force)
+        .filter(|(tpl, st, _)| {
+            *st == FileState::Changes
+                || (*st == FileState::Conflict && opts.force)
+                || (*st == FileState::Missing && is_wanted_sample(root, tpl.path))
         })
         .map(|(tpl, _, _)| *tpl)
         .collect();
@@ -661,9 +684,13 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         .collect();
     let toml_new = SgwToml {
         version: VERSION.to_string(),
+        // a file the project left out is not recorded; one `to_write` is about to create is,
+        // because after this run it is on disk as this version wrote it
         files: states
             .iter()
-            .filter(|(_, st, _)| *st != FileState::Missing)
+            .filter(|(tpl, st, _)| {
+                *st != FileState::Missing || to_write.iter().any(|w| w.path == tpl.path)
+            })
             .map(|(tpl, _, new)| (tpl.path.to_string(), new.clone()))
             .collect(),
     };
@@ -752,6 +779,14 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         for tpl in &to_write {
             write_file(&root.join(tpl.path), tpl.content.as_bytes(), tpl.executable)?;
             println!("{}", tf("sgw.update.wrote", &[("file", tpl.path)]));
+            // the sample moved, so this version's menu differs from what the project's own
+            // file was copied from: say which two files to diff, once, here
+            if let Some((own, _)) = templates::FROM_SAMPLE.iter().find(|(_, s)| *s == tpl.path) {
+                remain.push(tf(
+                    "sgw.update.r_sample",
+                    &[("own", own), ("sample", tpl.path)],
+                ));
+            }
         }
         for tpl in &conflicts {
             let beside = format!("{}.sgw-new", tpl.path);
@@ -1137,7 +1172,7 @@ mod pin_only_tests {
         // a file with no pin is itself
         let cfg = templates::FILES
             .iter()
-            .find(|t| t.path == ".devcontainer/config/config.yml")
+            .find(|t| t.path == ".devcontainer/config/config.sample.yml")
             .unwrap();
         assert_eq!(as_of_version(cfg.content, "0.2.40"), cfg.content);
     }

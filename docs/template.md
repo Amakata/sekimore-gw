@@ -20,7 +20,8 @@ carries the same files, byte for byte. Do not copy them by hand.
     ├── .env.sample                 # sgw init copies it to .env
     ├── .gitignore
     ├── config/
-    │   ├── config.yml              # sekimore-gw's allowlist of domains, and the relay's project policy
+    │   ├── config.sample.yml       # every key there is, with its default; sgw update keeps it current
+    │   ├── config.yml              # yours: sgw init copies it from the sample, and update never writes it
     │   └── squid/
     │       └── squid.conf.template
     ├── scripts/
