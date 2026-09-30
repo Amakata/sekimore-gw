@@ -12,6 +12,13 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.60 (2026-09-30)
+
+### Fix
+
+- `sgw update` never writes `.devcontainer/config/config.yml`, with `--force` or without: the template is `.devcontainer/config/config.sample.yml`, which the next `sgw update --apply` writes beside your file for you to diff against (#318)
+- `sgw.toml` records a file the run has just written instead of dropping it as missing, so a project no longer reads as one version behind the run that brought it up to date (#318)
+
 ## 0.2.59 (2026-09-29)
 
 ### Fix

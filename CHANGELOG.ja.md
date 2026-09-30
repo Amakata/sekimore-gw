@@ -11,6 +11,13 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.60（2026-09-30）
+
+### Fix
+
+- `sgw update` は `--force` の有無によらず `.devcontainer/config/config.yml` を書かなくなった。雛形は隣に置く `.devcontainer/config/config.sample.yml` で、次の `sgw update --apply` が書き、以後最新に保つ (#318)
+- `sgw.toml` が、その実行で書いたばかりのファイルを「無い」として記録から落とさなくなった。最新にした直後のプロジェクトが 1 版古く読めることがなくなった (#318)
+
 ## 0.2.59（2026-09-29）
 
 ### Fix
