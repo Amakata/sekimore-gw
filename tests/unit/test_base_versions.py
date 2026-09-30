@@ -17,8 +17,10 @@ ROOT = Path(__file__).resolve().parents[2]
 BASE = ROOT / "base"
 TEMPLATE = ROOT / "relay" / "templates" / "devcontainer" / ".devcontainer"
 
-_GW_IMAGE = re.compile(r"ghcr\.io/amakata/sekimore-gw:(\d+(?:\.\d+)*)")
-_BASE_IMAGE = re.compile(r"ghcr\.io/amakata/sgw-devcontainer-base:(\d+(?:\.\d+)*)")
+_GW_IMAGE = re.compile(r"ghcr\.io/amakata/sekimore-gw:(\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?)")
+_BASE_IMAGE = re.compile(
+    r"ghcr\.io/amakata/sgw-devcontainer-base:(\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?)"
+)
 
 
 def _version() -> str:
@@ -72,7 +74,7 @@ def describe_the_base_image_carries_the_gateways_version():
         # marker records that it was made (base/scripts/check-upgrading.py fails when it was not).
         for name in ("UPGRADING.md", "UPGRADING.ja.md"):
             first = _text(ROOT / name).splitlines()[0]
-            m = re.match(r"^<!-- reviewed-up-to: (\d+(?:\.\d+)*) -->", first)
+            m = re.match(r"^<!-- reviewed-up-to: (\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?) -->", first)
             assert m, f"{name} has no reviewed-up-to marker on its first line"
             assert m.group(1) == _version(), (
                 f"{name} is reviewed up to {m.group(1)}; decide whether {_version()} asks anything of the reader, then move the marker"
@@ -82,7 +84,7 @@ def describe_the_base_image_carries_the_gateways_version():
         # One changelog for the gateway, the relay, the base and sgw (#253). base/CHANGELOG.md
         # is the base's own history up to 0.2.45 and gets nothing new.
         for name in ("CHANGELOG.md", "CHANGELOG.ja.md"):
-            heads = re.findall(r"^## (\d+(?:\.\d+)*)", _text(ROOT / name), re.M)
+            heads = re.findall(r"^## (\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?)", _text(ROOT / name), re.M)
             assert heads and heads[0] == _version(), (
                 f"{name} leads with {heads[:1]}, not {_version()}"
             )
