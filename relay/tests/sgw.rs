@@ -541,7 +541,10 @@ fn init_writes_the_template_and_the_project_is_then_found() {
         "{stdout}"
     );
     assert!(stdout.contains("sgw verify"), "{stdout}");
+    // init writes both: the project's own config.yml to run with, and the sample beside it,
+    // which is what update keeps current
     assert!(dir.join(".devcontainer/config/config.yml").is_file());
+    assert!(dir.join(".devcontainer/config/config.sample.yml").is_file());
     assert!(dir.join(".devcontainer/.env").is_file());
     // no mise layer: sgw is the operator's tool (#234 stage 3)
     assert!(
@@ -558,7 +561,7 @@ fn init_writes_the_template_and_the_project_is_then_found() {
     for path in [
         ".devcontainer/docker-compose.yml",
         ".devcontainer/Dockerfile",
-        ".devcontainer/config/config.yml",
+        ".devcontainer/config/config.sample.yml",
         ".devcontainer/devcontainer.json",
     ] {
         assert!(
@@ -566,10 +569,14 @@ fn init_writes_the_template_and_the_project_is_then_found() {
             "{path} in {toml}"
         );
     }
-    assert!(
-        !toml.contains(".devcontainer/.env\""),
-        "the .env copy is not a template file"
-    );
+    // the files the project owns are copies of a sample, not template files: a sha for one
+    // would be the sample's while the real file differs, and so read as changed for ever
+    for path in [".devcontainer/.env", ".devcontainer/config/config.yml"] {
+        assert!(
+            !toml.contains(&format!("\"{path}\" = \"")),
+            "{path} is the project's, not a template file: {toml}"
+        );
+    }
     // found from a subdirectory of it, like any project
     let sub = dir.join("src");
     std::fs::create_dir_all(&sub).unwrap();
@@ -661,10 +668,10 @@ fn update_reports_and_applies_against_the_embedded_template() {
     let older = "#!/bin/sh\n# post-create of an older version\n";
     std::fs::write(&post_create, older).unwrap();
     record(&dir, ".devcontainer/scripts/post-create.sh", &sha(older));
-    // "yours": config.yml edited, and this version's template is what was recorded — left alone
-    let config = dir.join(".devcontainer/config/config.yml");
-    let mine = std::fs::read_to_string(&config).unwrap() + "# mine\n";
-    std::fs::write(&config, &mine).unwrap();
+    // "yours": .gitignore edited, and this version's template is what was recorded — left alone
+    let gitignore = dir.join(".devcontainer/.gitignore");
+    let mine = std::fs::read_to_string(&gitignore).unwrap() + "# mine\n";
+    std::fs::write(&gitignore, &mine).unwrap();
     // "conflict": the splash edited, and recorded as something else — .sgw-new beside it
     let splash = dir.join(".devcontainer/zsh-config/rc.d/99-splash.zsh");
     std::fs::write(&splash, "echo mine\n").unwrap();
@@ -695,8 +702,13 @@ fn update_reports_and_applies_against_the_embedded_template() {
         "{stdout}"
     );
     assert!(
-        line(".devcontainer/config/config.yml").contains("yours"),
+        line(".devcontainer/.gitignore").contains("yours"),
         "{stdout}"
+    );
+    // config.yml is the project's own and has no line of its own; its template is the sample
+    assert!(
+        !stdout.contains(".devcontainer/config/config.yml "),
+        "update says nothing about the file it never writes: {stdout}"
     );
     assert!(
         line(".devcontainer/zsh-config/rc.d/99-splash.zsh").contains(".sgw-new"),
@@ -750,7 +762,7 @@ fn update_reports_and_applies_against_the_embedded_template() {
         "overwritten"
     );
     assert_eq!(
-        std::fs::read_to_string(&config).unwrap(),
+        std::fs::read_to_string(&gitignore).unwrap(),
         mine,
         "left alone"
     );
@@ -1090,5 +1102,135 @@ fn a_template_that_changed_only_in_its_pin_leaves_an_edited_file_alone() {
     assert!(
         now.contains(&format!("sgw-devcontainer-base:{version}")),
         "the pin moved: {now}"
+    );
+}
+
+/// The project's `config.yml` holds the permission list, the repositories and the allowlist:
+/// losing it cuts the agent off from GitHub. `update` never writes it — not even with `--force`,
+/// which overwrites every other template file the project edited. The template of the same
+/// content is `config.sample.yml` beside it, which `update` does keep current.
+#[test]
+fn update_never_writes_the_projects_config_yml_not_even_forced() {
+    let f = fixture();
+    let dir = f._tmp.path().join("cfg");
+    let out = sgw(&f, &["init", dir.to_str().unwrap()]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let config = dir.join(".devcontainer/config/config.yml");
+    let mine = "# the project's own settings\nname: mine\nallow_domains:\n  - example.com\n";
+    std::fs::write(&config, mine).unwrap();
+    // the worst case for the old code: sgw.toml records a sha that is neither the file's nor
+    // this version's, so config.yml would be a Conflict and --force would overwrite it
+    record(&dir, ".devcontainer/config/config.yml", &sha("older\n"));
+    let out = sgw(&f, &["update", "--apply", "--offline", "--yes", "--force"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        mine,
+        "the project's config.yml must survive --force"
+    );
+    assert!(
+        !dir.join(".devcontainer/config/config.yml.sgw-new").exists(),
+        "no .sgw-new either: the sample is the file to diff against"
+    );
+}
+
+/// Every project that predates the split has `config.yml` and no `config.sample.yml`, and an
+/// `sgw.toml` that records a sha for `config.yml`. The first `update` writes the sample, and
+/// `sgw.toml` records the sample in its place: the project's own file was never the template's,
+/// so a sha for it read as changed for ever.
+#[test]
+fn a_project_from_before_the_split_gains_the_sample_and_keeps_its_config() {
+    let f = fixture();
+    let dir = f._tmp.path().join("pre");
+    let out = sgw(&f, &["init", dir.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success());
+    // wind the project back to the shape an older sgw left: no sample, and sgw.toml records
+    // config.yml with the sha of what that sgw wrote there
+    let sample = dir.join(".devcontainer/config/config.sample.yml");
+    let menu = std::fs::read_to_string(&sample).unwrap();
+    std::fs::remove_file(&sample).unwrap();
+    let config = dir.join(".devcontainer/config/config.yml");
+    let mine = "# the project's own settings\nname: mine\n";
+    std::fs::write(&config, mine).unwrap();
+    let toml = dir.join("sgw.toml");
+    let text = std::fs::read_to_string(&toml).unwrap().replace(
+        ".devcontainer/config/config.sample.yml",
+        ".devcontainer/config/config.yml",
+    );
+    std::fs::write(&toml, &text).unwrap();
+
+    let out = sgw(&f, &["update", "--offline"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.lines().any(|l| l
+            .trim_start()
+            .starts_with(".devcontainer/config/config.sample.yml")
+            && l.contains("new")),
+        "the sample is announced as new: {stdout}"
+    );
+    assert!(!stdout.contains("Everything is up to date."), "{stdout}");
+
+    let out = sgw(&f, &["update", "--apply", "--offline", "--yes"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("wrote .devcontainer/config/config.sample.yml"),
+        "{stdout}"
+    );
+    // and the note says which two files to diff
+    assert!(
+        stdout.contains(".devcontainer/config/config.sample.yml is this version's whole menu"),
+        "{stdout}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&sample).unwrap(),
+        menu,
+        "the sample is this version's menu"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        mine,
+        "the project's own file is untouched"
+    );
+    // sgw.toml records the sample, and the stale config.yml key is gone
+    let text = std::fs::read_to_string(&toml).unwrap();
+    assert!(
+        text.contains("\".devcontainer/config/config.sample.yml\" = \""),
+        "{text}"
+    );
+    assert!(
+        !text.contains("\".devcontainer/config/config.yml\" = \""),
+        "the stale record drops out: {text}"
+    );
+    // a second run has nothing left to do
+    let out = sgw(&f, &["update", "--offline"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("Everything is up to date."),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
     );
 }

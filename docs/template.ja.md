@@ -19,7 +19,8 @@
     ├── .env.sample                 # sgw init が .env に写す
     ├── .gitignore
     ├── config/
-    │   ├── config.yml              # sekimore-gw のドメイン許可リストと、関所のプロジェクトポリシー
+    │   ├── config.sample.yml       # 全キーと既定値の見本。sgw update が最新に保つ
+    │   ├── config.yml              # あなたのもの。sgw init が見本から写し、update は書かない
     │   └── squid/
     │       └── squid.conf.template
     ├── scripts/

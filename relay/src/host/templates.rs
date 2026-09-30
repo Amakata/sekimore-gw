@@ -44,8 +44,8 @@ pub const FILES: &[Template] = &[
         executable: false,
     },
     Template {
-        path: ".devcontainer/config/config.yml",
-        content: template!(".devcontainer/config/config.yml"),
+        path: ".devcontainer/config/config.sample.yml",
+        content: template!(".devcontainer/config/config.sample.yml"),
         executable: false,
     },
     Template {
@@ -80,9 +80,21 @@ pub const FILES: &[Template] = &[
     },
 ];
 
-/// `.env` starts as a copy of `.env.sample` (the sample's README's step 3), so the project can
-/// open before anyone edits it. It is not a template file: a second `init` must not touch it.
-pub const ENV_FROM_SAMPLE: (&str, &str) = (".devcontainer/.env", ".devcontainer/.env.sample");
+/// The files a project owns, each started from the sample beside it so the project can open
+/// before anyone edits it: `.env` from `.env.sample` (the sample's README's step 3), and
+/// `config.yml` from `config.sample.yml`. Neither is a template file — they are not in `FILES`,
+/// so `sgw update` never writes one, with `--force` or without it, and `sgw.toml` records the
+/// sample instead. `init` writes one only when it is absent, force or not: `config.yml` holds
+/// the permission list, the repositories and the allowlist, and rewriting it would cut the
+/// agent off from GitHub. The sample is what a project diffs its own file against after an
+/// update.
+pub const FROM_SAMPLE: &[(&str, &str)] = &[
+    (".devcontainer/.env", ".devcontainer/.env.sample"),
+    (
+        ".devcontainer/config/config.yml",
+        ".devcontainer/config/config.sample.yml",
+    ),
+];
 
 /// What `init` did: written, and what it left alone because it was there.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -102,8 +114,9 @@ pub fn conflicts(root: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Writes the template into `root`. Refuses when any file exists, unless `force`; `.env` is
-/// written from `.env.sample` only when absent, force or not.
+/// Writes the template into `root`. Refuses when any file exists, unless `force`; the files a
+/// project owns (`FROM_SAMPLE`: `.env` and `config.yml`) are written from their samples only
+/// when absent, force or not.
 pub fn write(root: &Path, force: bool) -> anyhow::Result<Report> {
     let existing = conflicts(root);
     if !existing.is_empty() && !force {
@@ -122,20 +135,24 @@ pub fn write(root: &Path, force: bool) -> anyhow::Result<Report> {
         set_mode(&dest, t.executable)?;
         report.written.push(t.path.to_string());
     }
-    let (env, sample) = ENV_FROM_SAMPLE;
-    let env_path = root.join(env);
-    if env_path.exists() {
-        report.existed.push(env.to_string());
-    } else {
+    for (own, sample) in FROM_SAMPLE {
+        let own_path = root.join(own);
+        if own_path.exists() {
+            report.existed.push((*own).to_string());
+            continue;
+        }
         let content = FILES
             .iter()
-            .find(|t| t.path == sample)
+            .find(|t| t.path == *sample)
             .map(|t| t.content)
             .unwrap_or_default();
-        std::fs::write(&env_path, content)
-            .with_context(|| format!("write {}", env_path.display()))?;
-        set_mode(&env_path, false)?;
-        report.written.push(env.to_string());
+        if let Some(dir) = own_path.parent() {
+            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        }
+        std::fs::write(&own_path, content)
+            .with_context(|| format!("write {}", own_path.display()))?;
+        set_mode(&own_path, false)?;
+        report.written.push((*own).to_string());
     }
     let toml = root.join(super::sgwtoml::NAME);
     std::fs::write(&toml, super::sgwtoml::SgwToml::of_template().render())
@@ -231,11 +248,23 @@ mod tests {
         let r = write(tmp.path(), false).unwrap();
         assert_eq!(
             r.written.len(),
-            FILES.len() + 2,
-            ".env and sgw.toml included"
+            FILES.len() + FROM_SAMPLE.len() + 1,
+            ".env, config.yml and sgw.toml included"
         );
         assert!(r.existed.is_empty());
         assert!(tmp.path().join(".devcontainer/.env").is_file());
+        // init writes both: the project's own config.yml to run with, and the sample beside it
+        assert!(tmp.path().join(".devcontainer/config/config.yml").is_file());
+        assert!(tmp
+            .path()
+            .join(".devcontainer/config/config.sample.yml")
+            .is_file());
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(".devcontainer/config/config.yml")).unwrap(),
+            std::fs::read_to_string(tmp.path().join(".devcontainer/config/config.sample.yml"))
+                .unwrap(),
+            "the project's file starts as a copy of the sample"
+        );
         let post_create = tmp.path().join(".devcontainer/scripts/post-create.sh");
         assert_ne!(
             std::fs::metadata(&post_create)
@@ -263,12 +292,19 @@ mod tests {
             std::fs::read_to_string(tmp.path().join(".devcontainer/.env")).unwrap(),
             "EDITED=1\n"
         );
-        // forced: the template files are rewritten, .env is not
+        // forced: the template files are rewritten, the project's own are not — losing
+        // config.yml would take the permissions, the repositories and the allowlist with it
+        let config = tmp.path().join(".devcontainer/config/config.yml");
+        std::fs::write(&config, "name: mine\n").unwrap();
         let r = write(tmp.path(), true).unwrap();
-        assert_eq!(r.existed, vec![".devcontainer/.env"]);
+        assert_eq!(
+            r.existed,
+            vec![".devcontainer/.env", ".devcontainer/config/config.yml"]
+        );
         assert_eq!(
             std::fs::read_to_string(tmp.path().join(".devcontainer/.env")).unwrap(),
             "EDITED=1\n"
         );
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), "name: mine\n");
     }
 }

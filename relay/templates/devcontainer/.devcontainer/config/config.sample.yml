@@ -3,10 +3,14 @@
 #
 # This file is the whole menu. Every key the gateway reads appears here: the ones this sample
 # sets, and the rest commented out with their default and a line on why you would change one.
-# Copy it into your project and delete what you do not need.
 #
-# The file sits in the worktree, so the dev container can write it. `reload:` below decides when
-# a change to it is applied - see that key before you hand work to an agent.
+# Your settings go in `config.yml` beside this file, which is where the gateway reads them and
+# which `sgw init` starts as a copy of this one. Edit that, and delete what you do not need.
+# `sgw update` keeps this sample current and never writes `config.yml`, so after an update diff
+# the two to see what the new version added.
+#
+# `config.yml` sits in the worktree, so the dev container can write it. `reload:` below decides
+# when a change to it is applied - see that key before you hand work to an agent.
 
 name: SGW Example | Sekimore
 description: SGW Example

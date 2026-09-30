@@ -440,6 +440,8 @@
   "sgw.update.f_yours": "あなたのもの（編集済み。この版は変えない）",
   "sgw.update.f_conflict": "編集済みで、この版も変える — 新しいものを .sgw-new として隣に書く（--force で上書き）",
   "sgw.update.f_missing": "無い（わざと外した? sgw init --force が書く）",
+  "sgw.update.f_sample_new": "新規（あなたが持つファイルの見本。update は見本だけを最新に保ち、あなたのものは書かない）",
+  "sgw.update.r_sample": "{sample} がこの版の全項目。自分の {own} と差分を取り、必要なものを取り込む",
   "sgw.update.m_dir": ".devcontainer/sgw/（mise の層）: 消す — その仕事は sgw がする",
   "sgw.update.m_foreign": "  sgw が置いていないファイルがある: {files}",
   "sgw.update.m_foreign_stop": ".devcontainer/sgw/ に sgw が置いていないファイルがある（{files}）。外に出してから sgw update --apply",

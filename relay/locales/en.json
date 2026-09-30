@@ -440,6 +440,8 @@
   "sgw.update.f_yours": "yours (edited; this version does not change it)",
   "sgw.update.f_conflict": "edited, and this version changes it too — the new one goes beside it as .sgw-new (--force overwrites)",
   "sgw.update.f_missing": "missing (left out on purpose? sgw init --force writes it)",
+  "sgw.update.f_sample_new": "new (the sample of a file you own; update keeps it current, and never writes yours)",
+  "sgw.update.r_sample": "{sample} is this version's whole menu; diff your {own} against it and take what you want",
   "sgw.update.m_dir": ".devcontainer/sgw/ (the mise layer): removed — sgw does its work now",
   "sgw.update.m_foreign": "  it holds files sgw did not put there: {files}",
   "sgw.update.m_foreign_stop": ".devcontainer/sgw/ holds files sgw did not put there ({files}); move them out, then sgw update --apply",

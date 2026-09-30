@@ -12,7 +12,8 @@ changed in each release, see the [changelog](CHANGELOG.md).
 
 | File | Owner |
 |---|---|
-| `.devcontainer/config/config.yml` | You. It contains the relay's configuration. |
+| `.devcontainer/config/config.yml` | You. It contains the relay's configuration. From 0.2.60, `sgw update` never writes it. |
+| `.devcontainer/config/config.sample.yml` | **Not you** from 0.2.60: every key there is, kept current by `sgw update`, for you to diff yours against. |
 | `mise.toml` | You. It includes the host-side tasks and contains your own tasks. |
 | `.devcontainer/docker-compose.yml` | You. It contains the gateway's image tag (`upgrade:apply` rewrites the tag and nothing else). |
 | `.devcontainer/sgw/` | **Not you** from base 0.2.20: `upgrade:apply` replaces it. Before base 0.2.20, you owned `.devcontainer/scripts/sgw.sh`. |
@@ -37,6 +38,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.51 | [0.2.52](#0252-the-mise-layer-is-gone-sgw-update---apply-removes-it), **everyone: `sgw update --apply`, then commit** |
 | 0.2.52 – 0.2.54 | [0.2.55](#0255-a-push-that-does-not-fast-forward-is-refused), **only if the agent rewrites branches it pushed** |
 | 0.2.55 – 0.2.57 | [0.2.58](#0258-the-post-createsh-guard-lets-the-signing-key-through), **only if you edited `post-create.sh`** |
+| 0.2.58 – 0.2.59 | [0.2.60](#0260-configyml-is-yours-and-configsampleyml-is-the-template), **everyone: a new file appears, commit it** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -843,3 +845,34 @@ forwarded key, and `postStartCommand` exited 1. The guard now stops only on a ke
 Nothing to do unless you edited `post-create.sh`: `sgw update --apply` replaces an unedited one.
 An edited one gets the new template beside it as `post-create.sh.sgw-new`; merge the guard's
 `signing_fp=` and `if keys=…` lines into yours by hand, then delete the `.sgw-new` file.
+
+## 0.2.60 config.yml is yours, and config.sample.yml is the template
+
+`.devcontainer/config/config.yml` was playing two parts: the file you edit, and the template
+`sgw init` writes. That made `sgw update --apply --force` overwrite it — with the permission
+list, the repository list and the allowlist in it, that cuts the agent off from GitHub. The two
+parts are now two files:
+
+| File | Owner |
+|---|---|
+| `.devcontainer/config/config.sample.yml` | **Not you.** Every key there is, with its default. `sgw update` keeps it current. |
+| `.devcontainer/config/config.yml` | You. `sgw update` never writes it, with `--force` or without. |
+
+`sgw update --apply` writes the sample the first time you run it on this version. Commit it:
+
+```
+sgw update --apply
+git add .devcontainer/config/config.sample.yml sgw.toml
+git commit
+```
+
+`sgw.toml` records the sample in place of `config.yml`, which it should never have recorded: the
+sha it held was the template's while your file differed, so `config.yml` read as changed for ever.
+
+From here on, diff the two after an upgrade to see what a version added:
+
+```
+diff .devcontainer/config/config.yml .devcontainer/config/config.sample.yml
+```
+
+`sgw init` writes both, so a new project still gets a `config.yml` it can run with.

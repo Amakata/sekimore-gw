@@ -12,7 +12,8 @@
 
 | ファイル | 持ち主 |
 |---|---|
-| `.devcontainer/config/config.yml` | あなた。関所（sekimore-relay）の設定が書かれています。 |
+| `.devcontainer/config/config.yml` | あなた。関所（sekimore-relay）の設定が書かれています。0.2.60 からは `sgw update` が書きません。 |
+| `.devcontainer/config/config.sample.yml` | 0.2.60 からは**あなたのものではありません**。全キーの見本で、`sgw update` が最新に保ちます。自分のものと差分を取るために使います。 |
 | `mise.toml` | あなた。ホスト側のタスクを include し、あなた自身のタスクを置きます。 |
 | `.devcontainer/docker-compose.yml` | あなた。ゲートウェイのイメージタグが書かれています（`upgrade:apply` が書き換えるのはタグだけです）。 |
 | `.devcontainer/sgw/` | base 0.2.20 からは**あなたのものではありません**。`upgrade:apply` が入れ替えます。base 0.2.20 より前は、`.devcontainer/scripts/sgw.sh` をあなたが持っていました。 |
@@ -37,6 +38,7 @@
 | 0.2.51 | [0.2.52](#0252-mise-の層が無くなった-sgw-update---apply-が消す)。**すべてのプロジェクト: `sgw update --apply` してコミット** |
 | 0.2.52 〜 0.2.54 | 下の 0.2.55。**エージェントが push 済みのブランチを書き換える場合だけ** |
 | 0.2.55 〜 0.2.57 | 下の 0.2.58。**`post-create.sh` を編集した場合だけ** |
+| 0.2.58 〜 0.2.59 | 下の 0.2.60。**すべてのプロジェクト: ファイルが 1 つ増えるのでコミットする** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -806,3 +808,35 @@ relay:
 `post-create.sh` を編集していなければ作業はありません。編集していないものは `sgw update --apply` が置き換えます。
 編集したものには新しい雛形が `post-create.sh.sgw-new` として隣に置かれます。ガードの `signing_fp=` と
 `if keys=…` の行を手で取り込み、`.sgw-new` を消してください。
+
+## 0.2.60 config.yml はあなたのもの、config.sample.yml が雛形
+
+`.devcontainer/config/config.yml` は 2 つの役をしていました。あなたが編集するファイルと、
+`sgw init` が書く雛形です。そのため `sgw update --apply --force` がこれを上書きしていました。
+権限の一覧・リポジトリの一覧・許可ドメインが入っているので、失うとエージェントは GitHub に
+届かなくなります。2 つの役を 2 つのファイルに分けました。
+
+| ファイル | 持ち主 |
+|---|---|
+| `.devcontainer/config/config.sample.yml` | **あなたのものではありません。** 全キーと既定値の見本。`sgw update` が最新に保ちます。 |
+| `.devcontainer/config/config.yml` | あなた。`sgw update` は `--force` の有無によらず書きません。 |
+
+この版で最初に `sgw update --apply` を実行したとき、見本が書かれます。コミットしてください。
+
+```
+sgw update --apply
+git add .devcontainer/config/config.sample.yml sgw.toml
+git commit
+```
+
+`sgw.toml` は `config.yml` に代えて見本を記録します。`config.yml` は記録すべきではありませんでした。
+記録していた sha は雛形のもので、あなたのファイルとは違うため、`config.yml` は常に「変更済み」と
+読めてしまっていました。
+
+以後は、更新のたびに 2 つの差分を取れば、その版で何が増えたか分かります。
+
+```
+diff .devcontainer/config/config.yml .devcontainer/config/config.sample.yml
+```
+
+`sgw init` は両方を書くので、新しいプロジェクトはこれまで通り動く `config.yml` を得ます。
