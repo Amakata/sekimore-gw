@@ -2210,7 +2210,7 @@ dependencies = [
 
 [[package]]
 name = "sekimore-relay"
-version = "0.2.61"
+version = "0.2.62"
 dependencies = [
  "aes-gcm",
  "anyhow",

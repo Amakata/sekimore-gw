@@ -12,6 +12,21 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.62 (2026-10-01)
+
+### Fix
+
+- On Docker on Linux the dev user takes the host user's UID/GID again: the base image moves `dialout` off GID 20 (the Mac's `staff`), which stopped Dev Containers' `updateRemoteUserUID` altogether (#340)
+- With the dev user off UID 1000, the signing socket follows the uid `sgw-agent setup` reports unless `signing_key.socket_uid` is set, and `sgw-post-start` hands the named volumes to that user (#340)
+- The template's `config.sample.yml` lets Claude Code sign in with a Claude account and lets Codex run on a ChatGPT plan; `storage.googleapis.com` goes through the relay under the upload cap (#341)
+
+### Enhancement
+
+- `ssh_options` may say `ProxyJump={bastion}`: each person keeps the value in the secret store with `sgw var set bastion`, so a shared config.yml names no one's account. Only an option's value may be a `{name}` (#335)
+- `sgw var set|get|list|delete` for those values; `sgw login` asks for the missing ones and `sgw check` shows `set` / `missing` / `locked`, never a value (#335)
+- The upstream proxy credential is two such values, `proxy_user` / `proxy_password`, also named as `{key}` in `upstream_proxy_username` / `_password`; a stored one moves into them at unlock (#336)
+- `sgw var set --secret` makes a value write-only for `sgw var get`, as the proxy password always is (#337)
+
 ## 0.2.61 (2026-09-30)
 
 ### Fix
