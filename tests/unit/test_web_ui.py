@@ -22,6 +22,24 @@ from src.web_ui.app import (
 )
 
 
+def store_with(old):
+    """#334: a store whose per-person values are empty and whose pre-#334 record is `old`.
+
+    A locked store is locked for every key.
+    """
+
+    from src.secret_store import Locked, NotFound
+
+    def get(namespace, name, sock_path=None):
+        if isinstance(old, Locked):
+            return Locked()
+        if namespace == "var":
+            return NotFound()
+        return old
+
+    return get
+
+
 def describe_pydantic_models():
     """Pydantic model unit tests."""
 
@@ -1759,7 +1777,7 @@ def describe_the_upstream_auth_state():
         from src.web_ui.app import _upstream_auth_state
 
         stored = '{"username": "stored", "password": "sekret"}'
-        with patch("src.web_ui.app.get_secret", return_value=stored):
+        with patch("src.secret_store.get_secret", side_effect=store_with(stored)):
             # The store wins over config.yml, because it is what Squid ends up presenting.
             assert _upstream_auth_state(True) == "set"
             assert _upstream_auth_state(False) == "set"
@@ -1768,7 +1786,7 @@ def describe_the_upstream_auth_state():
         from src.secret_store import Locked
         from src.web_ui.app import _upstream_auth_state
 
-        with patch("src.web_ui.app.get_secret", return_value=Locked()):
+        with patch("src.secret_store.get_secret", side_effect=store_with(Locked())):
             # The news is the lock, whatever config.yml has meanwhile.
             assert _upstream_auth_state(False) == "locked"
             assert _upstream_auth_state(True) == "locked"
@@ -1777,14 +1795,14 @@ def describe_the_upstream_auth_state():
         from src.secret_store import NotFound
         from src.web_ui.app import _upstream_auth_state
 
-        with patch("src.web_ui.app.get_secret", return_value=NotFound()):
+        with patch("src.secret_store.get_secret", side_effect=store_with(NotFound())):
             assert _upstream_auth_state(False) == "none"
 
     def it_says_config_when_the_store_is_empty_but_config_yml_has_one():
         from src.secret_store import NotFound
         from src.web_ui.app import _upstream_auth_state
 
-        with patch("src.web_ui.app.get_secret", return_value=NotFound()):
+        with patch("src.secret_store.get_secret", side_effect=store_with(NotFound())):
             assert _upstream_auth_state(True) == "config"
 
     def it_says_unavailable_when_the_store_cannot_be_reached_and_nothing_is_configured():
@@ -1794,7 +1812,7 @@ def describe_the_upstream_auth_state():
         def boom(*_a, **_k):
             raise SecretStoreError("no relay")
 
-        with patch("src.web_ui.app.get_secret", side_effect=boom):
+        with patch("src.secret_store.get_secret", side_effect=boom):
             assert _upstream_auth_state(False) == "unavailable"
             # What is in force is the more useful answer when there is one
             assert _upstream_auth_state(True) == "config"
