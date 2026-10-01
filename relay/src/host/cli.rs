@@ -173,6 +173,7 @@ passthrough! {
     StoreStatus => "sgw.cmd.store_status",
     Passphrase => "sgw.cmd.passphrase",
     ProxyCredential => "sgw.cmd.proxy_credential",
+    Var => "sgw.cmd.var",
     StoreExport => "sgw.cmd.store_export",
     StoreImport => "sgw.cmd.store_import",
     Tokens => "sgw.cmd.tokens",
@@ -268,6 +269,7 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
         ProxyCredential { args } => {
             ops::relay(&docker, &relay_sub("proxy-credential", &args), no_tty)
         }
+        Var { args } => ops::relay(&docker, &relay_sub("var", &args), no_tty),
         StoreExport { args } => ops::relay(&docker, &relay_sub("store-export", &args), no_tty),
         StoreImport { args } => ops::relay(&docker, &relay_sub("store-import", &args), no_tty),
         Tokens { args } => ops::relay(&docker, &relay_sub("tokens", &args), no_tty),

@@ -457,6 +457,29 @@ Add a bastion's host key with `sekimore-relay keyscan bastion.example.com --upst
 - `keyscan <host>` prints the fingerprints and saves. The operator named the host on the command line; that is the confirmation.
 - `login` asks yes/no first. It takes keys as a side effect of logging in, for hosts the operator did not name (the bastion, and the upstream through it), and a login must not quietly trust a host. A key step that ends without the key stops the login before the device flow, with a non-zero exit (0.2.45). To skip the question, run `keyscan` for each host first.
 
+### Per-person values (#334)
+
+config.yml is shared, but a bastion account is not. Write `{name}` in an option's value, and each person keeps the value in the secret store:
+
+```yaml
+domain_handlers:
+  ghe.example.com:
+    handler: github
+    ssh_options: ["ProxyJump={bastion}"]    # each person: sgw var set bastion
+```
+
+```sh
+sgw var set bastion      # typed without echo, or piped: echo alice@bastion.example.com:2222 | sgw var set bastion
+sgw var list             # the keys and whether each has a value (never the value)
+sgw var get bastion      # the value, for the person who asks
+```
+
+- A key is segments of `[A-Za-z0-9._-]` joined by `/`: `{bastion}` shared by several upstreams, `{ghe.example.com/bastion}` for one.
+- Only the value may be a `{name}`. `{opt}` for a whole `Key=Value`, or `{name}` in the option's name, is refused at load.
+- A value placed in an ssh option may hold only `[A-Za-z0-9._@:,/-]`, and the option is checked again once it is filled in.
+- `sgw login` asks for every value the config refers to that is missing. With the store locked or a value missing, the upstream is not connected, and the error says which command to run.
+- `sgw check` shows `{bastion}: set` / `missing` / `locked`, never the value.
+
 ## Display language (0.2.4)
 
 The CLI's messages are stored in `relay/locales/en.json` and `relay/locales/ja.json` and embedded in the binary.

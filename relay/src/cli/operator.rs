@@ -159,12 +159,15 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
         .writable()
         .await
         .context("the upstream token cannot be stored, so there is no point starting a login")?;
+    // #334: the per-person values the config refers to (a bastion account, say) before anything
+    // that connects through them; the ones missing are asked for here
+    let vars = ask_missing_vars(&r).await?;
     // #221: the bastions first. Their keys are what makes every later hop possible — including the
     // through-the-bastion scan of the upstream itself, further down — and they are the only keys
     // here that can be taken without a token.
-    login_bastion_keys(&r, &up, &audit)?;
+    login_bastion_keys(&r, &up, &vars, &audit)?;
     // #230: and the upstream's own key, through them, while there is still no token to lose
-    login_upstream_key_via_bastion(&r, &up, &audit)?;
+    login_upstream_key_via_bastion(&r, &up, &vars, &audit)?;
     if r.upstreams.len() > 1 {
         let mark = if up.is_default {
             t("op.login.default_mark")
@@ -258,7 +261,10 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
         // The through-the-bastion scan ran before the flow (#230), so behind a bastion the key
         // is already there and nothing needs saying.
         Ok(_) => {
-            if !ssh_for(&r, &up).known_hosts_has_upstream().unwrap_or(false) {
+            if !ssh_for(&r, &up, &vars)
+                .known_hosts_has_upstream()
+                .unwrap_or(false)
+            {
                 eprintln!(
                     "{}",
                     tf(
@@ -269,7 +275,10 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
             }
         }
         Err(e) => {
-            if !ssh_for(&r, &up).known_hosts_has_upstream().unwrap_or(false) {
+            if !ssh_for(&r, &up, &vars)
+                .known_hosts_has_upstream()
+                .unwrap_or(false)
+            {
                 eprintln!(
                     "{}",
                     tf(
@@ -390,8 +399,13 @@ fn offer_host_keys(
 /// A bastion is reachable from the gateway directly — that is what makes it a bastion — so the
 /// plain `ssh-keyscan` gets its key. Without it every later hop fails closed (#220), so this runs
 /// before the device flow rather than after.
-fn login_bastion_keys(r: &Resolved, up: &Upstream, audit: &Audit) -> anyhow::Result<()> {
-    let ssh = ssh_for(r, up);
+fn login_bastion_keys(
+    r: &Resolved,
+    up: &Upstream,
+    vars: &crate::vars::Vars,
+    audit: &Audit,
+) -> anyhow::Result<()> {
+    let ssh = ssh_for(r, up, vars);
     for (bhost, bport) in ssh.bastions() {
         match ssh.known_hosts_has(&bhost, bport) {
             Ok(true) => continue,
@@ -463,9 +477,10 @@ fn require_saved(saved: bool, host: &str, port: u16, domain: &str) -> anyhow::Re
 fn login_upstream_key_via_bastion(
     r: &Resolved,
     up: &Upstream,
+    vars: &crate::vars::Vars,
     audit: &Audit,
 ) -> anyhow::Result<()> {
-    let ssh = ssh_for(r, up);
+    let ssh = ssh_for(r, up, vars);
     if ssh.bastions().is_empty() {
         return Ok(());
     }
@@ -683,7 +698,9 @@ fn keyscan_via_bastion(up: &OpenSshUpstream, host: &str, port: u16) -> anyhow::R
         let scratch = dir.join(format!("known_hosts.scan.{key_type}"));
         scratch_guard.watch(&scratch);
         let _ = std::fs::remove_file(&scratch);
-        let args = up.keyscan_via_bastion_args(&cfg, &scratch, host, port, key_type);
+        let args = up
+            .keyscan_via_bastion_args(&cfg, &scratch, host, port, key_type)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         let out = std::process::Command::new("ssh")
             .args(&args)
             .env_remove("SSH_ASKPASS")
@@ -794,7 +811,7 @@ fn keyscan_direct(host: &str, port: u16) -> anyhow::Result<Vec<String>> {
 }
 
 /// Builds the `OpenSshUpstream` that describes how the relay reaches this upstream.
-fn ssh_for(r: &Resolved, up: &Upstream) -> OpenSshUpstream {
+fn ssh_for(r: &Resolved, up: &Upstream, vars: &crate::vars::Vars) -> OpenSshUpstream {
     OpenSshUpstream::new(
         &up.host,
         up.upstream_ssh_port,
@@ -802,6 +819,7 @@ fn ssh_for(r: &Resolved, up: &Upstream) -> OpenSshUpstream {
         r.relay.ssh_config.as_deref(),
     )
     .with_options(up.ssh_options.clone())
+    .with_vars(vars.clone())
 }
 
 /// 0.2.1: fetches the host key of an upstream or a bastion (ProxyJump target) and appends it to that upstream's known_hosts.
@@ -810,15 +828,21 @@ fn ssh_for(r: &Resolved, up: &Upstream) -> OpenSshUpstream {
 /// #221: when the upstream sits behind a ProxyJump bastion, the gateway cannot reach it directly
 /// at all, so the scan of the upstream host itself goes through the bastion. A bastion is still
 /// scanned directly — that is how its key gets into known_hosts in the first place.
-pub fn keyscan(path: &Path, host: &str, port: u16, upstream: Option<&str>) -> anyhow::Result<()> {
+pub async fn keyscan(
+    path: &Path,
+    host: &str,
+    port: u16,
+    upstream: Option<&str>,
+) -> anyhow::Result<()> {
     let r = resolve(path)?;
+    let vars = primed_vars(&r).await;
     let up = pick_upstream(&r, upstream)?;
     let audit = open_audit(&r)?;
     let host = host.trim().trim_end_matches('.');
     if host.is_empty() || host.contains(['/', ' ', ',']) {
         bail!("host must be a bare hostname or IP");
     }
-    let ssh = ssh_for(&r, up);
+    let ssh = ssh_for(&r, up, &vars);
     let route = scan_route(&ssh, host, port);
     let keys = match route {
         ScanRoute::Direct => keyscan_direct(host, port)?,
@@ -1286,6 +1310,8 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             ),
         }
     }
+    // #334: read once for every upstream; `check` shows each reference's state, never a value
+    let vars = primed_vars(&r).await;
     for u in &r.upstreams {
         if multi {
             println!("  [{}]", u.domain);
@@ -1296,9 +1322,18 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             &u.known_hosts,
             r.relay.ssh_config.as_deref(),
         )
-        .with_options(u.ssh_options.clone());
+        .with_options(u.ssh_options.clone())
+        .with_vars(vars.clone());
         if !u.ssh_options.is_empty() {
             println!("  ssh options:     {}", u.ssh_options.join(" "));
+            let keys = crate::vars::refs(u.ssh_options.iter());
+            if !keys.is_empty() {
+                let states: Vec<String> = keys
+                    .iter()
+                    .map(|k| format!("{{{k}}}: {}", vars.state(k).word()))
+                    .collect();
+                println!("  values:          {}", states.join(", "));
+            }
         }
         match up.known_hosts_has_upstream() {
             Ok(true) => println!(
@@ -2199,6 +2234,185 @@ pub async fn change_passphrase(path: &Path, kdf: Option<&str>) -> anyhow::Result
     } else {
         anyhow::bail!("{message}")
     }
+}
+
+// ---- per-person values (#334) ----
+
+/// The per-person values the config refers to, read once through the control socket. A one-shot
+/// subcommand calls this before it builds an upstream ssh.
+pub async fn primed_vars(r: &Resolved) -> crate::vars::Vars {
+    let v = crate::vars::Vars::new();
+    crate::vars::load(&v, &r.var_refs(), &secret_source_via_socket(r)).await;
+    v
+}
+
+fn var_key(key: &str) -> anyhow::Result<&str> {
+    let key = key.trim().trim_start_matches('{').trim_end_matches('}');
+    if !crate::vars::valid_key(key) {
+        bail!(
+            "{key:?} is not a key: segments of letters, digits, `.`, `_` and `-` joined by `/` \
+             (e.g. bastion, ghe.example.com/bastion)"
+        );
+    }
+    Ok(key)
+}
+
+/// The value for `key`: the first line of stdin when it is piped, otherwise typed without echo.
+/// Never an argument, which would reach `ps` and the shell history.
+fn read_var_value(key: &str) -> anyhow::Result<String> {
+    use std::io::BufRead;
+    let value = if store::control::is_terminal(libc::STDIN_FILENO) {
+        let s = store::control::prompt(&format!("Value for {{{key}}} (not echoed)"))?;
+        String::from_utf8_lossy(s.as_bytes()).into_owned()
+    } else {
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        line.trim_end_matches(['\r', '\n']).to_string()
+    };
+    if value.is_empty() {
+        bail!("the value is empty; nothing was stored");
+    }
+    Ok(value)
+}
+
+async fn var_store(sock: &Path, key: &str, value: &str) -> anyhow::Result<()> {
+    let body = serde_json::json!({
+        "op": "set", "namespace": crate::vars::NAMESPACE, "name": key, "value": value
+    })
+    .to_string();
+    let (ok, message) = store::control::call(sock, &body).await?;
+    if !ok {
+        eprintln!("{}", paint_err(Tone::Bad, &message));
+        bail!("{{{key}}} was not stored");
+    }
+    Ok(())
+}
+
+/// `var set <key>`
+pub async fn var_set(path: &Path, key: &str) -> anyhow::Result<()> {
+    let r = resolve(path)?;
+    let key = var_key(key)?;
+    if !r.var_refs().iter().any(|k| k == key) {
+        eprintln!(
+            "note: config.yml does not refer to {{{key}}}; it is stored anyway, and used once the \
+             config does"
+        );
+    }
+    let value = read_var_value(key)?;
+    var_store(&r.paths.control_sock, key, &value).await?;
+    // Not the value: whoever wants to see it asks for it with `var get`
+    println!("stored {{{key}}}; the relay picks it up within seconds");
+    Ok(())
+}
+
+/// `var get <key>`: the value, on stdout. Only ever run by a person on the host.
+pub async fn var_get(path: &Path, key: &str) -> anyhow::Result<()> {
+    let r = resolve(path)?;
+    let key = var_key(key)?;
+    match crate::vars::read(&[key.to_string()], &secret_source_via_socket(&r))
+        .await
+        .remove(key)
+    {
+        Some(crate::vars::State::Set(v)) => {
+            println!("{v}");
+            Ok(())
+        }
+        Some(crate::vars::State::Locked) => bail!("the secret store is locked: sgw unlock"),
+        Some(crate::vars::State::Unavailable(why)) => bail!("{why}"),
+        _ => bail!("{{{key}}} has no value: sgw var set {key}"),
+    }
+}
+
+/// `var delete <key>`
+pub async fn var_delete(path: &Path, key: &str) -> anyhow::Result<()> {
+    let r = resolve(path)?;
+    let key = var_key(key)?;
+    let body = serde_json::json!({
+        "op": "delete", "namespace": crate::vars::NAMESPACE, "name": key
+    })
+    .to_string();
+    let (ok, message) = store::control::call(&r.paths.control_sock, &body).await?;
+    if !ok {
+        bail!("{message}");
+    }
+    println!("deleted {{{key}}}");
+    Ok(())
+}
+
+/// `var list`: every key the config refers to or the store holds, and whether it has a value.
+/// Never a value. Works while the store is locked: the list holds names only.
+pub async fn var_list(path: &Path) -> anyhow::Result<()> {
+    let r = resolve(path)?;
+    let (ok, message, data) =
+        store::control::call_data(&r.paths.control_sock, r#"{"op":"list"}"#).await?;
+    if !ok {
+        bail!("{message}");
+    }
+    let stored: std::collections::BTreeSet<String> = data
+        .and_then(|d| d.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter(|row| row["namespace"] == crate::vars::NAMESPACE)
+        .filter_map(|row| row["name"].as_str().map(String::from))
+        .collect();
+    let refs = r.var_refs();
+    let mut keys: Vec<String> = refs.clone();
+    keys.extend(stored.iter().filter(|k| !refs.contains(k)).cloned());
+    if keys.is_empty() {
+        println!("no per-person values: config.yml refers to none and the store holds none");
+        return Ok(());
+    }
+    for k in keys {
+        let state = if stored.contains(&k) {
+            "set"
+        } else {
+            "missing"
+        };
+        let note = if refs.contains(&k) {
+            ""
+        } else {
+            "  (not referred to by config.yml)"
+        };
+        println!("{{{k}}}: {state}{note}");
+    }
+    Ok(())
+}
+
+/// For `login`: ask for every value the config refers to that the store lacks, then read them all.
+/// A locked store is said once rather than per key.
+async fn ask_missing_vars(r: &Resolved) -> anyhow::Result<crate::vars::Vars> {
+    let refs = r.var_refs();
+    let vars = primed_vars(r).await;
+    let missing: Vec<&String> = refs
+        .iter()
+        .filter(|k| vars.state(k) == crate::vars::State::Missing)
+        .collect();
+    if refs
+        .iter()
+        .any(|k| vars.state(k) == crate::vars::State::Locked)
+    {
+        bail!("config.yml refers to per-person values in the secret store, which is locked: sgw unlock");
+    }
+    if missing.is_empty() {
+        return Ok(vars);
+    }
+    if !store::control::is_terminal(libc::STDIN_FILENO) {
+        bail!(
+            "config.yml refers to {} with no value yet; set each with sgw var set <key>",
+            missing
+                .iter()
+                .map(|k| format!("{{{k}}}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    eprintln!("config.yml refers to per-person values that are not in the secret store yet:");
+    for k in missing {
+        let value = read_var_value(k)?;
+        var_store(&r.paths.control_sock, k, &value).await?;
+        eprintln!("stored {{{k}}}");
+    }
+    Ok(primed_vars(r).await)
 }
 
 #[cfg(test)]
