@@ -4,7 +4,7 @@
 //! so the upstream is determined by the port the connection arrived on, and the session is handled with that
 //! upstream's own `GitContext` (upstream git, GitHub client, known_hosts). With a single upstream this is the same setup as 0.1.x.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -23,7 +23,6 @@ use crate::git::agent_proxy::SigningAgent;
 use crate::git::upstream_ssh::OpenSshUpstream;
 use crate::git::{GitContext, UpstreamGit};
 use crate::github::upstream_token::SecretSource;
-use crate::github::GitHub;
 use crate::passthrough::{Passthrough, SniTarget};
 use crate::paths;
 use crate::ssh::authorized_keys::AuthorizedKeys;
@@ -195,7 +194,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     // Per upstream: GitHub client, upstream git, SSH listener. The russh config, keys and session limit are shared
     let ssh_config = Arc::new(server_config(host_key, r.relay.limits.session_timeout));
     let sessions = Arc::new(Semaphore::new(r.relay.limits.max_sessions.max(1)));
-    let mut githubs: HashMap<String, Arc<GitHub>> = HashMap::new();
+    let mut relays = crate::forge::Relays::new();
     let mut ssh_servers = Vec::new();
     for up in &r.upstreams {
         let (github, upstream_tokens, _http) =
@@ -225,13 +224,17 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         if let Err(e) = upstream.preflight().await {
             log::warn!("[{}] upstream preflight: {}", up.domain, e.message);
         }
-        githubs.insert(up.domain.clone(), github.clone());
+        // #328: the API and the git path both reach the upstream through the github forge relay,
+        // built in. The git path keeps the built-in one even once the API goes through a sidecar
+        let forge: Arc<dyn crate::forge::ForgeRelay> =
+            Arc::new(crate::forge::github::GitHubRelay::new(github));
+        relays.insert(up.domain.clone(), forge.clone());
 
         let git_ctx = Arc::new(GitContext {
             project: r.project.clone(),
             host: up.domain.clone(),
             upstream,
-            github: Some(github),
+            forge: Some(forge),
             audit: audit.clone(),
             limits: r.relay.limits.clone(),
         });
@@ -273,7 +276,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     let api_ctx = Arc::new(ApiContext {
         project: r.project.clone(),
         tokens: TokenStore::new(&r.paths.tokens),
-        githubs,
+        relays,
         audit: audit.clone(),
         keys,
         bootstrap: r.relay.bootstrap,

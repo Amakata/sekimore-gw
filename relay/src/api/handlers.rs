@@ -1,38 +1,47 @@
-//! The individual endpoints. Each checks the request's required fields, obtains proof via `Project::authorize`, and passes it to `GitHub`.
+//! The individual endpoints. Each checks the request's required fields, obtains proof via
+//! `Project::authorize`, and hands the operation to the forge relay for that repository's upstream
+//! (#328). Everything up to the proof is here, in the gateway; the upstream calls and the shaping of
+//! their answer are the relay's (`crate::forge::github`).
 
 use std::time::SystemTime;
 
 use hyper::body::Incoming;
 use hyper::{Request, StatusCode};
-use serde_json::Value;
 
 use super::types::{ApiRequest, ApiResponse, BootstrapRequest, BootstrapResponse, SigningBlock};
 use super::{read_body, ApiContext, ApiError};
 use crate::audit::Actor;
 use crate::config::BootstrapMode;
-use crate::github::GitHub;
-use crate::github::SecurityAlert;
+use crate::forge::{unexpected, Answer, Handle, Query, Resolved};
 use crate::paths;
 use crate::policy::SigningMode;
 use crate::policy::{Action, Authorized, Mode, Resource};
 use crate::ssh::authorized_keys::Added;
 use crate::tokens::TokenRecord;
 
-/// The GitHub client for the upstream of the repo the proof refers to (each upstream has its own token and API base. 0.2.0).
-fn gh<'a>(ctx: &'a ApiContext, auth: &Authorized<'_>) -> Result<&'a GitHub, ApiError> {
+/// The forge relay for the upstream of the repo the proof refers to (each upstream has its own
+/// token and API base. 0.2.0).
+fn relay<'a>(ctx: &'a ApiContext, auth: &Authorized<'_>) -> Result<Handle<'a>, ApiError> {
     let host = ctx.project.host_of(auth.policy());
     let key = if host.is_empty() {
         ctx.git_domain.as_str()
     } else {
         host
     };
-    ctx.githubs
-        .get(key)
-        .map(|g| g.as_ref())
-        .ok_or_else(|| ApiError {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            message: format!("upstream API for {key} is not configured on the gateway"),
-        })
+    ctx.relays.get(key).ok_or_else(|| ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        message: format!("upstream API for {key} is not configured on the gateway"),
+    })
+}
+
+/// Hand an authorized operation to the relay, with nothing resolved beforehand.
+async fn forward(
+    relay: Handle<'_>,
+    op: &str,
+    auth: &Authorized<'_>,
+    req: &ApiRequest,
+) -> Result<ApiResponse, ApiError> {
+    relay.call(op, &[auth], req, &Resolved::default()).await
 }
 
 fn need(cond: bool, msg: &str) -> Result<(), ApiError> {
@@ -49,23 +58,23 @@ fn need_repo(req: &ApiRequest) -> Result<(), ApiError> {
     need(!req.repo.is_empty(), "repo is required")
 }
 
-/// The preamble every repo-scoped handler shares: check the repo, ask the policy, pick the client
+/// The preamble every repo-scoped handler shares: check the repo, ask the policy, pick the relay
 /// for that repo's upstream.
 ///
 /// Resource and action stay arguments rather than being inferred from anything, because this is
 /// the security boundary: the permission a handler demands has to be readable at the handler, not
 /// looked up somewhere else. What is hidden here is only the mechanical part — the empty-string
-/// check and which `GitHub` the proof belongs to.
+/// check and which relay the proof belongs to.
 fn repo_scope<'a>(
     ctx: &'a ApiContext,
     req: &'a ApiRequest,
     resource: Resource,
     action: Action,
-) -> Result<(Authorized<'a>, &'a GitHub), ApiError> {
+) -> Result<(Authorized<'a>, Handle<'a>), ApiError> {
     need_repo(req)?;
     let auth = ctx.project.authorize(&req.repo, resource, action)?;
-    let client = gh(ctx, &auth)?;
-    Ok((auth, client))
+    let r = relay(ctx, &auth)?;
+    Ok((auth, r))
 }
 
 /// As `repo_scope`, plus the `number is required` guard.
@@ -74,7 +83,7 @@ fn numbered_scope<'a>(
     req: &'a ApiRequest,
     resource: Resource,
     action: Action,
-) -> Result<(Authorized<'a>, &'a GitHub), ApiError> {
+) -> Result<(Authorized<'a>, Handle<'a>), ApiError> {
     // Repo first, then the number: a request missing both is answered the way it always was.
     need_repo(req)?;
     need(req.number != 0, "number is required")?;
@@ -101,6 +110,19 @@ impl Numbered {
     }
 }
 
+/// Whether a number names a pull request: the relay looks, the gateway decides what follows.
+async fn names_a_pull_request(
+    r: Handle<'_>,
+    auth: &Authorized<'_>,
+    number: u64,
+) -> Result<bool, ApiError> {
+    let q = Query::NamesAPullRequest { number };
+    match r.ask(&q, auth).await? {
+        Answer::Bool(b) => Ok(b),
+        other => Err(unexpected(&q, &other)),
+    }
+}
+
 /// As `numbered_scope`, for a write where the number may name either kind.
 ///
 /// Looks the number up and authorizes against what it is, so the same command reaches an issue
@@ -115,7 +137,7 @@ async fn numbered_write_scope<'a>(
     ctx: &'a ApiContext,
     req: &'a ApiRequest,
     action: Action,
-) -> Result<(Authorized<'a>, &'a GitHub, Numbered), ApiError> {
+) -> Result<(Authorized<'a>, Handle<'a>, Numbered), ApiError> {
     need_repo(req)?;
     need(req.number != 0, "number is required")?;
 
@@ -137,8 +159,8 @@ async fn numbered_write_scope<'a>(
         Resource::Pr
     };
     let probe = ctx.project.authorize(&req.repo, probe_resource, action)?;
-    let client = gh(ctx, &probe)?;
-    let target = if client.names_a_pull_request(&probe, req.number).await? {
+    let r = relay(ctx, &probe)?;
+    let target = if names_a_pull_request(r, &probe, req.number).await? {
         Numbered::PullRequest
     } else {
         Numbered::Issue
@@ -146,7 +168,7 @@ async fn numbered_write_scope<'a>(
     let auth = ctx
         .project
         .authorize(&req.repo, target.resource(), action)?;
-    Ok((auth, client, target))
+    Ok((auth, r, target))
 }
 
 /// As `repo_scope`, but anchored on the project rather than a named repo (Projects v2 and search
@@ -156,11 +178,11 @@ fn project_scope<'a>(
     req: &'a ApiRequest,
     resource: Resource,
     action: Action,
-) -> Result<(Authorized<'a>, &'a GitHub), ApiError> {
+) -> Result<(Authorized<'a>, Handle<'a>), ApiError> {
     let anchor = project_anchor(ctx, req)?;
     let auth = ctx.project.authorize(anchor, resource, action)?;
-    let client = gh(ctx, &auth)?;
-    Ok((auth, client))
+    let r = relay(ctx, &auth)?;
+    Ok((auth, r))
 }
 
 /// Projects v2 is org-scoped, so the repo may be omitted. The policy anchor is then the project's first repository.
@@ -198,27 +220,29 @@ fn board_choices(boards: &[crate::api::ResolvedBoard]) -> String {
 /// #277: the board actually named decides last. `authorize` counted a key any board adds; here
 /// the board is known, and its own allow / deny settle it. Every Projects handler goes
 /// through this, so a board is never reached on the anchor repository's permissions alone.
-/// #291: the client it hands back is the board's upstream's, not the anchor repository's: a
+/// #291: the relay it hands back is the board's upstream's, not the anchor repository's: a
 /// board on the GHE is asked on the GHE whatever `--repo` / `SEKIMORE_REPO` name.
 async fn board_scope<'a>(
     ctx: &'a ApiContext,
     req: &ApiRequest,
     auth: &crate::policy::Authorized<'_>,
-) -> Result<(String, &'a GitHub), ApiError> {
+) -> Result<(Resolved, Handle<'a>), ApiError> {
     let board = resolve_board(ctx, req).await?;
     ctx.project.authorize_board(auth, &board.label)?;
-    let client = ctx
-        .githubs
-        .get(&board.upstream)
-        .map(|g| g.as_ref())
-        .ok_or_else(|| ApiError {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            message: format!(
-                "upstream API for {} (the upstream of project board {}) is not configured on the gateway",
-                board.upstream, board.label
-            ),
-        })?;
-    Ok((board.id, client))
+    let r = ctx.relays.get(&board.upstream).ok_or_else(|| ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        message: format!(
+            "upstream API for {} (the upstream of project board {}) is not configured on the gateway",
+            board.upstream, board.label
+        ),
+    })?;
+    Ok((
+        Resolved {
+            board_id: board.id,
+            ..Resolved::default()
+        },
+        r,
+    ))
 }
 
 async fn resolve_board(
@@ -230,7 +254,7 @@ async fn resolve_board(
             "no project board is allowed; add relay.project.boards (the org / user and the number from the board's URL)",
         ));
     }
-    let boards = ctx.project_boards.get(&ctx.githubs, &ctx.git_domain).await;
+    let boards = ctx.project_boards.get(&ctx.relays, &ctx.git_domain).await;
     if boards.is_empty() {
         // Declared but not resolvable. Saying "add relay.project.boards" here would send the
         // operator to a file that already has it; the usual reason is a locked secret store,
@@ -278,10 +302,10 @@ pub async fn dispatch(
         "/pr/create" => pr_create(ctx, req).await,
         "/pr/comment" => pr_comment(ctx, req).await,
         "/pr/reply" => pr_reply(ctx, req).await,
-        "/pr/comment-edit" => comment_edit(ctx, req).await,
-        "/pr/comment-delete" => comment_delete(ctx, req).await,
-        "/issue/comment-edit" => comment_edit(ctx, req).await,
-        "/issue/comment-delete" => comment_delete(ctx, req).await,
+        "/pr/comment-edit" => comment_edit(ctx, path, req).await,
+        "/pr/comment-delete" => comment_delete(ctx, path, req).await,
+        "/issue/comment-edit" => comment_edit(ctx, path, req).await,
+        "/issue/comment-delete" => comment_delete(ctx, path, req).await,
         "/pr/draft" => pr_draft(ctx, req).await,
         "/ci/dispatch" => ci_dispatch(ctx, req).await,
         "/pr/review" => pr_review(ctx, req).await,
@@ -489,22 +513,7 @@ async fn pr_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
     let auth = ctx
         .project
         .authorize_pr_from(&req.repo, &req.head, &req.base)?;
-    let pr = gh(ctx, &auth)?
-        .create_pull_request(
-            &auth,
-            &req.head,
-            &req.base,
-            &req.title,
-            &req.body,
-            req.pr_draft,
-        )
-        .await?;
-    Ok(ApiResponse {
-        number: Some(pr.number),
-        url: Some(pr.html_url),
-        node_id: Some(pr.node_id),
-        ..Default::default()
-    })
+    forward(relay(ctx, &auth)?, "/pr/create", &auth, req).await
 }
 
 async fn pr_comment(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
@@ -513,11 +522,8 @@ async fn pr_comment(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, A
         req.number != 0 && !req.body.is_empty(),
         "number and body are required",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Comment)?;
-    client
-        .comment_pull_request(&auth, req.number, &req.body)
-        .await?;
-    Ok(ApiResponse::default())
+    let (auth, r) = repo_scope(ctx, req, Resource::Pr, Action::Comment)?;
+    forward(r, "/pr/comment", &auth, req).await
 }
 
 /// #165: answer a line comment where it was left. `pr:comment` rather than a permission of its
@@ -529,11 +535,8 @@ async fn pr_reply(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Api
         req.number != 0 && req.comment_id != 0 && !req.body.is_empty(),
         "number, comment-id and body are required",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Comment)?;
-    client
-        .reply_to_review_comment(&auth, req.number, req.comment_id, &req.body)
-        .await?;
-    Ok(ApiResponse::default())
+    let (auth, r) = repo_scope(ctx, req, Resource::Pr, Action::Comment)?;
+    forward(r, "/pr/reply", &auth, req).await
 }
 
 /// #169: offer a draft for review, or put one back. `pr:create` rather than a key of its own —
@@ -541,22 +544,8 @@ async fn pr_reply(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Api
 async fn pr_draft(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
     need(req.number != 0, "number is required")?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Create)?;
-    client
-        .set_pull_request_draft(&auth, req.number, req.pr_draft)
-        .await?;
-    Ok(ApiResponse {
-        message: Some(format!(
-            "PR #{} is now {}",
-            req.number,
-            if req.pr_draft {
-                "a draft"
-            } else {
-                "ready for review"
-            }
-        )),
-        ..Default::default()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Pr, Action::Create)?;
+    forward(r, "/pr/draft", &auth, req).await
 }
 
 /// #168: start a workflow that has not run. `ci:dispatch`, not `ci:rerun`: a re-run repeats what
@@ -567,17 +556,8 @@ async fn ci_dispatch(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, 
         !req.workflow.is_empty() && !req.git_ref.is_empty(),
         "workflow and ref are required",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Dispatch)?;
-    client
-        .dispatch_workflow(&auth, &req.workflow, &req.git_ref, &req.inputs)
-        .await?;
-    Ok(ApiResponse {
-        message: Some(format!(
-            "dispatched {} on {}; find the run with `ci runs --ref {}`",
-            req.workflow, req.git_ref, req.git_ref
-        )),
-        ..Default::default()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Ci, Action::Dispatch)?;
+    forward(r, "/ci/dispatch", &auth, req).await
 }
 
 /// #172: the permission follows what the number names, not which command was typed. GitHub keeps
@@ -588,32 +568,34 @@ async fn comment_scope<'a>(
     ctx: &'a ApiContext,
     req: &'a ApiRequest,
     action: Action,
-) -> Result<(Authorized<'a>, &'a GitHub), ApiError> {
+) -> Result<(Authorized<'a>, Handle<'a>), ApiError> {
     need(req.comment_id != 0, "comment-id is required")?;
-    let (auth, client, target) = numbered_write_scope(ctx, req, action).await?;
+    let (auth, r, target) = numbered_write_scope(ctx, req, action).await?;
     // A line comment exists only on a pull request; the pulls endpoint is outside issue:*
     need(
         !req.inline || target == Numbered::PullRequest,
         "--inline names a line comment, and only a pull request has those",
     )?;
-    Ok((auth, client))
+    Ok((auth, r))
 }
 
-async fn comment_edit(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+async fn comment_edit(
+    ctx: &ApiContext,
+    path: &str,
+    req: &ApiRequest,
+) -> Result<ApiResponse, ApiError> {
     need(!req.body.is_empty(), "body is required")?;
-    let (auth, client) = comment_scope(ctx, req, Action::CommentUpdate).await?;
-    client
-        .update_comment(&auth, req.number, req.inline, req.comment_id, &req.body)
-        .await?;
-    Ok(ApiResponse::default())
+    let (auth, r) = comment_scope(ctx, req, Action::CommentUpdate).await?;
+    forward(r, path, &auth, req).await
 }
 
-async fn comment_delete(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = comment_scope(ctx, req, Action::CommentDelete).await?;
-    client
-        .delete_comment(&auth, req.number, req.inline, req.comment_id)
-        .await?;
-    Ok(ApiResponse::default())
+async fn comment_delete(
+    ctx: &ApiContext,
+    path: &str,
+    req: &ApiRequest,
+) -> Result<ApiResponse, ApiError> {
+    let (auth, r) = comment_scope(ctx, req, Action::CommentDelete).await?;
+    forward(r, path, &auth, req).await
 }
 
 async fn pr_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
@@ -641,11 +623,8 @@ async fn pr_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
             "each comment needs a path, a line and a body",
         )?;
     }
-    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Review)?;
-    client
-        .review_pull_request(&auth, req.number, &req.event, &req.body, &req.comments)
-        .await?;
-    Ok(ApiResponse::default())
+    let (auth, r) = repo_scope(ctx, req, Resource::Pr, Action::Review)?;
+    forward(r, "/pr/review", &auth, req).await
 }
 
 /// 0.2.59: settle a review conversation, or open it again.
@@ -660,30 +639,8 @@ async fn pr_resolve(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, A
         !req.thread_id.trim().is_empty(),
         "thread-id is required; `pr comments` prints it beside each line comment",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Resolve)?;
-    let want = !req.unresolve;
-    let now = client
-        .resolve_review_thread(&auth, req.number, req.thread_id.trim(), want)
-        .await?;
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(format!(
-            "{} {} on #{}",
-            if now { "resolved" } else { "unresolved" },
-            req.thread_id.trim(),
-            req.number
-        )),
-        ..ApiResponse::ok()
-    })
-}
-
-/// Nothing, or the string — so a handler can tell "leave it alone" from "set it to empty".
-fn opt(s: &str) -> Option<&str> {
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    let (auth, r) = repo_scope(ctx, req, Resource::Pr, Action::Resolve)?;
+    forward(r, "/pr/resolve", &auth, req).await
 }
 
 async fn pr_merge(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
@@ -694,7 +651,7 @@ async fn pr_merge(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Api
         req.method.is_empty() || matches!(req.method.as_str(), "merge" | "squash" | "rebase"),
         "method must be merge, squash or rebase",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Merge)?;
+    let (auth, r) = repo_scope(ctx, req, Resource::Pr, Action::Merge)?;
     // `delete_merged_branch` was declared as a repo policy and never enforced. It is the operator's
     // switch for exactly this, so the agent asking is necessary but not sufficient.
     if req.delete_branch && !auth.policy().delete_merged_branch {
@@ -703,54 +660,19 @@ async fn pr_merge(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Api
             auth.repo()
         )));
     }
-    let res = client
-        .merge_pull_request(
-            &auth,
-            req.number,
-            opt(&req.method),
-            opt(&req.title),
-            opt(&req.body),
-            req.delete_branch,
-        )
-        .await?;
-    let msg = format!(
-        "merged #{}{}{}",
-        req.number,
-        if req.method.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", req.method)
-        },
-        if res.branch_deleted {
-            format!(", deleted {}", res.branch)
-        } else {
-            String::new()
-        }
-    );
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(msg),
-        raw: serde_json::to_value(&res).ok(),
-        ..ApiResponse::ok()
-    })
+    forward(r, "/pr/merge", &auth, req).await
 }
 
 async fn pr_close(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Close)?;
-    client.close_pull_request(&auth, req.number).await?;
-    Ok(ApiResponse::default())
+    let (auth, r) = numbered_scope(ctx, req, Resource::Pr, Action::Close)?;
+    forward(r, "/pr/close", &auth, req).await
 }
 
 /// The inverse of closing, under the same permission: `pr:close` already lets the agent change the
 /// state, and reopening is the less destructive direction.
 async fn pr_reopen(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Close)?;
-    client.reopen_pull_request(&auth, req.number).await?;
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(format!("reopened #{}", req.number)),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = numbered_scope(ctx, req, Resource::Pr, Action::Close)?;
+    forward(r, "/pr/reopen", &auth, req).await
 }
 
 /// Edit a pull request's own metadata.
@@ -771,54 +693,15 @@ async fn pr_update(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, Ap
     } else {
         ctx.project.authorize_pr(&req.repo, &req.base)?
     };
-    gh(ctx, &auth)?
-        .update_pull_request(
-            &auth,
-            req.number,
-            opt(&req.title),
-            opt(&req.body),
-            opt(&req.base),
-        )
-        .await?;
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(format!("updated #{}", req.number)),
-        ..ApiResponse::ok()
-    })
+    forward(relay(ctx, &auth)?, "/pr/update", &auth, req).await
 }
 
 async fn pr_status(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
-    let st = client.pull_request_status(&auth, req.number).await?;
-    let raw = serde_json::to_value(&st).unwrap_or(serde_json::Value::Null);
-    let n = st.checks.len();
-    let msg = format!(
-        "PR #{} [{}{}] checks: {} ({} total)",
-        st.number,
-        st.state,
-        if st.merged { ", merged" } else { "" },
-        st.rollup,
-        n
-    );
-    Ok(ApiResponse {
-        ok: true,
-        number: Some(st.number),
-        raw: Some(raw),
-        message: Some(msg),
-        ..Default::default()
-    })
+    let (auth, r) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
+    forward(r, "/pr/status", &auth, req).await
 }
 
 // ---- reading pull requests and issues (0.2.8) ----
-
-/// How many to fetch: the agent's number, clamped, or the default when it asked for nothing.
-fn limit_or(first: u32, default: u32) -> u32 {
-    if first == 0 {
-        default
-    } else {
-        first.clamp(1, 100)
-    }
-}
 
 /// The three values GitHub accepts. Anything else is the agent's mistake, not an upstream error.
 fn list_state(state: &str) -> Result<&str, ApiError> {
@@ -829,363 +712,54 @@ fn list_state(state: &str) -> Result<&str, ApiError> {
     }
 }
 
-/// Render one discussion entry. The body is whatever a human wrote: it is printed, never parsed.
-/// #165: a review is one submission — a verdict, a body, and the line comments that came with
-/// it — so it is shown as one thing, with its comments nested under it. Flat and sorted by time,
-/// which is what this did before, left the reader to guess which comment belonged to which
-/// review, and two reviewers landing in the same second made that guess unreliable.
-fn comment_lines(items: &[crate::github::CommentItem]) -> String {
-    // The date alone is enough to follow a discussion; the time is in the JSON.
-    let day =
-        |c: &crate::github::CommentItem| c.created_at.split('T').next().unwrap_or("").to_string();
-    // Where an inline comment sits, and the id `pr reply` needs. The id appears only on the
-    // lines that can be answered, so its presence is what says a reply is possible.
-    // 0.2.59: and the conversation it sits in, which `pr resolve` takes. A thread id is long and
-    // every comment in a thread repeats it, so it is printed once — on the first comment of that
-    // thread this rendering reaches. Not on the thread's root: with a limit in play the root can
-    // fall outside the page while a reply is inside it, and then the id would never be shown.
-    // Only a settled thread is marked; an unmarked one is open.
-    let mut seen_threads: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut inline_tail = |c: &crate::github::CommentItem| {
-        let where_ = match (&c.path, c.line) {
-            (Some(p), Some(l)) => format!("{p}:{l}"),
-            (Some(p), None) => p.clone(),
-            _ => "[inline]".to_string(),
-        };
-        let mut s = match c.id {
-            Some(id) => format!("{where_}  #{id}"),
-            None => where_,
-        };
-        if let Some(t) = c.thread_id.as_deref() {
-            if seen_threads.insert(t.to_string()) {
-                s.push_str(&format!("  thread {t}"));
-                if c.resolved == Some(true) {
-                    s.push_str(" (resolved)");
-                }
-            }
-        }
-        s
-    };
-
-    let mut out = String::new();
-    let mut first = true;
-    for c in items {
-        match c.kind.as_str() {
-            // An inline comment is printed under its review, below; one that belongs to no
-            // review (a reply posted on its own) is printed where it falls.
-            "inline" if c.review_id.is_some() => continue,
-            // A review without an id cannot own anything: matching on None would make every
-            // parentless inline comment belong to it, and to every other such review too.
-            "review" | "review_envelope"
-                if c.review_id.is_none() && c.kind == "review_envelope" =>
-            {
-                continue
-            }
-            "review" | "review_envelope" => {
-                let children: Vec<_> = match c.review_id {
-                    Some(rid) => items
-                        .iter()
-                        .filter(|x| x.kind == "inline" && x.review_id == Some(rid))
-                        .collect(),
-                    None => Vec::new(),
-                };
-                // An envelope exists only to hold line comments; with none it says nothing.
-                if c.kind == "review_envelope" && children.is_empty() {
-                    continue;
-                }
-                if !first {
-                    out.push('\n');
-                }
-                out.push_str(&format!(
-                    "{} {:<6} review {}\n",
-                    day(c),
-                    c.author,
-                    c.state.clone().unwrap_or_default()
-                ));
-                for line in c.body.lines() {
-                    out.push_str(&format!("  {line}\n"));
-                }
-                for ch in children {
-                    out.push_str(&format!("    {}\n", inline_tail(ch)));
-                    for line in ch.body.lines() {
-                        out.push_str(&format!("      {line}\n"));
-                    }
-                }
-            }
-            _ => {
-                let tail = if c.kind == "inline" {
-                    inline_tail(c)
-                } else {
-                    "[comment]".to_string()
-                };
-                if !first {
-                    out.push('\n');
-                }
-                out.push_str(&format!("{} {:<6} {tail}\n", day(c), c.author));
-                for line in c.body.lines() {
-                    out.push_str(&format!("  {line}\n"));
-                }
-            }
-        }
-        first = false;
-    }
-    out.trim_end().to_string()
-}
-
 async fn pr_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
-    let pr = client.pull_request_view(&auth, req.number).await?;
-    let state = if pr.merged {
-        "merged".to_string()
-    } else if pr.draft {
-        format!("{}, draft", pr.state)
-    } else {
-        pr.state.clone()
-    };
-    let msg = format!(
-        "#{} {} [{}] {} ← {} by {}\n{} files +{} -{}, {} comments ({} on the diff)\n{}\n\n{}",
-        pr.number,
-        pr.title,
-        state,
-        pr.base,
-        pr.head,
-        pr.author,
-        pr.changed_files,
-        pr.additions,
-        pr.deletions,
-        pr.comments,
-        pr.review_comments,
-        pr.html_url,
-        pr.body
-    );
-    Ok(ApiResponse {
-        number: Some(pr.number),
-        url: Some(pr.html_url.clone()),
-        message: Some(msg.trim_end().to_string()),
-        raw: serde_json::to_value(&pr).ok(),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
+    forward(r, "/pr/view", &auth, req).await
 }
 
 /// The conversation, the reviews and the comments on the diff, as one ordered list. Each of the
 /// three is a separate GitHub endpoint, and reading one of them misses most of a review.
 async fn pr_comments(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
-    let items = client
-        .pull_request_comments(&auth, req.number, limit_or(req.first, 30))
-        .await?;
-    let msg = if items.is_empty() {
-        format!("no comments on PR #{}", req.number)
-    } else {
-        comment_lines(&items)
-    };
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(msg),
-        raw: serde_json::to_value(&items).ok(),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
+    forward(r, "/pr/comments", &auth, req).await
 }
 
 /// #173: which files a pull request touches, and how much moved in each.
 async fn pr_files(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
-    let (files, truncated) = client.pull_request_files(&auth, req.number).await?;
-    let (add, del): (u64, u64) = files
-        .iter()
-        .fold((0, 0), |(a, d), f| (a + f.additions, d + f.deletions));
-    let mut msg = files
-        .iter()
-        .map(|f| {
-            format!(
-                "{:<10} +{:<5} -{:<5} {}{}",
-                f.status,
-                f.additions,
-                f.deletions,
-                f.path,
-                f.no_patch
-                    .as_deref()
-                    .map(|w| format!("  ({w})"))
-                    .unwrap_or_default()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if files.is_empty() {
-        msg = format!("PR #{} touches no files", req.number);
-    } else {
-        msg.push_str(&format!(
-            "\n{}{} files, +{add} -{del}. sekimore pr diff --number {} --path <path>",
-            files.len(),
-            // Say so rather than let a file the relay never listed look like one that is not there
-            if truncated { "+" } else { "" },
-            req.number
-        ));
-    }
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(msg),
-        raw: serde_json::to_value(&files).ok(),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
+    forward(r, "/pr/files", &auth, req).await
 }
 
 /// #173: one file's patch, numbered the way `pr review --comment` wants.
 async fn pr_diff(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
-    let window = if req.window == 0 {
-        400
-    } else {
-        req.window as usize
-    };
-    let page = client
-        .pull_request_diff(
-            &auth,
-            req.number,
-            if req.file_path.is_empty() {
-                None
-            } else {
-                Some(&req.file_path)
-            },
-            window,
-            req.before.unwrap_or(0) as usize,
-        )
-        .await?;
-    Ok(ApiResponse {
-        number: Some(req.number),
-        raw: serde_json::to_value(&page).ok(),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = numbered_scope(ctx, req, Resource::Pr, Action::Read)?;
+    forward(r, "/pr/diff", &auth, req).await
 }
 
 async fn pr_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
-    let state = list_state(&req.state)?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::Read)?;
-    let prs = client
-        .list_pull_requests(
-            &auth,
-            state,
-            if req.base.is_empty() {
-                None
-            } else {
-                Some(&req.base)
-            },
-            limit_or(req.first, 20),
-        )
-        .await?;
-    let msg = if prs.is_empty() {
-        format!("no {state} pull requests")
-    } else {
-        prs.iter()
-            .map(|p| {
-                format!(
-                    "#{} [{}{}] {} ({}, {} ← {})",
-                    p.number,
-                    p.state,
-                    if p.draft { ", draft" } else { "" },
-                    p.title,
-                    p.author,
-                    p.base,
-                    p.head
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    Ok(ApiResponse {
-        message: Some(msg),
-        raw: serde_json::to_value(&prs).ok(),
-        ..ApiResponse::ok()
-    })
+    list_state(&req.state)?;
+    let (auth, r) = repo_scope(ctx, req, Resource::Pr, Action::Read)?;
+    forward(r, "/pr/list", &auth, req).await
 }
 
 /// One issue. GitHub serves pull requests from this endpoint too, so the answer says which it got
 /// rather than presenting a PR as an issue; the payload is still returned.
 async fn issue_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Issue, Action::Read)?;
-    let iss = client.issue_view(&auth, req.number).await?;
-    let mut msg = format!(
-        "#{} {} [{}] by {}",
-        iss.number, iss.title, iss.state, iss.author
-    );
-    if !iss.labels.is_empty() {
-        msg.push_str(&format!("\nlabels: {}", iss.labels.join(", ")));
-    }
-    if !iss.assignees.is_empty() {
-        msg.push_str(&format!("\nassignees: {}", iss.assignees.join(", ")));
-    }
-    msg.push_str(&format!("\n{} comments\n{}", iss.comments, iss.html_url));
-    if iss.is_pull_request {
-        msg.push_str("\nthis is a pull request, not an issue: sekimore pr view --number ");
-        msg.push_str(&iss.number.to_string());
-    }
-    if !iss.body.is_empty() {
-        msg.push_str(&format!("\n\n{}", iss.body));
-    }
-    Ok(ApiResponse {
-        number: Some(iss.number),
-        url: Some(iss.html_url.clone()),
-        message: Some(msg),
-        raw: serde_json::to_value(&iss).ok(),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = numbered_scope(ctx, req, Resource::Issue, Action::Read)?;
+    forward(r, "/issue/view", &auth, req).await
 }
 
 async fn issue_comments(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Issue, Action::Read)?;
-    let items = client
-        .issue_comments(&auth, req.number, limit_or(req.first, 30))
-        .await?;
-    let msg = if items.is_empty() {
-        format!("no comments on issue #{}", req.number)
-    } else {
-        comment_lines(&items)
-    };
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(msg),
-        raw: serde_json::to_value(&items).ok(),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = numbered_scope(ctx, req, Resource::Issue, Action::Read)?;
+    forward(r, "/issue/comments", &auth, req).await
 }
 
 async fn issue_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
-    let state = list_state(&req.state)?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Read)?;
-    let issues = client
-        .list_issues(
-            &auth,
-            state,
-            &req.labels,
-            if req.assignee.is_empty() {
-                None
-            } else {
-                Some(&req.assignee)
-            },
-            limit_or(req.first, 20),
-        )
-        .await?;
-    let msg = if issues.is_empty() {
-        format!("no {state} issues")
-    } else {
-        issues
-            .iter()
-            .map(|i| {
-                format!(
-                    "#{} [{}] {} ({}, {} comments)",
-                    i.number, i.state, i.title, i.author, i.comments
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    Ok(ApiResponse {
-        message: Some(msg),
-        raw: serde_json::to_value(&issues).ok(),
-        ..ApiResponse::ok()
-    })
+    list_state(&req.state)?;
+    let (auth, r) = repo_scope(ctx, req, Resource::Issue, Action::Read)?;
+    forward(r, "/issue/list", &auth, req).await
 }
 
 // ---- releases (0.2.6) ----
@@ -1195,84 +769,20 @@ async fn issue_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, A
 async fn release_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
     need(!req.tag.is_empty(), "tag is required")?;
-    // Without notes of its own a release would be empty, so ask GitHub to write them.
-    let generate = req.generate_notes || req.body.is_empty();
-    let (auth, client) = repo_scope(ctx, req, Resource::Release, Action::Create)?;
-    let rel = client
-        .create_release(
-            &auth,
-            &req.tag,
-            if req.title.is_empty() {
-                None
-            } else {
-                Some(&req.title)
-            },
-            if req.body.is_empty() {
-                None
-            } else {
-                Some(&req.body)
-            },
-            generate,
-            req.draft,
-            req.prerelease,
-        )
-        .await?;
-    let state = if rel.draft { " (draft)" } else { "" };
-    Ok(ApiResponse {
-        number: Some(rel.id),
-        url: Some(rel.html_url.clone()),
-        message: Some(format!("created release {}{}", rel.tag_name, state)),
-        raw: serde_json::to_value(&rel).ok(),
-        ..Default::default()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Release, Action::Create)?;
+    forward(r, "/release/create", &auth, req).await
 }
 
 async fn release_view(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
     need(!req.tag.is_empty(), "tag is required")?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Release, Action::Read)?;
-    match client.get_release_by_tag(&auth, &req.tag).await? {
-        Some(rel) => Ok(ApiResponse {
-            number: Some(rel.id),
-            url: Some(rel.html_url.clone()),
-            message: Some(format!(
-                "{}{} {}",
-                rel.tag_name,
-                if rel.draft { " (draft)" } else { "" },
-                rel.html_url
-            )),
-            raw: serde_json::to_value(&rel).ok(),
-            ..Default::default()
-        }),
-        None => Ok(ApiResponse {
-            message: Some(format!("no release for tag {}", req.tag)),
-            ..ApiResponse::ok()
-        }),
-    }
+    let (auth, r) = repo_scope(ctx, req, Resource::Release, Action::Read)?;
+    forward(r, "/release/view", &auth, req).await
 }
 
 async fn release_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = repo_scope(ctx, req, Resource::Release, Action::Read)?;
-    let limit = if req.first == 0 { 20 } else { req.first };
-    let rels = client.list_releases(&auth, limit).await?;
-    let msg = rels
-        .iter()
-        .map(|r| {
-            format!(
-                "{}{}{} {}",
-                r.tag_name,
-                if r.draft { " [draft]" } else { "" },
-                if r.prerelease { " [prerelease]" } else { "" },
-                r.html_url
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(ApiResponse {
-        message: Some(msg),
-        raw: serde_json::to_value(&rels).ok(),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Release, Action::Read)?;
+    forward(r, "/release/list", &auth, req).await
 }
 
 /// Publish a draft, or edit a release in place.
@@ -1297,11 +807,15 @@ async fn release_edit(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
     let base = ctx
         .project
         .authorize(&req.repo, Resource::Release, Action::Create)?;
-    let client = gh(ctx, &base)?;
-    let current = client
-        .get_release_for_edit(&base, &req.tag)
-        .await?
-        .ok_or_else(|| ApiError::bad_request(format!("no release for tag {}", req.tag)))?;
+    let r = relay(ctx, &base)?;
+    let q = Query::ReleaseForEdit {
+        tag: req.tag.clone(),
+    };
+    let current = match r.ask(&q, &base).await? {
+        Answer::Release(found) => found,
+        other => return Err(unexpected(&q, &other)),
+    }
+    .ok_or_else(|| ApiError::bad_request(format!("no release for tag {}", req.tag)))?;
     // Publishing is draft true → false. Anything else (staying a draft, or turning one back into a
     // draft) stays inside release:create.
     let publishing = current.draft && req.set_draft == Some(false);
@@ -1311,29 +825,14 @@ async fn release_edit(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
     } else {
         base
     };
-    let rel = gh(ctx, &auth)?
-        .update_release(
-            &auth,
-            current.id,
-            publishing,
-            opt(&req.title),
-            opt(&req.body),
-            req.set_draft,
-            req.set_prerelease,
-        )
-        .await?;
-    Ok(ApiResponse {
-        number: Some(rel.id),
-        url: Some(rel.html_url.clone()),
-        message: Some(format!(
-            "{} {}{}",
-            if publishing { "published" } else { "updated" },
-            rel.tag_name,
-            if rel.draft { " (draft)" } else { "" }
-        )),
-        raw: serde_json::to_value(&rel).ok(),
-        ..ApiResponse::ok()
-    })
+    let resolved = Resolved {
+        release_id: current.id,
+        publishing,
+        ..Resolved::default()
+    };
+    relay(ctx, &auth)?
+        .call("/release/edit", &[&auth], req, &resolved)
+        .await
 }
 
 /// Re-run a workflow run, or only the jobs that failed.
@@ -1343,76 +842,20 @@ async fn release_edit(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
 async fn ci_rerun(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
     need(req.run_id != 0, "run_id is required")?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Rerun)?;
-    client.rerun_ci(&auth, req.run_id, req.all).await?;
-    Ok(ApiResponse {
-        message: Some(format!(
-            "re-running {} of run {}",
-            if req.all {
-                "every job"
-            } else {
-                "the failed jobs"
-            },
-            req.run_id
-        )),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Ci, Action::Rerun)?;
+    forward(r, "/ci/rerun", &auth, req).await
 }
 
 async fn ci_cancel(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
     need(req.run_id != 0, "run_id is required")?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Rerun)?;
-    client.cancel_ci(&auth, req.run_id).await?;
-    Ok(ApiResponse {
-        message: Some(format!("cancelled run {}", req.run_id)),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Ci, Action::Rerun)?;
+    forward(r, "/ci/cancel", &auth, req).await
 }
 
 // ---- Dependabot alerts (0.2.28, #132) ----
 
-/// GitHub's own list; a dismissal without one of these is refused by the API too, but the
-/// message here names them.
-const DISMISS_REASONS: &[&str] = &[
-    "fix_started",
-    "inaccurate",
-    "no_bandwidth",
-    "not_used",
-    "tolerable_risk",
-];
 const ALERT_STATES: &[&str] = &["open", "dismissed", "fixed", "auto_dismissed", "all"];
-/// GitHub's limit on `dismissed_comment`
-const DISMISS_COMMENT_MAX: usize = 280;
-
-fn alert_line(a: &SecurityAlert) -> String {
-    let mut line = format!(
-        "#{} [{}] {}/{} {}",
-        a.number, a.severity, a.ecosystem, a.package, a.manifest_path
-    );
-    if !a.scope.is_empty() {
-        line.push_str(&format!(" ({})", a.scope));
-    }
-    line.push(' ');
-    line.push_str(&a.ghsa_id);
-    if let Some(cve) = &a.cve_id {
-        line.push_str(&format!(" {cve}"));
-    }
-    match &a.fixed_in {
-        Some(v) => line.push_str(&format!(" fixed in {v}")),
-        None => line.push_str(" no fix yet"),
-    }
-    if a.state != "open" {
-        line.push_str(&format!(" [{}", a.state));
-        if let Some(r) = &a.dismissed_reason {
-            line.push_str(&format!(": {r}"));
-        }
-        line.push(']');
-    }
-    line.push_str(" — ");
-    line.push_str(&a.summary);
-    line
-}
 
 async fn security_alerts(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
@@ -1425,53 +868,18 @@ async fn security_alerts(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespon
         ALERT_STATES.contains(&state),
         "state is one of open / dismissed / fixed / auto_dismissed / all",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Security, Action::Read)?;
-    let alerts = client.security_alerts(&auth, state).await?;
-    let raw = serde_json::to_value(&alerts).unwrap_or(serde_json::Value::Null);
-    let msg = alerts.iter().map(alert_line).collect::<Vec<_>>().join("\n");
-    Ok(ApiResponse {
-        ok: true,
-        raw: Some(raw),
-        message: Some(if msg.is_empty() {
-            format!("no {state} Dependabot alerts in {}", req.repo)
-        } else {
-            msg
-        }),
-        ..Default::default()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Security, Action::Read)?;
+    forward(r, "/security/alerts", &auth, req).await
 }
 
 async fn security_alert(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Security, Action::Read)?;
-    let a = client.security_alert(&auth, req.number).await?;
-    let mut msg = alert_line(&a);
-    if let Some(u) = &a.url {
-        msg.push('\n');
-        msg.push_str(u);
-    }
-    Ok(ApiResponse {
-        ok: true,
-        number: Some(a.number),
-        url: a.url.clone(),
-        raw: Some(serde_json::to_value(&a).unwrap_or(serde_json::Value::Null)),
-        message: Some(msg),
-        ..Default::default()
-    })
+    let (auth, r) = numbered_scope(ctx, req, Resource::Security, Action::Read)?;
+    forward(r, "/security/alert", &auth, req).await
 }
 
 async fn security_dismiss(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Security, Action::Dismiss)?;
-    need(
-        DISMISS_REASONS.contains(&req.reason.as_str()),
-        "reason is one of fix_started / inaccurate / no_bandwidth / not_used / tolerable_risk",
-    )?;
-    need(
-        req.body.chars().count() <= DISMISS_COMMENT_MAX,
-        "comment is at most 280 characters",
-    )?;
-    client
-        .security_alert_dismiss(&auth, req.number, &req.reason, &req.body)
-        .await?;
+    let (auth, r) = numbered_scope(ctx, req, Resource::Security, Action::Dismiss)?;
+    let resp = forward(r, "/security/dismiss", &auth, req).await?;
     // The generic api_ok line has the path; the reason is what a reader of the audit wants
     ctx.audit.log_edge(
         paths::DEV_RELAY_API,
@@ -1484,29 +892,21 @@ async fn security_dismiss(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespo
             ("comment", &req.body),
         ],
     );
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(format!("dismissed alert #{} ({})", req.number, req.reason)),
-        ..ApiResponse::ok()
-    })
+    Ok(resp)
 }
 
 /// The inverse of dismissing, under the same permission: `security:dismiss` already lets the
 /// agent change an alert's state, and reopening is the less destructive direction.
 async fn security_reopen(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = numbered_scope(ctx, req, Resource::Security, Action::Dismiss)?;
-    client.security_alert_reopen(&auth, req.number).await?;
+    let (auth, r) = numbered_scope(ctx, req, Resource::Security, Action::Dismiss)?;
+    let resp = forward(r, "/security/reopen", &auth, req).await?;
     ctx.audit.log_edge(
         paths::DEV_RELAY_API,
         "security_alert_reopened",
         Actor::Agent,
         &[("repo", auth.repo()), ("number", &req.number.to_string())],
     );
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(format!("reopened alert #{}", req.number)),
-        ..ApiResponse::ok()
-    })
+    Ok(resp)
 }
 
 async fn ci_runs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
@@ -1515,34 +915,8 @@ async fn ci_runs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiE
         !req.git_ref.is_empty(),
         "ref (tag / branch / sha) is required",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Read)?;
-    let runs = client.ci_runs(&auth, &req.git_ref).await?;
-    let raw = serde_json::to_value(&runs).unwrap_or(serde_json::Value::Null);
-    let msg = runs
-        .iter()
-        .map(|r| {
-            let st = if r.conclusion.is_empty() {
-                r.status.as_str()
-            } else {
-                r.conclusion.as_str()
-            };
-            format!(
-                "{} [{}] event={} run_id={} {}",
-                r.name, st, r.event, r.id, r.created_at
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(ApiResponse {
-        ok: true,
-        raw: Some(raw),
-        message: Some(if msg.is_empty() {
-            format!("no workflow runs for ref {}", req.git_ref)
-        } else {
-            msg
-        }),
-        ..Default::default()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Ci, Action::Read)?;
+    forward(r, "/ci/runs", &auth, req).await
 }
 
 async fn ci_jobs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
@@ -1551,74 +925,13 @@ async fn ci_jobs(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiE
         req.number != 0 || req.run_id != 0,
         "number or run_id is required",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Read)?;
-    let jobs = if req.run_id != 0 {
-        client.ci_jobs_for_run(&auth, req.run_id).await?
-    } else {
-        client.ci_jobs(&auth, req.number).await?
-    };
-    let raw = serde_json::to_value(&jobs).unwrap_or(serde_json::Value::Null);
-    let msg = jobs
-        .iter()
-        .map(|j| {
-            let st = if j.conclusion.is_empty() {
-                j.status.as_str()
-            } else {
-                j.conclusion.as_str()
-            };
-            format!("{} [{}] job_id={}", j.name, st, j.id)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(ApiResponse {
-        ok: true,
-        raw: Some(raw),
-        message: Some(if msg.is_empty() {
-            "no CI jobs for this PR".into()
-        } else {
-            msg
-        }),
-        ..Default::default()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Ci, Action::Read)?;
+    forward(r, "/ci/jobs", &auth, req).await
 }
 
 async fn ci_log(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = repo_scope(ctx, req, Resource::Ci, Action::Read)?;
-    let window = if req.window == 0 {
-        200
-    } else {
-        req.window as usize
-    };
-    let before = req.before.map(|b| b as usize);
-    // With no job_id given, pick the PR's failing job automatically (or the last job if none failed)
-    let (job_id, name, concl) = if req.job_id != 0 {
-        (req.job_id, String::new(), String::new())
-    } else {
-        need(
-            req.number != 0 || req.run_id != 0,
-            "number, run_id or job_id is required",
-        )?;
-        let jobs = if req.run_id != 0 {
-            client.ci_jobs_for_run(&auth, req.run_id).await?
-        } else {
-            client.ci_jobs(&auth, req.number).await?
-        };
-        let pick = jobs
-            .iter()
-            .find(|j| j.conclusion == "failure")
-            .or_else(|| jobs.last())
-            .ok_or_else(|| ApiError::bad_request("no CI jobs for this PR"))?;
-        (pick.id, pick.name.clone(), pick.conclusion.clone())
-    };
-    let page = client
-        .ci_job_log(&auth, job_id, &name, &concl, window, before)
-        .await?;
-    let raw = serde_json::to_value(&page).unwrap_or(serde_json::Value::Null);
-    Ok(ApiResponse {
-        ok: true,
-        raw: Some(raw),
-        ..Default::default()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Ci, Action::Read)?;
+    forward(r, "/ci/log", &auth, req).await
 }
 
 // ---- Issue ----
@@ -1626,26 +939,21 @@ async fn ci_log(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiEr
 async fn issue_create(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
     need(!req.title.is_empty(), "title is required")?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Issue, Action::Create)?;
+    let (auth, r) = repo_scope(ctx, req, Resource::Issue, Action::Create)?;
     // Applying labels is a separate permission: issue:label is required to set them
-    let label_auth = if req.labels.is_empty() {
-        None
-    } else {
-        Some(
-            ctx.project
-                .authorize(&req.repo, Resource::Issue, Action::Label)?,
-        )
-    };
-    let labels = label_auth.as_ref().map(|a| (a, req.labels.as_slice()));
-    let iss = client
-        .create_issue(&auth, &req.title, &req.body, labels)
-        .await?;
-    Ok(ApiResponse {
-        number: Some(iss.number),
-        url: Some(iss.html_url),
-        node_id: Some(iss.node_id),
-        ..Default::default()
-    })
+    if req.labels.is_empty() {
+        return forward(r, "/issue/create", &auth, req).await;
+    }
+    let label_auth = ctx
+        .project
+        .authorize(&req.repo, Resource::Issue, Action::Label)?;
+    r.call(
+        "/issue/create",
+        &[&auth, &label_auth],
+        req,
+        &Resolved::default(),
+    )
+    .await
 }
 
 async fn issue_comment(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
@@ -1654,9 +962,8 @@ async fn issue_comment(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse
         req.number != 0 && !req.body.is_empty(),
         "number and body are required",
     )?;
-    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Comment).await?;
-    client.comment_issue(&auth, req.number, &req.body).await?;
-    Ok(ApiResponse::default())
+    let (auth, r, _) = numbered_write_scope(ctx, req, Action::Comment).await?;
+    forward(r, "/issue/comment", &auth, req).await
 }
 
 /// 0.2.15: correct an issue's title or body.
@@ -1668,37 +975,24 @@ async fn issue_update(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
         !req.title.is_empty() || !req.body.is_empty(),
         "title or body is required",
     )?;
-    let (auth, client) = numbered_scope(ctx, req, Resource::Issue, Action::Update)?;
-    if client.names_a_pull_request(&auth, req.number).await? {
+    let (auth, r) = numbered_scope(ctx, req, Resource::Issue, Action::Update)?;
+    if names_a_pull_request(r, &auth, req.number).await? {
         return Err(ApiError::bad_request(format!(
             "#{} is a pull request; use sekimore pr update",
             req.number
         )));
     }
-    let title = (!req.title.is_empty()).then_some(req.title.as_str());
-    let body = (!req.body.is_empty()).then_some(req.body.as_str());
-    client.update_issue(&auth, req.number, title, body).await?;
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(format!("updated #{}", req.number)),
-        ..ApiResponse::ok()
-    })
+    forward(r, "/issue/update", &auth, req).await
 }
 
 async fn issue_close(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Close).await?;
-    client.close_issue(&auth, req.number).await?;
-    Ok(ApiResponse::default())
+    let (auth, r, _) = numbered_write_scope(ctx, req, Action::Close).await?;
+    forward(r, "/issue/close", &auth, req).await
 }
 
 async fn issue_reopen(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Close).await?;
-    client.reopen_issue(&auth, req.number).await?;
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(format!("reopened #{}", req.number)),
-        ..ApiResponse::ok()
-    })
+    let (auth, r, _) = numbered_write_scope(ctx, req, Action::Close).await?;
+    forward(r, "/issue/reopen", &auth, req).await
 }
 
 async fn issue_label(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
@@ -1707,34 +1001,19 @@ async fn issue_label(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, 
         req.number != 0 && !req.labels.is_empty(),
         "number and labels are required",
     )?;
-    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Label).await?;
-    client.label_issue(&auth, req.number, &req.labels).await?;
-    Ok(ApiResponse::default())
+    let (auth, r, _) = numbered_write_scope(ctx, req, Action::Label).await?;
+    forward(r, "/issue/label", &auth, req).await
 }
 
 /// Take labels off again. Adding and removing are one authority, `issue:label`.
-///
-/// GitHub removes one label per request, so several names mean several calls. The names are
-/// agent-supplied and land in the path; `unlabel_issue` is what keeps them inside the repository.
 async fn issue_unlabel(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need_repo(req)?;
     need(
         req.number != 0 && !req.labels.is_empty(),
         "number and labels are required",
     )?;
-    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Label).await?;
-    for label in &req.labels {
-        client.unlabel_issue(&auth, req.number, label).await?;
-    }
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(format!(
-            "removed {} from #{}",
-            req.labels.join(", "),
-            req.number
-        )),
-        ..ApiResponse::ok()
-    })
+    let (auth, r, _) = numbered_write_scope(ctx, req, Action::Label).await?;
+    forward(r, "/issue/unlabel", &auth, req).await
 }
 
 async fn issue_assign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
@@ -1743,11 +1022,8 @@ async fn issue_assign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse,
         req.number != 0 && !req.assignees.is_empty(),
         "number and assignees are required",
     )?;
-    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Assign).await?;
-    client
-        .assign_issue(&auth, req.number, &req.assignees)
-        .await?;
-    Ok(ApiResponse::default())
+    let (auth, r, _) = numbered_write_scope(ctx, req, Action::Assign).await?;
+    forward(r, "/issue/assign", &auth, req).await
 }
 
 async fn issue_unassign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
@@ -1756,34 +1032,28 @@ async fn issue_unassign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespons
         req.number != 0 && !req.assignees.is_empty(),
         "number and assignees are required",
     )?;
-    let (auth, client, _) = numbered_write_scope(ctx, req, Action::Assign).await?;
-    client
-        .unassign_issue(&auth, req.number, &req.assignees)
-        .await?;
-    Ok(ApiResponse {
-        number: Some(req.number),
-        message: Some(format!(
-            "unassigned {} from #{}",
-            req.assignees.join(", "),
-            req.number
-        )),
-        ..ApiResponse::ok()
-    })
+    let (auth, r, _) = numbered_write_scope(ctx, req, Action::Assign).await?;
+    forward(r, "/issue/unassign", &auth, req).await
 }
 
 // ---- Projects ----
 
+/// The four Projects operations share their shape: the project-anchored scope, then the board the
+/// request names, checked and resolved, then the relay of the board's upstream.
+async fn board_op(
+    ctx: &ApiContext,
+    op: &str,
+    req: &ApiRequest,
+    action: Action,
+) -> Result<ApiResponse, ApiError> {
+    let (auth, _) = project_scope(ctx, req, Resource::Project, action)?;
+    let (resolved, r) = board_scope(ctx, req, &auth).await?;
+    r.call(op, &[&auth], req, &resolved).await
+}
+
 async fn project_add_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need(!req.content_id.is_empty(), "content_id is required")?;
-    let (auth, _) = project_scope(ctx, req, Resource::Project, Action::AddItem)?;
-    let (board, client) = board_scope(ctx, req, &auth).await?;
-    let item = client
-        .add_project_item(&auth, &board, &req.content_id)
-        .await?;
-    Ok(ApiResponse {
-        item_id: Some(item),
-        ..Default::default()
-    })
+    board_op(ctx, "/project/add-item", req, Action::AddItem).await
 }
 
 async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
@@ -1791,44 +1061,16 @@ async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRe
         !req.item_id.is_empty() && !req.field_id.is_empty(),
         "item_id and field_id are required",
     )?;
-    let (auth, _) = project_scope(ctx, req, Resource::Project, Action::UpdateItem)?;
-    let (board, client) = board_scope(ctx, req, &auth).await?;
-    let value = req.value.clone().unwrap_or(Value::Null);
-    client
-        .update_project_item_field(&auth, &board, &req.item_id, &req.field_id, value)
-        .await?;
-    Ok(ApiResponse::default())
+    board_op(ctx, "/project/update-item", req, Action::UpdateItem).await
 }
 
 async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, _) = project_scope(ctx, req, Resource::Project, Action::Read)?;
-    let (board, client) = board_scope(ctx, req, &auth).await?;
-    let first = if req.first == 0 || req.first > 100 {
-        20
-    } else {
-        req.first
-    };
-    let raw = client.list_project_items(&auth, &board, first).await?;
-    Ok(ApiResponse {
-        raw: Some(raw),
-        ..Default::default()
-    })
+    board_op(ctx, "/project/list", req, Action::Read).await
 }
 
 /// 0.2.7: the board's fields and their option ids, which `project update-item` needs.
 async fn project_fields(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, _) = project_scope(ctx, req, Resource::Project, Action::Read)?;
-    let (board, client) = board_scope(ctx, req, &auth).await?;
-    let first = if req.first == 0 || req.first > 100 {
-        50
-    } else {
-        req.first
-    };
-    let raw = client.list_project_fields(&auth, &board, first).await?;
-    Ok(ApiResponse {
-        raw: Some(raw),
-        ..Default::default()
-    })
+    board_op(ctx, "/project/fields", req, Action::Read).await
 }
 
 /// 0.2.7: ask people to review a pull request.
@@ -1839,82 +1081,35 @@ async fn pr_request_review(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResp
         !req.reviewers.is_empty() || !req.team_reviewers.is_empty(),
         "at least one reviewer or team is required",
     )?;
-    let (auth, client) = repo_scope(ctx, req, Resource::Pr, Action::RequestReview)?;
-    client
-        .request_reviewers(&auth, req.number, &req.reviewers, &req.team_reviewers)
-        .await?;
-    let mut who = req.reviewers.clone();
-    who.extend(req.team_reviewers.iter().map(|t| format!("@{t}")));
-    Ok(ApiResponse {
-        message: Some(format!(
-            "requested review on #{} from {}",
-            req.number,
-            who.join(", ")
-        )),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Pr, Action::RequestReview)?;
+    forward(r, "/pr/request-review", &auth, req).await
 }
 
 /// 0.2.7: search issues and pull requests across the project.
 ///
 /// A search names no repository, so the policy anchor is the project's first one, the same way
-/// Projects does it. What actually keeps the answer inside the project is the `repo:` scoping and
-/// the filter applied to the results, both in the client.
+/// Projects does it. What keeps the answer inside the project is the `repo:` scoping and the filter
+/// applied to the results, both over the repositories handed to the relay here.
 async fn search_issues(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     need(!req.query.is_empty(), "query is required")?;
-    let (auth, client) = project_scope(ctx, req, Resource::Search, Action::Read)?;
-    let limit = if req.first == 0 { 20 } else { req.first };
-    let hits = client
-        .search_issues(&auth, &ctx.project, &req.query, limit)
-        .await?;
-    let msg = if hits.is_empty() {
-        "no match in this project".to_string()
-    } else {
-        hits.iter()
-            .map(|h| {
-                format!(
-                    "{}#{} [{}] {} ({})",
-                    h.repository, h.number, h.state, h.title, h.kind
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+    let (auth, r) = project_scope(ctx, req, Resource::Search, Action::Read)?;
+    let resolved = Resolved {
+        repos: ctx
+            .project
+            .repos
+            .iter()
+            .map(|r| r.full_name.clone())
+            .collect(),
+        ..Resolved::default()
     };
-    Ok(ApiResponse {
-        message: Some(msg),
-        raw: serde_json::to_value(&hits).ok(),
-        ..ApiResponse::ok()
-    })
+    r.call("/search/issues", &[&auth], req, &resolved).await
 }
 
 /// 0.2.9: the labels, assignees and milestones a repository defines, so `issue label` and
 /// `issue assign` can use a value that exists instead of guessing at one.
 async fn repo_vocabulary(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    let (auth, client) = repo_scope(ctx, req, Resource::Repo, Action::Read)?;
-    let limit = if req.first == 0 { 100 } else { req.first };
-    let raw = client.repo_vocabulary(&auth, limit).await?;
-    let line = |key: &str| {
-        raw.get(key)
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "(none)".to_string())
-    };
-    Ok(ApiResponse {
-        message: Some(format!(
-            "labels:     {}\nassignees:  {}\nmilestones: {}",
-            line("labels"),
-            line("assignees"),
-            line("milestones")
-        )),
-        raw: Some(raw),
-        ..ApiResponse::ok()
-    })
+    let (auth, r) = repo_scope(ctx, req, Resource::Repo, Action::Read)?;
+    forward(r, "/repo/vocabulary", &auth, req).await
 }
 
 // ---- Bootstrap (unauthenticated) ----
@@ -2069,181 +1264,4 @@ fn strictest_signing(project: &crate::policy::Project) -> SigningMode {
 #[allow(dead_code)]
 fn now() -> SystemTime {
     SystemTime::now()
-}
-
-#[cfg(test)]
-mod comment_rendering {
-    use crate::github::CommentItem;
-
-    fn item(kind: &str, author: &str, body: &str) -> CommentItem {
-        CommentItem {
-            kind: kind.into(),
-            author: author.into(),
-            created_at: "2026-09-24T10:00:00Z".into(),
-            body: body.into(),
-            state: None,
-            path: None,
-            line: None,
-            in_reply_to_id: None,
-            id: None,
-            review_id: None,
-            thread_id: None,
-            resolved: None,
-        }
-    }
-    fn review(author: &str, state: &str, body: &str, rid: u64) -> CommentItem {
-        CommentItem {
-            state: Some(state.into()),
-            review_id: Some(rid),
-            ..item("review", author, body)
-        }
-    }
-    fn inline(
-        author: &str,
-        path: &str,
-        line: u64,
-        body: &str,
-        id: u64,
-        rid: Option<u64>,
-    ) -> CommentItem {
-        CommentItem {
-            path: Some(path.into()),
-            line: Some(line),
-            id: Some(id),
-            review_id: rid,
-            ..item("inline", author, body)
-        }
-    }
-
-    /// #165: one submission reads as one thing, whoever else reviewed in the same second.
-    #[test]
-    fn line_comments_sit_under_the_review_they_came_with() {
-        let items = vec![
-            item("comment", "alice", "looks fine"),
-            review("bob", "CHANGES_REQUESTED", "two things", 1),
-            inline("bob", "pack.rs", 142, "why is this safe?", 2451, Some(1)),
-            review("carol", "APPROVED", "lgtm", 2),
-            inline("carol", "policy.rs", 88, "nice", 2452, Some(2)),
-        ];
-        let out = super::comment_lines(&items);
-        let bob = out.find("review CHANGES_REQUESTED").unwrap();
-        let carol = out.find("review APPROVED").unwrap();
-        let q = out.find("why is this safe?").unwrap();
-        let n = out.find("nice").unwrap();
-        assert!(
-            bob < q && q < carol,
-            "bob's comment must sit inside bob's review:\n{out}"
-        );
-        assert!(
-            carol < n,
-            "carol's comment must sit inside carol's review:\n{out}"
-        );
-        assert!(
-            out.contains("      why is this safe?"),
-            "nested deeper than its review:\n{out}"
-        );
-    }
-
-    /// The id is what says "you can answer this", so it appears only where a reply is possible.
-    #[test]
-    fn only_the_lines_that_can_be_replied_to_carry_an_id() {
-        let items = vec![
-            item("comment", "alice", "looks fine"),
-            review("bob", "COMMENTED", "a note", 1),
-            inline("bob", "pack.rs", 142, "why?", 2451, Some(1)),
-        ];
-        let out = super::comment_lines(&items);
-        assert!(out.contains("pack.rs:142  #2451"), "{out}");
-        let conversation = out.lines().find(|l| l.contains("[comment]")).unwrap();
-        assert!(
-            !conversation.contains('#'),
-            "a conversation comment needs no id: {conversation}"
-        );
-    }
-
-    /// A COMMENTED review with no body is only an envelope; with nothing in it, it says nothing.
-    #[test]
-    fn an_empty_envelope_is_dropped_but_a_full_one_is_not() {
-        let empty = vec![CommentItem {
-            ..review("bob", "COMMENTED", "", 1)
-        }];
-        let mut e = empty.clone();
-        e[0].kind = "review_envelope".into();
-        assert_eq!(
-            super::comment_lines(&e),
-            "",
-            "an envelope with no comments must not print"
-        );
-
-        let mut full = e.clone();
-        full.push(inline("bob", "pack.rs", 1, "here", 99, Some(1)));
-        let out = super::comment_lines(&full);
-        assert!(
-            out.contains("pack.rs:1  #99"),
-            "its comments must still show:\n{out}"
-        );
-    }
-
-    /// 0.2.59: `pr resolve` takes a thread id, and this is the only place one is shown. It is
-    /// printed once per conversation — a node id is long and every reply in a thread repeats it —
-    /// and on the first comment of the thread that is rendered rather than on the thread's root,
-    /// because a limit can leave the root out while a reply is still on the page.
-    #[test]
-    fn a_thread_id_is_printed_once_per_conversation_with_its_state() {
-        let threaded = |mut c: CommentItem, tid: &str, done: bool| {
-            c.thread_id = Some(tid.into());
-            c.resolved = Some(done);
-            c
-        };
-        let items = vec![
-            threaded(
-                inline("bob", "pack.rs", 7, "why?", 42, None),
-                "PRRT_a",
-                false,
-            ),
-            threaded(
-                inline("bob", "pack.rs", 7, "and also", 43, None),
-                "PRRT_a",
-                false,
-            ),
-            threaded(
-                inline("carol", "policy.rs", 9, "settled", 44, None),
-                "PRRT_b",
-                true,
-            ),
-            // No thread at all: the join found nothing, and the line still prints as before.
-            inline("dave", "main.rs", 1, "orphan", 45, None),
-        ];
-        let out = super::comment_lines(&items);
-        assert!(
-            out.contains("pack.rs:7  #42  thread PRRT_a"),
-            "the first comment of a conversation carries its id:\n{out}"
-        );
-        assert_eq!(
-            out.matches("PRRT_a").count(),
-            1,
-            "a thread id is not repeated on every reply:\n{out}"
-        );
-        assert!(
-            out.contains("policy.rs:9  #44  thread PRRT_b (resolved)"),
-            "a settled conversation says so:\n{out}"
-        );
-        assert!(
-            !out.contains("PRRT_a (resolved)"),
-            "an open one is left unmarked:\n{out}"
-        );
-        assert!(
-            out.contains("main.rs:1  #45\n"),
-            "a comment with no thread prints as it always did:\n{out}"
-        );
-    }
-
-    /// A reply posted on its own belongs to no review, and still has to appear.
-    #[test]
-    fn an_inline_comment_with_no_review_is_not_lost() {
-        let items = vec![inline("bob", "pack.rs", 7, "standalone", 42, None)];
-        let out = super::comment_lines(&items);
-        assert!(out.contains("pack.rs:7  #42"), "{out}");
-        assert!(out.contains("standalone"), "{out}");
-    }
 }

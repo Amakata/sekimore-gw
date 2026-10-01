@@ -86,7 +86,7 @@ async fn start(project: Project) -> Server {
         upstream: Arc::new(FailingUpstream {
             reached: reached.clone(),
         }),
-        github: None,
+        forge: None,
         audit: audit.clone(),
         limits: Limits::default(),
     });
