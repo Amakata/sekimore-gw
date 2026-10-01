@@ -456,6 +456,7 @@ domain_handlers:
 sgw var set bastion      # エコーなしで入力。パイプでも渡せる: echo alice@bastion.example.com:2222 | sgw var set bastion
 sgw var list             # キーと、値が入っているか（値は出さない）
 sgw var get bastion      # 値。実行した人にだけ出す
+sgw var set --secret corp/token   # 書き込み専用。置き換えはできるが読み戻せない
 ```
 
 - キーは `[A-Za-z0-9._-]` の段を `/` でつないだもの。複数の上流で共有するなら `{bastion}`、1 つの上流用なら `{ghe.example.com/bastion}`。
@@ -463,6 +464,7 @@ sgw var get bastion      # 値。実行した人にだけ出す
 - ssh のオプションに入る値は `[A-Za-z0-9._@:,/-]` だけ。値を埋めた後のオプションにも、通常の検査をかけ直します。
 - `sgw login` は、config が参照しているのに値が無いキーをまとめて聞きます。ストアが施錠中か値が無い間は、その上流に繋がず、実行すべきコマンドをエラーで示します。
 - `sgw check` は `{bastion}: set` / `missing` / `locked` を表示し、値は出しません。
+- `--secret` で入れた値と proxy のパスワードは、`sgw var get` で読み戻せません。置き換えても秘密のままで、`sgw var delete` で消すまで続きます。操作者の端末に値を出さないための仕組みで、gateway は使うために値を読むので、ホストを握った人からは隠せません。
 - 上流 proxy の資格情報も、この値 2 つ（`proxy_user` / `proxy_password`）です。`sgw proxy-credential set` で両方を入れます。`proxy.upstream_proxy_username: "{corp/user}"` と書けば別のキーを使います。0.2.62 より前に入れた資格情報は、ストアの解錠時にこの 2 つへ移ります。
 
 ## 表示言語（0.2.4）

@@ -134,6 +134,8 @@ pub enum VarAction {
     Set {
         #[arg(help = t("cli.var.key"))]
         key: String,
+        #[arg(long, help = t("cli.var.secret"))]
+        secret: bool,
     },
     #[command(about = t("cli.var.get"))]
     Get {
@@ -204,7 +206,9 @@ pub async fn run(cli: Cli) -> i32 {
                 .map(|_| 0),
         },
         Command::Var { action } => match action {
-            VarAction::Set { key } => operator::var_set(&cli.config, &key).await.map(|_| 0),
+            VarAction::Set { key, secret } => operator::var_set(&cli.config, &key, secret)
+                .await
+                .map(|_| 0),
             VarAction::Get { key } => operator::var_get(&cli.config, &key).await.map(|_| 0),
             VarAction::List => operator::var_list(&cli.config).await.map(|_| 0),
             VarAction::Delete { key } => operator::var_delete(&cli.config, &key).await.map(|_| 0),
