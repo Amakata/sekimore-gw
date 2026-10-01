@@ -621,10 +621,25 @@ pub struct SigningKeyConfig {
     /// mount, because `SSH_AUTH_SOCK` is a path
     #[serde(default = "d_signing_socket")]
     pub socket: PathBuf,
-    /// The uid the socket is given, so the dev container's user can open it. 1000 is `vscode` in
-    /// the devcontainer images. The mode is 0600, so no other uid on that volume can reach it
-    #[serde(default = "d_signing_socket_uid")]
-    pub socket_uid: u32,
+    /// The uid the socket is given, so the dev container's user can open it. The mode is 0600, so
+    /// no other uid on that volume can reach it. #339: unset, the socket follows the dev user's
+    /// actual uid, which `sgw-agent setup` reports on every start — 1000 (`vscode` in the
+    /// devcontainer images) until it does, and whatever Dev Containers' `updateRemoteUserUID`
+    /// made it on a Linux host. Set, it is fixed.
+    #[serde(default)]
+    pub socket_uid: Option<u32>,
+}
+
+impl SigningKeyConfig {
+    /// The uid the socket starts with.
+    pub fn socket_uid(&self) -> u32 {
+        self.socket_uid.unwrap_or_else(d_signing_socket_uid)
+    }
+
+    /// #339: whether the socket follows the uid the dev container reports.
+    pub fn follows_dev_uid(&self) -> bool {
+        self.socket_uid.is_none()
+    }
 }
 
 fn d_signing_source() -> SigningKeySource {
@@ -2217,7 +2232,8 @@ relay:
         assert_eq!(sk.namespace, "git");
         assert_eq!(sk.timeout, Duration::from_secs(15));
         assert_eq!(sk.socket, PathBuf::from("/run/sekimore/signing-agent.sock"));
-        assert_eq!(sk.socket_uid, 1000);
+        assert_eq!(sk.socket_uid(), 1000);
+        assert!(sk.follows_dev_uid());
         // Omitting the section entirely is the old behaviour, not an error
         let none = "domain_handlers:\n  github.com: { handler: git-relay }\nrelay:\n  project:\n    name: x\n    repos: [{ name: Org/App, mode: read-write }]\n";
         assert!(p(none)

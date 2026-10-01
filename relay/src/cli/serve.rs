@@ -417,11 +417,10 @@ async fn start_signing_agent(
         );
         return None;
     };
-    let agent = Arc::new(SigningAgent::new(
-        cfg,
-        host_agent.to_path_buf(),
-        audit.clone(),
-    ));
+    let agent = Arc::new(
+        SigningAgent::new(cfg, host_agent.to_path_buf(), audit.clone())
+            .remembering(r.relay.state_dir.join("signing-socket-uid")),
+    );
     let listener = match agent.bind() {
         Ok(l) => l,
         Err(e) => {

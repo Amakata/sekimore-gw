@@ -275,6 +275,7 @@ pub async fn dispatch(
 ) -> Result<ApiResponse, ApiError> {
     match path {
         "/whoami" => whoami(ctx, rec).await,
+        "/signing/owner" => signing_owner(ctx, req).await,
         "/pr/create" => pr_create(ctx, req).await,
         "/pr/comment" => pr_comment(ctx, req).await,
         "/pr/reply" => pr_reply(ctx, req).await,
@@ -475,6 +476,41 @@ async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiE
     Ok(ApiResponse {
         message: Some(msg),
         ..Default::default()
+    })
+}
+
+/// #339: the dev container's user, so the signing socket can belong to it.
+///
+/// Any project token will do and no permission is asked: the only thing this changes is which uid
+/// on the shared volume may open the socket, and root in the dev container can open it whatever the
+/// owner is. What it fixes is a dev user Dev Containers gave the host's uid on Linux (501, say),
+/// shut out of a socket made for 1000. Root is refused: that would shut the dev user out instead.
+async fn signing_owner(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    let uid = req
+        .uid
+        .ok_or_else(|| ApiError::bad_request("uid is required"))?;
+    need(
+        uid != 0,
+        "uid 0 is root; the socket is for the dev container's user",
+    )?;
+    let Some(sig) = &ctx.signing else {
+        return Ok(ApiResponse {
+            message: Some("no signing key is offered by the gateway".into()),
+            ..ApiResponse::ok()
+        });
+    };
+    let changed = sig.follow_dev_uid(uid).map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("cannot hand the signing socket to uid {uid}: {e}"),
+    })?;
+    let now = sig.socket_uid();
+    Ok(ApiResponse {
+        message: Some(if changed {
+            format!("the signing socket now belongs to uid {now}")
+        } else {
+            format!("the signing socket belongs to uid {now}")
+        }),
+        ..ApiResponse::ok()
     })
 }
 

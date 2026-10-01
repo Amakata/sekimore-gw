@@ -3956,3 +3956,34 @@ async fn a_board_on_another_upstream_is_asked_there_whatever_repo_names() {
         "{msg}"
     );
 }
+
+/// #339: the dev container reports its user's uid for the signing socket. Root and a missing uid
+/// are refused; a gateway that offers no signing key says so and changes nothing.
+#[tokio::test]
+async fn signing_owner_takes_the_dev_users_uid() {
+    let f = start_api(project_case_a(&[]), BootstrapMode::Auto, true).await;
+    let (code, _) = post(
+        f.addr,
+        "/signing/owner",
+        Some(&f.token),
+        &ApiRequest::default(),
+    )
+    .await;
+    assert_eq!(code, 400, "a uid is required");
+    let root = ApiRequest {
+        uid: Some(0),
+        ..Default::default()
+    };
+    let (code, resp) = post(f.addr, "/signing/owner", Some(&f.token), &root).await;
+    assert_eq!(code, 400, "{resp:?}");
+    let dev = ApiRequest {
+        uid: Some(501),
+        ..Default::default()
+    };
+    let (code, resp) = post(f.addr, "/signing/owner", Some(&f.token), &dev).await;
+    assert_eq!(code, 200, "{resp:?}");
+    assert!(resp.message.unwrap_or_default().contains("no signing key"));
+    let (code, _) = post(f.addr, "/signing/owner", None, &dev).await;
+    assert_eq!(code, 401, "a project token is still required");
+    assert!(recorded(&f.recorder).is_empty(), "nothing reaches upstream");
+}
