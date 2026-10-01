@@ -1864,23 +1864,25 @@ pub async fn proxy_credential_set(path: &Path) -> anyhow::Result<()> {
     }
     eprintln!("username: {user}");
     let pass = store::control::prompt("Proxy password")?;
-    let value = serde_json::json!({
-        "username": user,
-        "password": String::from_utf8_lossy(pass.as_bytes()),
-    })
-    .to_string();
-    let body = serde_json::json!({
-        "op": "set", "namespace": PROXY_NAMESPACE, "name": PROXY_NAME, "value": value
-    })
-    .to_string();
-    let (ok, message) = store::control::call(&sock, &body).await?;
-    if !ok {
-        // #213: the store's refusal ("the secret store is locked; ask a human to run: …") is
-        // the operator's error, on stderr and in red like the line that follows it
-        eprintln!("{}", paint_err(Tone::Bad, &message));
-        bail!("the credential was not stored");
+    // #334: two per-person values — the ones config.yml refers to, or proxy_user / proxy_password
+    let (ku, kp) = proxy_var_keys(path)?;
+    for (key, value) in [
+        (&ku, user.clone()),
+        (&kp, String::from_utf8_lossy(pass.as_bytes()).into_owned()),
+    ] {
+        let body = serde_json::json!({
+            "op": "set", "namespace": crate::vars::NAMESPACE, "name": key, "value": value
+        })
+        .to_string();
+        let (ok, message) = store::control::call(&sock, &body).await?;
+        if !ok {
+            // #213: the store's refusal ("the secret store is locked; ask a human to run: …") is
+            // the operator's error, on stderr and in red like the line that follows it
+            eprintln!("{}", paint_err(Tone::Bad, &message));
+            bail!("the credential was not stored");
+        }
     }
-    println!("{message}");
+    println!("stored {{{ku}}} and {{{kp}}}");
     // #271: the old wording told people to run `sgw restart` — stale since #193, where the
     // gateway's watcher took over and applies the credential to Squid on its own.
     println!(
@@ -1915,17 +1917,40 @@ fn usable_username(username: &str) -> Result<(), String> {
 /// Remove it. For a deployment that no longer sits behind a proxy, or one moving the value.
 pub async fn proxy_credential_clear(path: &Path) -> anyhow::Result<()> {
     let sock = store_paths(path)?;
-    let body = serde_json::json!({
-        "op": "delete", "namespace": PROXY_NAMESPACE, "name": PROXY_NAME
-    })
-    .to_string();
-    let (ok, message) = store::control::call(&sock, &body).await?;
-    println!("{message}");
-    if ok {
-        Ok(())
-    } else {
-        bail!("nothing was removed")
+    let (ku, kp) = proxy_var_keys(path)?;
+    // #334: the two per-person values, and the record from before them if it is still there
+    let mut removed = 0;
+    for (ns, name) in [
+        (crate::vars::NAMESPACE, ku.as_str()),
+        (crate::vars::NAMESPACE, kp.as_str()),
+        (PROXY_NAMESPACE, PROXY_NAME),
+    ] {
+        let body = serde_json::json!({"op": "delete", "namespace": ns, "name": name}).to_string();
+        let (ok, message, _, code) = store::control::call_coded(&sock, &body).await?;
+        if ok {
+            removed += 1;
+        } else if code.as_deref() != Some(store::control::CODE_NOT_FOUND) {
+            bail!("{message}");
+        }
     }
+    if removed == 0 {
+        bail!("nothing was removed: no upstream proxy credential is stored");
+    }
+    println!("removed the upstream proxy credential");
+    Ok(())
+}
+
+/// #334: the keys the proxy credential is kept under — the ones `upstream_proxy_username` /
+/// `_password` refer to as `{name}`, or proxy_user / proxy_password.
+fn proxy_var_keys(path: &Path) -> anyhow::Result<(String, String)> {
+    let r = resolve(path)?;
+    Ok(match r.proxy.as_ref() {
+        Some(px) => crate::proxy_credential::var_keys(px),
+        None => (
+            crate::proxy_credential::VAR_USER.to_string(),
+            crate::proxy_credential::VAR_PASSWORD.to_string(),
+        ),
+    })
 }
 
 /// `lock` and `status`, which need no passphrase.

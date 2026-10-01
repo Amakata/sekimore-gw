@@ -92,13 +92,16 @@ proxy:
   # upstream_proxy_tls: false             # default false. TLS on the hop to the upstream proxy itself
   #
   # gw 0.2.22: the credential belongs in the secret store, not here and not in the environment:
-  #   mise run gw:proxy-credential -- set
+  #   sgw proxy-credential set        (gw 0.2.62+: the per-person values proxy_user / proxy_password,
+  #                                    also settable one at a time with `sgw var set proxy_user`)
+  # gw 0.2.62+: write "{name}" in the two fields below to name other keys, e.g. "{corp/proxy_user}";
+  # each person keeps their own value with `sgw var set corp/proxy_user`.
   # Written here it is readable from the dev container, because this file is in the worktree. The
   # environment is not the answer either: `.devcontainer/.env` is the dev service's own env_file,
   # so anything in it becomes a variable in the agent's own process. Both are still read, so an
   # existing deployment keeps working. The store is sealed at start-up, so Squid runs without
   # upstream authentication until `mise run gw:unlock`.
-  upstream_proxy_username: null           # prefer `mise run gw:proxy-credential -- set`
+  upstream_proxy_username: null           # prefer `sgw proxy-credential set`, or "{proxy_user}"
   upstream_proxy_password: null           # readable from dev if set here
 
 # Web UI language (gw 0.2.4+). auto = follow the browser's Accept-Language; a choice made in the

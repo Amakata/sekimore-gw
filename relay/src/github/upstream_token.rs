@@ -124,10 +124,15 @@ impl SecretSource {
     }
 
     async fn set(&self, name: &str, value: &str) -> Result<(), TokenError> {
+        self.set_in(NAMESPACE, name, value).await
+    }
+
+    /// A secret into any namespace (#334: the per-person values live under `var`).
+    pub async fn set_in(&self, namespace: &str, name: &str, value: &str) -> Result<(), TokenError> {
         match self {
             SecretSource::InProcess(store) => {
                 let store = store.lock().await;
-                match store.set(NAMESPACE, name, value.as_bytes()) {
+                match store.set(namespace, name, value.as_bytes()) {
                     Ok(()) => Ok(()),
                     Err(store::StoreError::Locked) => Err(locked(name)),
                     Err(e) => Err(TokenError::Io(std::io::Error::other(e.to_string()))),
@@ -135,7 +140,7 @@ impl SecretSource {
             }
             SecretSource::ControlSocket(sock) => {
                 let body = serde_json::json!({
-                    "op": "set", "namespace": NAMESPACE, "name": name, "value": value
+                    "op": "set", "namespace": namespace, "name": name, "value": value
                 })
                 .to_string();
                 let (ok, message, _, code) = call(sock, &body).await?;
@@ -152,10 +157,14 @@ impl SecretSource {
     }
 
     async fn delete(&self, name: &str) -> Result<bool, TokenError> {
+        self.delete_in(NAMESPACE, name).await
+    }
+
+    pub async fn delete_in(&self, namespace: &str, name: &str) -> Result<bool, TokenError> {
         match self {
             SecretSource::InProcess(store) => {
                 let store = store.lock().await;
-                match store.delete(NAMESPACE, name) {
+                match store.delete(namespace, name) {
                     Ok(existed) => Ok(existed),
                     Err(store::StoreError::Locked) => Err(locked(name)),
                     Err(e) => Err(TokenError::Io(std::io::Error::other(e.to_string()))),
@@ -163,7 +172,7 @@ impl SecretSource {
             }
             SecretSource::ControlSocket(sock) => {
                 let body =
-                    serde_json::json!({"op": "delete", "namespace": NAMESPACE, "name": name})
+                    serde_json::json!({"op": "delete", "namespace": namespace, "name": name})
                         .to_string();
                 let (ok, message, _, code) = call(sock, &body).await?;
                 if ok {

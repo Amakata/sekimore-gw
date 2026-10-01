@@ -479,6 +479,7 @@ sgw var get bastion      # the value, for the person who asks
 - A value placed in an ssh option may hold only `[A-Za-z0-9._@:,/-]`, and the option is checked again once it is filled in.
 - `sgw login` asks for every value the config refers to that is missing. With the store locked or a value missing, the upstream is not connected, and the error says which command to run.
 - `sgw check` shows `{bastion}: set` / `missing` / `locked`, never the value.
+- The upstream proxy credential is two such values, `proxy_user` / `proxy_password` (`sgw proxy-credential set` fills both). `proxy.upstream_proxy_username: "{corp/user}"` names other keys. A credential stored before 0.2.62 moves into them once the store is unlocked.
 
 ## Display language (0.2.4)
 

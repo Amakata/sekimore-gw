@@ -22,7 +22,7 @@ from .. import __version__ as core_version
 from .. import constants, i18n
 from ..config import NO_PROXY_ALWAYS, PROXY_DENIED_HANDLERS, merge_no_proxy
 from ..logger import ComponentType, log_error, log_system_event
-from ..secret_store import PROXY_NAME, PROXY_NAMESPACE, Locked, SecretStoreError, get_secret
+from ..secret_store import SecretStoreError, literal, read_proxy_credential
 from . import __version__ as webui_version
 from .log_stream import LogStreamer, parse_client_message
 
@@ -411,25 +411,30 @@ def _run_iptables(iptables_cmd: str) -> IptablesResponse:
         return IptablesResponse(available=False, error=str(e))
 
 
-def _upstream_auth_state(has_config_auth: bool) -> str:
+def _upstream_auth_state(
+    has_config_auth: bool,
+    username_field: str | None = None,
+    password_field: str | None = None,
+) -> str:
     """Which upstream proxy credential is in force, and why there is not one (#194).
 
     The Web UI is a separate process from the orchestrator, so it asks the store itself rather
     than reading the gateway's state. The value is discarded here — only the state is reported,
-    never the credential.
+    never the credential. #334: the fields may name per-person values (`{proxy_user}`); the
+    names are passed so the same keys are asked for as Squid's.
 
     `set` beats `config` because the store is what Squid ends up presenting. `locked` is not
-    `none`: the operator's next step is `gw:unlock`, not registering a credential, and conflating
+    `none`: the operator's next step is `sgw unlock`, not registering a credential, and conflating
     the two is what cost the reporter a day.
     """
     try:
-        secret = get_secret(PROXY_NAMESPACE, PROXY_NAME)
+        state, _ = read_proxy_credential(username_field, password_field)
     except SecretStoreError:
         # No relay configured at all, or it is not up yet. Say what is in force instead.
         return "config" if has_config_auth else "unavailable"
-    if isinstance(secret, str):
+    if state == "set":
         return "set"
-    if isinstance(secret, Locked):
+    if state == "locked":
         # A locked store may well hold one; it cannot be read without the key. What config.yml
         # or the environment has is what Squid is using meanwhile, but the store is the news.
         return "locked"
@@ -452,10 +457,16 @@ async def get_config() -> ConfigResponse:
     proxy_cfg = config.get("proxy", {})
 
     # Expose only whether credentials exist; never the password itself
+    # #334: a `{key}` in the field is a name in the store, not a credential in config.yml
     has_config_auth = bool(
-        proxy_cfg.get("upstream_proxy_username") or os.getenv("SEKIMORE_UPSTREAM_PROXY_USERNAME")
+        literal(proxy_cfg.get("upstream_proxy_username"))
+        or os.getenv("SEKIMORE_UPSTREAM_PROXY_USERNAME")
     )
-    upstream_auth = _upstream_auth_state(has_config_auth)
+    upstream_auth = _upstream_auth_state(
+        has_config_auth,
+        proxy_cfg.get("upstream_proxy_username"),
+        proxy_cfg.get("upstream_proxy_password"),
+    )
     has_auth = upstream_auth in ("set", "config")
 
     proxy_response = ProxyConfigResponse(

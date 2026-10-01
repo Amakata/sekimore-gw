@@ -158,3 +158,62 @@ def describe_is_unlocked():
     def it_is_false_when_the_relay_cannot_be_reached(tmp_path):
         # Not an exception: the caller's next step — try again later — is the same either way.
         assert is_unlocked(tmp_path / "absent.sock") is False
+
+
+def describe_per_person_values():
+    """#334: config fields may name per-person values; the proxy credential lives in two."""
+
+    def it_reads_a_whole_field_as_a_reference_and_anything_else_as_a_literal():
+        from src.secret_store import literal, reference
+
+        assert reference("{proxy_user}") == "proxy_user"
+        assert reference(" {corp/user} ") == "corp/user"
+        for lit in ["alice", "{a b}", "x{proxy_user}", "{proxy_user}x", "{}", "{../x}", "", None]:
+            assert reference(lit) is None, lit
+        assert literal("{proxy_user}") is None, "a reference is never the credential itself"
+        assert literal("alice") == "alice"
+        assert literal(None) is None
+
+    def _store(values):
+        from src.secret_store import NotFound
+
+        def get(namespace, name, sock_path=None):
+            return values.get((namespace, name), NotFound())
+
+        return get
+
+    def it_reads_the_per_person_values_before_the_old_record():
+        from unittest.mock import patch
+
+        from src.secret_store import read_proxy_credential
+
+        old = {("proxy", "upstream"): '{"username": "old", "password": "o"}'}
+        with patch("src.secret_store.get_secret", side_effect=_store(old)):
+            assert read_proxy_credential(None, None) == ("set", ("old", "o"))
+        new = dict(old)
+        new[("var", "proxy_user")] = "alice"
+        new[("var", "proxy_password")] = "p@ss:w0rd %x"
+        with patch("src.secret_store.get_secret", side_effect=_store(new)):
+            assert read_proxy_credential(None, None) == ("set", ("alice", "p@ss:w0rd %x"))
+
+    def it_reads_the_keys_the_config_names():
+        from unittest.mock import patch
+
+        from src.secret_store import read_proxy_credential
+
+        values = {("var", "corp/user"): "bob", ("var", "corp/pass"): "b"}
+        with patch("src.secret_store.get_secret", side_effect=_store(values)):
+            assert read_proxy_credential("{corp/user}", "{corp/pass}") == ("set", ("bob", "b"))
+            # a literal field is not a key; the default pair (empty here) is asked for instead
+            assert read_proxy_credential("carol", "c") == ("none", None)
+
+    def it_reports_a_locked_store_and_an_unusable_record():
+        from unittest.mock import patch
+
+        from src.secret_store import Locked, read_proxy_credential
+
+        with patch("src.secret_store.get_secret", return_value=Locked()):
+            assert read_proxy_credential(None, None) == ("locked", None)
+        bad = {("proxy", "upstream"): "not json"}
+        with patch("src.secret_store.get_secret", side_effect=_store(bad)):
+            assert read_proxy_credential(None, None) == ("unusable", None)

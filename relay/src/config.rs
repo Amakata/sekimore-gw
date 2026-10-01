@@ -1510,17 +1510,29 @@ impl ProxySpec {
             return None;
         }
         self.stored.get().or_else(|| {
-            self.username
-                .clone()
-                .map(|u| (u, self.password.clone().unwrap_or_default()))
+            self.literal_username()
+                .map(|u| (u, self.literal_password().unwrap_or_default()))
         })
+    }
+
+    /// #334: a field that is a `{name}` is a reference into the secret store, never the value itself.
+    fn literal_username(&self) -> Option<String> {
+        self.username
+            .clone()
+            .filter(|u| crate::proxy_credential::reference(Some(u)).is_none())
+    }
+
+    fn literal_password(&self) -> Option<String> {
+        self.password
+            .clone()
+            .filter(|p| crate::proxy_credential::reference(Some(p)).is_none())
     }
 
     /// Where `credential()` comes from, for `check` and for the message when the proxy refuses it.
     pub fn credential_source(&self) -> &'static str {
         if self.stored.get().is_some() {
             "the secret store (sgw proxy-credential)"
-        } else if self.username.is_some() {
+        } else if self.literal_username().is_some() {
             "SEKIMORE_UPSTREAM_PROXY_* or config.yml"
         } else {
             "none"
@@ -1659,9 +1671,21 @@ pub struct Resolved {
 }
 
 impl Resolved {
-    /// #334: the per-person values the config refers to (`{name}` in ssh_options), each once.
+    /// #334: the per-person values the config refers to (`{name}` in ssh_options and the proxy
+    /// credential), each once.
     pub fn var_refs(&self) -> Vec<String> {
-        crate::vars::refs(self.upstreams.iter().flat_map(|u| u.ssh_options.iter()))
+        let mut out = crate::vars::refs(self.upstreams.iter().flat_map(|u| u.ssh_options.iter()));
+        // and the proxy credential's, when `upstream_proxy_username` / `_password` name one
+        if let Some(px) = &self.proxy {
+            for f in [px.username.as_deref(), px.password.as_deref()] {
+                if let Some(k) = crate::proxy_credential::reference(f) {
+                    if !out.contains(&k) {
+                        out.push(k);
+                    }
+                }
+            }
+        }
+        out
     }
 
     pub fn default_upstream(&self) -> &Upstream {
