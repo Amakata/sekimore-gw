@@ -19,6 +19,7 @@
   "cli.var": "人ごとの値（踏み台のアカウントなど）を秘密ストアに置き、config.yml から {name} で参照する",
   "cli.var.key": "キー。英数字と . _ - の段を / でつなぐ（例: bastion、ghe.example.com/bastion）",
   "cli.var.set": "値を入れる（エコーなしで入力、または標準入力の 1 行目。ps に残る引数では渡さない）",
+  "cli.var.secret": "値を書き込み専用にする。置き換えはできるが var get では読み戻せない。proxy のパスワードは常にこの扱い",
   "cli.var.get": "値を表示する。ホストで人が実行するとき専用。ほかに値を出すものは無い",
   "cli.var.list": "config.yml が参照するキーとストアにあるキー、それぞれ値があるか（値は出さない）",
   "cli.var.delete": "値を消す",

@@ -19,6 +19,7 @@
   "cli.var": "Per-person values (a bastion account, say) kept in the secret store and referred to from config.yml as {name}",
   "cli.var.key": "The key: segments of letters, digits, . _ - joined by / (e.g. bastion, ghe.example.com/bastion)",
   "cli.var.set": "Store a value (typed without echo, or the first line of stdin; never an argument, which would reach ps)",
+  "cli.var.secret": "Make the value write-only: it can be replaced, not read back with var get. The proxy password always is",
   "cli.var.get": "Print a value. Only for a person on the host; nothing else prints one",
   "cli.var.list": "The keys config.yml refers to and the store holds, and whether each has a value (never the value)",
   "cli.var.delete": "Remove a value",

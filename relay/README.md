@@ -472,6 +472,7 @@ domain_handlers:
 sgw var set bastion      # typed without echo, or piped: echo alice@bastion.example.com:2222 | sgw var set bastion
 sgw var list             # the keys and whether each has a value (never the value)
 sgw var get bastion      # the value, for the person who asks
+sgw var set --secret corp/token   # write-only: it can be replaced, not read back
 ```
 
 - A key is segments of `[A-Za-z0-9._-]` joined by `/`: `{bastion}` shared by several upstreams, `{ghe.example.com/bastion}` for one.
@@ -479,6 +480,7 @@ sgw var get bastion      # the value, for the person who asks
 - A value placed in an ssh option may hold only `[A-Za-z0-9._@:,/-]`, and the option is checked again once it is filled in.
 - `sgw login` asks for every value the config refers to that is missing. With the store locked or a value missing, the upstream is not connected, and the error says which command to run.
 - `sgw check` shows `{bastion}: set` / `missing` / `locked`, never the value.
+- A value set with `--secret`, and the proxy password always, is refused by `sgw var get`. It stays a secret when replaced, until `sgw var delete`. This keeps it off the operator's terminal; the gateway still reads it to use it, so it does not hide it from whoever controls the host.
 - The upstream proxy credential is two such values, `proxy_user` / `proxy_password` (`sgw proxy-credential set` fills both). `proxy.upstream_proxy_username: "{corp/user}"` names other keys. A credential stored before 0.2.62 moves into them once the store is unlocked.
 
 ## Display language (0.2.4)

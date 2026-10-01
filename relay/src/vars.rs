@@ -28,6 +28,9 @@ use crate::github::upstream_token::{SecretSource, TokenError};
 
 /// The store namespace per-person values are filed under.
 pub const NAMESPACE: &str = "var";
+/// The marks that make a value write-only for the operator's CLI: `var set --secret`, and the
+/// proxy password always. `var get` refuses one; it can be replaced, not read back.
+pub const SECRET_NAMESPACE: &str = "var-secret";
 /// A key longer than this is a mistake, not a name.
 const KEY_MAX: usize = 128;
 /// How often `serve` looks at the store again, as for the proxy credential.

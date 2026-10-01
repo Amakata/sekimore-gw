@@ -1866,22 +1866,9 @@ pub async fn proxy_credential_set(path: &Path) -> anyhow::Result<()> {
     let pass = store::control::prompt("Proxy password")?;
     // #334: two per-person values — the ones config.yml refers to, or proxy_user / proxy_password
     let (ku, kp) = proxy_var_keys(path)?;
-    for (key, value) in [
-        (&ku, user.clone()),
-        (&kp, String::from_utf8_lossy(pass.as_bytes()).into_owned()),
-    ] {
-        let body = serde_json::json!({
-            "op": "set", "namespace": crate::vars::NAMESPACE, "name": key, "value": value
-        })
-        .to_string();
-        let (ok, message) = store::control::call(&sock, &body).await?;
-        if !ok {
-            // #213: the store's refusal ("the secret store is locked; ask a human to run: …") is
-            // the operator's error, on stderr and in red like the line that follows it
-            eprintln!("{}", paint_err(Tone::Bad, &message));
-            bail!("the credential was not stored");
-        }
-    }
+    // The password is a secret: `var get` will not print it back (the username is not)
+    var_store(&sock, &ku, &user, false).await?;
+    var_store(&sock, &kp, &String::from_utf8_lossy(pass.as_bytes()), true).await?;
     println!("stored {{{ku}}} and {{{kp}}}");
     // #271: the old wording told people to run `sgw restart` — stale since #193, where the
     // gateway's watcher took over and applies the credential to Squid on its own.
@@ -2300,21 +2287,76 @@ fn read_var_value(key: &str) -> anyhow::Result<String> {
     Ok(value)
 }
 
-async fn var_store(sock: &Path, key: &str, value: &str) -> anyhow::Result<()> {
-    let body = serde_json::json!({
-        "op": "set", "namespace": crate::vars::NAMESPACE, "name": key, "value": value
-    })
-    .to_string();
-    let (ok, message) = store::control::call(sock, &body).await?;
-    if !ok {
-        eprintln!("{}", paint_err(Tone::Bad, &message));
-        bail!("{{{key}}} was not stored");
+async fn var_store(sock: &Path, key: &str, value: &str, secret: bool) -> anyhow::Result<()> {
+    let mut writes = vec![(crate::vars::NAMESPACE, value)];
+    if secret {
+        writes.push((crate::vars::SECRET_NAMESPACE, "1"));
+    }
+    for (ns, v) in writes {
+        let body =
+            serde_json::json!({"op": "set", "namespace": ns, "name": key, "value": v}).to_string();
+        let (ok, message) = store::control::call(sock, &body).await?;
+        if !ok {
+            eprintln!("{}", paint_err(Tone::Bad, &message));
+            bail!("{{{key}}} was not stored");
+        }
     }
     Ok(())
 }
 
-/// `var set <key>`
-pub async fn var_set(path: &Path, key: &str) -> anyhow::Result<()> {
+/// The keys that are secret whatever was asked: the proxy password, under the key config names.
+fn always_secret(r: &Resolved) -> Vec<String> {
+    let (_, password) = match r.proxy.as_ref() {
+        Some(px) => crate::proxy_credential::var_keys(px),
+        None => (
+            String::new(),
+            crate::proxy_credential::VAR_PASSWORD.to_string(),
+        ),
+    };
+    let mut out = vec![password];
+    if !out
+        .iter()
+        .any(|k| k == crate::proxy_credential::VAR_PASSWORD)
+    {
+        out.push(crate::proxy_credential::VAR_PASSWORD.to_string());
+    }
+    out
+}
+
+/// The store's names, by namespace. Readable while locked: names only.
+async fn stored_names(
+    sock: &Path,
+) -> anyhow::Result<std::collections::BTreeMap<String, std::collections::BTreeSet<String>>> {
+    let (ok, message, data) = store::control::call_data(sock, r#"{"op":"list"}"#).await?;
+    if !ok {
+        bail!("{message}");
+    }
+    let mut out: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        Default::default();
+    for row in data.and_then(|d| d.as_array().cloned()).unwrap_or_default() {
+        if let (Some(ns), Some(name)) = (row["namespace"].as_str(), row["name"].as_str()) {
+            out.entry(ns.to_string())
+                .or_default()
+                .insert(name.to_string());
+        }
+    }
+    Ok(out)
+}
+
+/// Whether `key` is write-only: marked with `var set --secret`, or the proxy password.
+async fn is_secret(r: &Resolved, key: &str) -> anyhow::Result<bool> {
+    if always_secret(r).iter().any(|k| k == key) {
+        return Ok(true);
+    }
+    Ok(stored_names(&r.paths.control_sock)
+        .await?
+        .get(crate::vars::SECRET_NAMESPACE)
+        .is_some_and(|s| s.contains(key)))
+}
+
+/// `var set [--secret] <key>`. Once secret, a key stays secret until it is deleted: a later set
+/// without `--secret` keeps the mark, so the new value cannot be read back either.
+pub async fn var_set(path: &Path, key: &str, secret: bool) -> anyhow::Result<()> {
     let r = resolve(path)?;
     let key = var_key(key)?;
     if !r.var_refs().iter().any(|k| k == key) {
@@ -2323,17 +2365,32 @@ pub async fn var_set(path: &Path, key: &str) -> anyhow::Result<()> {
              config does"
         );
     }
+    let secret = secret || is_secret(&r, key).await?;
     let value = read_var_value(key)?;
-    var_store(&r.paths.control_sock, key, &value).await?;
-    // Not the value: whoever wants to see it asks for it with `var get`
-    println!("stored {{{key}}}; the relay picks it up within seconds");
+    var_store(&r.paths.control_sock, key, &value, secret).await?;
+    // Not the value: whoever wants to see one asks for it with `var get`, and a secret one not at all
+    if secret {
+        println!("stored {{{key}}} as a secret (it can be replaced, not read back); the relay picks it up within seconds");
+    } else {
+        println!("stored {{{key}}}; the relay picks it up within seconds");
+    }
     Ok(())
 }
 
-/// `var get <key>`: the value, on stdout. Only ever run by a person on the host.
+/// `var get <key>`: the value, on stdout. Only ever run by a person on the host, and refused for
+/// a secret one (`var set --secret`, the proxy password).
+///
+/// A convenience boundary, not a cryptographic one: the gateway itself has to read the value to use
+/// it, and whoever controls the host can reach it there. What this stops is the value being one
+/// command away on the operator's terminal.
 pub async fn var_get(path: &Path, key: &str) -> anyhow::Result<()> {
     let r = resolve(path)?;
     let key = var_key(key)?;
+    if is_secret(&r, key).await? {
+        bail!(
+            "{{{key}}} is a secret: it can be replaced (sgw var set {key}) or removed (sgw var delete {key}), not read back"
+        );
+    }
     match crate::vars::read(&[key.to_string()], &secret_source_via_socket(&r))
         .await
         .remove(key)
@@ -2360,6 +2417,12 @@ pub async fn var_delete(path: &Path, key: &str) -> anyhow::Result<()> {
     if !ok {
         bail!("{message}");
     }
+    // and its secret mark, if it had one
+    let mark = serde_json::json!({
+        "op": "delete", "namespace": crate::vars::SECRET_NAMESPACE, "name": key
+    })
+    .to_string();
+    let _ = store::control::call(&r.paths.control_sock, &mark).await;
     println!("deleted {{{key}}}");
     Ok(())
 }
@@ -2368,18 +2431,16 @@ pub async fn var_delete(path: &Path, key: &str) -> anyhow::Result<()> {
 /// Never a value. Works while the store is locked: the list holds names only.
 pub async fn var_list(path: &Path) -> anyhow::Result<()> {
     let r = resolve(path)?;
-    let (ok, message, data) =
-        store::control::call_data(&r.paths.control_sock, r#"{"op":"list"}"#).await?;
-    if !ok {
-        bail!("{message}");
-    }
-    let stored: std::collections::BTreeSet<String> = data
-        .and_then(|d| d.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter(|row| row["namespace"] == crate::vars::NAMESPACE)
-        .filter_map(|row| row["name"].as_str().map(String::from))
-        .collect();
+    let names = stored_names(&r.paths.control_sock).await?;
+    let stored = names
+        .get(crate::vars::NAMESPACE)
+        .cloned()
+        .unwrap_or_default();
+    let marked = names
+        .get(crate::vars::SECRET_NAMESPACE)
+        .cloned()
+        .unwrap_or_default();
+    let always = always_secret(&r);
     let refs = r.var_refs();
     let mut keys: Vec<String> = refs.clone();
     keys.extend(stored.iter().filter(|k| !refs.contains(k)).cloned());
@@ -2393,12 +2454,17 @@ pub async fn var_list(path: &Path) -> anyhow::Result<()> {
         } else {
             "missing"
         };
+        let secret = if marked.contains(&k) || always.contains(&k) {
+            " (secret)"
+        } else {
+            ""
+        };
         let note = if refs.contains(&k) {
             ""
         } else {
             "  (not referred to by config.yml)"
         };
-        println!("{{{k}}}: {state}{note}");
+        println!("{{{k}}}: {state}{secret}{note}");
     }
     Ok(())
 }
@@ -2432,9 +2498,10 @@ async fn ask_missing_vars(r: &Resolved) -> anyhow::Result<crate::vars::Vars> {
         );
     }
     eprintln!("config.yml refers to per-person values that are not in the secret store yet:");
+    let always = always_secret(r);
     for k in missing {
         let value = read_var_value(k)?;
-        var_store(&r.paths.control_sock, k, &value).await?;
+        var_store(&r.paths.control_sock, k, &value, always.contains(k)).await?;
         eprintln!("stored {{{k}}}");
     }
     Ok(primed_vars(r).await)
@@ -2443,6 +2510,86 @@ async fn ask_missing_vars(r: &Resolved) -> anyhow::Result<crate::vars::Vars> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A config whose state dir is `dir`, and an unlocked store served on its control socket.
+    async fn served_config(dir: &Path) -> (PathBuf, Resolved) {
+        use crate::store::crypto::{Kdf, KdfParams, Secret};
+        let cfg = dir.join("config.yml");
+        std::fs::write(
+            &cfg,
+            format!(
+                "domain_handlers:\n  github.com: {{ handler: github }}\nrelay:\n  state_dir: {}\n  project: {{ name: x }}\n",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        let r = resolve(&cfg).unwrap();
+        let mut store = store::SecretStore::open(&dir.join("secrets-test.db")).unwrap();
+        store
+            .initialise(
+                &Secret::new(b"pw".to_vec()),
+                Kdf::Argon2id,
+                KdfParams {
+                    memory_kib: 8,
+                    iterations: 1,
+                    parallelism: 1,
+                },
+            )
+            .unwrap();
+        let sock = r.paths.control_sock.clone();
+        let store = std::sync::Arc::new(tokio::sync::Mutex::new(store));
+        tokio::spawn(async move {
+            store::control::serve(sock, store, std::sync::Arc::new(|| {})).await
+        });
+        for _ in 0..100 {
+            if r.paths.control_sock.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        (cfg, r)
+    }
+
+    /// #334: a value set as a secret cannot be read back, stays a secret when it is replaced
+    /// without `--secret`, and stops being one only when it is deleted. The proxy password is a
+    /// secret whatever was asked; an ordinary value reads back.
+    #[tokio::test]
+    async fn a_secret_value_is_not_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cfg, r) = served_config(dir.path()).await;
+        let sock = r.paths.control_sock.clone();
+
+        var_store(&sock, "bastion", "alice@bastion.example.com", false)
+            .await
+            .unwrap();
+        assert!(var_get(&cfg, "bastion").await.is_ok());
+        assert!(!is_secret(&r, "bastion").await.unwrap());
+
+        var_store(&sock, "token", "s3cret", true).await.unwrap();
+        let e = var_get(&cfg, "token").await.unwrap_err().to_string();
+        assert!(e.contains("is a secret") && !e.contains("s3cret"), "{e}");
+        var_store(
+            &sock,
+            "token",
+            "replaced",
+            is_secret(&r, "token").await.unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(is_secret(&r, "token").await.unwrap(), "the mark stays");
+        assert!(var_get(&cfg, "token").await.is_err());
+
+        var_store(&sock, "proxy_password", "p", false)
+            .await
+            .unwrap();
+        assert!(var_get(&cfg, "proxy_password").await.is_err());
+
+        var_delete(&cfg, "token").await.unwrap();
+        assert!(
+            !is_secret(&r, "token").await.unwrap(),
+            "deleting takes the mark too"
+        );
+    }
 
     /// #230: the yes/no is read as bytes and judged leniently — a task runner's carriage
     /// return or stray bytes must not turn a `yes` into a `no`.
