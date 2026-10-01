@@ -15,6 +15,7 @@
 //! the built-in one, so a push does not depend on a sidecar being up.
 
 pub mod github;
+pub mod sidecar;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -107,7 +108,7 @@ impl Grant {
 }
 
 /// What the gateway found out before the call, and the relay is to use rather than look up again.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Resolved {
     /// The board's node id, from the declared board the request named
     pub board_id: String,
@@ -119,7 +120,8 @@ pub struct Resolved {
 }
 
 /// A question the gateway asks before it can decide.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "query", rename_all = "snake_case")]
 pub enum Query {
     /// Is this number a pull request? GitHub serves both from the issues endpoints
     NamesAPullRequest { number: u64 },
@@ -139,7 +141,8 @@ pub enum Query {
     IsAncestor { base: String, head: String },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Answer {
     Bool(bool),
     Release(Option<ReleaseRef>),
@@ -147,14 +150,14 @@ pub enum Answer {
     Branch(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReleaseRef {
     pub id: u64,
     pub draft: bool,
 }
 
 /// A pull request the git path opened for a `refs/for/` / `refs/pr/` push, or found already open.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OpenedPr {
     pub number: u64,
     pub url: String,

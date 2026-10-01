@@ -170,13 +170,9 @@ impl Action {
     }
 }
 
-/// Parses the "pr:create" form. The Go version used bare string keys, so a combination that does not
-/// exist, such as "pr:delete", was silently accepted.
-pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
-    let (r, a) = s
-        .split_once(':')
-        .ok_or_else(|| format!("{s:?}: must be resource:action"))?;
-    let resource = match r.trim() {
+/// A resource name (`pr`, `issue`, …), as a permission key or a sidecar's `resources` writes it.
+pub fn parse_resource(r: &str) -> Result<Resource, String> {
+    Ok(match r.trim() {
         "pr" => Resource::Pr,
         "issue" => Resource::Issue,
         "project" => Resource::Project,
@@ -190,7 +186,16 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
                 "unknown resource {other:?} (known: ci, issue, pr, project, release, repo, search, security)"
             ))
         }
-    };
+    })
+}
+
+/// Parses the "pr:create" form. The Go version used bare string keys, so a combination that does not
+/// exist, such as "pr:delete", was silently accepted.
+pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
+    let (r, a) = s
+        .split_once(':')
+        .ok_or_else(|| format!("{s:?}: must be resource:action"))?;
+    let resource = parse_resource(r)?;
     let action = match a.trim() {
         "create" => Action::Create,
         "comment" => Action::Comment,

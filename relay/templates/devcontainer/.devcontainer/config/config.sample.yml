@@ -157,6 +157,14 @@ relay:
   bootstrap: auto               # dev registers its disposable key and gets a project token automatically
   token_ttl: 12h                # the wrapper `sekimore` re-runs the bootstrap when the token expires,
                                 # so this is not a reason to restart the container
+  sidecars:                     # gw 0.3.0+ forge relays run as sidecars (docker-compose.relay.yml)
+    github:                     # the agent's API calls go through the sekimore-github service; the
+                                # git path and login / check stay in the gateway. Remove the block
+                                # and the gateway serves the API itself
+      socket: /run/sekimore-sidecars/github.sock
+      resources: [pr, issue, project, repo, ci, release, search, security]
+                                # what the sidecar may claim; one that claims more is not connected
+      # upstreams: [github.com]  # the git-relay domains whose API it serves (default: all)
   # store:                      # gw 0.2.17+ how the secret store is unlocked when the relay starts
   #   unlock: prompt            # prompt (the default: `mise run gw:unlock`) | file | env.
                                 # file and env put the passphrase at rest, which is what prompt avoids.

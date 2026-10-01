@@ -20,7 +20,7 @@ test-hooks = []
 tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "fs", "sync", "time", "signal"] }
 russh = { version = "0.63", default-features = false, features = ["ring", "flate2"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
-hyper = { version = "1.7", features = ["http1", "server"] }
+hyper = { version = "1.7", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1.10"

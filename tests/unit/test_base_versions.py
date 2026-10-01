@@ -57,6 +57,11 @@ def describe_the_base_image_carries_the_gateways_version():
         assert dockerfile == [_version()], (
             f"the template's Dockerfile pins base {dockerfile}, not {_version()}"
         )
+        # #329: the github sidecar runs the gateway's image, so the overlay pins it too
+        overlay = _GW_IMAGE.findall(_text(TEMPLATE / "docker-compose.relay.yml"))
+        assert overlay == [_version()], (
+            f"the template's relay overlay pins the sidecar's gateway image {overlay}, not {_version()}"
+        )
 
     def it_quotes_this_version_in_the_readmes():
         for name in ("README.md", "README.ja.md"):

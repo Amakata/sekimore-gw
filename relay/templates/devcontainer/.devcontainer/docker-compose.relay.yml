@@ -19,6 +19,13 @@
 #         is picked up as it is. Naming the file instead pins its inode at start, and every
 #         reconnect then needs `sgw recreate`.
 #   * Keeps dev's disposable key (~/.ssh/sekimore) in a volume, so a rebuild does not change it.
+#   * Runs the github forge relay as a sidecar (sekimore-gw 0.3.0 and later, #329).
+#       - With relay.sidecars.github in config.yml, the agent's API calls (sgw-agent pr …) go
+#         through it. The git path and the operator's login / check stay built into the gateway,
+#         so a push does not depend on the sidecar.
+#       - Same image as the gateway, another command. It holds nothing: the gateway hands it each
+#         call's token, and it reaches GitHub only through the gateway's 443 passthrough.
+#       - Without relay.sidecars.github, it idles and the gateway serves the API itself.
 #   * Shares the signing key's socket between gateway and dev (sekimore-gw 0.2.29 and later, #59).
 #       - With relay.signing_key in config.yml, the gateway creates an agent socket at
 #         /run/sekimore/signing-agent.sock that exposes exactly one key of the host's ssh-agent.
@@ -37,6 +44,8 @@ services:
       - ${SEKIMORE_AGENT_SOCK:-/run/host-services/ssh-auth.sock}:/ssh-agent/agent.sock:ro
       # The volume the signing socket lives in (used only when relay.signing_key is set)
       - sekimore-signing:/run/sekimore
+      # The forge relay sidecars' sockets (#329). Shared with the sidecars, never with dev
+      - sekimore-sidecars:/run/sekimore-sidecars
     environment:
       - SSH_AUTH_SOCK=/ssh-agent/agent.sock
 
@@ -63,8 +72,27 @@ services:
       - SEKIMORE_PROJECT=${SEKIMORE_PROJECT:-}
       - SEKIMORE_SIGNING_KEY_COMMENT=${SEKIMORE_SIGNING_KEY_COMMENT:-}
 
+  sekimore-github:
+    image: ghcr.io/amakata/sekimore-gw:0.2.61
+    entrypoint:
+      - sekimore-relay
+      - sidecar
+      - github
+      - --socket=/run/sekimore-sidecars/github.sock
+      - --via=sekimore-gw     # the upstream API only through the gateway's 443 passthrough
+    networks:
+      internal-net: {}
+    volumes:
+      - sekimore-sidecars:/run/sekimore-sidecars
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    restart: unless-stopped
+
 volumes:
   sekimore-agent-keys:
     name: sekimore-agent-keys-${DEVCONTAINER_ID}
   sekimore-signing:
     name: sekimore-signing-${DEVCONTAINER_ID}
+  sekimore-sidecars:
+    name: sekimore-sidecars-${DEVCONTAINER_ID}

@@ -49,6 +49,9 @@ nodes:
   gateway.relay.passthrough:
     kind: relay
     note: "the relay's 443 passthrough"
+  sidecar.forge:
+    kind: relay-sidecar
+    note: "a forge relay run as a sidecar (#329); holds nothing, is handed each call's upstream token, reaches the upstream only through the passthrough"
   gateway.webui:
     kind: service
     note: "FastAPI on 8080; read from dev by design, writes refused"
@@ -89,8 +92,8 @@ secrets:
     verify: "the gateway's API must not hand out the upstream proxy password"
   upstream_token:
     held_by: gateway.store
-    used_by: [relay.github.api]
-    exposed_via: []          # /api/relay/tokens lists metadata only
+    used_by: [relay.github.api, sidecar.api]
+    exposed_via: [relay.sidecar]   # handed to a forge relay sidecar per call (#329); /api/relay/tokens lists metadata only
     tests: [tests/unit/test_web_ui_relay.py]
   operator_ssh_agent:
     held_by: operator
@@ -401,3 +404,29 @@ edges:
     impl: [relay/src/store/control.rs, relay/src/cli/operator.rs]
     tests: [relay/src/store/control.rs]
     verify: "the secret store"
+
+  # ---- forge relay sidecars (#329) ---------------------------------------------------------
+  - id: relay.sidecar
+    from: gateway.relay.api
+    to: sidecar.forge
+    proto: HTTP/1.1 over a Unix socket, on a volume only the gateway and the sidecar mount
+    resolves: n/a (a path, relay.sidecars.<name>.socket)
+    verifies_peer: the socket's path and mode (0660); GET /describe checked against relay.sidecars (name, resources, a guide) before the first call
+    presents: upstream_token, for the one call's upstream
+    audit: audit.jsonl sidecar_unavailable / sidecar_refused
+    switches: {relay.sidecars: set}
+    impl: [relay/src/forge/sidecar.rs, relay/src/cli/serve.rs]
+    tests: [relay/tests/sidecar.rs, relay/tests/api_server.rs]
+
+  - id: sidecar.api
+    from: sidecar.forge
+    to: gateway.relay.passthrough
+    proto: TLS to the upstream API end to end, dialed at the gateway's 443 for the API's name (SNI picks the target; upload cap)
+    resolves: the sidecar resolves the gateway (--via); the API's own name is kept for SNI and the certificate
+    verifies_peer: rustls — platform roots, SSL_CERT_FILE
+    tls_impl: rustls
+    presents: upstream_token
+    audit: audit.jsonl api_call (written by the gateway from the calls the sidecar reports; the passthrough logs the connection itself)
+    switches: {relay.sidecars: set}
+    impl: [relay/src/forge/sidecar.rs, relay/src/github/http.rs]
+    tests: [relay/tests/sidecar.rs]

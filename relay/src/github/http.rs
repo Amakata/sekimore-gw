@@ -17,6 +17,13 @@ pub struct HttpOptions<'a> {
     pub ca_file: Option<&'a Path>,
     pub proxy: Option<&'a ProxySpec>,
     pub timeout: Duration,
+    /// #329: names to connect to at a fixed address instead of resolving them — a sidecar dials
+    /// the upstream API at the gateway's 443 passthrough, keeping the name for SNI and for the
+    /// certificate check
+    pub connect_to: &'a [(String, std::net::SocketAddr)],
+    /// #329: ignore `HTTPS_PROXY` and friends. A sidecar's one way out is the passthrough; a proxy
+    /// variable in its environment must not open another
+    pub no_env_proxy: bool,
 }
 
 impl Default for HttpOptions<'_> {
@@ -25,6 +32,8 @@ impl Default for HttpOptions<'_> {
             ca_file: None,
             proxy: None,
             timeout: Duration::from_secs(30),
+            connect_to: &[],
+            no_env_proxy: false,
         }
     }
 }
@@ -74,6 +83,12 @@ pub fn build_client(opts: &HttpOptions<'_>) -> anyhow::Result<reqwest::Client> {
             Some(u)
         });
         b = b.proxy(proxy);
+    }
+    for (name, addr) in opts.connect_to {
+        b = b.resolve(name, *addr);
+    }
+    if opts.no_env_proxy && opts.proxy.is_none() {
+        b = b.no_proxy();
     }
     b.build().context("build http client")
 }
