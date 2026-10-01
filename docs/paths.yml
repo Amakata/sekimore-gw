@@ -95,6 +95,11 @@ secrets:
     used_by: [relay.github.api, sidecar.api]
     exposed_via: [relay.sidecar]   # handed to a forge relay sidecar per call (#329); /api/relay/tokens lists metadata only
     tests: [tests/unit/test_web_ui_relay.py]
+  per_person_values:
+    held_by: gateway.store
+    used_by: [relay.ssh.bastion, relay.ssh.upstream]   # filled into ssh_options `{name}` at spawn (#334)
+    exposed_via: []          # `sgw var get` prints one for the person on the host; check and the Web UI say set / missing / locked only
+    tests: [relay/src/vars.rs, relay/src/git/upstream_ssh.rs]
   operator_ssh_agent:
     held_by: operator
     used_by: [relay.ssh.bastion, relay.ssh.upstream]

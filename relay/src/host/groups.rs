@@ -54,6 +54,7 @@ pub const GROUPS: &[Group] = &[
                 "proxy-credential",
                 "sgw.cmd.proxy_credential",
             ),
+            leaf("var", "var", "sgw.cmd.var"),
             leaf("export", "store-export", "sgw.cmd.store_export"),
             leaf("import", "store-import", "sgw.cmd.store_import"),
         ],

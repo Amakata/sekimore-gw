@@ -146,7 +146,7 @@ git の署名が対象とするのは `"SSHSIG" ++ namespace ++ …` です。SS
 どのサーバーへの認証にも使えません（関所自身の sshd も含みます）。運用者の他の鍵が同じ agent にあっても、fingerprint による
 絞り込みで見えなくなります。関所は、拒否を `signing_agent_refused`、成功した署名を `signing_agent_signed` として監査ログに記録します。
 
-socket はモード 0600 で作成され、`socket_uid` が所有します。関所はどちらもパスではなくファイルディスクリプタ経由で設定します。
+socket はモード 0600 で作成され、dev コンテナのユーザーが所有します。持ち主は、`sgw-agent setup` が起動のたびに伝える uid です（#339。伝わるまでは 1000、Dev Containers の `updateRemoteUserUID` が変えた環境ではホストの uid）。`socket_uid` を設定すればその値に固定します。関所はどちらもパスではなくファイルディスクリプタ経由で設定します。
 volume は共有されており dev コンテナには sudo があるので、パスを解決し直す `chmod` は、ゲートウェイ側のファイルに向け直されるおそれがあるためです。
 
 dev コンテナ側に sekimore 専用のコマンドは不要で、通常の `git commit` で署名されます。`sgw-agent setup` が公開鍵を
@@ -257,7 +257,7 @@ AI エージェント向けの使い方は `sgw-agent guide` で表示できま�
 | `ssh_config` | 無し | 上流の ssh に `-F` で渡すファイル（上級者向け） |
 | `upstream` / `upstream_ssh_port` / `api_base` / `graphql_base` / `oauth_client_id` | | 既定の上流の設定。handler 側に書くのが新しい書き方です。 |
 | `limits` | | セッション数とタイムアウト |
-| `signing_key` | 無し | 0.2.29（#59）: dev コンテナがコミット署名に使う鍵。絞り込んだ agent socket 経由で提供します。キーは `source`（`agent`）、`fingerprint`（`SHA256:…`）、`namespace`（`git`）、`timeout`（`15s`）、`socket`（`/run/sekimore/signing-agent.sock`）、`socket_uid`（`1000`）です。設定しなければ、dev コンテナが自分で鍵を生成します（「署名鍵」を参照）。 |
+| `signing_key` | 無し | 0.2.29（#59）: dev コンテナがコミット署名に使う鍵。絞り込んだ agent socket 経由で提供します。キーは `source`（`agent`）、`fingerprint`（`SHA256:…`）、`namespace`（`git`）、`timeout`（`15s`）、`socket`（`/run/sekimore/signing-agent.sock`）、`socket_uid`（未設定なら dev のユーザーの uid に合わせる。最初は 1000）です。設定しなければ、dev コンテナが自分で鍵を生成します（「署名鍵」を参照）。 |
 | `project` | 必須 | プロジェクト（後述） |
 
 ### `relay.project`
@@ -440,6 +440,32 @@ network:
 
 - `keyscan <host>` は fingerprint を表示して保存します。運用者がコマンドラインでホストを名指ししたこと自体が確認です
 - `login` は先に yes/no を聞きます。ログインのついでに、運用者が名指ししていないホスト（踏み台と、その先の上流）の鍵を取るので、黙って信用してはいけないからです。鍵を保存せずに終わった段があれば、login は device flow に進まず 0 以外で終わります（0.2.45）。確認を省くなら、先に各ホストを `keyscan` してください
+
+### 人ごとの値（#334）
+
+config.yml は共有しますが、踏み台のアカウントは人ごとに違います。オプションの値に `{name}` を書き、値は各自が秘密ストアに入れます。
+
+```yaml
+domain_handlers:
+  ghe.example.com:
+    handler: github
+    ssh_options: ["ProxyJump={bastion}"]    # 各自: sgw var set bastion
+```
+
+```sh
+sgw var set bastion      # エコーなしで入力。パイプでも渡せる: echo alice@bastion.example.com:2222 | sgw var set bastion
+sgw var list             # キーと、値が入っているか（値は出さない）
+sgw var get bastion      # 値。実行した人にだけ出す
+sgw var set --secret corp/token   # 書き込み専用。置き換えはできるが読み戻せない
+```
+
+- キーは `[A-Za-z0-9._-]` の段を `/` でつないだもの。複数の上流で共有するなら `{bastion}`、1 つの上流用なら `{ghe.example.com/bastion}`。
+- `{name}` にできるのは値だけ。`Key=Value` を丸ごと `{opt}` にすることや、オプション名に `{name}` を書くことは、読み込み時に拒否します。
+- ssh のオプションに入る値は `[A-Za-z0-9._@:,/-]` だけ。値を埋めた後のオプションにも、通常の検査をかけ直します。
+- `sgw login` は、config が参照しているのに値が無いキーをまとめて聞きます。ストアが施錠中か値が無い間は、その上流に繋がず、実行すべきコマンドをエラーで示します。
+- `sgw check` は `{bastion}: set` / `missing` / `locked` を表示し、値は出しません。
+- `--secret` で入れた値と proxy のパスワードは、`sgw var get` で読み戻せません。置き換えても秘密のままで、`sgw var delete` で消すまで続きます。操作者の端末に値を出さないための仕組みで、gateway は使うために値を読むので、ホストを握った人からは隠せません。
+- 上流 proxy の資格情報も、この値 2 つ（`proxy_user` / `proxy_password`）です。`sgw proxy-credential set` で両方を入れます。`proxy.upstream_proxy_username: "{corp/user}"` と書けば別のキーを使います。0.2.62 より前に入れた資格情報は、ストアの解錠時にこの 2 つへ移ります。
 
 ## 表示言語（0.2.4）
 

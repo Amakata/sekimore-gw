@@ -78,6 +78,11 @@ pub enum Command {
         #[command(subcommand)]
         action: ProxyCredentialAction,
     },
+    #[command(about = t("cli.var"))]
+    Var {
+        #[command(subcommand)]
+        action: VarAction,
+    },
     #[command(name = "store-export", about = t("cli.store_export"))]
     StoreExport {
         #[arg(long, help = t("cli.store_export.out"))]
@@ -129,6 +134,29 @@ pub enum Command {
         repo: Option<String>,
         #[command(subcommand)]
         cmd: agent::AgentCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum VarAction {
+    #[command(about = t("cli.var.set"))]
+    Set {
+        #[arg(help = t("cli.var.key"))]
+        key: String,
+        #[arg(long, help = t("cli.var.secret"))]
+        secret: bool,
+    },
+    #[command(about = t("cli.var.get"))]
+    Get {
+        #[arg(help = t("cli.var.key"))]
+        key: String,
+    },
+    #[command(about = t("cli.var.list"))]
+    List,
+    #[command(about = t("cli.var.delete"))]
+    Delete {
+        #[arg(help = t("cli.var.key"))]
+        key: String,
     },
 }
 
@@ -187,6 +215,14 @@ pub async fn run(cli: Cli) -> i32 {
                 .await
                 .map(|_| 0),
         },
+        Command::Var { action } => match action {
+            VarAction::Set { key, secret } => operator::var_set(&cli.config, &key, secret)
+                .await
+                .map(|_| 0),
+            VarAction::Get { key } => operator::var_get(&cli.config, &key).await.map(|_| 0),
+            VarAction::List => operator::var_list(&cli.config).await.map(|_| 0),
+            VarAction::Delete { key } => operator::var_delete(&cli.config, &key).await.map(|_| 0),
+        },
         Command::StoreExport { out } => operator::store_export(&cli.config, out.as_deref())
             .await
             .map(|_| 0),
@@ -204,7 +240,9 @@ pub async fn run(cli: Cli) -> i32 {
             host,
             port,
             upstream,
-        } => operator::keyscan(&cli.config, &host, port, upstream.as_deref()).map(|_| 0),
+        } => operator::keyscan(&cli.config, &host, port, upstream.as_deref())
+            .await
+            .map(|_| 0),
         Command::Bootstrap { action } => operator::bootstrap(&cli.config, action).map(|_| 0),
         Command::Agent { repo, cmd } => agent::run(repo.as_deref(), cmd).await,
     };

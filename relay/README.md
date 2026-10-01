@@ -151,7 +151,7 @@ relay's own sshd, even if the same key is also registered as an authentication k
 operator's other keys can be in the same agent; the fingerprint filter hides them. The relay
 audits refusals as `signing_agent_refused` and successful signatures as `signing_agent_signed`.
 
-The socket is created with mode 0600 and owned by `socket_uid`. The relay sets both through a file
+The socket is created with mode 0600 and owned by the dev container's user: the uid `sgw-agent setup` reports on every start (#339; 1000 until it does, the host's uid where Dev Containers' `updateRemoteUserUID` changed it), or `socket_uid` when set. The relay sets both through a file
 descriptor rather than by path. The volume is shared and the dev container has sudo, so a `chmod`
 that resolved the path again could be redirected to a file in the gateway.
 
@@ -269,7 +269,7 @@ Each key is a fully qualified domain name and must match exactly. Configuring `g
 | `ssh_config` | none | A file passed to the upstream ssh with `-F` (for advanced use) |
 | `upstream` / `upstream_ssh_port` / `api_base` / `graphql_base` / `oauth_client_id` | | Settings for the default upstream. Setting these on the handler is the newer style. |
 | `limits` | | Session counts and timeouts |
-| `signing_key` | none | 0.2.29 (#59): the key that the dev container signs commits with, offered through a filtered agent socket. Its keys are `source` (`agent`), `fingerprint` (`SHA256:…`), `namespace` (`git`), `timeout` (`15s`), `socket` (`/run/sekimore/signing-agent.sock`), and `socket_uid` (`1000`). If it is not set, the dev container generates its own key (see [Signing key](#signing-key-0229-59)). |
+| `signing_key` | none | 0.2.29 (#59): the key that the dev container signs commits with, offered through a filtered agent socket. Its keys are `source` (`agent`), `fingerprint` (`SHA256:…`), `namespace` (`git`), `timeout` (`15s`), `socket` (`/run/sekimore/signing-agent.sock`), and `socket_uid` (unset: follows the dev user's uid, starting at 1000). If it is not set, the dev container generates its own key (see [Signing key](#signing-key-0229-59)). |
 | `project` | required | The project (see below) |
 
 ### `relay.project`
@@ -456,6 +456,32 @@ Add a bastion's host key with `sekimore-relay keyscan bastion.example.com --upst
 
 - `keyscan <host>` prints the fingerprints and saves. The operator named the host on the command line; that is the confirmation.
 - `login` asks yes/no first. It takes keys as a side effect of logging in, for hosts the operator did not name (the bastion, and the upstream through it), and a login must not quietly trust a host. A key step that ends without the key stops the login before the device flow, with a non-zero exit (0.2.45). To skip the question, run `keyscan` for each host first.
+
+### Per-person values (#334)
+
+config.yml is shared, but a bastion account is not. Write `{name}` in an option's value, and each person keeps the value in the secret store:
+
+```yaml
+domain_handlers:
+  ghe.example.com:
+    handler: github
+    ssh_options: ["ProxyJump={bastion}"]    # each person: sgw var set bastion
+```
+
+```sh
+sgw var set bastion      # typed without echo, or piped: echo alice@bastion.example.com:2222 | sgw var set bastion
+sgw var list             # the keys and whether each has a value (never the value)
+sgw var get bastion      # the value, for the person who asks
+sgw var set --secret corp/token   # write-only: it can be replaced, not read back
+```
+
+- A key is segments of `[A-Za-z0-9._-]` joined by `/`: `{bastion}` shared by several upstreams, `{ghe.example.com/bastion}` for one.
+- Only the value may be a `{name}`. `{opt}` for a whole `Key=Value`, or `{name}` in the option's name, is refused at load.
+- A value placed in an ssh option may hold only `[A-Za-z0-9._@:,/-]`, and the option is checked again once it is filled in.
+- `sgw login` asks for every value the config refers to that is missing. With the store locked or a value missing, the upstream is not connected, and the error says which command to run.
+- `sgw check` shows `{bastion}: set` / `missing` / `locked`, never the value.
+- A value set with `--secret`, and the proxy password always, is refused by `sgw var get`. It stays a secret when replaced, until `sgw var delete`. This keeps it off the operator's terminal; the gateway still reads it to use it, so it does not hide it from whoever controls the host.
+- The upstream proxy credential is two such values, `proxy_user` / `proxy_password` (`sgw proxy-credential set` fills both). `proxy.upstream_proxy_username: "{corp/user}"` names other keys. A credential stored before 0.2.62 moves into them once the store is unlocked.
 
 ## Display language (0.2.4)
 

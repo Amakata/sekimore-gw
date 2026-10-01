@@ -102,4 +102,12 @@ for t in gh; do
 done
 echo "== the tools the base leaves out are absent"
 
+# ---- #339: GID 20 is free ----
+# Dev Containers' updateRemoteUserUID changes nothing when the host's GID is taken, and 20 is the
+# Mac's `staff`: a Linux VM built with 501:20 left the user at 1000:1000.
+if in_image /usr/bin/getent group 20 >/dev/null; then
+  fail "GID 20 is taken in the image ($(in_image /usr/bin/getent group 20)); updateRemoteUserUID will not run on a host user in group 20"
+fi
+echo "== GID 20 is free for the host user's group"
+
 echo "PASS: the image holds gateway $GW"

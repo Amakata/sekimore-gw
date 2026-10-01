@@ -23,6 +23,8 @@ pub struct OpenSshUpstream {
     pub ssh_bin: String,
     /// 0.2.1: extra `-o` options from config (ProxyJump and the like). They come after the options the relay enforces, and the first value given wins
     pub extra_options: Vec<String>,
+    /// #334: the values the options' `{name}` references stand for, from the secret store
+    pub vars: crate::vars::Vars,
 }
 
 impl OpenSshUpstream {
@@ -35,6 +37,7 @@ impl OpenSshUpstream {
             auth_sock: auth_sock_from_env(),
             ssh_bin: "ssh".to_string(),
             extra_options: Vec::new(),
+            vars: crate::vars::Vars::new(),
         }
     }
 
@@ -42,6 +45,35 @@ impl OpenSshUpstream {
     pub fn with_options(mut self, opts: Vec<String>) -> Self {
         self.extra_options = opts;
         self
+    }
+
+    /// #334: where the options' `{name}` references are filled in from.
+    pub fn with_vars(mut self, vars: crate::vars::Vars) -> Self {
+        self.vars = vars;
+        self
+    }
+
+    /// The extra options with their references filled in, or why one cannot be.
+    pub fn options(&self) -> Result<Vec<String>, crate::vars::VarError> {
+        self.extra_options
+            .iter()
+            .map(|o| self.vars.ssh_option(o))
+            .collect()
+    }
+
+    fn options_that_fill(&self) -> Vec<String> {
+        self.extra_options
+            .iter()
+            .filter_map(|o| self.vars.ssh_option(o).ok())
+            .collect()
+    }
+
+    /// #334: the references that cannot be filled in right now, for a message.
+    pub fn unfilled(&self) -> Vec<crate::vars::VarError> {
+        self.extra_options
+            .iter()
+            .filter_map(|o| self.vars.ssh_option(o).err())
+            .collect()
     }
 
     /// Whether known_hosts has a line for the upstream host. Hashed lines (`|1|…`) cannot be matched, so we assume they do.
@@ -92,7 +124,9 @@ impl OpenSshUpstream {
     /// keyed by host and port.
     pub fn bastions(&self) -> Vec<(String, u16)> {
         let mut out = Vec::new();
-        for opt in &self.extra_options {
+        // #334: an option whose reference cannot be filled in yet names no bastion; `unfilled`
+        // says why, and spawning refuses on it
+        for opt in self.options_that_fill() {
             let Some((key, value)) = opt.split_once('=') else {
                 continue;
             };
@@ -197,7 +231,8 @@ impl OpenSshUpstream {
         host: &str,
         port: u16,
         key_type: &str,
-    ) -> Vec<String> {
+    ) -> Result<Vec<String>, crate::vars::VarError> {
+        let extra = self.options()?;
         let mut args: Vec<String> = vec![
             "-F".into(),
             cfg.display().to_string(),
@@ -226,9 +261,9 @@ impl OpenSshUpstream {
         // The ProxyJump from config has to come along: the scan takes the route the real
         // connection takes. These come last, and ssh keeps the first value it was given, so
         // nothing here can widen the options above.
-        for opt in &self.extra_options {
+        for opt in extra {
             args.push("-o".into());
-            args.push(opt.clone());
+            args.push(opt);
         }
         args.push("-T".into());
         args.push("-p".into());
@@ -237,7 +272,7 @@ impl OpenSshUpstream {
         // Authentication is expected to fail (there is no key for this host in the agent, and
         // BatchMode forbids asking); the host key is recorded before that, which is all we want.
         args.push("true".into());
-        args
+        Ok(args)
     }
 
     /// What to do about a missing host key, written for whoever reads it on stderr.
@@ -279,7 +314,9 @@ impl OpenSshUpstream {
         )
     }
 
-    fn command(&self, remote: &str) -> Command {
+    fn command(&self, remote: &str) -> Result<Command, crate::vars::VarError> {
+        // #334: filled in before anything else, so a missing value stops here with its remedy
+        let extra = self.options()?;
         let mut cmd = Command::new(&self.ssh_bin);
         cmd.arg("-T").arg("-x").arg("-a");
         // #220: the enforced options in a file, because a ProxyJump hop gets `-F` and not `-o`.
@@ -312,7 +349,7 @@ impl OpenSshUpstream {
         cmd.arg("-o")
             .arg(format!("UserKnownHostsFile={}", self.known_hosts.display()));
         // Extra options from config. ssh honors the first value given, so they cannot override the enforced options above.
-        for opt in &self.extra_options {
+        for opt in &extra {
             cmd.arg("-o").arg(opt);
         }
         cmd.arg("-p").arg(self.port.to_string());
@@ -331,7 +368,7 @@ impl OpenSshUpstream {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        cmd
+        Ok(cmd)
     }
 }
 
@@ -366,7 +403,11 @@ impl UpstreamGit for OpenSshUpstream {
     async fn spawn(&self, auth: &GitAuthorized<'_>) -> Result<UpstreamProcess, UpstreamError> {
         // The repository name is the canonical one from config; policy restricts it to [A-Za-z0-9._-], so quoting is safe.
         let remote = format!("{} '{}.git'", auth.verb().as_str(), auth.repo());
-        let child = self.command(&remote).spawn().map_err(|e| UpstreamError {
+        let mut cmd = self.command(&remote).map_err(|e| UpstreamError {
+            kind: "var",
+            message: e.to_string(),
+        })?;
+        let child = cmd.spawn().map_err(|e| UpstreamError {
             kind: "spawn",
             message: format!(
                 "cannot start {}: {e} (is openssh-client installed in the gateway image?)",
@@ -392,6 +433,86 @@ impl UpstreamGit for OpenSshUpstream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_bastion(value: Option<&str>) -> OpenSshUpstream {
+        let vars = crate::vars::Vars::new();
+        if let Some(v) = value {
+            vars.replace_all(
+                [(
+                    "bastion".to_string(),
+                    crate::vars::State::Set(v.to_string()),
+                )]
+                .into(),
+            );
+        }
+        OpenSshUpstream::new("ghe.example.com", 22, Path::new("/nonexistent/kh"), None)
+            .with_options(vec!["ProxyJump={bastion}".into()])
+            .with_vars(vars)
+    }
+
+    fn args_of(cmd: &Command) -> Vec<String> {
+        cmd.as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// #334: the value reaches ssh filled in, as one `-o` argument, and the bastion it names is
+    /// the one whose host key is checked.
+    #[test]
+    fn a_reference_is_filled_in_when_ssh_is_spawned() {
+        let up = with_bastion(Some("alice@bastion.example.com:2222"));
+        let args = args_of(&up.command("git-upload-pack 'Org/Repo.git'").unwrap());
+        let i = args
+            .iter()
+            .position(|a| a == "ProxyJump=alice@bastion.example.com:2222")
+            .expect("the filled-in option");
+        assert_eq!(args[i - 1], "-o");
+        assert!(!args.iter().any(|a| a.contains("{bastion}")), "{args:?}");
+        assert_eq!(
+            up.bastions(),
+            vec![("bastion.example.com".to_string(), 2222)]
+        );
+        assert!(up.unfilled().is_empty());
+    }
+
+    /// No value: ssh is not started, the reason says what the operator runs, and no bastion is
+    /// guessed at.
+    #[test]
+    fn a_missing_value_stops_the_spawn_with_its_remedy() {
+        let up = with_bastion(None);
+        let e = up.command("git-upload-pack 'Org/Repo.git'").unwrap_err();
+        assert!(e.to_string().contains("sgw var set bastion"), "{e}");
+        assert!(up.bastions().is_empty());
+        assert_eq!(up.unfilled().len(), 1);
+        let e = up
+            .keyscan_via_bastion_args(Path::new("/x"), Path::new("/y"), "h", 22, "ssh-ed25519")
+            .unwrap_err();
+        assert!(e.to_string().contains("sgw var set bastion"), "{e}");
+    }
+
+    /// Whatever was typed into the store, a value that would add an option of its own never
+    /// reaches the command line.
+    #[test]
+    fn a_value_with_another_option_in_it_never_reaches_ssh() {
+        for evil in [
+            "bastion -oProxyCommand=touch%20/tmp/pwned",
+            "bastion\nProxyCommand sh",
+            "bastion,ProxyCommand=sh",
+        ] {
+            let up = with_bastion(Some(evil));
+            match up.command("git-upload-pack 'Org/Repo.git'") {
+                Err(_) => {}
+                Ok(cmd) => {
+                    let args = args_of(&cmd);
+                    assert!(
+                        !args.iter().any(|a| a.contains("ProxyCommand")),
+                        "{evil:?} reached ssh: {args:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn known_hosts_matching() {
@@ -450,7 +571,7 @@ mod tests {
     fn command_line_shape() {
         let dir = tempfile::tempdir().unwrap();
         let up = OpenSshUpstream::new("github.com", 22, &dir.path().join("kh"), None);
-        let cmd = up.command("git-upload-pack 'Org/Repo.git'");
+        let cmd = up.command("git-upload-pack 'Org/Repo.git'").unwrap();
         let args: Vec<String> = cmd
             .as_std()
             .get_args()
@@ -471,7 +592,7 @@ mod tests {
         let kh = dir.path().join("known_hosts");
         let up = OpenSshUpstream::new("ghe.example.com", 2222, &kh, None)
             .with_options(vec!["ProxyJump=user@bastion.example.net:2222".into()]);
-        let cmd = up.command("git-upload-pack 'Org/Repo.git'");
+        let cmd = up.command("git-upload-pack 'Org/Repo.git'").unwrap();
         let args: Vec<String> = cmd
             .as_std()
             .get_args()
@@ -577,8 +698,9 @@ mod tests {
             .with_options(vec!["ProxyJump=user@bastion.example.net:2222".into()]);
         let cfg = up.ensure_ssh_config().unwrap();
         let scratch = dir.path().join("scratch");
-        let args =
-            up.keyscan_via_bastion_args(&cfg, &scratch, "ghe.example.com", 2222, "ssh-ed25519");
+        let args = up
+            .keyscan_via_bastion_args(&cfg, &scratch, "ghe.example.com", 2222, "ssh-ed25519")
+            .unwrap();
         let pos = |s: &str| args.iter().position(|a| a == s);
         // the enforced config comes first, so the jump hop is checked against the real file
         assert_eq!(args[0], "-F");
@@ -653,7 +775,7 @@ mod tests {
                 "ProxyJump=bastion.example.com".into(),
                 "StrictHostKeyChecking=no".into(), // config rejects this, and even if it got through it comes later and has no effect
             ]);
-        let cmd = up.command("git-upload-pack 'Org/Repo.git'");
+        let cmd = up.command("git-upload-pack 'Org/Repo.git'").unwrap();
         let args: Vec<String> = cmd
             .as_std()
             .get_args()

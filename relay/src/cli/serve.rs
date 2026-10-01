@@ -161,6 +161,10 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     // goes through the proxy — the passthrough and every GitHub client built below read it per
     // connection, from the cell this fills.
     crate::proxy_credential::spawn_refresher(r.proxy.as_ref(), secrets.clone());
+    // #334: the per-person values ssh_options refer to, kept current the same way; the upstream
+    // ssh fills them in when it spawns
+    let vars = crate::vars::Vars::new();
+    crate::vars::spawn_refresher(vars.clone(), r.var_refs(), secrets.clone());
     // #192: an `https://` proxy (`proxy.upstream_proxy_tls`) is spoken to over TLS, trusting the
     // same roots as the GitHub client (platform, SSL_CERT_FILE, relay.ca_file)
     crate::netutil::init_proxy_tls(r.relay.ca_file.as_deref()).context("proxy TLS roots")?;
@@ -220,7 +224,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
                 up.domain
             ),
         }
-        let upstream: Arc<dyn UpstreamGit> = build_upstream(&r, up);
+        let upstream: Arc<dyn UpstreamGit> = build_upstream(&r, up, &vars);
         if let Err(e) = upstream.preflight().await {
             log::warn!("[{}] upstream preflight: {}", up.domain, e.message);
         }
@@ -317,10 +321,13 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     if let Some(store) = secret_store {
         let sock = r.paths.control_sock.clone();
         let caches = token_caches;
+        let lock_vars = vars.clone();
         let forget_caches: store::control::ForgetCaches = Arc::new(move || {
             for c in &caches {
                 c.forget();
             }
+            // #334: and the per-person values, so a lock takes them at once rather than within a tick
+            lock_vars.forget();
         });
         tokio::spawn(async move {
             if let Err(e) = store::control::serve(sock, store, forget_caches).await {
@@ -435,11 +442,10 @@ async fn start_signing_agent(
         );
         return None;
     };
-    let agent = Arc::new(SigningAgent::new(
-        cfg,
-        host_agent.to_path_buf(),
-        audit.clone(),
-    ));
+    let agent = Arc::new(
+        SigningAgent::new(cfg, host_agent.to_path_buf(), audit.clone())
+            .remembering(r.relay.state_dir.join("signing-socket-uid")),
+    );
     let listener = match agent.bind() {
         Ok(l) => l,
         Err(e) => {
@@ -496,7 +502,7 @@ fn git_domains(r: &Resolved) -> Vec<GitDomain> {
         .collect()
 }
 
-fn build_upstream(r: &Resolved, up: &Upstream) -> Arc<dyn UpstreamGit> {
+fn build_upstream(r: &Resolved, up: &Upstream, vars: &crate::vars::Vars) -> Arc<dyn UpstreamGit> {
     #[cfg(feature = "test-hooks")]
     {
         let root = r
@@ -520,7 +526,8 @@ fn build_upstream(r: &Resolved, up: &Upstream) -> Arc<dyn UpstreamGit> {
             &up.known_hosts,
             r.relay.ssh_config.as_deref(),
         )
-        .with_options(up.ssh_options.clone()),
+        .with_options(up.ssh_options.clone())
+        .with_vars(vars.clone()),
     )
 }
 
