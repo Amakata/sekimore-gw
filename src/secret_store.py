@@ -89,6 +89,11 @@ def read_proxy_credential(
     if isinstance(user, Locked):
         return "locked", None
     if isinstance(user, str) and user:
+        # Squid puts the username into `cache_peer ... login=<user>:<pass>`, which has no quoting:
+        # a space ends the option. `proxy-credential set` refuses one when typed (#271); a value
+        # set with `sgw var set` is checked here, where it is used
+        if not all(c.isascii() and c.isprintable() and not c.isspace() for c in user):
+            return "unusable", None
         password = get_secret(VAR_NAMESPACE, kp, sock_path)
         return "set", (user, password if isinstance(password, str) else "")
     old = get_secret(PROXY_NAMESPACE, PROXY_NAME, sock_path)

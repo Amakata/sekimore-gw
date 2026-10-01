@@ -217,3 +217,13 @@ def describe_per_person_values():
         bad = {("proxy", "upstream"): "not json"}
         with patch("src.secret_store.get_secret", side_effect=_store(bad)):
             assert read_proxy_credential(None, None) == ("unusable", None)
+
+    def it_refuses_a_username_squid_cannot_carry():
+        from unittest.mock import patch
+
+        from src.secret_store import read_proxy_credential
+
+        for bad in ["al ice", "alice\t", "アリス"]:
+            values = {("var", "proxy_user"): bad, ("var", "proxy_password"): "p"}
+            with patch("src.secret_store.get_secret", side_effect=_store(values)):
+                assert read_proxy_credential(None, None) == ("unusable", None), bad
