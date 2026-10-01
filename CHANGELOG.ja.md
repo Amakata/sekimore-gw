@@ -11,6 +11,21 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.62（2026-10-01）
+
+### Fix
+
+- Linux の Docker で、dev のユーザーが再びホストのユーザーの UID/GID になる。base イメージの `dialout` が GID 20（Mac の `staff`）を使っていて、Dev Containers の `updateRemoteUserUID` が止まっていたので、別の GID に移した (#340)
+- dev のユーザーが UID 1000 でなくなっても、署名用ソケットは `signing_key.socket_uid` を設定しない限り `sgw-agent setup` が伝える uid に合わせ、`sgw-post-start` が named volume をそのユーザーに渡す (#340)
+- テンプレートの `config.sample.yml` で、Claude Code が Claude アカウントでログインでき、Codex が ChatGPT のプランで動く。`storage.googleapis.com` は送信上限つきで関所を通す (#341)
+
+### Enhancement
+
+- `ssh_options` に `ProxyJump={bastion}` と書ける。値は各自が `sgw var set bastion` で秘密ストアに入れるので、共有の config.yml に誰かのアカウントを書かずに済む。`{name}` にできるのはオプションの値だけ (#335)
+- その値を扱う `sgw var set|get|list|delete`。`sgw login` は足りない値を聞き、`sgw check` は `set` / `missing` / `locked` を表示し、値は出さない (#335)
+- 上流 proxy の資格情報も、この値 2 つ（`proxy_user` / `proxy_password`）になる。`upstream_proxy_username` / `_password` に `{key}` を書けば別のキーを使う。保存済みのものは解錠時に移る (#336)
+- `sgw var set --secret` で入れた値は `sgw var get` で読み戻せない。proxy のパスワードは常にこの扱い (#337)
+
 ## 0.2.61（2026-09-30）
 
 ### Fix
