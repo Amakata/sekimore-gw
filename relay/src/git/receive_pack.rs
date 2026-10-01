@@ -25,7 +25,7 @@ use super::{
 };
 use crate::audit::Actor;
 use crate::config::OnExists;
-use crate::github::GhError;
+use crate::forge::OpenPrError;
 use crate::paths;
 use crate::pktline::{
     caps_contain, encode_commands, encode_into, parse_receive_pack, validate_ref_name, CommandLine,
@@ -526,27 +526,39 @@ pub trait UpstreamCommits: Sync {
 
 /// The real one: the upstream's API, scoped by the authorization this push already passed.
 pub struct ApiUpstreamCommits<'a> {
-    pub github: Option<&'a crate::github::GitHub>,
+    pub forge: Option<&'a dyn crate::forge::ForgeRelay>,
     pub auth: &'a GitAuthorized<'a>,
+}
+
+impl ApiUpstreamCommits<'_> {
+    /// A yes / no question about this repository's history, asked of the forge relay under the
+    /// push's own authorization. An `Err` is "cannot tell", and the caller fails closed on it.
+    async fn ask(&self, q: &crate::forge::Query) -> Result<bool, String> {
+        let Some(forge) = self.forge else {
+            return Err("this relay has no API client for the upstream".to_string());
+        };
+        match crate::forge::Handle::of(forge).ask_git(q, self.auth).await {
+            Ok(crate::forge::Answer::Bool(b)) => Ok(b),
+            Ok(other) => Err(crate::forge::unexpected(q, &other).message),
+            Err(e) => Err(e.message),
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl UpstreamCommits for ApiUpstreamCommits<'_> {
     async fn has_commit(&self, sha: &str) -> Result<bool, String> {
-        let Some(gh) = self.github else {
-            return Err("this relay has no API client for the upstream".to_string());
-        };
-        gh.commit_exists(self.auth, sha)
-            .await
-            .map_err(|e| e.to_string())
+        self.ask(&crate::forge::Query::CommitExists {
+            sha: sha.to_string(),
+        })
+        .await
     }
     async fn is_ancestor(&self, base: &str, head: &str) -> Result<bool, String> {
-        let Some(gh) = self.github else {
-            return Err("this relay has no API client for the upstream".to_string());
-        };
-        gh.is_ancestor(self.auth, base, head)
-            .await
-            .map_err(|e| e.to_string())
+        self.ask(&crate::forge::Query::IsAncestor {
+            base: base.to_string(),
+            head: head.to_string(),
+        })
+        .await
     }
 }
 
@@ -1165,7 +1177,7 @@ pub async fn relay_receive_pack(
     // #59: what settles the boundary of the history this push brings. Built here because it
     // borrows the same `auth` the push was allowed under.
     let upstream_commits = ApiUpstreamCommits {
-        github: ctx.github.as_deref(),
+        forge: ctx.forge.as_deref(),
         auth,
     };
     let pack_fut = async {
@@ -1402,7 +1414,7 @@ async fn create_pr(
     auth: &GitAuthorized<'_>,
     pr: &PrIntent,
 ) -> bool {
-    let Some(gh) = &ctx.github else {
+    let Some(forge) = &ctx.forge else {
         say(
             io,
             &format!(
@@ -1413,21 +1425,34 @@ async fn create_pr(
         .await;
         return false;
     };
+    let forge = crate::forge::Handle::of(forge.as_ref());
     // `refs/pr/<branch>` names no base, so the default branch stands in. Resolved before the
     // proof is taken, because `bases` has to be checked against the base actually used (#158).
     let base = match &pr.base {
         Some(b) => b.clone(),
-        None => match gh.default_branch(auth).await {
-            Ok(b) => b,
-            Err(e) => {
-                say(
-                    io,
-                    &format!("push of {} accepted, but the default branch could not be read, so no PR was opened: {e}", pr.client_ref),
-                )
-                .await;
-                return false;
+        None => {
+            let q = crate::forge::Query::DefaultBranch;
+            match forge.ask_git(&q, auth).await {
+                Ok(crate::forge::Answer::Branch(b)) => b,
+                Ok(other) => {
+                    let e = crate::forge::unexpected(&q, &other);
+                    say(
+                        io,
+                        &format!("push of {} accepted, but the default branch could not be read, so no PR was opened: {}", pr.client_ref, e.message),
+                    )
+                    .await;
+                    return false;
+                }
+                Err(e) => {
+                    say(
+                        io,
+                        &format!("push of {} accepted, but the default branch could not be read, so no PR was opened: {}", pr.client_ref, e.message),
+                    )
+                    .await;
+                    return false;
+                }
             }
-        },
+        }
     };
     // Re-obtain the proof (plan_push already checked it; this can only fail if the policy changed since).
     // For `refs/pr/` this is the first time `bases` sees the base at all, since it was not known
@@ -1444,12 +1469,12 @@ async fn create_pr(
         "Created via sekimore-relay (`{}`). Pushed by an AI agent through the gateway.\n\nCommit: {}",
         pr.client_ref, pr.sha
     );
-    match gh
-        .create_pull_request(&api_auth, &pr.head_branch, &base, &title, &body, false)
+    match forge
+        .open_pr(&api_auth, &pr.head_branch, &base, &title, &body)
         .await
     {
-        Ok(r) => {
-            say(io, &format!("created PR #{} {}", r.number, r.html_url)).await;
+        Ok(r) if !r.existed => {
+            say(io, &format!("created PR #{} {}", r.number, r.url)).await;
             ctx.audit.log_edge(
                 paths::RELAY_GITHUB_API,
                 "pr_created",
@@ -1463,61 +1488,57 @@ async fn create_pr(
             );
             true
         }
-        Err(GhError::Status { status: 422, .. }) => match gh
-            .find_pull_request(&api_auth, &pr.head_branch, &base)
-            .await
-        {
-            Ok(Some(existing)) => {
-                say(
-                    io,
-                    &format!(
-                        "PR already exists: #{} {}",
-                        existing.number, existing.html_url
-                    ),
-                )
-                .await;
-                ctx.audit.log_edge(
-                    paths::RELAY_GITHUB_API,
-                    "pr_exists",
-                    Actor::Agent,
-                    &[
-                        ("repo", auth.repo()),
-                        ("head", &pr.head_branch),
-                        ("number", &existing.number.to_string()),
-                    ],
-                );
-                true
-            }
-            Ok(None) => {
-                say(io, "push ok but PR creation failed: upstream returned 422 and no matching open PR was found").await;
-                ctx.audit.deny_edge(
-                    paths::RELAY_GITHUB_API,
-                    "pr_failed",
-                    Actor::Agent,
-                    "422 without existing PR",
-                    &[("repo", auth.repo()), ("head", &pr.head_branch)],
-                );
-                false
-            }
-            Err(e) => {
-                say(io, &format!("push ok but PR lookup failed: {e}")).await;
-                ctx.audit.deny_edge(
-                    paths::RELAY_GITHUB_API,
-                    "pr_failed",
-                    Actor::Agent,
-                    &e.to_string(),
-                    &[("repo", auth.repo()), ("head", &pr.head_branch)],
-                );
-                false
-            }
-        },
-        Err(e) => {
-            say(io, &format!("push ok but PR creation failed: {e}")).await;
+        Ok(existing) => {
+            say(
+                io,
+                &format!("PR already exists: #{} {}", existing.number, existing.url),
+            )
+            .await;
+            ctx.audit.log_edge(
+                paths::RELAY_GITHUB_API,
+                "pr_exists",
+                Actor::Agent,
+                &[
+                    ("repo", auth.repo()),
+                    ("head", &pr.head_branch),
+                    ("number", &existing.number.to_string()),
+                ],
+            );
+            true
+        }
+        Err(OpenPrError::NotOpened(_)) => {
+            say(io, "push ok but PR creation failed: upstream returned 422 and no matching open PR was found").await;
             ctx.audit.deny_edge(
                 paths::RELAY_GITHUB_API,
                 "pr_failed",
                 Actor::Agent,
-                &e.to_string(),
+                "422 without existing PR",
+                &[("repo", auth.repo()), ("head", &pr.head_branch)],
+            );
+            false
+        }
+        Err(OpenPrError::LookupFailed(e)) => {
+            say(io, &format!("push ok but PR lookup failed: {}", e.message)).await;
+            ctx.audit.deny_edge(
+                paths::RELAY_GITHUB_API,
+                "pr_failed",
+                Actor::Agent,
+                &e.message,
+                &[("repo", auth.repo()), ("head", &pr.head_branch)],
+            );
+            false
+        }
+        Err(OpenPrError::CreateFailed(e)) => {
+            say(
+                io,
+                &format!("push ok but PR creation failed: {}", e.message),
+            )
+            .await;
+            ctx.audit.deny_edge(
+                paths::RELAY_GITHUB_API,
+                "pr_failed",
+                Actor::Agent,
+                &e.message,
                 &[("repo", auth.repo()), ("head", &pr.head_branch)],
             );
             false

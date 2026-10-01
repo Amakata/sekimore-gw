@@ -34,7 +34,6 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 
 use crate::audit::{Actor, Audit};
 use crate::config::Limits;
-use crate::github::GitHub;
 use crate::paths;
 pub use crate::policy::GitVerb;
 use crate::policy::{Denied, GitAuthorized, Project};
@@ -107,8 +106,10 @@ pub struct GitContext {
     /// 0.2.0: the upstream this listener serves (the git-relay domain). Empty means upstreams are not distinguished (single-upstream tests)
     pub host: String,
     pub upstream: Arc<dyn UpstreamGit>,
-    /// Used to create PRs. When None, `refs/for` reports that the push went through but no PR could be created
-    pub github: Option<Arc<GitHub>>,
+    /// The forge relay for this upstream (#328), built in: opens the PR for `refs/for` / `refs/pr`
+    /// and answers what a push needs from the upstream (default branch, fast-forward, commits).
+    /// When None, `refs/for` reports that the push went through but no PR could be created
+    pub forge: Option<Arc<dyn crate::forge::ForgeRelay>>,
     pub audit: Arc<Audit>,
     pub limits: Limits,
 }

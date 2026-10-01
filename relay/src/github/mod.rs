@@ -1,7 +1,8 @@
 //! Upstream (github.com / GHES) API client.
 //!
-//! The key point: **every method requires an `&Authorized<'_>`**, so code that reaches upstream without
-//! passing a policy check will not compile. For GraphQL (Projects v2) the relay builds the query itself, so agents never write GraphQL.
+//! The key point: **every method requires a `&Grant`**, which only the gateway makes, out of the
+//! policy's own proof (`crate::forge`), so code that reaches upstream without passing a policy check
+//! will not compile. For GraphQL (Projects v2) the relay builds the query itself, so agents never write GraphQL.
 //!
 //! ```compile_fail
 //! # use sekimore_relay::github::GitHub;
@@ -25,8 +26,9 @@ use serde_json::{json, Value};
 use url::Url;
 
 use crate::audit::{Actor, Audit};
+use crate::forge::Grant;
 use crate::paths;
-use crate::policy::{Action, Authorized, Denied, Resource};
+use crate::policy::{Action, Denied, Resource};
 use http::{read_limited, truncate};
 use upstream_token::{TokenError, UpstreamTokenStore};
 
@@ -345,8 +347,11 @@ pub struct GitHub {
     api_base: Url,
     graphql_base: Url,
     http: reqwest::Client,
-    tokens: Arc<UpstreamTokenStore>,
-    audit: Arc<Audit>,
+    /// #328: where the bearer token comes from and where each upstream call is written down —
+    /// the two things that stay in the gateway. Built in they are the secret store and the audit;
+    /// a sidecar (#329) gets the call's credential and hands its records back.
+    tokens: Arc<dyn TokenSource>,
+    calls: Arc<dyn CallLog>,
     /// 0.2.34 (#172): who the token belongs to, read once. It cannot change without the token
     /// changing, and checking a comment's author on every edit would otherwise pay for it twice
     viewer: std::sync::OnceLock<String>,
@@ -368,7 +373,7 @@ impl GitHub {
             graphql_base,
             http,
             tokens,
-            audit,
+            calls: audit,
             viewer: std::sync::OnceLock::new(),
             route: paths::RELAY_GITHUB_API,
         }
@@ -384,7 +389,7 @@ impl GitHub {
 
     pub async fn create_pull_request(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         head: &str,
         base: &str,
         title: &str,
@@ -419,7 +424,7 @@ impl GitHub {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_release(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         tag: &str,
         name: Option<&str>,
         body: Option<&str>,
@@ -457,7 +462,7 @@ impl GitHub {
     /// 0.2.6: the release for one tag. `Ok(None)` when the tag has no release yet.
     pub async fn get_release_by_tag(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         tag: &str,
     ) -> Result<Option<ReleaseResult>, GhError> {
         auth.ensure(Resource::Release, Action::Read)?;
@@ -515,7 +520,7 @@ impl GitHub {
     /// 0.2.6: the most recent releases, newest first.
     pub async fn list_releases(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         limit: u32,
     ) -> Result<Vec<ReleaseResult>, GhError> {
         auth.ensure(Resource::Release, Action::Read)?;
@@ -541,7 +546,7 @@ impl GitHub {
     /// floor for any edit, so that is what proves this one.
     pub async fn get_release_for_edit(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         tag: &str,
     ) -> Result<Option<ReleaseResult>, GhError> {
         auth.ensure(Resource::Release, Action::Create)?;
@@ -558,7 +563,7 @@ impl GitHub {
     #[allow(clippy::too_many_arguments)]
     pub async fn update_release(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         release_id: u64,
         publishing: bool,
         name: Option<&str>,
@@ -607,12 +612,7 @@ impl GitHub {
     /// `ci:rerun` and not `ci:read`: this spends the account's Actions minutes and re-executes
     /// workflow code with the repository's secrets, which is a different authority from reading a
     /// log. The run id is a `u64` and cannot leave its path segment.
-    pub async fn rerun_ci(
-        &self,
-        auth: &Authorized<'_>,
-        run_id: u64,
-        all: bool,
-    ) -> Result<(), GhError> {
+    pub async fn rerun_ci(&self, auth: &Grant, run_id: u64, all: bool) -> Result<(), GhError> {
         auth.ensure(Resource::Ci, Action::Rerun)?;
         let what = if all { "rerun" } else { "rerun-failed-jobs" };
         self.rest::<Value>(
@@ -625,7 +625,7 @@ impl GitHub {
     }
 
     /// 0.2.9: stop a workflow run. Same permission as re-running: both steer what CI is doing.
-    pub async fn cancel_ci(&self, auth: &Authorized<'_>, run_id: u64) -> Result<(), GhError> {
+    pub async fn cancel_ci(&self, auth: &Grant, run_id: u64) -> Result<(), GhError> {
         auth.ensure(Resource::Ci, Action::Rerun)?;
         self.rest::<Value>(
             "POST",
@@ -642,7 +642,7 @@ impl GitHub {
     /// accepted too, since creating a PR implies seeing the one that already exists.
     pub async fn find_pull_request(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         head: &str,
         base: &str,
     ) -> Result<Option<PrResult>, GhError> {
@@ -812,7 +812,7 @@ impl GitHub {
     /// Summarize a PR's state and CI checks, covering both check-runs (GitHub Actions and friends) and commit statuses (external CI).
     pub async fn pull_request_status(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
     ) -> Result<PrStatus, GhError> {
         auth.ensure(Resource::Pr, Action::Read)?;
@@ -924,12 +924,8 @@ impl GitHub {
     /// answer to a page of one commit — the body otherwise carries every commit and file of the
     /// difference, which a large rewrite makes large. Two commits with no common history are a
     /// 404 here, which is "no".
-    pub async fn is_ancestor(
-        &self,
-        auth: &crate::policy::GitAuthorized<'_>,
-        base: &str,
-        head: &str,
-    ) -> Result<bool, GhError> {
+    pub async fn is_ancestor(&self, auth: &Grant, base: &str, head: &str) -> Result<bool, GhError> {
+        auth.ensure_git()?;
         for sha in [base, head] {
             if sha.len() != 40 || !sha.bytes().all(|c| c.is_ascii_hexdigit()) {
                 return Ok(false);
@@ -959,11 +955,8 @@ impl GitHub {
         }
     }
 
-    pub async fn commit_exists(
-        &self,
-        auth: &crate::policy::GitAuthorized<'_>,
-        sha: &str,
-    ) -> Result<bool, GhError> {
+    pub async fn commit_exists(&self, auth: &Grant, sha: &str) -> Result<bool, GhError> {
+        auth.ensure_git()?;
         // The sha comes off the wire. A path segment is escaped everywhere else in this file for
         // the same reason, and this one is also checked to be a sha at all, because anything that
         // is not cannot name a commit and asking would only spend a call.
@@ -992,10 +985,8 @@ impl GitHub {
     ///
     /// Read at pull-request time rather than when the push is planned: planning is offline and
     /// synchronous, and creating the pull request already calls the API.
-    pub async fn default_branch(
-        &self,
-        auth: &crate::policy::GitAuthorized<'_>,
-    ) -> Result<String, GhError> {
+    pub async fn default_branch(&self, auth: &Grant) -> Result<String, GhError> {
+        auth.ensure_git()?;
         let r: Value = self
             .rest("GET", &format!("/repos/{}", auth.repo()), None)
             .await?;
@@ -1022,11 +1013,7 @@ impl GitHub {
     }
 
     /// Actions runs attached to a ref, newest first. Used to see runs with no PR, such as Docker Publish on a tag push.
-    pub async fn ci_runs(
-        &self,
-        auth: &Authorized<'_>,
-        git_ref: &str,
-    ) -> Result<Vec<CiRun>, GhError> {
+    pub async fn ci_runs(&self, auth: &Grant, git_ref: &str) -> Result<Vec<CiRun>, GhError> {
         auth.ensure(Resource::Ci, Action::Read)?;
         let repo = auth.repo();
         let sha = self.resolve_sha(repo, git_ref).await?;
@@ -1065,7 +1052,7 @@ impl GitHub {
     /// OAuth scope on the upstream token; without it GitHub answers 403 and this says so.
     pub async fn security_alerts(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         state: &str,
     ) -> Result<Vec<SecurityAlert>, GhError> {
         auth.ensure(Resource::Security, Action::Read)?;
@@ -1091,7 +1078,7 @@ impl GitHub {
 
     pub async fn security_alert(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
     ) -> Result<SecurityAlert, GhError> {
         auth.ensure(Resource::Security, Action::Read)?;
@@ -1109,7 +1096,7 @@ impl GitHub {
     /// 280 characters — both are checked by the handler, and GitHub checks them again.
     pub async fn security_alert_dismiss(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         reason: &str,
         comment: &str,
@@ -1129,11 +1116,7 @@ impl GitHub {
     }
 
     /// The inverse of dismissing, under the same authority.
-    pub async fn security_alert_reopen(
-        &self,
-        auth: &Authorized<'_>,
-        number: u64,
-    ) -> Result<(), GhError> {
+    pub async fn security_alert_reopen(&self, auth: &Grant, number: u64) -> Result<(), GhError> {
         auth.ensure(Resource::Security, Action::Dismiss)?;
         self.rest::<Value>(
             "PATCH",
@@ -1145,11 +1128,7 @@ impl GitHub {
     }
 
     /// The jobs of a run.
-    pub async fn ci_jobs_for_run(
-        &self,
-        auth: &Authorized<'_>,
-        run_id: u64,
-    ) -> Result<Vec<CiJob>, GhError> {
+    pub async fn ci_jobs_for_run(&self, auth: &Grant, run_id: u64) -> Result<Vec<CiJob>, GhError> {
         auth.ensure(Resource::Ci, Action::Read)?;
         let repo = auth.repo();
         let jobs: Value = self
@@ -1175,7 +1154,7 @@ impl GitHub {
     }
 
     /// Jobs of the latest Actions runs for a PR's head commit. Used to get the job_id of a failing job.
-    pub async fn ci_jobs(&self, auth: &Authorized<'_>, number: u64) -> Result<Vec<CiJob>, GhError> {
+    pub async fn ci_jobs(&self, auth: &Grant, number: u64) -> Result<Vec<CiJob>, GhError> {
         auth.ensure(Resource::Ci, Action::Read)?;
         let repo = auth.repo();
         let pr: Value = self
@@ -1212,7 +1191,7 @@ impl GitHub {
     /// GitHub returns job logs as one plain-text blob, so the relay splits it into lines and returns the window.
     pub async fn ci_job_log(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         job_id: u64,
         job_name: &str,
         conclusion: &str,
@@ -1253,7 +1232,7 @@ impl GitHub {
     /// and stops rather than asking for one oversized response.
     async fn pull_request_files_paged(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         pages: u32,
         per_page: u32,
@@ -1289,7 +1268,7 @@ impl GitHub {
     /// under `RESPONSE_CAP`, and each patch is dropped once its counts have been read.
     pub async fn pull_request_files(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
     ) -> Result<(Vec<PrFile>, bool), GhError> {
         let (mut files, more) = self
@@ -1308,7 +1287,7 @@ impl GitHub {
     /// — here a start offset, not an end — because a diff is read from the top.
     pub async fn pull_request_diff(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         path: Option<&str>,
         window: usize,
@@ -1366,7 +1345,7 @@ impl GitHub {
 
     pub async fn comment_pull_request(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         body: &str,
     ) -> Result<(), GhError> {
@@ -1406,7 +1385,7 @@ impl GitHub {
     /// an issue would ride on a pull request's permission. Returns the path to write to.
     async fn own_comment(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         inline: bool,
         comment_id: u64,
@@ -1444,7 +1423,7 @@ impl GitHub {
     /// #172: correct a comment the agent posted on `number`. `inline` names a line comment.
     pub async fn update_comment(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         inline: bool,
         comment_id: u64,
@@ -1459,7 +1438,7 @@ impl GitHub {
     /// #172: withdraw a comment the agent posted on `number`.
     pub async fn delete_comment(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         inline: bool,
         comment_id: u64,
@@ -1476,7 +1455,7 @@ impl GitHub {
     /// `ci runs --ref`.
     pub async fn dispatch_workflow(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         workflow: &str,
         git_ref: &str,
         inputs: &std::collections::BTreeMap<String, String>,
@@ -1503,7 +1482,7 @@ impl GitHub {
     /// the only way, and it wants the pull request's node id rather than its number.
     pub async fn set_pull_request_draft(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         draft: bool,
     ) -> Result<(), GhError> {
@@ -1539,7 +1518,7 @@ impl GitHub {
 
     pub async fn reply_to_review_comment(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         comment_id: u64,
         body: &str,
@@ -1556,7 +1535,7 @@ impl GitHub {
 
     pub async fn review_pull_request(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         event: &str,
         body: &str,
@@ -1594,7 +1573,7 @@ impl GitHub {
     /// because this notifies humans rather than recording an opinion.
     pub async fn request_reviewers(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         reviewers: &[String],
         team_reviewers: &[String],
@@ -1629,7 +1608,7 @@ impl GitHub {
     /// the merge instead of deleting something of its own.
     pub async fn merge_pull_request(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         method: Option<&str>,
         title: Option<&str>,
@@ -1697,11 +1676,7 @@ impl GitHub {
 
     /// 0.2.9: the inverse of `close_pull_request`. Reopening is strictly less destructive than
     /// closing, so `pr:close` covers both.
-    pub async fn reopen_pull_request(
-        &self,
-        auth: &Authorized<'_>,
-        number: u64,
-    ) -> Result<(), GhError> {
+    pub async fn reopen_pull_request(&self, auth: &Grant, number: u64) -> Result<(), GhError> {
         auth.ensure(Resource::Pr, Action::Close)?;
         self.rest::<Value>(
             "PATCH",
@@ -1720,7 +1695,7 @@ impl GitHub {
     /// from `Project::authorize_pr(repo, new_base)`, the same check `pr create` runs.
     pub async fn update_pull_request(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         title: Option<&str>,
         body: Option<&str>,
@@ -1746,11 +1721,7 @@ impl GitHub {
         Ok(())
     }
 
-    pub async fn close_pull_request(
-        &self,
-        auth: &Authorized<'_>,
-        number: u64,
-    ) -> Result<(), GhError> {
+    pub async fn close_pull_request(&self, auth: &Grant, number: u64) -> Result<(), GhError> {
         auth.ensure(Resource::Pr, Action::Close)?;
         self.rest::<Value>(
             "PATCH",
@@ -1766,10 +1737,10 @@ impl GitHub {
     /// Applying labels is a separate permission: doing so also requires `label_auth` (proof of `issue:label`).
     pub async fn create_issue(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         title: &str,
         body: &str,
-        labels: Option<(&Authorized<'_>, &[String])>,
+        labels: Option<(&Grant, &[String])>,
     ) -> Result<IssueResult, GhError> {
         auth.ensure(Resource::Issue, Action::Create)?;
         let mut payload = json!({"title": title, "body": body});
@@ -1801,7 +1772,7 @@ impl GitHub {
 
     pub async fn comment_issue(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         body: &str,
     ) -> Result<(), GhError> {
@@ -1820,7 +1791,7 @@ impl GitHub {
         Ok(())
     }
 
-    pub async fn close_issue(&self, auth: &Authorized<'_>, number: u64) -> Result<(), GhError> {
+    pub async fn close_issue(&self, auth: &Grant, number: u64) -> Result<(), GhError> {
         // A number reaches either kind (see numbered_write_scope); the proof already
         // matches whichever it turned out to be
         auth.ensure_any(&[
@@ -1838,7 +1809,7 @@ impl GitHub {
 
     /// 0.2.9: the inverse of `close_issue`, under the same permission — reopening undoes a close
     /// rather than adding a new power.
-    pub async fn reopen_issue(&self, auth: &Authorized<'_>, number: u64) -> Result<(), GhError> {
+    pub async fn reopen_issue(&self, auth: &Grant, number: u64) -> Result<(), GhError> {
         // A number reaches either kind (see numbered_write_scope); the proof already
         // matches whichever it turned out to be
         auth.ensure_any(&[
@@ -1856,7 +1827,7 @@ impl GitHub {
 
     pub async fn label_issue(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         labels: &[String],
     ) -> Result<(), GhError> {
@@ -1877,7 +1848,7 @@ impl GitHub {
 
     pub async fn assign_issue(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         assignees: &[String],
     ) -> Result<(), GhError> {
@@ -1904,7 +1875,7 @@ impl GitHub {
     /// with the operator's token (the 0.2.7 traversal fix).
     pub async fn unlabel_issue(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         label: &str,
     ) -> Result<(), GhError> {
@@ -1931,7 +1902,7 @@ impl GitHub {
     /// involved.
     pub async fn unassign_issue(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         assignees: &[String],
     ) -> Result<(), GhError> {
@@ -1954,7 +1925,7 @@ impl GitHub {
 
     pub async fn add_project_item(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         project_id: &str,
         content_node_id: &str,
     ) -> Result<String, GhError> {
@@ -1974,7 +1945,7 @@ impl GitHub {
 
     pub async fn update_project_item_field(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         project_id: &str,
         item_id: &str,
         field_id: &str,
@@ -1997,7 +1968,7 @@ impl GitHub {
     /// order could not see the board.
     pub async fn list_project_items(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         project_id: &str,
         first: u32,
     ) -> Result<Value, GhError> {
@@ -2035,7 +2006,7 @@ query($project:ID!,$first:Int!,$fields:Int!){
     /// command unusable on its own.
     pub async fn list_project_fields(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         project_id: &str,
         first: u32,
     ) -> Result<Value, GhError> {
@@ -2093,13 +2064,13 @@ query($project:ID!,$first:Int!,$fields:Int!){
     /// returned. Two layers, because the first one is a request and the second one is a fact.
     pub async fn search_issues(
         &self,
-        auth: &Authorized<'_>,
-        project: &crate::policy::Project,
+        auth: &Grant,
+        repos: &[String],
         query: &str,
         limit: u32,
     ) -> Result<Vec<SearchHit>, GhError> {
         auth.ensure(Resource::Search, Action::Read)?;
-        let scope = project.search_scope();
+        let scope: Vec<String> = repos.iter().map(|r| format!("repo:{r}")).collect();
         if scope.is_empty() {
             return Ok(Vec::new());
         }
@@ -2129,7 +2100,7 @@ query($project:ID!,$first:Int!,$fields:Int!){
                     Some(format!("{owner}/{name}"))
                 })
                 .unwrap_or_default();
-            if !project.owns_repo(&repo) {
+            if !repos.iter().any(|r| r.eq_ignore_ascii_case(&repo)) {
                 // A result from outside the project: the query was scoped, so this means the
                 // caller wrote their own repo: qualifier. Drop it rather than report it.
                 continue;
@@ -2179,11 +2150,7 @@ query($project:ID!,$first:Int!,$fields:Int!){
     /// `issue label` and `issue assign` take free text today, so an agent guesses: GitHub silently
     /// creates a label that does not exist, and 422s on an assignee who cannot be assigned. This is
     /// what `repo:read` is for; until now that key was declared and nothing checked it.
-    pub async fn repo_vocabulary(
-        &self,
-        auth: &Authorized<'_>,
-        limit: u32,
-    ) -> Result<Value, GhError> {
+    pub async fn repo_vocabulary(&self, auth: &Grant, limit: u32) -> Result<Value, GhError> {
         auth.ensure(Resource::Repo, Action::Read)?;
         let n = limit.clamp(1, 100);
         let repo = auth.repo();
@@ -2302,16 +2269,7 @@ query($project:ID!,$first:Int!,$fields:Int!){
         let status = resp.status().as_u16();
         let body = read_limited(resp, CI_LOG_CAP).await?;
         let audit_path = path.split('?').next().unwrap_or(path);
-        self.audit.log_edge(
-            self.route,
-            "api_call",
-            Actor::System,
-            &[
-                ("method", method),
-                ("path", audit_path),
-                ("status", &status.to_string()),
-            ],
-        );
+        self.calls.api_call(self.route, method, audit_path, status);
         if status >= 400 {
             return Err(GhError::Status {
                 method: method.to_string(),
@@ -2356,16 +2314,7 @@ query($project:ID!,$first:Int!,$fields:Int!){
         let body = read_limited(resp, RESPONSE_CAP).await?;
         // The query string is not worth auditing (the values are long).
         let audit_path = path.split('?').next().unwrap_or(path);
-        self.audit.log_edge(
-            self.route,
-            "api_call",
-            Actor::System,
-            &[
-                ("method", method),
-                ("path", audit_path),
-                ("status", &status.to_string()),
-            ],
-        );
+        self.calls.api_call(self.route, method, audit_path, status);
         if status >= 400 {
             return Err(GhError::Status {
                 method: method.to_string(),
@@ -2390,11 +2339,7 @@ query($project:ID!,$first:Int!,$fields:Int!){
 /// which goes through `url_escape`; the numbers are `u64` and cannot leave their path segment.
 impl GitHub {
     /// The whole pull request, including the counts GitHub attaches to it.
-    pub async fn pull_request_view(
-        &self,
-        auth: &Authorized<'_>,
-        number: u64,
-    ) -> Result<PrView, GhError> {
+    pub async fn pull_request_view(&self, auth: &Grant, number: u64) -> Result<PrView, GhError> {
         auth.ensure(Resource::Pr, Action::Read)?;
         let pr: Value = self
             .rest(
@@ -2432,7 +2377,7 @@ impl GitHub {
     /// diff. Reading only one of them misses most of a review.
     pub async fn pull_request_comments(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         limit: u32,
     ) -> Result<Vec<CommentItem>, GhError> {
@@ -2573,7 +2518,7 @@ impl GitHub {
     /// not receive is one it simply does not show.
     pub async fn review_threads(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         pages: u32,
         per_page: u32,
@@ -2598,7 +2543,7 @@ impl GitHub {
     /// out" — not "there was a second page", which is the usual case and is read.
     async fn fetch_review_threads(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         pages: u32,
         per_page: u32,
@@ -2701,7 +2646,7 @@ impl GitHub {
     /// is not there — the same shape as `own_comment` (#172), and for the same reason.
     pub async fn resolve_review_thread(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         thread_id: &str,
         resolved: bool,
@@ -2741,11 +2686,7 @@ impl GitHub {
     }
 
     /// One issue. GitHub also serves pull requests here, so the caller is told which it got.
-    pub async fn issue_view(
-        &self,
-        auth: &Authorized<'_>,
-        number: u64,
-    ) -> Result<IssueView, GhError> {
+    pub async fn issue_view(&self, auth: &Grant, number: u64) -> Result<IssueView, GhError> {
         auth.ensure(Resource::Issue, Action::Read)?;
         let iss: Value = self
             .rest(
@@ -2780,7 +2721,7 @@ impl GitHub {
     /// reason — a project can want issues opened without wanting what a person wrote rewritable.
     pub async fn update_issue(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         title: Option<&str>,
         body: Option<&str>,
@@ -2813,11 +2754,7 @@ impl GitHub {
     /// the 0.2.13 attempt stalled. A proof is still required, so nothing reaches upstream without
     /// passing the policy; what it does not require is a *particular* proof, because deciding which
     /// one applies is the question being asked.
-    pub async fn names_a_pull_request(
-        &self,
-        auth: &Authorized<'_>,
-        number: u64,
-    ) -> Result<bool, GhError> {
+    pub async fn names_a_pull_request(&self, auth: &Grant, number: u64) -> Result<bool, GhError> {
         let iss: Value = self
             .rest(
                 "GET",
@@ -2831,7 +2768,7 @@ impl GitHub {
     /// The conversation on an issue. Issues have only the one kind of comment.
     pub async fn issue_comments(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         number: u64,
         limit: u32,
     ) -> Result<Vec<CommentItem>, GhError> {
@@ -2872,7 +2809,7 @@ impl GitHub {
     /// `pr list` is where a PR belongs and `issue:read` is not `pr:read`.
     pub async fn list_issues(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         state: &str,
         labels: &[String],
         assignee: Option<&str>,
@@ -2912,7 +2849,7 @@ impl GitHub {
     /// The repository's pull requests.
     pub async fn list_pull_requests(
         &self,
-        auth: &Authorized<'_>,
+        auth: &Grant,
         state: &str,
         base: Option<&str>,
         limit: u32,
@@ -3114,6 +3051,40 @@ fn path_segment(s: &str) -> String {
     out
 }
 
+/// Where a client's bearer token comes from (#328).
+#[async_trait::async_trait]
+pub trait TokenSource: Send + Sync {
+    async fn token(&self) -> Result<String, TokenError>;
+}
+
+#[async_trait::async_trait]
+impl TokenSource for UpstreamTokenStore {
+    async fn token(&self) -> Result<String, TokenError> {
+        UpstreamTokenStore::token(self).await
+    }
+}
+
+/// Where a client writes down each upstream call it made (#328). The audit's `api_call` edge,
+/// built in.
+pub trait CallLog: Send + Sync {
+    fn api_call(&self, route: &'static str, method: &str, path: &str, status: u16);
+}
+
+impl CallLog for Audit {
+    fn api_call(&self, route: &'static str, method: &str, path: &str, status: u16) {
+        self.log_edge(
+            route,
+            "api_call",
+            Actor::System,
+            &[
+                ("method", method),
+                ("path", path),
+                ("status", &status.to_string()),
+            ],
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3204,6 +3175,7 @@ mod tests {
         let auth = p
             .authorize("Org/Repo", Resource::Pr, Action::Create)
             .unwrap();
+        let auth = crate::forge::Grant::for_test(&auth);
         let g = gh();
         // Proof of pr:create cannot drive a merge (it reaches neither upstream nor the token store).
         assert!(matches!(
@@ -3232,6 +3204,7 @@ mod tests {
         let auth = p
             .authorize("Org/Repo", Resource::Pr, Action::Create)
             .unwrap();
+        let auth = crate::forge::Grant::for_test(&auth);
         assert!(matches!(
             gh().pull_request_status(&auth, 1).await,
             Err(GhError::Denied(_))
@@ -3241,6 +3214,7 @@ mod tests {
             .with_repo("Org/Repo", Mode::ReadOnly, &[])
             .grant("pr:read");
         let auth = p.authorize("Org/Repo", Resource::Pr, Action::Read).unwrap();
+        let auth = crate::forge::Grant::for_test(&auth);
         assert!(matches!(
             gh().pull_request_status(&auth, 1).await,
             Err(GhError::Token(_))
@@ -3271,6 +3245,7 @@ mod tests {
             .with_repo("Org/Repo", Mode::ReadOnly, &[])
             .grant("pr:read");
         let auth = p.authorize("Org/Repo", Resource::Pr, Action::Read).unwrap();
+        let auth = crate::forge::Grant::for_test(&auth);
         assert!(matches!(
             gh().ci_jobs(&auth, 1).await,
             Err(GhError::Denied(_))
@@ -3280,6 +3255,7 @@ mod tests {
             .with_repo("Org/Repo", Mode::ReadOnly, &[])
             .grant("ci:read");
         let auth = p.authorize("Org/Repo", Resource::Ci, Action::Read).unwrap();
+        let auth = crate::forge::Grant::for_test(&auth);
         assert!(matches!(
             gh().ci_jobs(&auth, 1).await,
             Err(GhError::Token(_))
@@ -3303,6 +3279,7 @@ mod tests {
             .with_repo("Org/Repo", Mode::ReadOnly, &[])
             .grant("pr:read");
         let auth = p.authorize("Org/Repo", Resource::Pr, Action::Read).unwrap();
+        let auth = crate::forge::Grant::for_test(&auth);
         assert!(matches!(
             gh().ci_runs(&auth, "main").await,
             Err(GhError::Denied(_))

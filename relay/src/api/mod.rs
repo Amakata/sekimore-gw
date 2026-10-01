@@ -1,12 +1,12 @@
 //! The relay's HTTP surface, which the agent-side CLI talks to (plaintext, reachable only from internal-net).
 //!
-//! Shared pipeline: verify the token → match the project → parse JSON → dispatch to a handler (which gets an `Authorized` to pass to `GitHub`).
+//! Shared pipeline: verify the token → match the project → parse JSON → dispatch to a handler (which gets an `Authorized` and hands the operation to the forge relay, #328).
 //! `/bootstrap` is the only unauthenticated endpoint (it registers a disposable key and issues a project token).
 
 pub mod handlers;
 pub mod types;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ use tokio::net::TcpListener;
 
 use crate::audit::{Actor, Audit};
 use crate::config::BootstrapMode;
-use crate::github::{GhError, GitHub};
+use crate::github::GhError;
 use crate::paths;
 use crate::policy::Project;
 use crate::ssh::authorized_keys::AuthorizedKeys;
@@ -35,8 +35,9 @@ use types::{ApiRequest, ApiResponse};
 pub struct ApiContext {
     pub project: Project,
     pub tokens: TokenStore,
-    /// GitHub client per upstream (keyed by git-relay domain). Became a map in 0.2.0
-    pub githubs: HashMap<String, Arc<GitHub>>,
+    /// The forge relay per upstream (keyed by git-relay domain). A map of GitHub clients in 0.2.0,
+    /// forge relays since #328
+    pub relays: crate::forge::Relays,
     pub audit: Arc<Audit>,
     pub keys: Arc<AuthorizedKeys>,
     pub bootstrap: BootstrapMode,
@@ -129,7 +130,7 @@ impl ProjectBoards {
     /// unset), with that upstream's client, and remembers which it was.
     pub async fn get(
         &self,
-        githubs: &std::collections::HashMap<String, Arc<crate::github::GitHub>>,
+        relays: &crate::forge::Relays,
         default_domain: &str,
     ) -> Vec<ResolvedBoard> {
         let mut slot = self.resolved.lock().await;
@@ -142,17 +143,24 @@ impl ProjectBoards {
                 .upstream
                 .clone()
                 .unwrap_or_else(|| default_domain.to_string());
-            let Some(gh) = githubs.get(&upstream) else {
+            let Some(relay) = relays.get(&upstream) else {
                 log::warn!(
                     "project board {} names upstream {upstream}, which has no API client; it stays refused",
                     b.label()
                 );
                 continue;
             };
-            match gh
-                .resolve_project_board(b.org.as_deref(), b.user.as_deref(), b.number)
-                .await
-            {
+            let q = crate::forge::Query::BoardId {
+                org: b.org.clone(),
+                user: b.user.clone(),
+                number: b.number,
+            };
+            let answer = match relay.ask_unscoped(&q).await {
+                Ok(crate::forge::Answer::Id(id)) => Ok(id),
+                Ok(other) => Err(crate::forge::unexpected(&q, &other)),
+                Err(e) => Err(e),
+            };
+            match answer {
                 Ok(id) => {
                     log::info!("project board {} → {id} ({upstream})", b.label());
                     out.push(ResolvedBoard {
@@ -163,9 +171,10 @@ impl ProjectBoards {
                     });
                 }
                 Err(e) => log::warn!(
-                    "project board {} could not be resolved ({e}); it stays refused until the \
+                    "project board {} could not be resolved ({}); it stays refused until the \
                      next attempt",
-                    b.label()
+                    b.label(),
+                    e.message
                 ),
             }
         }

@@ -676,6 +676,13 @@ impl<'p> Authorized<'p> {
     pub fn policy(&self) -> &'p RepoPolicy {
         self.repo
     }
+    /// #328: what the grant handed to a forge relay carries
+    pub(crate) fn resource(&self) -> Resource {
+        self.resource
+    }
+    pub(crate) fn action(&self) -> Action {
+        self.action
+    }
     /// For the audit log: what exactly was allowed.
     pub fn permission(&self) -> (&'static str, &'static str) {
         (self.resource.as_str(), self.action.as_str())

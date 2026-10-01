@@ -196,7 +196,9 @@ async fn setup_tuned(grants: &[&str], tune: impl FnOnce(&mut Project)) -> E2e {
         project,
         host: String::new(),
         upstream: Arc::new(LocalGitUpstream::new(&root)),
-        github: Some(gh),
+        forge: Some(Arc::new(sekimore_relay::forge::github::GitHubRelay::new(
+            gh,
+        ))),
         audit: audit.clone(),
         limits: Limits {
             idle_timeout: Duration::from_secs(20),
@@ -1308,7 +1310,9 @@ async fn setup_multi(grants: &[&str]) -> (E2e, SocketAddr, PathBuf) {
             project: project.clone(),
             host: host.into(),
             upstream: Arc::new(LocalGitUpstream::new(root)),
-            github: Some(gh.clone()),
+            forge: Some(Arc::new(sekimore_relay::forge::github::GitHubRelay::new(
+                gh.clone(),
+            ))),
             audit: audit.clone(),
             limits: Limits {
                 idle_timeout: Duration::from_secs(20),

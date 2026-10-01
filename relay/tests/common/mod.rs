@@ -1,7 +1,7 @@
 //! Shared fixtures for the integration tests: a temp state dir, a mock GitHub, API server startup, and HTTP helpers.
 #![allow(dead_code)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -865,9 +865,9 @@ pub async fn start_api_full(
     let ctx = Arc::new(ApiContext {
         project,
         tokens,
-        githubs: HashMap::from([
-            ("github.com".to_string(), gh),
-            ("ghe.example.com".to_string(), ghe),
+        relays: sekimore_relay::forge::Relays::from([
+            ("github.com".to_string(), built_in(gh)),
+            ("ghe.example.com".to_string(), built_in(ghe)),
         ]),
         audit,
         keys: Arc::new(AuthorizedKeys::new(&dir.path().join("authorized_keys"), 8)),
@@ -947,4 +947,9 @@ pub fn gen_pubkey() -> String {
 
 pub fn recorded(rec: &Recorder) -> Vec<Recorded> {
     rec.lock().unwrap().clone()
+}
+
+/// #328: a GitHub client as the built-in forge relay the gateway wraps it in.
+pub fn built_in(gh: Arc<GitHub>) -> Arc<dyn sekimore_relay::forge::ForgeRelay> {
+    Arc::new(sekimore_relay::forge::github::GitHubRelay::new(gh))
 }
