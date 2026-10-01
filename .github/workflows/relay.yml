@@ -40,6 +40,11 @@ jobs:
         run: cargo test --features test-hooks,host --locked
         env:
           SEKIMORE_E2E_REQUIRED: "1"
+      # #329: the API suite again, every call through a github sidecar on a Unix socket
+      - name: test the API over the sidecar socket
+        run: cargo test --features test-hooks,host --locked --test api_server --test sidecar
+        env:
+          SEKIMORE_TEST_FORGE: socket
       - name: forbidden dependencies
         run: |
           ! cargo tree -i aws-lc-rs 2>/dev/null
