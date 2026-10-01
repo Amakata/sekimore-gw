@@ -127,6 +127,7 @@ Everything else: `sgw --help`.
 |---|---|
 | Go through a corporate proxy | `proxy.upstream_proxy`. Its password: `sgw proxy-credential set` |
 | Reach GitHub through a bastion | `domain_handlers.<host>.ssh_options: [ProxyJump=…]` |
+| Keep a per-person value (a bastion account) out of the shared config.yml | Write `{name}` in the value (`ProxyJump={bastion}`); each person runs `sgw var set bastion` |
 | Use GitHub Enterprise | Add its host to `domain_handlers` (`ssh_port`, `api_base`) |
 | Have the agent's commits show as Verified on GitHub | Register the key `sgw signing-key` prints as a Signing Key |
 | Run the dev container on a Linux VM reached by Remote-SSH | [docs/remote-ssh.md](docs/remote-ssh.md) |

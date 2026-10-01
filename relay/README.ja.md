@@ -441,6 +441,29 @@ network:
 - `keyscan <host>` は fingerprint を表示して保存します。運用者がコマンドラインでホストを名指ししたこと自体が確認です
 - `login` は先に yes/no を聞きます。ログインのついでに、運用者が名指ししていないホスト（踏み台と、その先の上流）の鍵を取るので、黙って信用してはいけないからです。鍵を保存せずに終わった段があれば、login は device flow に進まず 0 以外で終わります（0.2.45）。確認を省くなら、先に各ホストを `keyscan` してください
 
+### 人ごとの値（#334）
+
+config.yml は共有しますが、踏み台のアカウントは人ごとに違います。オプションの値に `{name}` を書き、値は各自が秘密ストアに入れます。
+
+```yaml
+domain_handlers:
+  ghe.example.com:
+    handler: github
+    ssh_options: ["ProxyJump={bastion}"]    # 各自: sgw var set bastion
+```
+
+```sh
+sgw var set bastion      # エコーなしで入力。パイプでも渡せる: echo alice@bastion.example.com:2222 | sgw var set bastion
+sgw var list             # キーと、値が入っているか（値は出さない）
+sgw var get bastion      # 値。実行した人にだけ出す
+```
+
+- キーは `[A-Za-z0-9._-]` の段を `/` でつないだもの。複数の上流で共有するなら `{bastion}`、1 つの上流用なら `{ghe.example.com/bastion}`。
+- `{name}` にできるのは値だけ。`Key=Value` を丸ごと `{opt}` にすることや、オプション名に `{name}` を書くことは、読み込み時に拒否します。
+- ssh のオプションに入る値は `[A-Za-z0-9._@:,/-]` だけ。値を埋めた後のオプションにも、通常の検査をかけ直します。
+- `sgw login` は、config が参照しているのに値が無いキーをまとめて聞きます。ストアが施錠中か値が無い間は、その上流に繋がず、実行すべきコマンドをエラーで示します。
+- `sgw check` は `{bastion}: set` / `missing` / `locked` を表示し、値は出しません。
+
 ## 表示言語（0.2.4）
 
 CLI の文言は `relay/locales/en.json` と `relay/locales/ja.json` にあり、バイナリに埋め込まれます。

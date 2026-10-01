@@ -1044,9 +1044,13 @@ impl Loaded {
             let mut ssh_options: Vec<String> = Vec::new();
             for opt in relay.ssh_options.iter().chain(h.ssh_options.iter()) {
                 let opt = opt.trim();
-                validate_ssh_option(opt).map_err(|why| {
-                    ConfigError::Invalid(format!("ssh_options for {d}: {opt:?} {why}"))
-                })?;
+                // #334: a `{name}` in the value is filled in from the secret store when ssh is
+                // spawned; here the option is checked with each one standing in as a value that fits
+                crate::vars::ssh_option_shape(opt)
+                    .and_then(|shape| validate_ssh_option(&shape))
+                    .map_err(|why| {
+                        ConfigError::Invalid(format!("ssh_options for {d}: {opt:?} {why}"))
+                    })?;
                 ssh_options.push(opt.to_string());
             }
             let (upstream_token, known_hosts) = if is_default {
@@ -1655,6 +1659,11 @@ pub struct Resolved {
 }
 
 impl Resolved {
+    /// #334: the per-person values the config refers to (`{name}` in ssh_options), each once.
+    pub fn var_refs(&self) -> Vec<String> {
+        crate::vars::refs(self.upstreams.iter().flat_map(|u| u.ssh_options.iter()))
+    }
+
     pub fn default_upstream(&self) -> &Upstream {
         &self.upstreams[0]
     }
@@ -2556,6 +2565,39 @@ relay:
             assert!(err.contains("ssh_options"), "{bad}: {err}");
         }
         assert!(validate_ssh_option("ProxyCommand=nc -X connect -x proxy:3128 %h %p").is_ok());
+    }
+
+    /// #334: a `{name}` may stand for a value, never for the option's name or the whole option,
+    /// and the references are what `var_refs` reports.
+    #[test]
+    fn ssh_options_may_refer_to_per_person_values_in_their_value_only() {
+        let with = |opt: &str| {
+            format!(
+                "domain_handlers:\n  github.com: {{ handler: github }}\n  ghe.example.com: {{ handler: github, ssh_port: 2222, ssh_options: [\"{opt}\"] }}\nrelay:\n  project: {{ name: x }}\n"
+            )
+        };
+        let r = p(&with("ProxyJump={ghe.example.com/bastion}"))
+            .unwrap()
+            .resolve()
+            .unwrap();
+        assert_eq!(r.var_refs(), vec!["ghe.example.com/bastion"]);
+        let r = p(&with("ProxyJump={user}@bastion.example.com:2222"))
+            .unwrap()
+            .resolve()
+            .unwrap();
+        assert_eq!(r.var_refs(), vec!["user"]);
+        for bad in [
+            "{opt}",
+            "{key}=bastion",
+            "Proxy{x}=bastion",
+            "ProxyJump={bad key}",
+            "ProxyJump={unclosed",
+            "ProxyJump=}",
+            "StrictHostKeyChecking={x}",
+        ] {
+            let e = p(&with(bad)).unwrap().resolve().unwrap_err().to_string();
+            assert!(e.contains("ssh_options"), "{bad}: {e}");
+        }
     }
 
     #[test]
