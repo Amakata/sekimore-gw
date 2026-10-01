@@ -151,7 +151,7 @@ relay's own sshd, even if the same key is also registered as an authentication k
 operator's other keys can be in the same agent; the fingerprint filter hides them. The relay
 audits refusals as `signing_agent_refused` and successful signatures as `signing_agent_signed`.
 
-The socket is created with mode 0600 and owned by `socket_uid`. The relay sets both through a file
+The socket is created with mode 0600 and owned by the dev container's user: the uid `sgw-agent setup` reports on every start (#339; 1000 until it does, the host's uid where Dev Containers' `updateRemoteUserUID` changed it), or `socket_uid` when set. The relay sets both through a file
 descriptor rather than by path. The volume is shared and the dev container has sudo, so a `chmod`
 that resolved the path again could be redirected to a file in the gateway.
 
@@ -269,7 +269,7 @@ Each key is a fully qualified domain name and must match exactly. Configuring `g
 | `ssh_config` | none | A file passed to the upstream ssh with `-F` (for advanced use) |
 | `upstream` / `upstream_ssh_port` / `api_base` / `graphql_base` / `oauth_client_id` | | Settings for the default upstream. Setting these on the handler is the newer style. |
 | `limits` | | Session counts and timeouts |
-| `signing_key` | none | 0.2.29 (#59): the key that the dev container signs commits with, offered through a filtered agent socket. Its keys are `source` (`agent`), `fingerprint` (`SHA256:…`), `namespace` (`git`), `timeout` (`15s`), `socket` (`/run/sekimore/signing-agent.sock`), and `socket_uid` (`1000`). If it is not set, the dev container generates its own key (see [Signing key](#signing-key-0229-59)). |
+| `signing_key` | none | 0.2.29 (#59): the key that the dev container signs commits with, offered through a filtered agent socket. Its keys are `source` (`agent`), `fingerprint` (`SHA256:…`), `namespace` (`git`), `timeout` (`15s`), `socket` (`/run/sekimore/signing-agent.sock`), and `socket_uid` (unset: follows the dev user's uid, starting at 1000). If it is not set, the dev container generates its own key (see [Signing key](#signing-key-0229-59)). |
 | `project` | required | The project (see below) |
 
 ### `relay.project`

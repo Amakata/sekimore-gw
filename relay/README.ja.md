@@ -146,7 +146,7 @@ git の署名が対象とするのは `"SSHSIG" ++ namespace ++ …` です。SS
 どのサーバーへの認証にも使えません（関所自身の sshd も含みます）。運用者の他の鍵が同じ agent にあっても、fingerprint による
 絞り込みで見えなくなります。関所は、拒否を `signing_agent_refused`、成功した署名を `signing_agent_signed` として監査ログに記録します。
 
-socket はモード 0600 で作成され、`socket_uid` が所有します。関所はどちらもパスではなくファイルディスクリプタ経由で設定します。
+socket はモード 0600 で作成され、dev コンテナのユーザーが所有します。持ち主は、`sgw-agent setup` が起動のたびに伝える uid です（#339。伝わるまでは 1000、Dev Containers の `updateRemoteUserUID` が変えた環境ではホストの uid）。`socket_uid` を設定すればその値に固定します。関所はどちらもパスではなくファイルディスクリプタ経由で設定します。
 volume は共有されており dev コンテナには sudo があるので、パスを解決し直す `chmod` は、ゲートウェイ側のファイルに向け直されるおそれがあるためです。
 
 dev コンテナ側に sekimore 専用のコマンドは不要で、通常の `git commit` で署名されます。`sgw-agent setup` が公開鍵を
@@ -257,7 +257,7 @@ AI エージェント向けの使い方は `sgw-agent guide` で表示できま�
 | `ssh_config` | 無し | 上流の ssh に `-F` で渡すファイル（上級者向け） |
 | `upstream` / `upstream_ssh_port` / `api_base` / `graphql_base` / `oauth_client_id` | | 既定の上流の設定。handler 側に書くのが新しい書き方です。 |
 | `limits` | | セッション数とタイムアウト |
-| `signing_key` | 無し | 0.2.29（#59）: dev コンテナがコミット署名に使う鍵。絞り込んだ agent socket 経由で提供します。キーは `source`（`agent`）、`fingerprint`（`SHA256:…`）、`namespace`（`git`）、`timeout`（`15s`）、`socket`（`/run/sekimore/signing-agent.sock`）、`socket_uid`（`1000`）です。設定しなければ、dev コンテナが自分で鍵を生成します（「署名鍵」を参照）。 |
+| `signing_key` | 無し | 0.2.29（#59）: dev コンテナがコミット署名に使う鍵。絞り込んだ agent socket 経由で提供します。キーは `source`（`agent`）、`fingerprint`（`SHA256:…`）、`namespace`（`git`）、`timeout`（`15s`）、`socket`（`/run/sekimore/signing-agent.sock`）、`socket_uid`（未設定なら dev のユーザーの uid に合わせる。最初は 1000）です。設定しなければ、dev コンテナが自分で鍵を生成します（「署名鍵」を参照）。 |
 | `project` | 必須 | プロジェクト（後述） |
 
 ### `relay.project`

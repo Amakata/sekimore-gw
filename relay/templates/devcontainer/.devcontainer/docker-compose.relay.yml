@@ -44,8 +44,9 @@ services:
     volumes:
       - sekimore-agent-keys:/home/vscode/.ssh/sekimore
       # The same volume. Read-write because connect(2) to a unix socket needs write permission.
-      # The socket itself is 0600 and owned by relay.signing_key.socket_uid (1000 = vscode by
-      # default).
+      # The socket itself is 0600 and owned by the dev user: the uid sgw-agent setup reports on
+      # every start (1000 = vscode until then; the host's uid where updateRemoteUserUID changed it),
+      # or relay.signing_key.socket_uid when set.
       - sekimore-signing:/run/sekimore
     environment:
       # Read by sekimore-agent-setup.sh (auto: register the key and fetch the token

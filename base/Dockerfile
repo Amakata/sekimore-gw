@@ -70,6 +70,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libpq-dev default-libmysqlclient-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# #339: GID 20 is the Mac's `staff`. Debian gives it to `dialout` (serial ports, which a dev
+# container has no use for), and Dev Containers' updateRemoteUserUID changes neither the UID nor
+# the GID when the host's GID is already taken — so on a Linux VM built with the Mac's 501:20 the
+# user stayed 1000:1000 and files written in the container were not the VM user's. Moved aside.
+RUN if [ "$(getent group dialout | cut -d: -f3)" = 20 ]; then groupmod -g 9920 dialout; fi \
+    && ! getent group 20 >/dev/null
+
 # Ensure default vscode user has access to /usr/local/share
 RUN chown -R ${USERNAME}:${USERNAME} /usr/local/share
 

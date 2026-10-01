@@ -222,6 +222,31 @@ async fn bootstrap(endpoint: &str, public_key: &str) -> Option<BootstrapResponse
         .ok()
 }
 
+async fn signing_owner(endpoint: &str, token: &str, uid: u32) {
+    let Ok(c) = http(5) else { return };
+    let req = ApiRequest {
+        uid: Some(uid),
+        ..ApiRequest::default()
+    };
+    match c
+        .post(format!("{endpoint}/signing/owner"))
+        .bearer_auth(token)
+        .json(&req)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            if let Ok(resp) = r.json::<crate::api::types::ApiResponse>().await {
+                if let Some(m) = resp.message {
+                    println!("[agent] relay: {m}");
+                }
+            }
+        }
+        Ok(r) => log::debug!("signing/owner: HTTP {}", r.status()),
+        Err(e) => log::debug!("signing/owner: {e}"),
+    }
+}
+
 /// `ssh-add -L` against a socket: the exit status decides, not the output (an empty agent prints
 /// "The agent has no identities." on stdout and exits 1).
 fn agent_keys(ssh_add: &str, socket: &str) -> Option<String> {
@@ -509,6 +534,12 @@ pub async fn setup(s: &Settings, gw: Ipv4Addr) -> anyhow::Result<Option<Outcome>
         .unwrap_or_else(|| "github.com".to_string());
     let git_domains = with_default_first(git_domains, &git_domain, s.ssh_port);
 
+    // #339: tell the gateway which uid the dev user has, every start, so the signing socket can
+    // belong to it — Dev Containers gives the user the host's uid on Linux, and a socket made for
+    // 1000 would shut a 501 out. A gateway that predates this answers 404, and nothing changes.
+    if let (Some(t), Some(_)) = (&token, &sig_sock) {
+        signing_owner(&endpoint, t, owner.uid).await;
+    }
     // ---- the signing key (#59) ----
     let signing = match &sig_sock {
         Some(sock) if Path::new(sock).exists() && is_socket(sock) => {

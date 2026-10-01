@@ -202,7 +202,12 @@ pub struct SigningIdentity {
 pub struct SigningAgent {
     filter: Filter,
     socket: PathBuf,
-    socket_uid: u32,
+    /// #339: the uid the socket belongs to now. It starts at the configured one (or the one last
+    /// reported) and follows what the dev container reports, unless `socket_uid` is set
+    socket_uid: std::sync::atomic::AtomicU32,
+    follows_dev_uid: bool,
+    /// Where the uid last reported is kept, so a gateway restart creates the socket for it
+    remembered: Option<PathBuf>,
     /// The host agent, i.e. `SSH_AUTH_SOCK` inside the gateway
     upstream: PathBuf,
     timeout: Duration,
@@ -225,7 +230,9 @@ impl SigningAgent {
                 namespace: cfg.namespace.clone(),
             },
             socket: cfg.socket.clone(),
-            socket_uid: cfg.socket_uid,
+            socket_uid: std::sync::atomic::AtomicU32::new(cfg.socket_uid()),
+            follows_dev_uid: cfg.follows_dev_uid(),
+            remembered: None,
             upstream,
             timeout: cfg.timeout,
             audit,
@@ -235,6 +242,56 @@ impl SigningAgent {
 
     pub fn socket(&self) -> &Path {
         &self.socket
+    }
+
+    /// #339: keep the uid the dev container reports in `file`, and start from the one kept there.
+    /// Only while the socket follows the dev user; a configured `socket_uid` wins.
+    pub fn remembering(mut self, file: PathBuf) -> Self {
+        if self.follows_dev_uid {
+            if let Some(uid) = std::fs::read_to_string(&file)
+                .ok()
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .filter(|u| *u != 0)
+            {
+                self.socket_uid
+                    .store(uid, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        self.remembered = Some(file);
+        self
+    }
+
+    pub fn socket_uid(&self) -> u32 {
+        self.socket_uid.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// #339: the dev container's user is `uid`; hand it the socket. True when the owner changed.
+    ///
+    /// Not for root (root opens it anyway, and a socket owned by root would shut the dev user
+    /// out), and not when `socket_uid` is configured. The owner is changed with `lchown`, as in
+    /// `bind`: the entry is on a shared volume, and a symlink put there is never followed.
+    pub fn follow_dev_uid(&self, uid: u32) -> io::Result<bool> {
+        if !self.follows_dev_uid || uid == 0 || uid == self.socket_uid() {
+            return Ok(false);
+        }
+        if std::fs::symlink_metadata(&self.socket).is_ok() {
+            std::os::unix::fs::lchown(&self.socket, Some(uid), None)?;
+        }
+        self.socket_uid
+            .store(uid, std::sync::atomic::Ordering::Relaxed);
+        if let Some(f) = &self.remembered {
+            if let Err(e) = std::fs::write(f, format!("{uid}\n")) {
+                log::warn!(
+                    "cannot keep the signing socket's uid in {}: {e}",
+                    f.display()
+                );
+            }
+        }
+        log::info!(
+            "signing agent socket {} now belongs to uid {uid}",
+            self.socket.display()
+        );
+        Ok(true)
     }
 
     pub fn fingerprint(&self) -> &str {
@@ -277,7 +334,7 @@ impl SigningAgent {
         set_socket_mode_0600(&self.socket)?;
         // Not `chown`: the entry this is about may have been replaced by a symlink, and following
         // it is the whole bug. `lchown` on a symlink changes the symlink, never its target.
-        std::os::unix::fs::lchown(&self.socket, Some(self.socket_uid), None)?;
+        std::os::unix::fs::lchown(&self.socket, Some(self.socket_uid()), None)?;
         Ok(listener)
     }
 
@@ -287,7 +344,7 @@ impl SigningAgent {
             self.socket.display(),
             self.filter.fingerprint,
             self.filter.namespace,
-            self.socket_uid
+            self.socket_uid()
         );
         loop {
             let (stream, _) = listener.accept().await?;
@@ -863,6 +920,64 @@ mod tests {
         );
     }
 
+    fn follow_cfg(socket: &Path, socket_uid: Option<u32>) -> crate::config::SigningKeyConfig {
+        crate::config::SigningKeyConfig {
+            source: crate::config::SigningKeySource::Agent,
+            fingerprint: "SHA256:jKUukqk9WD+ycgT05yemhOEOxL4M5i+0l4Ibm7ZMqnw".into(),
+            namespace: "git".into(),
+            timeout: Duration::from_secs(1),
+            socket: socket.to_path_buf(),
+            socket_uid,
+        }
+    }
+
+    /// #339: unset, the socket goes to the uid the dev container reports, which is kept for the
+    /// next start; root is refused, and a configured `socket_uid` is not moved.
+    #[test]
+    fn the_socket_follows_the_dev_user_unless_its_uid_is_configured() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("signing.sock");
+        let kept = dir.path().join("signing-socket-uid");
+        let me = std::fs::metadata(dir.path()).unwrap().uid();
+        // as left by a start that handed the socket to someone else
+        std::fs::write(&kept, format!("{}\n", me + 1)).unwrap();
+        let a = SigningAgent::new(
+            &follow_cfg(&sock, None),
+            PathBuf::from("/nonexistent/up.sock"),
+            Arc::new(Audit::disabled()),
+        )
+        .remembering(kept.clone());
+        assert_eq!(a.socket_uid(), me + 1, "it starts from the uid kept");
+        let _l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+
+        assert!(!a.follow_dev_uid(0).unwrap(), "never root");
+        assert!(a.follow_dev_uid(me).unwrap());
+        assert_eq!(std::fs::symlink_metadata(&sock).unwrap().uid(), me);
+        assert_eq!(
+            std::fs::read_to_string(&kept).unwrap().trim(),
+            me.to_string()
+        );
+        assert!(
+            !a.follow_dev_uid(me).unwrap(),
+            "the same uid again changes nothing"
+        );
+
+        let fixed = SigningAgent::new(
+            &follow_cfg(&sock, Some(me + 7)),
+            PathBuf::from("/nonexistent/up.sock"),
+            Arc::new(Audit::disabled()),
+        )
+        .remembering(kept.clone());
+        assert_eq!(
+            fixed.socket_uid(),
+            me + 7,
+            "the configured uid, not the kept one"
+        );
+        assert!(!fixed.follow_dev_uid(me + 3).unwrap());
+        assert_eq!(fixed.socket_uid(), me + 7);
+    }
+
     #[test]
     fn the_missing_key_audit_is_rate_limited() {
         // `agent-setup.sh` and `relay:verify` list identities on every container start, and an
@@ -873,7 +988,7 @@ mod tests {
             namespace: "git".into(),
             timeout: Duration::from_secs(1),
             socket: PathBuf::from("/nonexistent/x.sock"),
-            socket_uid: 0,
+            socket_uid: Some(0),
         };
         let a = SigningAgent::new(
             &cfg,

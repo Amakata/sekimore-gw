@@ -1076,7 +1076,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                         ("fingerprint", &sk.fingerprint),
                         ("namespace", &sk.namespace),
                         ("socket", &sk.socket.display().to_string()),
-                        ("uid", &sk.socket_uid.to_string()),
+                        ("uid", &sk.socket_uid().to_string()),
                     ]
                 )
             );
