@@ -621,10 +621,25 @@ pub struct SigningKeyConfig {
     /// mount, because `SSH_AUTH_SOCK` is a path
     #[serde(default = "d_signing_socket")]
     pub socket: PathBuf,
-    /// The uid the socket is given, so the dev container's user can open it. 1000 is `vscode` in
-    /// the devcontainer images. The mode is 0600, so no other uid on that volume can reach it
-    #[serde(default = "d_signing_socket_uid")]
-    pub socket_uid: u32,
+    /// The uid the socket is given, so the dev container's user can open it. The mode is 0600, so
+    /// no other uid on that volume can reach it. #339: unset, the socket follows the dev user's
+    /// actual uid, which `sgw-agent setup` reports on every start — 1000 (`vscode` in the
+    /// devcontainer images) until it does, and whatever Dev Containers' `updateRemoteUserUID`
+    /// made it on a Linux host. Set, it is fixed.
+    #[serde(default)]
+    pub socket_uid: Option<u32>,
+}
+
+impl SigningKeyConfig {
+    /// The uid the socket starts with.
+    pub fn socket_uid(&self) -> u32 {
+        self.socket_uid.unwrap_or_else(d_signing_socket_uid)
+    }
+
+    /// #339: whether the socket follows the uid the dev container reports.
+    pub fn follows_dev_uid(&self) -> bool {
+        self.socket_uid.is_none()
+    }
 }
 
 fn d_signing_source() -> SigningKeySource {
@@ -1114,9 +1129,13 @@ impl Loaded {
             let mut ssh_options: Vec<String> = Vec::new();
             for opt in relay.ssh_options.iter().chain(h.ssh_options.iter()) {
                 let opt = opt.trim();
-                validate_ssh_option(opt).map_err(|why| {
-                    ConfigError::Invalid(format!("ssh_options for {d}: {opt:?} {why}"))
-                })?;
+                // #334: a `{name}` in the value is filled in from the secret store when ssh is
+                // spawned; here the option is checked with each one standing in as a value that fits
+                crate::vars::ssh_option_shape(opt)
+                    .and_then(|shape| validate_ssh_option(&shape))
+                    .map_err(|why| {
+                        ConfigError::Invalid(format!("ssh_options for {d}: {opt:?} {why}"))
+                    })?;
                 ssh_options.push(opt.to_string());
             }
             let (upstream_token, known_hosts) = if is_default {
@@ -1579,17 +1598,29 @@ impl ProxySpec {
             return None;
         }
         self.stored.get().or_else(|| {
-            self.username
-                .clone()
-                .map(|u| (u, self.password.clone().unwrap_or_default()))
+            self.literal_username()
+                .map(|u| (u, self.literal_password().unwrap_or_default()))
         })
+    }
+
+    /// #334: a field that is a `{name}` is a reference into the secret store, never the value itself.
+    fn literal_username(&self) -> Option<String> {
+        self.username
+            .clone()
+            .filter(|u| crate::proxy_credential::reference(Some(u)).is_none())
+    }
+
+    fn literal_password(&self) -> Option<String> {
+        self.password
+            .clone()
+            .filter(|p| crate::proxy_credential::reference(Some(p)).is_none())
     }
 
     /// Where `credential()` comes from, for `check` and for the message when the proxy refuses it.
     pub fn credential_source(&self) -> &'static str {
         if self.stored.get().is_some() {
             "the secret store (sgw proxy-credential)"
-        } else if self.username.is_some() {
+        } else if self.literal_username().is_some() {
             "SEKIMORE_UPSTREAM_PROXY_* or config.yml"
         } else {
             "none"
@@ -1728,6 +1759,23 @@ pub struct Resolved {
 }
 
 impl Resolved {
+    /// #334: the per-person values the config refers to (`{name}` in ssh_options and the proxy
+    /// credential), each once.
+    pub fn var_refs(&self) -> Vec<String> {
+        let mut out = crate::vars::refs(self.upstreams.iter().flat_map(|u| u.ssh_options.iter()));
+        // and the proxy credential's, when `upstream_proxy_username` / `_password` name one
+        if let Some(px) = &self.proxy {
+            for f in [px.username.as_deref(), px.password.as_deref()] {
+                if let Some(k) = crate::proxy_credential::reference(f) {
+                    if !out.contains(&k) {
+                        out.push(k);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn default_upstream(&self) -> &Upstream {
         &self.upstreams[0]
     }
@@ -2308,7 +2356,8 @@ relay:
         assert_eq!(sk.namespace, "git");
         assert_eq!(sk.timeout, Duration::from_secs(15));
         assert_eq!(sk.socket, PathBuf::from("/run/sekimore/signing-agent.sock"));
-        assert_eq!(sk.socket_uid, 1000);
+        assert_eq!(sk.socket_uid(), 1000);
+        assert!(sk.follows_dev_uid());
         // Omitting the section entirely is the old behaviour, not an error
         let none = "domain_handlers:\n  github.com: { handler: git-relay }\nrelay:\n  project:\n    name: x\n    repos: [{ name: Org/App, mode: read-write }]\n";
         assert!(p(none)
@@ -2680,6 +2729,39 @@ relay:
             assert!(err.contains("ssh_options"), "{bad}: {err}");
         }
         assert!(validate_ssh_option("ProxyCommand=nc -X connect -x proxy:3128 %h %p").is_ok());
+    }
+
+    /// #334: a `{name}` may stand for a value, never for the option's name or the whole option,
+    /// and the references are what `var_refs` reports.
+    #[test]
+    fn ssh_options_may_refer_to_per_person_values_in_their_value_only() {
+        let with = |opt: &str| {
+            format!(
+                "domain_handlers:\n  github.com: {{ handler: github }}\n  ghe.example.com: {{ handler: github, ssh_port: 2222, ssh_options: [\"{opt}\"] }}\nrelay:\n  project: {{ name: x }}\n"
+            )
+        };
+        let r = p(&with("ProxyJump={ghe.example.com/bastion}"))
+            .unwrap()
+            .resolve()
+            .unwrap();
+        assert_eq!(r.var_refs(), vec!["ghe.example.com/bastion"]);
+        let r = p(&with("ProxyJump={user}@bastion.example.com:2222"))
+            .unwrap()
+            .resolve()
+            .unwrap();
+        assert_eq!(r.var_refs(), vec!["user"]);
+        for bad in [
+            "{opt}",
+            "{key}=bastion",
+            "Proxy{x}=bastion",
+            "ProxyJump={bad key}",
+            "ProxyJump={unclosed",
+            "ProxyJump=}",
+            "StrictHostKeyChecking={x}",
+        ] {
+            let e = p(&with(bad)).unwrap().resolve().unwrap_err().to_string();
+            assert!(e.contains("ssh_options"), "{bad}: {e}");
+        }
     }
 
     #[test]

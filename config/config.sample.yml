@@ -226,7 +226,8 @@ database_path: "/data/security_gateway.db"
 #     namespace: git              # the SSHSIG namespace the socket admits. `file` / `email` are refused
 #     timeout: 15s                # one round trip to the host agent; generous because a hardware key may want a touch
 #     socket: /run/sekimore/signing-agent.sock   # on a volume the dev container mounts at the same path
-#     socket_uid: 1000            # the dev container's user (vscode). The socket is 0600 and owned by it
+#     socket_uid: 1000            # unset (the default): follows the dev user's uid, which setup reports
+#                                 # on every start. Set it to fix the owner. The socket is 0600
 #   project:
 #     name: case-a
 #     repos:

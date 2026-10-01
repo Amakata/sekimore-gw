@@ -124,6 +124,7 @@ dev コンテナから外に出る道はゲートウェイだけです。
 |---|---|
 | 企業プロキシを通す | `proxy.upstream_proxy`。パスワードは `sgw proxy-credential set` |
 | 踏み台越しに GitHub に届く | `domain_handlers.<host>.ssh_options: [ProxyJump=…]` |
+| 人ごとの値（踏み台のアカウント）を共有の config.yml に書かない | 値に `{name}` を書く（`ProxyJump={bastion}`）。各自が `sgw var set bastion` を実行する |
 | GitHub Enterprise を使う | `domain_handlers` にそのホストを足す（`ssh_port`、`api_base`） |
 | エージェントのコミットを GitHub で Verified にする | `sgw signing-key` が表示する鍵を Signing Key として登録する |
 | Remote-SSH で繋ぐ Linux VM の上で dev コンテナを動かす | [docs/remote-ssh.ja.md](docs/remote-ssh.ja.md) |

@@ -29,8 +29,15 @@ cat > "$TMP/ws/.devcontainer/scripts/post-create.sh" <<S
 echo post-create >> "$TMP/log/order"
 S
 chmod +x "$TMP/bin/sudo" "$TMP/sgw-agent" "$TMP/docker-init"
+mkdir -p "$TMP/owned/a" "$TMP/owned/b"
+cat > "$TMP/chown" <<S
+#!/bin/sh
+echo "chown \$*" >> "$TMP/log/chown"
+S
+chmod +x "$TMP/chown"
 run() {
   env -i PATH="$TMP/bin:$PATH" HOME="$TMP" SGW_WORKSPACE="$TMP/ws" SGW_AGENT_BIN="$TMP/sgw-agent" SGW_DOCKER_INIT="$TMP/docker-init" \
+    SGW_OWNED_DIRS="$TMP/owned/a $TMP/owned/b $TMP/owned/absent" SGW_CHOWN="$TMP/chown" \
     SEKIMORE_PROJECT=p SEKIMORE_GUIDE_LANG=ja OTHER=1 "$@" sh "$SCRIPT"
 }
 echo "== setup runs as root with -E, then docker-init, then post-create"
@@ -46,4 +53,14 @@ echo "== without a post-create.sh the start still completes"
 rm -f "$TMP/log/order" "$TMP/ws/.devcontainer/scripts/post-create.sh"
 run
 [ "$(tr '\n' ' ' < "$TMP/log/order")" = "sgw-agent setup docker-init " ] || fail "unexpected steps: $(cat "$TMP/log/order")"
+echo "== #339: a volume that already belongs to this user is left alone"
+rm -f "$TMP/log/chown"
+run
+[ ! -e "$TMP/log/chown" ] || fail "chowned what was already ours: $(cat "$TMP/log/chown")"
+echo "== #339: a volume owned by another uid is handed over, a missing one skipped"
+rm -f "$TMP/log/chown"
+other=$(( $(id -u) + 1 ))
+run SGW_UID="$other" SGW_GID=20 > /dev/null
+[ "$(wc -l < "$TMP/log/chown")" -eq 2 ] || fail "expected two chowns: $(cat "$TMP/log/chown")"
+grep -qx "chown -R $other:20 $TMP/owned/a" "$TMP/log/chown" || fail "a was not handed over: $(cat "$TMP/log/chown")"
 echo "PASS: sgw-post-start runs setup, docker-init and post-create in order"

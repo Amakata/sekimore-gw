@@ -26,12 +26,9 @@ from .logger import ComponentType, log_error, log_system_event, log_warning, set
 from .proxy_manager import ProxyManager
 from .proxy_monitor import ProxyMonitor
 from .secret_store import (
-    PROXY_NAME,
-    PROXY_NAMESPACE,
-    Locked,
-    NotFound,
     SecretStoreError,
-    get_secret,
+    literal,
+    read_proxy_credential,
 )
 
 # How long the watcher thread waits for a reload it handed to the main loop. Bounded so a reload
@@ -953,13 +950,18 @@ class SecurityGatewayOrchestrator:
         passphrase yet. Squid comes up without upstream authentication and
         `_watch_proxy_credential` puts the stored credential in whenever it becomes readable.
         """
+        # #334: a field that is `{key}` names a per-person value in the store; it is never the
+        # credential itself
         configured = (
-            self.config.proxy.upstream_proxy_username,
-            self.config.proxy.upstream_proxy_password,
+            literal(self.config.proxy.upstream_proxy_username),
+            literal(self.config.proxy.upstream_proxy_password),
             False,
         )
         try:
-            secret = get_secret(PROXY_NAMESPACE, PROXY_NAME)
+            state, credential = read_proxy_credential(
+                self.config.proxy.upstream_proxy_username,
+                self.config.proxy.upstream_proxy_password,
+            )
         except SecretStoreError as e:
             # Either there is no relay at all — `config.yml` need not declare a git-relay handler,
             # and then there is no store and never will be — or the relay has not finished
@@ -969,36 +971,32 @@ class SecurityGatewayOrchestrator:
             log_system_event(f"Secret store not reachable ({e}); using the configured credential")
             self._proxy_credential_state = "unreachable"
             return configured
-        if isinstance(secret, Locked):
-            self._proxy_credential_state = "locked"
-        elif isinstance(secret, NotFound):
-            self._proxy_credential_state = "none"
-        if isinstance(secret, str):
-            try:
-                parsed = json.loads(secret)
-                username, password = parsed["username"], parsed["password"]
-            except (ValueError, KeyError, TypeError) as e:
-                log_error(
-                    ComponentType.PROXY,
-                    f"the stored upstream proxy credential is not usable ({e}); "
-                    "re-run `sekimore-relay proxy-credential set`",
-                )
-                return configured
+        if state == "set" and credential is not None:
+            self._proxy_credential_state = "set"
             log_system_event("Upstream proxy credential read from the secret store")
-            return username, password, True
-
-        if isinstance(secret, Locked):
-            if any(configured):
+            return credential[0], credential[1], True
+        if state == "unusable":
+            log_error(
+                ComponentType.PROXY,
+                "the stored upstream proxy credential is not usable; "
+                "re-run `sgw proxy-credential set`",
+            )
+            self._proxy_credential_state = "none"
+            return configured
+        self._proxy_credential_state = state
+        if state == "locked":
+            if any(configured[:2]):
                 # Configured both ways. The store is the one that will win once it opens, so say
                 # which is in force now rather than let the swap look like a change nobody made.
                 log_system_event(
                     "Secret store locked; using the configured upstream proxy credential for now"
                 )
         # Nothing stored. Only worth a word when the alternative is the readable one.
-        elif isinstance(secret, NotFound) and self.config.proxy.upstream_proxy_password:
+        elif configured[1]:
             log_system_event(
                 "The upstream proxy password comes from config.yml, which the dev container "
-                "can read. `sekimore-relay proxy-credential set` moves it into the store"
+                "can read. `sgw var set proxy_password` (or `sgw proxy-credential set`) moves it "
+                "into the store"
             )
         return configured
 
@@ -1113,34 +1111,28 @@ class SecurityGatewayOrchestrator:
         (#194): unlock, `gw:proxy-credential set`, or nothing at all.
         """
         try:
-            secret = get_secret(PROXY_NAMESPACE, PROXY_NAME)
+            state, credential = read_proxy_credential(
+                self.config.proxy.upstream_proxy_username,
+                self.config.proxy.upstream_proxy_password,
+            )
         except SecretStoreError:
             # The relay may not have finished starting, or may have been restarted under us.
             # Either way the answer next tick may differ, so this is not worth a log line.
             return "unreachable", None
-        if isinstance(secret, Locked):
-            return "locked", None
-        if isinstance(secret, NotFound):
-            return "none", None
-        try:
-            parsed = json.loads(secret)
-            username, password = parsed["username"], parsed["password"]
-        except (ValueError, KeyError, TypeError) as e:
+        if state == "unusable":
             # Its own flag rather than a state: the state it reports is `none`, so tracking it
             # there would flap between the two and say this on every tick.
             if not self._proxy_credential_unusable_logged:
                 log_error(
                     ComponentType.PROXY,
-                    f"the stored upstream proxy credential is not usable ({e}); "
-                    "re-run `sekimore-relay proxy-credential set`",
+                    "the stored upstream proxy credential is not usable; "
+                    "re-run `sgw proxy-credential set`",
                 )
                 self._proxy_credential_unusable_logged = True
             # Unusable is not a credential. Treated as `none`, so Squid keeps what it has.
             return "none", None
         self._proxy_credential_unusable_logged = False
-        if not (username and password):
-            return "none", None
-        return "set", (username, password)
+        return state, credential
 
     def _apply_proxy_credential(self, credential: tuple[str, str]) -> bool:
         """Write the credential into Squid's config and reload it. True when Squid took it."""

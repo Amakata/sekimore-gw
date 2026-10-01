@@ -216,7 +216,7 @@ async fn the_proxy_signs_for_git_and_for_nothing_else() {
         timeout: Duration::from_secs(15),
         socket: dir.path().join("signing-agent.sock"),
         // The test runs as whoever it runs as; chown to another uid would need root
-        socket_uid: own_uid(dir.path()),
+        socket_uid: Some(own_uid(dir.path())),
     };
     cfg.validate()
         .expect("the fingerprint ssh-keygen printed must be accepted");
@@ -418,7 +418,7 @@ async fn a_symlink_at_the_socket_path_is_not_followed() {
         namespace: "git".to_string(),
         timeout: Duration::from_secs(15),
         socket: sock.clone(),
-        socket_uid: own_uid(dir.path()),
+        socket_uid: Some(own_uid(dir.path())),
     };
     let agent = SigningAgent::new(&cfg, dir.path().join("none"), Arc::new(Audit::disabled()));
     let _listener = agent.bind().unwrap();
@@ -462,7 +462,7 @@ async fn the_socket_is_owner_only_and_replaces_a_stale_one() {
         namespace: "git".to_string(),
         timeout: Duration::from_secs(15),
         socket: sock.clone(),
-        socket_uid: own_uid(dir.path()),
+        socket_uid: Some(own_uid(dir.path())),
     };
     let agent = SigningAgent::new(
         &cfg,

@@ -531,7 +531,7 @@ const MAX_STDIN_PASSPHRASE: usize = 1024;
 
 /// Whether a descriptor is a terminal. Split out from the refusal below so the decision can be
 /// tested against a real pipe and the message against both answers.
-fn is_terminal(fd: libc::c_int) -> bool {
+pub(crate) fn is_terminal(fd: libc::c_int) -> bool {
     unsafe { libc::isatty(fd) == 1 }
 }
 

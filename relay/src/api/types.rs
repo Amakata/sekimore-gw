@@ -46,6 +46,9 @@ pub struct ApiRequest {
     pub value: Option<Value>,
     #[serde(default, skip_serializing_if = "is_zero32")]
     pub first: u32,
+    /// #339: the dev container user's uid, for `/signing/owner`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<u32>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub job_id: u64,
     #[serde(default, skip_serializing_if = "is_zero")]

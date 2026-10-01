@@ -12,6 +12,24 @@ from src.config import Config, relay_fingerprint
 from src.orchestrator import ReloadWindow, SecurityGatewayOrchestrator, _relay_settings_changed
 
 
+def store_with(old):
+    """#334: a store whose per-person values are empty and whose pre-#334 record is `old`.
+
+    A locked store is locked for every key.
+    """
+
+    from src.secret_store import Locked, NotFound
+
+    def get(namespace, name, sock_path=None):
+        if isinstance(old, Locked):
+            return Locked()
+        if namespace == "var":
+            return NotFound()
+        return old
+
+    return get
+
+
 def describe_security_gateway_orchestrator():
     """SecurityGatewayOrchestrator unit tests."""
 
@@ -2018,7 +2036,7 @@ database_path: /tmp/test.db
         def boom(*_a, **_k):
             raise SecretStoreError("cannot reach the relay's control socket at /nope")
 
-        with patch("src.orchestrator.get_secret", side_effect=boom):
+        with patch("src.secret_store.get_secret", side_effect=boom):
             orch = _orch(tmp_path)
         assert orch._upstream_proxy_credential() == ("configured", "from-config-yml", False)
         from src.orchestrator import _relay_ports_of
@@ -2060,7 +2078,7 @@ relay:
 
         with patch("subprocess.run") as m:
             m.return_value = Mock(returncode=0, stdout="", stderr="")
-            with patch("src.orchestrator.get_secret", side_effect=boom):
+            with patch("src.secret_store.get_secret", side_effect=boom):
                 orch = SecurityGatewayOrchestrator(config_path=config_file)
         from src.orchestrator import _relay_ports_of
 
@@ -2071,7 +2089,7 @@ relay:
     def it_falls_back_while_the_store_is_locked_and_asks_to_be_revisited(tmp_path):
         from src.secret_store import Locked
 
-        with patch("src.orchestrator.get_secret", return_value=Locked()):
+        with patch("src.secret_store.get_secret", side_effect=store_with(Locked())):
             orch = _orch(tmp_path)
             assert orch._upstream_proxy_credential() == ("configured", "from-config-yml", False)
         assert orch._proxy_credential_applied is None, (
@@ -2081,13 +2099,13 @@ relay:
     def it_prefers_the_stored_credential_over_the_configured_one(tmp_path):
         # The whole point: config.yml is readable from dev, the store is not.
         stored = '{"username": "stored", "password": "sekret"}'
-        with patch("src.orchestrator.get_secret", return_value=stored):
+        with patch("src.secret_store.get_secret", side_effect=store_with(stored)):
             orch = _orch(tmp_path)
             assert orch._upstream_proxy_credential() == ("stored", "sekret", True)
 
     def it_keeps_going_when_the_stored_value_is_the_wrong_shape(tmp_path):
         # Better than crashing the gateway: say so, and fall back to what config.yml has.
-        with patch("src.orchestrator.get_secret", return_value="not json"):
+        with patch("src.secret_store.get_secret", side_effect=store_with("not json")):
             orch = _orch(tmp_path)
             with patch("src.orchestrator.log_error") as mock_err:
                 assert orch._upstream_proxy_credential() == ("configured", "from-config-yml", False)
@@ -2131,7 +2149,7 @@ relay:
 
         with patch("subprocess.run") as m:
             m.return_value = Mock(returncode=0, stdout="", stderr="")
-            with patch("src.orchestrator.get_secret", side_effect=boom):
+            with patch("src.secret_store.get_secret", side_effect=boom):
                 orch = SecurityGatewayOrchestrator(config_path=config_file)
         # #275: the hold Squid started with, so a tick only reloads when the store changes it
         hold = orch.proxy_manager.hold_for_store if orch.proxy_manager else False
@@ -2150,13 +2168,20 @@ relay:
         The sleep is what ends the run: a fake that raises once the answers are used up, so the
         loop is exercised exactly as written rather than by calling the tick directly.
         """
-        calls = iter(answers)
+        from src.secret_store import Locked, NotFound
 
-        def next_answer(*_a, **_k):
-            try:
-                answer = next(calls)
-            except StopIteration:
+        pending = list(answers)
+
+        def next_answer(namespace, *_a, **_k):
+            # #334: a tick asks for the per-person value first and the old record after it. The
+            # entry in `answers` is the old record's; the per-person value is empty, unless the
+            # store is locked or unreachable, which the first question already finds
+            if not pending:
                 raise asyncio.CancelledError from None
+            answer = pending[0]
+            if namespace == "var" and not isinstance(answer, (Locked, Exception)):
+                return NotFound()
+            pending.pop(0)
             if isinstance(answer, Exception):
                 raise answer
             return answer
@@ -2165,7 +2190,7 @@ relay:
             return None
 
         with (
-            patch("src.orchestrator.get_secret", side_effect=next_answer),
+            patch("src.secret_store.get_secret", side_effect=next_answer),
             patch("asyncio.sleep", new=no_sleep),
             contextlib.suppress(asyncio.CancelledError),
         ):
@@ -2290,7 +2315,7 @@ database_path: /tmp/test.db
 
         with patch("subprocess.run") as m:
             m.return_value = Mock(returncode=0, stdout="", stderr="")
-            with patch("src.orchestrator.get_secret", side_effect=boom):
+            with patch("src.secret_store.get_secret", side_effect=boom):
                 orch = SecurityGatewayOrchestrator(config_path=config_file)
         assert _relay_ports_of(orch.config) == []
 
@@ -2423,14 +2448,19 @@ def describe_the_store_hold():
         return config_file
 
     def _orch_with_store(config_file, answer):
-        def reply(*_a, **_k):
+        def reply(namespace, *_a, **_k):
+            from src.secret_store import NotFound
+
             if isinstance(answer, Exception):
                 raise answer
+            # #334: `answer` is the pre-#334 record; the per-person values are empty
+            if namespace == "var" and isinstance(answer, str):
+                return NotFound()
             return answer
 
         with patch("subprocess.run") as m:
             m.return_value = Mock(returncode=0, stdout="", stderr="")
-            with patch("src.orchestrator.get_secret", side_effect=reply):
+            with patch("src.secret_store.get_secret", side_effect=reply):
                 return SecurityGatewayOrchestrator(config_path=config_file)
 
     def a_locked_store_starts_squid_in_the_hold(tmp_path):
@@ -2479,12 +2509,17 @@ def describe_the_store_hold():
         orch.proxy_manager.hold_for_store = hold
 
     def _tick(orch, answer):
-        def reply(*_a, **_k):
+        def reply(namespace, *_a, **_k):
+            from src.secret_store import NotFound
+
             if isinstance(answer, Exception):
                 raise answer
+            # #334: `answer` is the pre-#334 record; the per-person values are empty
+            if namespace == "var" and isinstance(answer, str):
+                return NotFound()
             return answer
 
-        with patch("src.orchestrator.get_secret", side_effect=reply):
+        with patch("src.secret_store.get_secret", side_effect=reply):
             orch._proxy_credential_tick()
 
     def the_credential_lifts_the_hold_in_one_reload(tmp_path):

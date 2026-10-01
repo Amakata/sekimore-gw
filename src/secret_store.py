@@ -16,6 +16,7 @@ retries once someone unlocks. `SecretStoreError` is for the cases that will not 
 from __future__ import annotations
 
 import json
+import re
 import socket
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,80 @@ CODE_LOCKED = "locked"
 # breaking change across two languages.
 PROXY_NAMESPACE = "proxy"
 PROXY_NAME = "upstream"
+
+# #334: per-person values (`sgw var set`) are filed under `var`, and the upstream proxy credential
+# lives in two of them unless config.yml names others as `{key}`. `proxy/upstream` above is the
+# record from before them; the relay moves it into these once the store is readable.
+VAR_NAMESPACE = "var"
+VAR_PROXY_USER = "proxy_user"
+VAR_PROXY_PASSWORD = "proxy_password"
+_KEY_SEGMENT = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def reference(field: str | None) -> str | None:
+    """The key a config field refers to when the whole field is `{key}`; otherwise None.
+
+    The same rule as the relay's `proxy_credential::reference`: segments of `[A-Za-z0-9._-]`
+    joined by `/`, none of them `.` or `..`.
+    """
+    if not isinstance(field, str) or not field:
+        return None
+    f = field.strip()
+    if not (f.startswith("{") and f.endswith("}")):
+        return None
+    key = f[1:-1]
+    segments = key.split("/")
+    if not key or len(key) > 128:
+        return None
+    if any(s in ("", ".", "..") or not _KEY_SEGMENT.fullmatch(s) for s in segments):
+        return None
+    return key
+
+
+def literal(field: str | None) -> str | None:
+    """A config field as a literal value: None when it is empty or a `{key}` reference."""
+    if not field or reference(field) is not None:
+        return None
+    return field
+
+
+def read_proxy_credential(
+    username_field: str | None,
+    password_field: str | None,
+    sock_path: str | Path = CONTROL_SOCK_PATH,
+) -> tuple[str, tuple[str, str] | None]:
+    """The upstream proxy credential in the store: `set` / `locked` / `none` / `unusable`.
+
+    The per-person values first (the keys the config refers to, or proxy_user / proxy_password),
+    then the record from before them. Raises SecretStoreError when the store cannot be reached.
+    """
+    ku = reference(username_field) or VAR_PROXY_USER
+    kp = reference(password_field) or VAR_PROXY_PASSWORD
+    user = get_secret(VAR_NAMESPACE, ku, sock_path)
+    if isinstance(user, Locked):
+        return "locked", None
+    if isinstance(user, str) and user:
+        # Squid puts the username into `cache_peer ... login=<user>:<pass>`, which has no quoting:
+        # a space ends the option. `proxy-credential set` refuses one when typed (#271); a value
+        # set with `sgw var set` is checked here, where it is used
+        if not all(c.isascii() and c.isprintable() and not c.isspace() for c in user):
+            return "unusable", None
+        password = get_secret(VAR_NAMESPACE, kp, sock_path)
+        return "set", (user, password if isinstance(password, str) else "")
+    old = get_secret(PROXY_NAMESPACE, PROXY_NAME, sock_path)
+    if isinstance(old, Locked):
+        return "locked", None
+    if isinstance(old, NotFound):
+        return "none", None
+    try:
+        parsed = json.loads(old)
+        username, password = parsed["username"], parsed["password"]
+    except (ValueError, KeyError, TypeError):
+        return "unusable", None
+    if not username:
+        return "none", None
+    return "set", (username, password or "")
+
 
 # One reply is one line of JSON. A secret is small; this is only here so a socket that never
 # terminates a line cannot hang the gateway's start-up.
