@@ -16,6 +16,18 @@ use crate::i18n::tf;
 
 pub const GATEWAY: &str = "sekimore-gw";
 pub const DEV: &str = "dev";
+/// #329: the forge relay sidecars a project's compose may declare, each on the gateway's image.
+pub const SIDECARS: &[&str] = &["sekimore-github"];
+
+/// The sidecars among `docker compose config --services` output.
+pub fn sidecars_in(services: &str) -> Vec<String> {
+    services
+        .lines()
+        .map(str::trim)
+        .filter(|s| SIDECARS.contains(s))
+        .map(String::from)
+        .collect()
+}
 
 /// The terminal decision for a `docker exec` (#230, #50 of the base).
 ///
@@ -493,6 +505,13 @@ impl Docker {
             "--force-recreate".into(),
             GATEWAY.into(),
         ]);
+        // #329: a forge relay sidecar runs the gateway's image, so it moves with it. Only the ones
+        // this project's compose declares: naming a service it does not have fails the whole `up`
+        let mut svc: Vec<String> = compose.clone();
+        svc.extend(["config".into(), "--services".into()]);
+        let svc_refs: Vec<&str> = svc.iter().map(String::as_str).collect();
+        let services = self.out(&svc_refs).unwrap_or_default();
+        up.extend(sidecars_in(&services));
         let rc = self.run(&up)?;
         if rc != 0 {
             bail!("docker compose up failed");
@@ -532,6 +551,22 @@ impl Docker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #329: the sidecar moves with the gateway when the project has one, and an older compose
+    /// without it is not asked for a service it does not declare.
+    #[test]
+    fn a_recreate_takes_the_sidecars_the_compose_declares_and_no_others() {
+        assert_eq!(
+            sidecars_in("dev\nsekimore-gw\nsekimore-github\n"),
+            vec!["sekimore-github".to_string()]
+        );
+        assert!(sidecars_in("dev\nsekimore-gw\n").is_empty());
+        assert!(sidecars_in("").is_empty());
+        assert!(
+            sidecars_in("sekimore-github-old\n").is_empty(),
+            "a name that only starts like one is not one"
+        );
+    }
 
     #[test]
     fn a_terminal_at_both_ends_gets_a_pty_and_a_pipe_does_not() {

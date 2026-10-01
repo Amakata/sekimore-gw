@@ -815,6 +815,39 @@ pub async fn start_api_full(
     project_boards: Vec<ResolvedBoard>,
     declared: Option<Vec<sekimore_relay::config::BoardRef>>,
 ) -> ApiFixture {
+    let forge = if forge_over_socket() {
+        Forge::Sidecar
+    } else {
+        Forge::BuiltIn
+    };
+    start_api_on(
+        project,
+        bootstrap,
+        upstream_token,
+        project_boards,
+        declared,
+        forge,
+    )
+    .await
+}
+
+/// #329: how an API fixture reaches the github forge relay.
+pub enum Forge {
+    BuiltIn,
+    /// A real sidecar on a socket in the fixture's directory
+    Sidecar,
+    /// Whatever is (or is not) listening at this path; the test decides
+    SocketAt(std::path::PathBuf),
+}
+
+pub async fn start_api_on(
+    project: Project,
+    bootstrap: BootstrapMode,
+    upstream_token: bool,
+    project_boards: Vec<ResolvedBoard>,
+    declared: Option<Vec<sekimore_relay::config::BoardRef>>,
+    forge: Forge,
+) -> ApiFixture {
     let dir = tempfile::tempdir().unwrap();
     let (api_base, recorder) = mock_github().await;
     let graphql = Url::parse(&format!(
@@ -837,6 +870,7 @@ pub async fn start_api_full(
             .unwrap();
     }
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
+    let gh_api = (api_base.clone(), graphql.clone());
     let gh = Arc::new(GitHub::new(
         api_base,
         graphql,
@@ -851,6 +885,7 @@ pub async fn start_api_full(
         ghe_base.as_str().trim_end_matches("/api/v3").to_string() + "/api"
     ))
     .unwrap();
+    let ghe_api = (ghe_base.clone(), ghe_graphql.clone());
     let ghe = Arc::new(GitHub::new(
         ghe_base,
         ghe_graphql,
@@ -865,10 +900,16 @@ pub async fn start_api_full(
     let ctx = Arc::new(ApiContext {
         project,
         tokens,
-        relays: sekimore_relay::forge::Relays::from([
-            ("github.com".to_string(), built_in(gh)),
-            ("ghe.example.com".to_string(), built_in(ghe)),
-        ]),
+        relays: relays_for(
+            dir.path(),
+            forge,
+            vec![
+                ("github.com", gh, gh_api),
+                ("ghe.example.com", ghe, ghe_api),
+            ],
+            store.clone(),
+            audit.clone(),
+        ),
         audit,
         keys: Arc::new(AuthorizedKeys::new(&dir.path().join("authorized_keys"), 8)),
         bootstrap,
@@ -952,4 +993,64 @@ pub fn recorded(rec: &Recorder) -> Vec<Recorded> {
 /// #328: a GitHub client as the built-in forge relay the gateway wraps it in.
 pub fn built_in(gh: Arc<GitHub>) -> Arc<dyn sekimore_relay::forge::ForgeRelay> {
     Arc::new(sekimore_relay::forge::github::GitHubRelay::new(gh))
+}
+
+/// #329: which transport the API fixtures use. Unset, the github forge relay is built in; with
+/// `SEKIMORE_TEST_FORGE=socket` every API call goes through a real sidecar on a Unix socket, so
+/// the same suite proves both transports behave alike.
+pub fn forge_over_socket() -> bool {
+    std::env::var("SEKIMORE_TEST_FORGE").as_deref() == Ok("socket")
+}
+
+/// The relays an API fixture runs with, by `forge_over_socket`. Over the socket one sidecar serves
+/// both upstreams, the way a deployment with github.com and a GHE would run it.
+pub fn relays_for(
+    dir: &std::path::Path,
+    forge: Forge,
+    upstreams: Vec<(&str, Arc<GitHub>, (Url, Url))>,
+    tokens: Arc<UpstreamTokenStore>,
+    audit: Arc<Audit>,
+) -> sekimore_relay::forge::Relays {
+    use sekimore_relay::forge::sidecar;
+    let mut relays = sekimore_relay::forge::Relays::new();
+    let sock = match forge {
+        Forge::BuiltIn => {
+            for (domain, gh, _) in upstreams {
+                relays.insert(domain, built_in(gh));
+            }
+            return relays;
+        }
+        Forge::Sidecar => {
+            let sock = dir.join("github.sock");
+            let listener = sidecar::bind(&sock).unwrap();
+            tokio::spawn(sidecar::run(
+                listener,
+                Arc::new(sidecar::Sidecar::new(None)),
+            ));
+            sock
+        }
+        Forge::SocketAt(p) => p,
+    };
+    let resources = [
+        "pr", "issue", "project", "repo", "ci", "release", "search", "security",
+    ]
+    .map(String::from)
+    .to_vec();
+    for (domain, _, (api_base, graphql_base)) in upstreams {
+        relays.insert(
+            domain,
+            Arc::new(sidecar::SocketRelay::new(
+                "github",
+                &sock,
+                sidecar::UpstreamApi {
+                    api_base,
+                    graphql_base,
+                },
+                tokens.clone(),
+                audit.clone(),
+                resources.clone(),
+            )),
+        );
+    }
+    relays
 }

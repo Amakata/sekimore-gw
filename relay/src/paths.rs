@@ -31,6 +31,11 @@ pub const PASSTHROUGH_VIA_SQUID: &str = "passthrough.via_squid";
 pub const DEV_SIGNING: &str = "dev.signing";
 /// The operator → the secret store's control socket.
 pub const OPERATOR_STORE: &str = "operator.store";
+/// #329: the gateway → a forge relay sidecar, over its Unix socket. Carries the call's token.
+pub const RELAY_SIDECAR: &str = "relay.sidecar";
+/// #329: a forge relay sidecar → the upstream API, through the gateway's 443 passthrough. The
+/// gateway writes these from the records the sidecar hands back.
+pub const SIDECAR_API: &str = "sidecar.api";
 
 /// Every edge the relay implements. The test compares this with the ledger.
 pub const EDGES: &[&str] = &[
@@ -47,6 +52,8 @@ pub const EDGES: &[&str] = &[
     PASSTHROUGH_VIA_SQUID,
     DEV_SIGNING,
     OPERATOR_STORE,
+    RELAY_SIDECAR,
+    SIDECAR_API,
 ];
 
 /// The audit field that carries the edge id.
@@ -92,6 +99,11 @@ pub const AUDIT_EVENTS: &[(&str, &str)] = &[
     (RELAY_GITHUB_API, "api_call"),
     (RELAY_GITHUB_VIA_PROXY, "api_call"),
     (RELAY_GITHUB_VIA_SQUID, "api_call"),
+    // #329: a forge relay sidecar — not answering, or refused for what it claims — and the
+    // upstream calls it made
+    (RELAY_SIDECAR, "sidecar_unavailable"),
+    (RELAY_SIDECAR, "sidecar_refused"),
+    (SIDECAR_API, "api_call"),
     // what a push made of the API, on the logical edge: the hop is on the api_call entries
     (RELAY_GITHUB_API, "pr_created"),
     (RELAY_GITHUB_API, "pr_exists"),

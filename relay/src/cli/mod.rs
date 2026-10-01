@@ -33,6 +33,15 @@ pub enum Command {
     NeedsRelay,
     #[command(about = t("cli.serve"))]
     Serve,
+    #[command(about = t("cli.sidecar"))]
+    Sidecar {
+        #[arg(help = t("cli.sidecar.name"))]
+        name: String,
+        #[arg(long, help = t("cli.sidecar.socket"))]
+        socket: PathBuf,
+        #[arg(long, help = t("cli.sidecar.via"))]
+        via: Option<String>,
+    },
     #[command(about = t("cli.login"))]
     Login {
         #[arg(long, help = t("cli.login.upstream"))]
@@ -149,6 +158,7 @@ pub async fn run(cli: Cli) -> i32 {
     let result: anyhow::Result<i32> = match cli.cmd {
         Command::NeedsRelay => operator::needs_relay(&cli.config),
         Command::Serve => serve::serve(&cli.config).await.map(|_| 0),
+        Command::Sidecar { name, socket, via } => sidecar(&name, &socket, via).await,
         Command::Login { upstream } => operator::login(&cli.config, upstream.as_deref())
             .await
             .map(|_| 0),
@@ -210,4 +220,23 @@ pub async fn run(cli: Cli) -> i32 {
             1
         }
     }
+}
+
+/// #329: run a forge relay as a sidecar. Only the gateway connects; the relay holds no
+/// configuration and no credential of its own.
+async fn sidecar(name: &str, socket: &std::path::Path, via: Option<String>) -> anyhow::Result<i32> {
+    if name != "github" {
+        anyhow::bail!(
+            "there is no forge relay named {name:?}; the known ones are {}",
+            crate::config::FORGE_RELAYS.join(", ")
+        );
+    }
+    log::info!(
+        "{name} relay sidecar {} on {} (upstream API via {})",
+        env!("CARGO_PKG_VERSION"),
+        socket.display(),
+        via.as_deref().unwrap_or("its own address")
+    );
+    let s = std::sync::Arc::new(crate::forge::sidecar::Sidecar::new(via));
+    crate::forge::sidecar::serve(socket, s).await.map(|_| 0)
 }

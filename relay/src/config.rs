@@ -643,6 +643,69 @@ fn d_signing_socket_uid() -> u32 {
     1000
 }
 
+/// #329: a forge relay reached over a Unix socket.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SidecarConfig {
+    /// Where the sidecar listens, on a volume the gateway and the sidecar share and the dev
+    /// container does not
+    pub socket: PathBuf,
+    /// The resources it may serve (`pr`, `issue`, …). A sidecar that claims one not listed here is
+    /// not connected: the claim is checked against this, not trusted
+    pub resources: Vec<String>,
+    /// The upstreams (git-relay domains) whose API it serves. Empty: every upstream
+    #[serde(default)]
+    pub upstreams: Vec<String>,
+}
+
+/// The forge relays that exist. A sidecar names one of these.
+pub const FORGE_RELAYS: &[&str] = &["github"];
+
+impl SidecarConfig {
+    pub fn validate(&self, name: &str, domains: &[String]) -> Result<(), ConfigError> {
+        let bad = |m: String| ConfigError::Invalid(format!("relay.sidecars.{name}: {m}"));
+        if !FORGE_RELAYS.contains(&name) {
+            return Err(bad(format!(
+                "there is no forge relay named {name:?}; the known ones are {}",
+                FORGE_RELAYS.join(", ")
+            )));
+        }
+        if !self.socket.is_absolute() {
+            return Err(bad(format!(
+                "socket {} must be an absolute path on a volume the gateway and the sidecar share",
+                self.socket.display()
+            )));
+        }
+        if self.resources.is_empty() {
+            return Err(bad(
+                "resources is empty; list what the sidecar serves (pr, issue, release, ci, project, search, repo, security)"
+                    .to_string(),
+            ));
+        }
+        for r in &self.resources {
+            crate::policy::parse_resource(r).map_err(bad)?;
+        }
+        for u in &self.upstreams {
+            if !domains.iter().any(|d| d.eq_ignore_ascii_case(u)) {
+                return Err(bad(format!(
+                    "upstream {u} is not a git-relay domain; the domains are {}",
+                    domains.join(", ")
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether this sidecar serves the API of `domain`.
+    pub fn serves(&self, domain: &str) -> bool {
+        self.upstreams.is_empty()
+            || self
+                .upstreams
+                .iter()
+                .any(|u| u.eq_ignore_ascii_case(domain))
+    }
+}
+
 impl SigningKeyConfig {
     /// Everything that can be decided without talking to the agent.
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -748,6 +811,10 @@ pub struct RelayConfig {
     /// disposable and therefore cannot stay registered with the forge
     #[serde(default)]
     pub signing_key: Option<SigningKeyConfig>,
+    /// #329: forge relays that run as sidecars, by name (`github`). One that is not listed runs
+    /// built in. The git path and the operator's commands use the built-in one either way
+    #[serde(default)]
+    pub sidecars: BTreeMap<String, SidecarConfig>,
     pub project: ProjectConfig,
     /// Test only: run a command instead of the upstream ssh (the parent directory for `["git", "receive-pack", "<bare-dir>"]`)
     #[cfg(feature = "test-hooks")]
@@ -955,6 +1022,9 @@ impl Loaded {
         if let Some(sk) = &relay.signing_key {
             sk.validate()?;
         }
+        for (name, s) in &relay.sidecars {
+            s.validate(name, &self.git_relay_domains())?;
+        }
         Ok(true)
     }
 
@@ -1122,6 +1192,9 @@ impl Loaded {
             .map_err(ConfigError::Invalid)?;
         if let Some(sk) = &relay.signing_key {
             sk.validate()?;
+        }
+        for (name, s) in &relay.sidecars {
+            s.validate(name, &self.git_relay_domains())?;
         }
         let upstreams = self.resolve_upstreams(&relay)?;
         let default_up = upstreams[0].clone();
@@ -1715,6 +1788,57 @@ mod tests {
 
     fn p(text: &str) -> Result<Loaded, ConfigError> {
         parse(Path::new("test.yml"), text)
+    }
+
+    /// #329: a sidecar is checked where it is written: a relay that does not exist, a socket path
+    /// that depends on the working directory, a resource with no such name or an upstream that is
+    /// not a git-relay domain each stop the config from loading.
+    #[test]
+    fn a_sidecar_is_checked_where_it_is_written() {
+        let body = |sidecar: &str| {
+            format!(
+                "domain_handlers:\n  github.com: {{ handler: github }}\nrelay:\n  project:\n    name: case-sidecar\n    repos:\n      - {{ name: Org/App, mode: read-write }}\n  sidecars:\n{sidecar}"
+            )
+        };
+        let ok = p(&body(
+            "    github: { socket: /run/sekimore/github.sock, resources: [pr, issue], upstreams: [github.com] }\n",
+        ))
+        .unwrap()
+        .resolve()
+        .unwrap();
+        let s = &ok.relay.sidecars["github"];
+        assert!(s.serves("github.com") && s.serves("GitHub.com"));
+        assert!(!s.serves("ghe.example.com"));
+
+        for (sidecar, says) in [
+            (
+                "    gitlab: { socket: /run/sekimore/gitlab.sock, resources: [pr] }\n",
+                "no forge relay named",
+            ),
+            (
+                "    github: { socket: run/github.sock, resources: [pr] }\n",
+                "absolute path",
+            ),
+            (
+                "    github: { socket: /run/sekimore/github.sock, resources: [] }\n",
+                "resources is empty",
+            ),
+            (
+                "    github: { socket: /run/sekimore/github.sock, resources: [pr, s3] }\n",
+                "unknown resource",
+            ),
+            (
+                "    github: { socket: /run/sekimore/github.sock, resources: [pr], upstreams: [evil.example.com] }\n",
+                "not a git-relay domain",
+            ),
+        ] {
+            let e = p(&body(sidecar))
+                .unwrap()
+                .resolve()
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(says), "{sidecar}: {e}");
+        }
     }
 
     /// #158: a template that would put an unsubstituted placeholder into a branch name is

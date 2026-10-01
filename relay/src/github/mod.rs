@@ -368,12 +368,24 @@ impl GitHub {
         tokens: Arc<UpstreamTokenStore>,
         audit: Arc<Audit>,
     ) -> Self {
+        GitHub::with_sources(api_base, graphql_base, http, tokens, audit)
+    }
+
+    /// #329: a client whose token and call log come from the caller — the sidecar, which is handed
+    /// the call's credential and hands its records back to the gateway.
+    pub fn with_sources(
+        api_base: Url,
+        graphql_base: Url,
+        http: reqwest::Client,
+        tokens: Arc<dyn TokenSource>,
+        calls: Arc<dyn CallLog>,
+    ) -> Self {
         GitHub {
             api_base,
             graphql_base,
             http,
             tokens,
-            calls: audit,
+            calls,
             viewer: std::sync::OnceLock::new(),
             route: paths::RELAY_GITHUB_API,
         }
@@ -383,6 +395,16 @@ impl GitHub {
     pub fn with_route(mut self, route: &'static str) -> Self {
         self.route = route;
         self
+    }
+
+    /// #329: who the token belongs to, if a call has looked it up. A sidecar builds a client per
+    /// call and carries this across, so it is asked once per token as the built-in client does.
+    pub fn viewer(&self) -> Option<String> {
+        self.viewer.get().cloned()
+    }
+
+    pub fn seed_viewer(&self, login: String) {
+        let _ = self.viewer.set(login);
     }
 
     // ---- Pull Request ----

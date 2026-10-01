@@ -224,11 +224,32 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         if let Err(e) = upstream.preflight().await {
             log::warn!("[{}] upstream preflight: {}", up.domain, e.message);
         }
-        // #328: the API and the git path both reach the upstream through the github forge relay,
-        // built in. The git path keeps the built-in one even once the API goes through a sidecar
+        // #328: the git path reaches the upstream through the github forge relay, built in — even
+        // where the agent's API goes through a sidecar (#329), so a push does not depend on one
         let forge: Arc<dyn crate::forge::ForgeRelay> =
             Arc::new(crate::forge::github::GitHubRelay::new(github));
-        relays.insert(up.domain.clone(), forge.clone());
+        let api_relay: Arc<dyn crate::forge::ForgeRelay> = match sidecar_for(&r, &up.domain) {
+            Some((name, s)) => {
+                log::info!(
+                    "[{}] the agent's API goes through the {name} relay sidecar at {}",
+                    up.domain,
+                    s.socket.display()
+                );
+                Arc::new(crate::forge::sidecar::SocketRelay::new(
+                    name,
+                    &s.socket,
+                    crate::forge::sidecar::UpstreamApi {
+                        api_base: up.api_base.clone(),
+                        graphql_base: up.graphql_base.clone(),
+                    },
+                    upstream_tokens.clone(),
+                    audit.clone(),
+                    s.resources.clone(),
+                ))
+            }
+            None => forge.clone(),
+        };
+        relays.insert(up.domain.clone(), api_relay);
 
         let git_ctx = Arc::new(GitContext {
             project: r.project.clone(),
@@ -330,6 +351,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
                 port: 443,
                 max_upload: t.max_upload,
             })
+            .chain(sidecar_targets(&r))
             .collect(),
         max_upload: r.default_upstream().max_upload,
         mode: r.relay.https,
@@ -550,6 +572,50 @@ fn store_passphrase(
     )))
 }
 
+/// #329: the sidecar that serves `domain`'s API, if one does. Only `github` exists, and every
+/// upstream is a GitHub, so the name is the forge relay to use.
+fn sidecar_for<'a>(
+    r: &'a Resolved,
+    domain: &str,
+) -> Option<(&'a str, &'a crate::config::SidecarConfig)> {
+    r.relay
+        .sidecars
+        .iter()
+        .find(|(_, s)| s.serves(domain))
+        .map(|(n, s)| (n.as_str(), s))
+}
+
+/// #329: the passthrough targets a sidecar's upstream calls need. The sidecar dials the gateway's
+/// 443 for the API's host, so each such host has to be a target — with the same upload cap a
+/// relayed domain gets — or the passthrough would hand the connection to the default upstream.
+fn sidecar_targets(r: &Resolved) -> Vec<SniTarget> {
+    let mut out: Vec<SniTarget> = Vec::new();
+    for up in &r.upstreams {
+        if sidecar_for(r, &up.domain).is_none() {
+            continue;
+        }
+        for u in [&up.api_base, &up.graphql_base] {
+            let Some(host) = u.host_str() else { continue };
+            let known = r.https_targets.iter().any(|t| t.domain == host)
+                || out.iter().any(|t| t.domain == host);
+            if known {
+                continue;
+            }
+            out.push(SniTarget {
+                domain: host.to_string(),
+                host: host.to_string(),
+                port: u.port_or_known_default().unwrap_or(443),
+                max_upload: if r.relay.https_max_upload_bytes < 0 {
+                    None
+                } else {
+                    Some(r.relay.https_max_upload_bytes as u64)
+                },
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod store_unlock_tests {
     use super::store_passphrase;
@@ -602,5 +668,70 @@ mod store_unlock_tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("SEKIMORE_TEST_UNSET_PASSPHRASE"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod sidecar_tests {
+    use super::{sidecar_for, sidecar_targets};
+
+    fn resolved(sidecars: &str) -> crate::config::Resolved {
+        let text = format!(
+            r#"
+domain_handlers:
+  github.com: {{ handler: github }}
+  ghe.example.com: {{ handler: github, ssh_port: 2222 }}
+relay:
+  project:
+    name: case-sidecar
+    repos:
+      - {{ name: Org/App, mode: read-write }}
+{sidecars}
+"#
+        );
+        crate::config::parse(std::path::Path::new("test.yml"), &text)
+            .unwrap()
+            .resolve()
+            .unwrap()
+    }
+
+    /// Without a sidecar nothing changes: the passthrough gets no target it did not have.
+    #[test]
+    fn no_sidecar_no_new_target() {
+        let r = resolved("");
+        assert!(sidecar_for(&r, "github.com").is_none());
+        assert!(sidecar_targets(&r).is_empty());
+    }
+
+    /// A sidecar for a GHE only: its API is on the git host, which is a target already (with the
+    /// handler's own cap), so nothing is added — and github.com's API host is not added either.
+    #[test]
+    fn a_sidecar_adds_its_upstreams_api_host_only() {
+        let r = resolved(
+            "  sidecars:\n    github:\n      socket: /run/sekimore/github.sock\n      resources: [pr]\n      upstreams: [ghe.example.com]\n",
+        );
+        assert!(sidecar_for(&r, "github.com").is_none());
+        assert!(sidecar_for(&r, "ghe.example.com").is_some());
+        assert!(sidecar_targets(&r).is_empty(), "{:?}", sidecar_targets(&r));
+        assert!(r
+            .https_targets
+            .iter()
+            .any(|t| t.domain == "ghe.example.com"));
+    }
+
+    /// With no `upstreams` a sidecar serves every one, github.com's API host included.
+    #[test]
+    fn a_sidecar_without_upstreams_serves_them_all() {
+        let r = resolved(
+            "  sidecars:\n    github:\n      socket: /run/sekimore/github.sock\n      resources: [pr, issue]\n",
+        );
+        assert!(sidecar_for(&r, "github.com").is_some());
+        let t = sidecar_targets(&r);
+        let api = t
+            .iter()
+            .find(|x| x.domain == "api.github.com")
+            .expect("api.github.com");
+        assert_eq!(api.host, "api.github.com");
+        assert_eq!(api.max_upload, Some(1024 * 1024), "the default upload cap");
     }
 }
