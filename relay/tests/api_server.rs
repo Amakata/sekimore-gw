@@ -3988,6 +3988,175 @@ async fn signing_owner_takes_the_dev_users_uid() {
     assert!(recorded(&f.recorder).is_empty(), "nothing reaches upstream");
 }
 
+fn task_req(number: u64) -> ApiRequest {
+    ApiRequest {
+        number,
+        ..req("LibOrg/awesome-lib")
+    }
+}
+
+fn patches(f: &ApiFixture) -> Vec<common::Recorded> {
+    recorded(&f.recorder)
+        .into_iter()
+        .filter(|r| r.method == "PATCH")
+        .collect()
+}
+
+/// #345: the boxes are listed with the id `check --id` takes; a fenced or inline `[ ]` is not one.
+#[tokio::test]
+async fn tasks_lists_the_boxes_with_their_ids() {
+    let f = start_api(project_case_a(&["issue:read"]), BootstrapMode::Auto, true).await;
+    let (code, resp) = post(f.addr, "/issue/tasks", Some(&f.token), &task_req(60)).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let msg = resp.message.unwrap_or_default();
+    assert_eq!(msg.lines().count(), 4, "{msg}");
+    assert!(
+        msg.contains("[x] push image") && msg.contains("(Deploy › Production)"),
+        "{msg}"
+    );
+    assert!(patches(&f).is_empty());
+}
+
+/// Ticking flips the one mark, writes nothing else, and is audited with the item's text.
+#[tokio::test]
+async fn check_flips_one_box_and_nothing_else() {
+    let f = start_api(project_case_a(&["issue:check"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        task_match: "build".into(),
+        ..task_req(60)
+    };
+    let (code, resp) = post(f.addr, "/issue/check", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let p = patches(&f);
+    assert_eq!(p.len(), 1, "one write");
+    assert!(p[0].path.ends_with("/issues/60"), "{}", p[0].path);
+    let written = p[0].body["body"].as_str().unwrap();
+    assert_eq!(
+        written,
+        common::TASK_BODY.replace("- [ ] build", "- [x] build")
+    );
+    let audit = std::fs::read_to_string(&f.audit_path).unwrap();
+    assert!(
+        audit.contains("task_checked") && audit.contains("\"item\":\"build\""),
+        "{audit}"
+    );
+}
+
+/// Two items with the same text are refused with both listed, and narrowed by the parent.
+#[tokio::test]
+async fn an_ambiguous_match_is_refused_and_narrowed_by_parent() {
+    let f = start_api(project_case_a(&["issue:check"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        task_match: "smoke".into(),
+        ..task_req(60)
+    };
+    let (code, resp) = post(f.addr, "/issue/check", Some(&f.token), &r).await;
+    assert_eq!(code, 400);
+    let e = resp.error.unwrap_or_default();
+    assert!(
+        e.contains("2 items") && e.contains("--parent") && e.contains("Staging"),
+        "{e}"
+    );
+    assert!(patches(&f).is_empty());
+    let r = ApiRequest {
+        task_match: "smoke".into(),
+        parent: "production".into(),
+        ..task_req(60)
+    };
+    let (code, resp) = post(f.addr, "/issue/check", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let written = patches(&f)[0].body["body"].as_str().unwrap().to_string();
+    assert!(
+        written.contains("- Production\n  - [x] smoke test"),
+        "{written}"
+    );
+    assert!(
+        written.contains("- Staging\n  - [ ] smoke test"),
+        "{written}"
+    );
+}
+
+/// The number decides the key: a pull request's box needs pr:check, whichever command was typed.
+#[tokio::test]
+async fn a_pull_requests_box_needs_pr_check() {
+    let f = start_api(project_case_a(&["issue:check"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        task_match: "tests".into(),
+        ..task_req(61)
+    };
+    let (code, resp) = post(f.addr, "/issue/check", Some(&f.token), &r).await;
+    assert_eq!(code, 403);
+    assert!(resp.error.unwrap_or_default().contains("pr:check"));
+    assert!(patches(&f).is_empty());
+}
+
+/// Someone else's comment is in scope; a comment on another number is not.
+#[tokio::test]
+async fn a_box_in_someone_elses_comment_on_this_number_is_ticked() {
+    let f = start_api(project_case_a(&["issue:check"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        task_match: "diff".into(),
+        comment_id: 700,
+        ..task_req(60)
+    };
+    let (code, resp) = post(f.addr, "/issue/check", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let p = patches(&f);
+    assert!(p[0].path.ends_with("/issues/comments/700"), "{}", p[0].path);
+    assert_eq!(
+        p[0].body["body"].as_str().unwrap(),
+        "Reviewer checklist:\n- [x] read the diff\n"
+    );
+    let r = ApiRequest {
+        task_match: "elsewhere".into(),
+        comment_id: 701,
+        ..task_req(60)
+    };
+    let (code, resp) = post(f.addr, "/issue/check", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp);
+    assert!(resp.error.unwrap_or_default().contains("not on #60"));
+    assert_eq!(patches(&f).len(), 1, "nothing more was written");
+}
+
+/// A box already in the asked state is left alone; unticking takes the same key.
+#[tokio::test]
+async fn an_already_ticked_box_is_not_written_and_uncheck_works() {
+    let f = start_api(project_case_a(&["issue:check"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        task_match: "push".into(),
+        ..task_req(60)
+    };
+    let (code, resp) = post(f.addr, "/issue/check", Some(&f.token), &r).await;
+    assert_eq!(code, 200);
+    assert!(resp.message.unwrap_or_default().starts_with("already [x]"));
+    assert!(patches(&f).is_empty());
+    let r = ApiRequest {
+        task_match: "push".into(),
+        uncheck: true,
+        ..task_req(60)
+    };
+    let (code, resp) = post(f.addr, "/issue/check", Some(&f.token), &r).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert!(patches(&f)[0].body["body"]
+        .as_str()
+        .unwrap()
+        .contains("- [ ] push image"));
+}
+
+/// A text a person edited between the read and the write is not overwritten.
+#[tokio::test]
+async fn a_text_edited_meanwhile_is_not_overwritten() {
+    let f = start_api(project_case_a(&["issue:check"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        task_match: "ship".into(),
+        ..task_req(62)
+    };
+    let (code, resp) = post(f.addr, "/issue/check", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp);
+    assert!(resp.error.unwrap_or_default().contains("changed while"));
+    assert!(patches(&f).is_empty());
+}
+
 fn board_items(resp: &sekimore_relay::api::types::ApiResponse) -> Vec<String> {
     resp.raw
         .as_ref()

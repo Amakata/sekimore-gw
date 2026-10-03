@@ -1469,6 +1469,88 @@ impl GitHub {
         Ok(())
     }
 
+    /// #345: where a task list lives — the body of `number` (an issue or a pull request; GitHub
+    /// serves both from the issues endpoints), or one of its comments, checked to sit on it.
+    /// Anyone's comment: a box in a person's checklist is the point. Returns the path and the text.
+    async fn task_text_at(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        comment: Option<(u64, bool)>,
+    ) -> Result<(String, String), GhError> {
+        let (path, parent) = match comment {
+            None => (format!("/repos/{}/issues/{number}", auth.repo()), None),
+            Some((id, inline)) => {
+                let (kind, field) = if inline {
+                    ("pulls", "/pull_request_url")
+                } else {
+                    ("issues", "/issue_url")
+                };
+                (
+                    format!("/repos/{}/{kind}/comments/{id}", auth.repo()),
+                    Some((field, kind, id)),
+                )
+            }
+        };
+        let v: Value = self.rest("GET", &path, None).await?;
+        if let Some((field, kind, id)) = parent {
+            if !pointer_str(&v, field).ends_with(&format!("/{kind}/{number}")) {
+                return Err(GhError::Refused(format!(
+                    "comment {id} is not on #{number}"
+                )));
+            }
+        }
+        Ok((path, pointer_str(&v, "/body").to_string()))
+    }
+
+    /// #345: the text a task list is in, for `issue tasks` / `pr tasks` and before a tick.
+    pub async fn task_text(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        comment: Option<(u64, bool)>,
+    ) -> Result<String, GhError> {
+        auth.ensure_any(&[
+            (Resource::Issue, Action::Read),
+            (Resource::Pr, Action::Read),
+            (Resource::Issue, Action::Check),
+            (Resource::Pr, Action::Check),
+        ])?;
+        Ok(self.task_text_at(auth, number, comment).await?.1)
+    }
+
+    /// #345: write back a text that differs from `was` by one box. Refused when the text is no
+    /// longer `was` — a person edited it meanwhile, and their edit is not to be overwritten — or
+    /// when anything but one box mark would change.
+    pub async fn set_task_text(
+        &self,
+        auth: &Authorized<'_>,
+        number: u64,
+        comment: Option<(u64, bool)>,
+        was: &str,
+        now: &str,
+    ) -> Result<(), GhError> {
+        auth.ensure_any(&[
+            (Resource::Issue, Action::Check),
+            (Resource::Pr, Action::Check),
+        ])?;
+        if !crate::tasks::only_a_box_changed(was, now) {
+            return Err(GhError::Refused(
+                "the change is more than one task-list box; nothing was written".into(),
+            ));
+        }
+        let (path, current) = self.task_text_at(auth, number, comment).await?;
+        if current != was {
+            return Err(GhError::Refused(
+                "the text changed while the box was being ticked; nothing was written, run it again"
+                    .into(),
+            ));
+        }
+        self.rest::<Value>("PATCH", &path, Some(json!({"body": now})))
+            .await?;
+        Ok(())
+    }
+
     /// #165: reply to a line comment, in the thread it belongs to. GitHub takes this on the
     /// pulls endpoint with `in_reply_to`; the conversation endpoint cannot address a thread.
     /// #168: start a `workflow_dispatch` run. `workflow_id` takes the file name, which is what a

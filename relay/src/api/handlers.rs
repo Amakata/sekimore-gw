@@ -329,6 +329,9 @@ pub async fn dispatch(
         "/security/alert" => security_alert(ctx, req).await,
         "/security/dismiss" => security_dismiss(ctx, req).await,
         "/security/reopen" => security_reopen(ctx, req).await,
+        "/issue/tasks" => task_list(ctx, req, Resource::Issue).await,
+        "/pr/tasks" => task_list(ctx, req, Resource::Pr).await,
+        "/issue/check" | "/pr/check" => task_check(ctx, req).await,
         _ => Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: format!("unknown endpoint {path}"),
@@ -1803,6 +1806,138 @@ async fn issue_unassign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespons
             req.assignees.join(", "),
             req.number
         )),
+        ..ApiResponse::ok()
+    })
+}
+
+// ---- task-list boxes (#345) ----
+
+/// The comment a task list is in, when the request names one.
+fn task_comment(req: &ApiRequest) -> Option<(u64, bool)> {
+    (req.comment_id != 0).then_some((req.comment_id, req.inline))
+}
+
+fn task_place(req: &ApiRequest) -> String {
+    match task_comment(req) {
+        Some((id, _)) => format!("comment {id} on #{}", req.number),
+        None => format!("#{}", req.number),
+    }
+}
+
+/// `issue tasks` / `pr tasks`: every box in the body or a comment, with the id `check --id` takes.
+async fn task_list(
+    ctx: &ApiContext,
+    req: &ApiRequest,
+    resource: Resource,
+) -> Result<ApiResponse, ApiError> {
+    let (auth, client) = numbered_scope(ctx, req, resource, Action::Read)?;
+    need(
+        !req.inline || resource == Resource::Pr,
+        "--inline names a line comment, and only a pull request has those",
+    )?;
+    let text = client
+        .task_text(&auth, req.number, task_comment(req))
+        .await?;
+    let all = crate::tasks::tasks(&text);
+    Ok(ApiResponse {
+        number: Some(req.number),
+        message: Some(if all.is_empty() {
+            format!("no task-list boxes in {}", task_place(req))
+        } else {
+            crate::tasks::render(&all)
+        }),
+        raw: serde_json::to_value(&all).ok(),
+        ..ApiResponse::ok()
+    })
+}
+
+/// `issue check` / `pr check`: tick or untick one box, and nothing else.
+///
+/// The number decides the key, as for closing: a box on a pull request is `pr:check` whichever
+/// command was typed. The item is picked by its text and narrowed by heading and parent, never by
+/// position. The relay reads the text, flips the one mark, and writes it back only when that is the
+/// whole difference and nobody changed the text meanwhile (`set_task_text`).
+async fn task_check(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need_repo(req)?;
+    need(req.number != 0, "number is required")?;
+    need(
+        !req.task_match.trim().is_empty() || !req.task_id.trim().is_empty(),
+        "--match <text> is required (or --id from `tasks`): the item, as `issue tasks` / `pr tasks` list it",
+    )?;
+    let (auth, client, target) = numbered_write_scope(ctx, req, Action::Check).await?;
+    need(
+        !req.inline || target == Numbered::PullRequest,
+        "--inline names a line comment, and only a pull request has those",
+    )?;
+    let comment = task_comment(req);
+    let text = client.task_text(&auth, req.number, comment).await?;
+    let all = crate::tasks::tasks(&text);
+    let pick = crate::tasks::Pick {
+        matches: req.task_match.clone(),
+        under: req.under.clone(),
+        parent: req.parent.clone(),
+        id: req.task_id.clone(),
+    };
+    let tasks_cmd = match target {
+        Numbered::PullRequest => "pr tasks",
+        Numbered::Issue => "issue tasks",
+    };
+    let task = match crate::tasks::pick(&all, &pick) {
+        Ok(t) => t,
+        Err(crate::tasks::PickError::NothingAsked) => {
+            return Err(ApiError::bad_request("--match <text> or --id is required"))
+        }
+        Err(crate::tasks::PickError::NoMatch) => {
+            return Err(ApiError::bad_request(format!(
+                "no task-list item in {} matches; `sgw-agent {tasks_cmd} --number {}` lists them",
+                task_place(req),
+                req.number
+            )))
+        }
+        Err(crate::tasks::PickError::Several(v)) => {
+            return Err(ApiError::bad_request(format!(
+                "{} items in {} match; narrow it with --under <heading> or --parent <item>, or name one with --id:\n{}",
+                v.len(),
+                task_place(req),
+                crate::tasks::render(&v)
+            )))
+        }
+    };
+    let want = !req.uncheck;
+    let mark = if want { "[x]" } else { "[ ]" };
+    if task.checked == want {
+        return Ok(ApiResponse {
+            number: Some(req.number),
+            message: Some(format!(
+                "already {mark} {} in {}",
+                task.text,
+                task_place(req)
+            )),
+            ..ApiResponse::ok()
+        });
+    }
+    let now = crate::tasks::set(&text, task, want);
+    client
+        .set_task_text(&auth, req.number, comment, &text, &now)
+        .await?;
+    // The generic api_ok line has the path; the item and its new state are what a reader wants
+    let comment_id = comment.map(|(id, _)| id.to_string()).unwrap_or_default();
+    ctx.audit.log_edge(
+        paths::DEV_RELAY_API,
+        "task_checked",
+        Actor::Agent,
+        &[
+            ("repo", auth.repo()),
+            ("number", &req.number.to_string()),
+            ("comment", &comment_id),
+            ("item", &task.text),
+            ("heading", &task.heading),
+            ("checked", if want { "true" } else { "false" }),
+        ],
+    );
+    Ok(ApiResponse {
+        number: Some(req.number),
+        message: Some(format!("{mark} {} in {}", task.text, task_place(req))),
         ..ApiResponse::ok()
     })
 }

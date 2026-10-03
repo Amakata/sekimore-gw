@@ -203,6 +203,32 @@ endpoints! {
             #[arg(long = "comments-file", default_value = "", help = t("agent.pr.review.comments_file"))]
             comments_file: String,
         },
+        Tasks("/pr/tasks") = t("agent.pr.tasks") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long = "comment-id", help = t("agent.task.comment_id"))]
+            comment_id: Option<u64>,
+            #[arg(long, help = t("agent.comment_inline"))]
+            inline: bool,
+        },
+        Check("/pr/check") = t("agent.pr.check") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long = "comment-id", help = t("agent.task.comment_id"))]
+            comment_id: Option<u64>,
+            #[arg(long, help = t("agent.comment_inline"))]
+            inline: bool,
+            #[arg(long = "match", help = t("agent.task.match"))]
+            task_match: Option<String>,
+            #[arg(long, help = t("agent.task.under"))]
+            under: Option<String>,
+            #[arg(long, help = t("agent.task.parent"))]
+            parent: Option<String>,
+            #[arg(long, help = t("agent.task.id"))]
+            id: Option<String>,
+            #[arg(long, help = t("agent.task.uncheck"))]
+            uncheck: bool,
+        },
         Resolve("/pr/resolve") = t("agent.pr.resolve") => {
             #[arg(long, help = t("agent.number"))]
             number: u64,
@@ -395,6 +421,28 @@ endpoints! {
             number: u64,
             #[arg(long, help = t("agent.body"))]
             body: String,
+        },
+        Tasks("/issue/tasks") = t("agent.issue.tasks") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long = "comment-id", help = t("agent.task.comment_id"))]
+            comment_id: Option<u64>,
+        },
+        Check("/issue/check") = t("agent.issue.check") => {
+            #[arg(long, help = t("agent.number"))]
+            number: u64,
+            #[arg(long = "comment-id", help = t("agent.task.comment_id"))]
+            comment_id: Option<u64>,
+            #[arg(long = "match", help = t("agent.task.match"))]
+            task_match: Option<String>,
+            #[arg(long, help = t("agent.task.under"))]
+            under: Option<String>,
+            #[arg(long, help = t("agent.task.parent"))]
+            parent: Option<String>,
+            #[arg(long, help = t("agent.task.id"))]
+            id: Option<String>,
+            #[arg(long, help = t("agent.task.uncheck"))]
+            uncheck: bool,
         },
         CommentEdit("/issue/comment-edit") = t("agent.issue.comment_edit") => {
             #[arg(long, help = t("agent.number"))]

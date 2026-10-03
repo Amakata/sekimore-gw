@@ -261,7 +261,7 @@ edges:
     resolves: gateway.dns
     verifies_peer: none (plain, inside the gateway's network)
     presents: project_token
-    audit: audit.jsonl api_ok / api_error / token_denied / token_wrong_project / repo_denied / security_alert_dismissed / security_alert_reopened / bootstrap_ok / bootstrap_denied
+    audit: audit.jsonl api_ok / api_error / token_denied / token_wrong_project / repo_denied / security_alert_dismissed / security_alert_reopened / task_checked / bootstrap_ok / bootstrap_denied
     impl: [relay/src/api]
     tests: [relay/tests/api_server.rs]
     verify: "one GitHub API call through the relay"
