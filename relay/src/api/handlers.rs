@@ -1839,17 +1839,69 @@ async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRe
 async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
     let (auth, _) = project_scope(ctx, req, Resource::Project, Action::Read)?;
     let (board, client) = board_scope(ctx, req, &auth).await?;
-    let first = if req.first == 0 || req.first > 100 {
-        20
-    } else {
-        req.first
-    };
-    let raw = client.list_project_items(&auth, &board, first).await?;
+    // #344: above GitHub's page size used to fall back to 20 without a word, which read as "the
+    // board has 20 items". Said instead, with the ways to get more.
+    need(
+        req.first <= PROJECT_PAGE,
+        "--first is at most 100 (one page); --all reads every page, --after <cursor> the next one",
+    )?;
+    let first = if req.first == 0 { 20 } else { req.first };
+    let after = (!req.after.trim().is_empty()).then(|| req.after.trim());
+    if !req.all {
+        let raw = client
+            .list_project_items(&auth, &board, first, after)
+            .await?;
+        return Ok(ApiResponse {
+            raw: Some(raw),
+            ..Default::default()
+        });
+    }
+    // `--all`: every page, oldest first, folded into one answer of the same shape. Bounded, like
+    // the review threads (#315): a board past this is answered as far as it goes, with the cursor
+    // to carry on from.
+    let mut raw = client
+        .list_project_items(&auth, &board, PROJECT_PAGE, after)
+        .await?;
+    let mut nodes: Vec<Value> = raw
+        .pointer("/data/node/items/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut page = raw.pointer("/data/node/items/pageInfo").cloned();
+    while nodes.len() < PROJECT_ALL_MAX {
+        let next = page
+            .as_ref()
+            .filter(|p| p.get("hasNextPage").and_then(Value::as_bool) == Some(true))
+            .and_then(|p| p.get("endCursor").and_then(Value::as_str))
+            .map(str::to_string);
+        let Some(cursor) = next else { break };
+        let more = client
+            .list_project_items(&auth, &board, PROJECT_PAGE, Some(&cursor))
+            .await?;
+        nodes.extend(
+            more.pointer("/data/node/items/nodes")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        page = more.pointer("/data/node/items/pageInfo").cloned();
+    }
+    if let Some(items) = raw.pointer_mut("/data/node/items") {
+        items["nodes"] = Value::Array(nodes);
+        if let Some(p) = page {
+            items["pageInfo"] = p;
+        }
+    }
     Ok(ApiResponse {
         raw: Some(raw),
         ..Default::default()
     })
 }
+
+/// GitHub's page size for a board's items.
+const PROJECT_PAGE: u32 = 100;
+/// How many items `project list --all` reads before it stops and hands back the cursor.
+const PROJECT_ALL_MAX: usize = 1000;
 
 /// 0.2.7: the board's fields and their option ids, which `project update-item` needs.
 async fn project_fields(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {

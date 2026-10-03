@@ -644,6 +644,33 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
                 ]}}}}),
             );
         }
+        // #344: a board read page by page. Three items, two to a page: the first page ends at
+        // C1, and the cursor C1 brings the third. Only `--after` / `--all` and the paging test ask
+        // with a page size of 2
+        if query.contains("items(first:$first,after:$after)")
+            && matches!(
+                body.pointer("/variables/first").and_then(|v| v.as_u64()),
+                Some(2) | Some(100)
+            )
+        {
+            let item = |n: u64| {
+                serde_json::json!({"id": format!("PVTI_p{n}"), "type": "ISSUE",
+                "content": {"number": n, "title": format!("item {n}")}, "fieldValues": {"nodes": []}})
+            };
+            let after = body.pointer("/variables/after").and_then(|v| v.as_str());
+            let (nodes, next) = match after {
+                None => (vec![item(1), item(2)], Some("C1")),
+                Some("C1") => (vec![item(3)], None),
+                Some(_) => (vec![], None),
+            };
+            return (
+                StatusCode::OK,
+                serde_json::json!({"data": {"node": {"title": "Board", "items": {
+                    "totalCount": 3,
+                    "pageInfo": {"hasNextPage": next.is_some(), "endCursor": next},
+                    "nodes": nodes}}}}),
+            );
+        }
         return (
             StatusCode::OK,
             serde_json::json!({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_1"}}, "node": {"title": "Board", "items": {"nodes": [
