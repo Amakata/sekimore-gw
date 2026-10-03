@@ -190,7 +190,8 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
     // #172: one comment, read before a write so its author can be checked. 4242 is the agent's
     // own; anything else belongs to a person and must be refused. Every comment sits on #8 (a
     // pull request), so an id named with another number must be refused too.
-    if method == "GET" {
+    // (700 and 701 are #345's, answered further down)
+    if method == "GET" && !p.ends_with("/comments/700") && !p.ends_with("/comments/701") {
         if let Some((_, id)) = p.split_once("/comments/") {
             let login = if id == "4242" {
                 "agent-bot"
@@ -333,6 +334,49 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
                 "additions": 40, "deletions": 5,
                 "node_id": "PR_kwDO7"
             }),
+        );
+    }
+    // #345: task lists. #60 is an issue whose body has a checklist with two "smoke test" items
+    // under different parents; #61 is a pull request with one; comment 700 (someone else's) sits
+    // on #60 and comment 701 on another number; #62's body changes between two reads.
+    if method == "GET" && p.ends_with("/issues/60") {
+        return (
+            StatusCode::OK,
+            serde_json::json!({"number": 60, "title": "Release", "user": {"login": "alice"},
+                "body": TASK_BODY, "state": "open"}),
+        );
+    }
+    if method == "GET" && p.ends_with("/issues/61") {
+        return (
+            StatusCode::OK,
+            serde_json::json!({"number": 61, "title": "A PR", "user": {"login": "alice"},
+                "body": "- [ ] tests pass\n", "state": "open",
+                "pull_request": {"url": "https://github.example/api/pulls/61"}}),
+        );
+    }
+    if method == "GET" && p.ends_with("/issues/62") {
+        static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        return (
+            StatusCode::OK,
+            serde_json::json!({"number": 62, "title": "Moving", "user": {"login": "alice"},
+                "body": format!("- [ ] ship\n\nedited {n}\n"), "state": "open"}),
+        );
+    }
+    if method == "GET" && p.ends_with("/issues/comments/700") {
+        return (
+            StatusCode::OK,
+            serde_json::json!({"id": 700, "user": {"login": "carol"},
+                "issue_url": "https://github.example/api/v3/repos/LibOrg/awesome-lib/issues/60",
+                "body": "Reviewer checklist:\n- [ ] read the diff\n"}),
+        );
+    }
+    if method == "GET" && p.ends_with("/issues/comments/701") {
+        return (
+            StatusCode::OK,
+            serde_json::json!({"id": 701, "user": {"login": "carol"},
+                "issue_url": "https://github.example/api/v3/repos/LibOrg/awesome-lib/issues/99",
+                "body": "- [ ] elsewhere\n"}),
         );
     }
     // 0.2.8: the issues endpoint serves pull requests too; #8 is one, and issue list must drop it.
@@ -642,6 +686,33 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
                      "options": [{"id": "OPT_todo", "name": "Todo"}, {"id": "OPT_done", "name": "Done"}]},
                     {"id": "PVTF_text", "name": "Notes", "dataType": "TEXT"}
                 ]}}}}),
+            );
+        }
+        // #344: a board read page by page. Three items, two to a page: the first page ends at
+        // C1, and the cursor C1 brings the third. Only `--after` / `--all` and the paging test ask
+        // with a page size of 2
+        if query.contains("items(first:$first,after:$after)")
+            && matches!(
+                body.pointer("/variables/first").and_then(|v| v.as_u64()),
+                Some(2) | Some(100)
+            )
+        {
+            let item = |n: u64| {
+                serde_json::json!({"id": format!("PVTI_p{n}"), "type": "ISSUE",
+                "content": {"number": n, "title": format!("item {n}")}, "fieldValues": {"nodes": []}})
+            };
+            let after = body.pointer("/variables/after").and_then(|v| v.as_str());
+            let (nodes, next) = match after {
+                None => (vec![item(1), item(2)], Some("C1")),
+                Some("C1") => (vec![item(3)], None),
+                Some(_) => (vec![], None),
+            };
+            return (
+                StatusCode::OK,
+                serde_json::json!({"data": {"node": {"title": "Board", "items": {
+                    "totalCount": 3,
+                    "pageInfo": {"hasNextPage": next.is_some(), "endCursor": next},
+                    "nodes": nodes}}}}),
             );
         }
         return (
@@ -1054,3 +1125,5 @@ pub fn relays_for(
     }
     relays
 }
+/// #345: the checklist issue #60 carries.
+pub const TASK_BODY: &str = "## Deploy\n\n- [ ] build\n- [x] push image\n- Staging\n  - [ ] smoke test\n- Production\n  - [ ] smoke test\n";

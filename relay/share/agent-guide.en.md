@@ -58,6 +58,10 @@ sekimore pr comment --number N --body="…"                     [pr:comment]
 sekimore pr reply --number N --comment-id C --body="…"          [pr:comment]  reply to a line comment in its thread
 sekimore pr resolve --number N --thread-id T                  [pr:resolve]  mark a review conversation as settled
 sekimore pr unresolve --number N --thread-id T                [pr:resolve]  the inverse of resolve
+sekimore pr tasks --number N [--comment-id C [--inline]]      [pr:read]  the task-list boxes, each with its id
+sekimore pr check --number N --match "text"                   [pr:check]  tick one box (--uncheck to untick); nothing else changes
+                                                              #   --under "heading" / --parent "item" narrow it, --id picks
+                                                              #   one by the id tasks printed; a box in anyone's comment, too
                                                               #   T is the id `pr comments` prints after `thread`
                                                               #   a conversation it already prints as (resolved) is settled
 sekimore pr comment-edit --number N --comment-id C --body="…"   [pr:comment_update]  edit your own comment
@@ -86,6 +90,8 @@ sekimore issue view --number N                                [issue:read]  titl
 sekimore issue comments --number N                            [issue:read]
 sekimore issue list [--state open] [--labels bug]             [issue:read]
 sekimore issue update --number N [--title "…"] [--body="…"]    [issue:update]  the body is the change instruction; do not rewrite what a person wrote
+sekimore issue tasks --number N [--comment-id C]              [issue:read]  the task-list boxes, each with its id
+sekimore issue check --number N --match "text"                [issue:check]  tick one box instead of rewriting the body
 sekimore issue comment --number N --body="…"                  [issue:comment]
 sekimore issue close --number N                               [issue:close]
 sekimore issue reopen --number N                              [issue:close]  the inverse of close
@@ -101,6 +107,8 @@ sekimore release list                                         [release:read]
 sekimore release edit --tag vX.Y.Z --draft false              [release:publish]  publishing a draft only
                                                               #   editing a release that remains a draft requires release:create
 sekimore project list --board 2                               [project:read]  the items, with their Status and other field values
+                                                              #   oldest first, 20 a page (--first up to 100); past that
+                                                              #   it prints the cursor for --after, or --all reads every page
 sekimore project fields --board 2                             [project:read]  the field and option ids that update-item takes
 sekimore project add-item / update-item --board 2             [project:add_item] / [project:update_item]
 ```

@@ -93,6 +93,7 @@ pub const AUDIT_EVENTS: &[(&str, &str)] = &[
     (DEV_RELAY_API, "api_error"),
     (DEV_RELAY_API, "security_alert_dismissed"),
     (DEV_RELAY_API, "security_alert_reopened"),
+    (DEV_RELAY_API, "task_checked"),
     (DEV_RELAY_API, "bootstrap_ok"),
     (DEV_RELAY_API, "bootstrap_denied"),
     // the relay's calls to the upstream API, on whichever hop the proxy config selects

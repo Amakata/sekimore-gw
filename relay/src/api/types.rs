@@ -78,6 +78,18 @@ pub struct ApiRequest {
     /// rather than a second one, the way `pr_draft` carries which way `pr draft` / `pr ready` move
     #[serde(default, skip_serializing_if = "is_false")]
     pub unresolve: bool,
+    /// #345: the task-list item `issue check` / `pr check` ticks: text it contains, the heading it
+    /// sits under, the item it is nested in, or the id `issue tasks` printed. And which way
+    #[serde(default, rename = "match", skip_serializing_if = "String::is_empty")]
+    pub task_match: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub under: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub task_id: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub uncheck: bool,
     /// 0.2.33 (#168): the workflow file `ci dispatch` starts
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub workflow: String,
@@ -135,9 +147,13 @@ pub struct ApiRequest {
     /// travels in `body`
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
-    /// 0.2.9: `ci rerun --all` re-runs every job instead of only the failed ones
+    /// 0.2.9: `ci rerun --all` re-runs every job instead of only the failed ones. #344: and
+    /// `project list --all` follows every page
     #[serde(default, skip_serializing_if = "is_false")]
     pub all: bool,
+    /// #344: where `project list` continues — the cursor the previous page ended at
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub after: String,
 }
 
 fn is_false(b: &bool) -> bool {

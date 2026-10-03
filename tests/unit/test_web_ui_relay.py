@@ -587,6 +587,7 @@ def describe_dashboard_permission_list():
             "CommentUpdate": "comment_update",
             "CommentDelete": "comment_delete",
             "Resolve": "resolve",
+            "Check": "check",
         }
         defined = set()
         for res, body in re.findall(r"Resource::(\w+) => &\[([^\]]*)\]", policy):

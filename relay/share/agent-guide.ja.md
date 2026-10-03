@@ -58,6 +58,10 @@ sekimore pr comment --number N --body="…"                     [pr:comment]
 sekimore pr reply --number N --comment-id C --body="…"          [pr:comment]  行コメントのスレッドに返信する
 sekimore pr resolve --number N --thread-id T                  [pr:resolve]  レビューのやり取りを解決済みにする
 sekimore pr unresolve --number N --thread-id T                [pr:resolve]  resolve の逆
+sekimore pr tasks --number N [--comment-id C [--inline]]      [pr:read]  チェックボックスの一覧。項目ごとの id 付き
+sekimore pr check --number N --match "文言"                   [pr:check]  チェックボックスを 1 つ入れる（--uncheck で外す）。ほかは変えない
+                                                              #   --under "見出し" / --parent "項目" で絞り、--id で tasks の id を
+                                                              #   指定する。誰のコメントのチェックボックスでもよい
                                                               #   T は `pr comments` が `thread` の後に表示する id
                                                               #   (resolved) と表示されているものは、すでに解決済み
 sekimore pr comment-edit --number N --comment-id C --body="…"   [pr:comment_update]  自分のコメントを編集する
@@ -86,6 +90,8 @@ sekimore issue view --number N                                [issue:read]  タ�
 sekimore issue comments --number N                            [issue:read]
 sekimore issue list [--state open] [--labels bug]             [issue:read]
 sekimore issue update --number N [--title "…"] [--body="…"]    [issue:update]  本文は変更指示そのもの。人が書いた本文は書き換えない
+sekimore issue tasks --number N [--comment-id C]              [issue:read]  チェックボックスの一覧。項目ごとの id 付き
+sekimore issue check --number N --match "文言"                [issue:check]  本文を書き換えずにチェックボックスを 1 つ入れる
 sekimore issue comment --number N --body="…"                  [issue:comment]
 sekimore issue close --number N                               [issue:close]
 sekimore issue reopen --number N                              [issue:close]  close の逆
@@ -101,6 +107,8 @@ sekimore release list                                         [release:read]
 sekimore release edit --tag vX.Y.Z --draft false              [release:publish]  draft の公開のみ
                                                               #   draft のままの編集には release:create が必要
 sekimore project list --board 2                               [project:read]  アイテムと、その Status などのフィールド値
+                                                              #   古い順に 1 ページ 20 件（--first で最大 100）。続きがあれば
+                                                              #   --after に渡すカーソルを表示する。--all ですべてのページ
 sekimore project fields --board 2                             [project:read]  update-item に渡す field と option の id
 sekimore project add-item / update-item --board 2             [project:add_item] / [project:update_item]
 ```
