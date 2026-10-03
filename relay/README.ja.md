@@ -345,8 +345,8 @@ base を検査できません。そのため関所は、そのようなリポジ
 
   ```
   pr:      create  read  comment  comment_update  comment_delete  review  request_review
-           resolve  label  assign  close  merge
-  issue:   create  read  update  comment  comment_update  comment_delete  label  assign  close
+           resolve  check  label  assign  close  merge
+  issue:   create  read  update  comment  comment_update  comment_delete  check  label  assign  close
   ci:      read  rerun  dispatch          security: read  dismiss
   release: create  read  publish          project:  read  add_item  update_item
   repo:    read                           search:   read
@@ -354,6 +354,7 @@ base を検査できません。そのため関所は、そのようなリポジ
 
 - `pr:read` は、状態と CI チェックに加えて、本文とコメントも対象にします。`issue:read` は別の権限なので、非公開のトラッカーを読ませずに bug を登録させることができます。`search:read` は、検索が 1 つのリポジトリに宛てた操作ではないため、独立したリソースです。
 - `pr:review` はレビューを提出する権限、`pr:request_review` は他の人にレビューを依頼する権限です。前者は意見を記録し、後者は人に通知するので、分けています。
+- `pr:check` / `issue:check`（#345）は、本文や（誰のものでも）コメントのチェックボックスを 1 つ入れる・外す権限です（`pr check` / `issue check`）。関所はその 1 文字だけを書き戻し、ほかが変わる場合や、人がその間に本文を編集した場合は拒否します。`pr:create` / `issue:update` には含めていません。チェックを 1 つ入れることは、人が書いた本文の書き換えよりずっと小さい操作だからです。閉じる操作と同じく、どちらの権限が要るかは番号で決まります。チェックボックスが人の確認の印になっているリポジトリでは、リポジトリ行で外します（`-pr:check`）。
 - `pr:resolve` は、レビューのやり取りを解決済みにする（および未解決に戻す）権限です。`pr:comment` には含めていません。解決済みにすることは、他の人が書いた指摘を終わったことにする操作であり、指摘に返信することとは別の権限だからです。返信はさせたいが、解決済みにするかどうかは人が決めたい、というプロジェクトがあります。
 - `ci:rerun` は workflow run の再実行と中止の権限です。再実行は Actions の時間を消費し、リポジトリの secret にアクセスできる workflow のコードを実行するので、`ci:read` には含めていません。
 - `release:publish` は、draft の Release を公開する権限です。`release create --draft` は公開を人間に委ねるためにあるので、公開を `release:create` に含めると、その区別が失われます。draft のまま編集するだけなら `release:create` で足ります。

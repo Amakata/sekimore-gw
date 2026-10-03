@@ -150,6 +150,36 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     }
                     leaf
                 }
+                PrCmd::Tasks {
+                    number,
+                    comment_id,
+                    inline,
+                } => {
+                    req.number = number;
+                    req.comment_id = comment_id.unwrap_or(0);
+                    req.inline = inline;
+                    leaf
+                }
+                PrCmd::Check {
+                    number,
+                    comment_id,
+                    inline,
+                    task_match,
+                    under,
+                    parent,
+                    id,
+                    uncheck,
+                } => {
+                    req.number = number;
+                    req.comment_id = comment_id.unwrap_or(0);
+                    req.inline = inline;
+                    req.task_match = task_match.unwrap_or_default();
+                    req.under = under.unwrap_or_default();
+                    req.parent = parent.unwrap_or_default();
+                    req.task_id = id.unwrap_or_default();
+                    req.uncheck = uncheck;
+                    leaf
+                }
                 PrCmd::Resolve { number, thread_id } => {
                     req.number = number;
                     req.thread_id = thread_id;
@@ -365,6 +395,29 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     req.body = body;
                     leaf
                 }
+                IssueCmd::Tasks { number, comment_id } => {
+                    req.number = number;
+                    req.comment_id = comment_id.unwrap_or(0);
+                    leaf
+                }
+                IssueCmd::Check {
+                    number,
+                    comment_id,
+                    task_match,
+                    under,
+                    parent,
+                    id,
+                    uncheck,
+                } => {
+                    req.number = number;
+                    req.comment_id = comment_id.unwrap_or(0);
+                    req.task_match = task_match.unwrap_or_default();
+                    req.under = under.unwrap_or_default();
+                    req.parent = parent.unwrap_or_default();
+                    req.task_id = id.unwrap_or_default();
+                    req.uncheck = uncheck;
+                    leaf
+                }
                 IssueCmd::CommentEdit {
                     number,
                     comment_id,
@@ -480,10 +533,14 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     board,
                     project_id,
                     first,
+                    after,
+                    all,
                 } => {
                     req.board = board;
                     req.project_id = project_id.unwrap_or_default();
                     req.first = first;
+                    req.after = after.unwrap_or_default();
+                    req.all = all;
                     leaf
                 }
                 ProjectCmd::Fields {

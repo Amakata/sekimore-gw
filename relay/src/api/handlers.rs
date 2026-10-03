@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use hyper::body::Incoming;
 use hyper::{Request, StatusCode};
+use serde_json::Value;
 
 use super::types::{ApiRequest, ApiResponse, BootstrapRequest, BootstrapResponse, SigningBlock};
 use super::{read_body, ApiContext, ApiError};
@@ -353,6 +354,9 @@ pub async fn dispatch(
         "/security/alert" => security_alert(ctx, req).await,
         "/security/dismiss" => security_dismiss(ctx, req).await,
         "/security/reopen" => security_reopen(ctx, req).await,
+        "/issue/tasks" => task_list(ctx, req, Resource::Issue).await,
+        "/pr/tasks" => task_list(ctx, req, Resource::Pr).await,
+        "/issue/check" | "/pr/check" => task_check(ctx, req).await,
         _ => Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: format!("unknown endpoint {path}"),
@@ -1072,6 +1076,81 @@ async fn issue_unassign(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRespons
     forward(r, "/issue/unassign", &auth, req).await
 }
 
+// ---- task-list boxes (#345) ----
+
+/// `issue tasks` / `pr tasks`: every box in the body or a comment, with the id `check --id` takes.
+async fn task_list(
+    ctx: &ApiContext,
+    req: &ApiRequest,
+    resource: Resource,
+) -> Result<ApiResponse, ApiError> {
+    let (auth, r) = numbered_scope(ctx, req, resource, Action::Read)?;
+    need(
+        !req.inline || resource == Resource::Pr,
+        "--inline names a line comment, and only a pull request has those",
+    )?;
+    let op = if resource == Resource::Pr {
+        "/pr/tasks"
+    } else {
+        "/issue/tasks"
+    };
+    forward(r, op, &auth, req).await
+}
+
+/// `issue check` / `pr check`: tick or untick one box, and nothing else.
+///
+/// The number decides the key, as for closing: a box on a pull request is `pr:check` whichever
+/// command was typed. The relay picks the item by its text (narrowed by heading and parent, never
+/// by position), flips the one mark, and writes it back only when that is the whole difference and
+/// nobody changed the text meanwhile. The audit is written here, from what the relay reports.
+async fn task_check(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    need_repo(req)?;
+    need(req.number != 0, "number is required")?;
+    need(
+        !req.task_match.trim().is_empty() || !req.task_id.trim().is_empty(),
+        "--match <text> is required (or --id from `tasks`): the item, as `issue tasks` / `pr tasks` list it",
+    )?;
+    let (auth, r, target) = numbered_write_scope(ctx, req, Action::Check).await?;
+    need(
+        !req.inline || target == Numbered::PullRequest,
+        "--inline names a line comment, and only a pull request has those",
+    )?;
+    let op = match target {
+        Numbered::PullRequest => "/pr/check",
+        Numbered::Issue => "/issue/check",
+    };
+    let resp = forward(r, op, &auth, req).await?;
+    let done = resp.raw.as_ref();
+    if done.and_then(|v| v.get("changed")).and_then(Value::as_bool) == Some(true) {
+        let field = |k: &str| {
+            done.and_then(|v| v.get(k))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        // The generic api_ok line has the path; the item and its new state are what a reader wants
+        let comment_id = if req.comment_id != 0 {
+            req.comment_id.to_string()
+        } else {
+            String::new()
+        };
+        ctx.audit.log_edge(
+            paths::DEV_RELAY_API,
+            "task_checked",
+            Actor::Agent,
+            &[
+                ("repo", auth.repo()),
+                ("number", &req.number.to_string()),
+                ("comment", &comment_id),
+                ("item", &field("item")),
+                ("heading", &field("heading")),
+                ("checked", if req.uncheck { "false" } else { "true" }),
+            ],
+        );
+    }
+    Ok(resp)
+}
+
 // ---- Projects ----
 
 /// The four Projects operations share their shape: the project-anchored scope, then the board the
@@ -1101,8 +1180,71 @@ async fn project_update_item(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiRe
 }
 
 async fn project_list(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
-    board_op(ctx, "/project/list", req, Action::Read).await
+    let (auth, _) = project_scope(ctx, req, Resource::Project, Action::Read)?;
+    let (resolved, r) = board_scope(ctx, req, &auth).await?;
+    // #344: above GitHub's page size used to fall back to 20 without a word, which read as "the
+    // board has 20 items". Said instead, with the ways to get more.
+    need(
+        req.first <= PROJECT_PAGE,
+        "--first is at most 100 (one page); --all reads every page, --after <cursor> the next one",
+    )?;
+    if !req.all {
+        return r.call("/project/list", &[&auth], req, &resolved).await;
+    }
+    // `--all`: every page, oldest first, folded into one answer of the same shape. Bounded, like
+    // the review threads (#315): a board past this is answered as far as it goes, with the cursor
+    // to carry on from. The relay answers one page at a time; the folding is here
+    let mut page_req = req.clone();
+    page_req.all = false;
+    page_req.first = PROJECT_PAGE;
+    let mut raw = r
+        .call("/project/list", &[&auth], &page_req, &resolved)
+        .await?
+        .raw
+        .unwrap_or(Value::Null);
+    let mut nodes: Vec<Value> = raw
+        .pointer("/data/node/items/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut page = raw.pointer("/data/node/items/pageInfo").cloned();
+    while nodes.len() < PROJECT_ALL_MAX {
+        let next = page
+            .as_ref()
+            .filter(|p| p.get("hasNextPage").and_then(Value::as_bool) == Some(true))
+            .and_then(|p| p.get("endCursor").and_then(Value::as_str))
+            .map(str::to_string);
+        let Some(cursor) = next else { break };
+        page_req.after = cursor;
+        let more = r
+            .call("/project/list", &[&auth], &page_req, &resolved)
+            .await?
+            .raw
+            .unwrap_or(Value::Null);
+        nodes.extend(
+            more.pointer("/data/node/items/nodes")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        page = more.pointer("/data/node/items/pageInfo").cloned();
+    }
+    if let Some(items) = raw.pointer_mut("/data/node/items") {
+        items["nodes"] = Value::Array(nodes);
+        if let Some(p) = page {
+            items["pageInfo"] = p;
+        }
+    }
+    Ok(ApiResponse {
+        raw: Some(raw),
+        ..Default::default()
+    })
 }
+
+/// GitHub's page size for a board's items.
+const PROJECT_PAGE: u32 = 100;
+/// How many items `project list --all` reads before it stops and hands back the cursor.
+const PROJECT_ALL_MAX: usize = 1000;
 
 /// 0.2.7: the board's fields and their option ids, which `project update-item` needs.
 async fn project_fields(ctx: &ApiContext, req: &ApiRequest) -> Result<ApiResponse, ApiError> {

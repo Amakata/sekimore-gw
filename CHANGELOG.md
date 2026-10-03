@@ -12,6 +12,16 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.63 (2026-10-03)
+
+### Fix
+
+- `project list` reads a board past its first 100 items: `--after <cursor>` goes on from where a page ended, `--all` reads every page, and the listing says when more remain. A `--first` above 100 is refused instead of quietly becoming 20 (#346)
+
+### Enhancement
+
+- `issue check` / `pr check --match "text"` tick or untick one task-list box in a body or anyone's comment, under new keys `issue:check` / `pr:check`; the relay writes back only that mark. `issue tasks` / `pr tasks` list the boxes (#347)
+
 ## 0.2.62 (2026-10-01)
 
 ### Fix

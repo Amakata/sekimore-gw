@@ -93,6 +93,8 @@ impl ForgeRelay for GitHubRelay {
             "/security/alert" => security_alert(gh, g, req).await,
             "/security/dismiss" => security_dismiss(gh, g, req).await,
             "/security/reopen" => security_reopen(gh, g, req).await,
+            "/issue/tasks" | "/pr/tasks" => task_list(gh, g, req).await,
+            "/issue/check" | "/pr/check" => task_check(gh, g, req).await,
             _ => Err(ApiError {
                 status: StatusCode::NOT_FOUND,
                 message: format!("unknown endpoint {op}"),
@@ -832,6 +834,100 @@ async fn issue_unassign(gh: &GitHub, g: &Grant, req: &ApiRequest) -> Result<ApiR
     })
 }
 
+// ---- task-list boxes (#345) ----
+
+/// The comment a task list is in, when the request names one.
+fn task_comment(req: &ApiRequest) -> Option<(u64, bool)> {
+    (req.comment_id != 0).then_some((req.comment_id, req.inline))
+}
+
+fn task_place(req: &ApiRequest) -> String {
+    match task_comment(req) {
+        Some((id, _)) => format!("comment {id} on #{}", req.number),
+        None => format!("#{}", req.number),
+    }
+}
+
+async fn task_list(gh: &GitHub, g: &Grant, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    let text = gh.task_text(g, req.number, task_comment(req)).await?;
+    let all = crate::tasks::tasks(&text);
+    Ok(ApiResponse {
+        number: Some(req.number),
+        message: Some(if all.is_empty() {
+            format!("no task-list boxes in {}", task_place(req))
+        } else {
+            crate::tasks::render(&all)
+        }),
+        raw: serde_json::to_value(&all).ok(),
+        ..ApiResponse::ok()
+    })
+}
+
+/// Pick the item, flip its mark, write it back through `set_task_text`, which refuses anything but
+/// that one mark or a text that changed since it was read. `raw` says what changed, for the
+/// gateway's audit.
+async fn task_check(gh: &GitHub, g: &Grant, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+    let comment = task_comment(req);
+    let text = gh.task_text(g, req.number, comment).await?;
+    let all = crate::tasks::tasks(&text);
+    let pick = crate::tasks::Pick {
+        matches: req.task_match.clone(),
+        under: req.under.clone(),
+        parent: req.parent.clone(),
+        id: req.task_id.clone(),
+    };
+    let tasks_cmd = if g.is(Resource::Pr, Action::Check) {
+        "pr tasks"
+    } else {
+        "issue tasks"
+    };
+    let task = match crate::tasks::pick(&all, &pick) {
+        Ok(t) => t,
+        Err(crate::tasks::PickError::NothingAsked) => {
+            return Err(bad("--match <text> or --id is required"))
+        }
+        Err(crate::tasks::PickError::NoMatch) => {
+            return Err(ApiError::bad_request(format!(
+                "no task-list item in {} matches; `sgw-agent {tasks_cmd} --number {}` lists them",
+                task_place(req),
+                req.number
+            )))
+        }
+        Err(crate::tasks::PickError::Several(v)) => {
+            return Err(ApiError::bad_request(format!(
+                "{} items in {} match; narrow it with --under <heading> or --parent <item>, or name one with --id:\n{}",
+                v.len(),
+                task_place(req),
+                crate::tasks::render(&v)
+            )))
+        }
+    };
+    let want = !req.uncheck;
+    let mark = if want { "[x]" } else { "[ ]" };
+    let done = |changed: bool| serde_json::json!({"changed": changed, "item": task.text, "heading": task.heading});
+    if task.checked == want {
+        return Ok(ApiResponse {
+            number: Some(req.number),
+            message: Some(format!(
+                "already {mark} {} in {}",
+                task.text,
+                task_place(req)
+            )),
+            raw: Some(done(false)),
+            ..ApiResponse::ok()
+        });
+    }
+    let now = crate::tasks::set(&text, task, want);
+    gh.set_task_text(g, req.number, comment, &text, &now)
+        .await?;
+    Ok(ApiResponse {
+        number: Some(req.number),
+        message: Some(format!("{mark} {} in {}", task.text, task_place(req))),
+        raw: Some(done(true)),
+        ..ApiResponse::ok()
+    })
+}
+
 // ---- Projects ----
 
 async fn project_add_item(
@@ -865,12 +961,14 @@ async fn project_list(
     req: &ApiRequest,
     r: &Resolved,
 ) -> Result<ApiResponse, ApiError> {
-    let first = if req.first == 0 || req.first > 100 {
+    // The gateway refused a page over 100 and folds `--all` from single pages (#344)
+    let first = if req.first == 0 {
         20
     } else {
-        req.first
+        req.first.min(100)
     };
-    let raw = gh.list_project_items(g, &r.board_id, first).await?;
+    let after = (!req.after.trim().is_empty()).then(|| req.after.trim());
+    let raw = gh.list_project_items(g, &r.board_id, first, after).await?;
     Ok(ApiResponse {
         raw: Some(raw),
         ..Default::default()

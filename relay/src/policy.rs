@@ -77,6 +77,10 @@ pub enum Action {
     /// posting one — a project can want the agent to answer review notes without letting it
     /// declare them settled
     Resolve,
+    /// #345: tick or untick a task-list box in a body or a comment, and change nothing else.
+    /// Separate from `Update` / `CommentUpdate`: flipping one box is far less than rewriting what
+    /// a person wrote, and the relay writes only the one character
+    Check,
 }
 
 impl Resource {
@@ -112,6 +116,7 @@ impl Resource {
                 CommentUpdate,
                 CommentDelete,
                 Resolve,
+                Check,
             ],
             Resource::Issue => &[
                 Create,
@@ -123,6 +128,7 @@ impl Resource {
                 Update,
                 CommentUpdate,
                 CommentDelete,
+                Check,
             ],
             Resource::Project => &[Read, AddItem, UpdateItem],
             Resource::Repo => &[Read],
@@ -165,6 +171,7 @@ impl Action {
             Action::CommentUpdate => "comment_update",
             Action::CommentDelete => "comment_delete",
             Action::Resolve => "resolve",
+            Action::Check => "check",
             Action::Dismiss => "dismiss",
         }
     }
@@ -215,6 +222,7 @@ pub fn parse_permission(s: &str) -> Result<(Resource, Action), String> {
         "comment_update" => Action::CommentUpdate,
         "comment_delete" => Action::CommentDelete,
         "resolve" => Action::Resolve,
+        "check" => Action::Check,
         "dismiss" => Action::Dismiss,
         other => return Err(format!("unknown action {other:?}")),
     };
@@ -1650,7 +1658,10 @@ mod tests {
         // + pr:comment_update, pr:comment_delete, issue:comment_update, issue:comment_delete
         //   (#172: posting is not the authority to rewrite or remove)
         // + pr:resolve (0.2.59: settling someone else's review note is not answering it)
-        assert_eq!(all_permission_keys().len(), 34);
+        // + pr:check, issue:check (#345: ticking a box is far less than rewriting a body)
+        assert_eq!(all_permission_keys().len(), 36);
+        assert!(parse_permission("issue:check").is_ok() && parse_permission("pr:check").is_ok());
+        assert!(parse_permission("project:check").is_err());
         // dismissing is not a kind of reading, and reading is not a kind of dismissing
         assert!(parse_permission("security:close").is_err());
         assert!(parse_permission("pr:dismiss").is_err());
