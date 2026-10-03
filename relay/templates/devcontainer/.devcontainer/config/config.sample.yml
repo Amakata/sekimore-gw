@@ -236,6 +236,7 @@ relay:
       # - pr:comment_delete   # gw 0.2.34+ delete a comment the agent posted. Commenting is not the authority to erase
       # - pr:resolve          # gw 0.2.59+ mark a review conversation as settled, and open one again. Answering
       #                       #   someone's review note is not the authority to declare it dealt with
+      # - pr:check            # gw 0.2.63+ tick a task-list box in a PR or its comments, and change nothing else
       # issues
       - issue:create          # file an issue
       - issue:read            # read issues and their comments
@@ -246,6 +247,7 @@ relay:
       # - issue:assign        # add and remove assignees. It puts work on a named person
       # - issue:comment_update  # gw 0.2.34+ edit a comment the agent posted. Only the agent's own; a person's is refused
       # - issue:comment_delete  # gw 0.2.34+ delete a comment the agent posted. Commenting is not the authority to erase
+      # - issue:check         # gw 0.2.63+ tick a task-list box in an issue or its comments, and change nothing else
       # CI
       - ci:read               # workflow runs for a ref, which job failed, and its log
       # - ci:rerun            # re-run and cancel runs. It spends Actions minutes and runs workflow code

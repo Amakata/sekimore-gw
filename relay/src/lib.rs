@@ -21,5 +21,6 @@ pub mod policy;
 pub mod proxy_credential;
 pub mod ssh;
 pub mod store;
+pub mod tasks;
 pub mod tokens;
 pub mod vars;

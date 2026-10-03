@@ -361,8 +361,8 @@ specifies the base in the ref and is checked before the push is sent.
 
   ```
   pr:      create  read  comment  comment_update  comment_delete  review  request_review
-           resolve  label  assign  close  merge
-  issue:   create  read  update  comment  comment_update  comment_delete  label  assign  close
+           resolve  check  label  assign  close  merge
+  issue:   create  read  update  comment  comment_update  comment_delete  check  label  assign  close
   ci:      read  rerun  dispatch          security: read  dismiss
   release: create  read  publish          project:  read  add_item  update_item
   repo:    read                           search:   read
@@ -370,6 +370,7 @@ specifies the base in the ref and is checked before the push is sent.
 
 - `pr:read` covers the state, the CI checks, the description and the comments. `issue:read` is a separate permission, so an agent can file bugs without being able to read a private tracker. `search:read` is a separate resource because a search is not addressed to a single repository.
 - `pr:review` submits a review, and `pr:request_review` requests a review from someone else. They are separate because the first records an opinion and the second notifies a person.
+- `pr:check` / `issue:check` (#345) tick or untick one task-list box in a body or in anyone's comment, through `pr check` / `issue check`. The relay writes back only the one mark, and refuses when anything else would change or a person edited the text meanwhile. It is not part of `pr:create` / `issue:update`: ticking a box is far less than rewriting what a person wrote. As with closing, the number decides which key applies. A repository where a box is a person's sign-off drops it on its repository line (`-pr:check`).
 - `pr:resolve` marks a review conversation as settled, and opens one again. It is not part of `pr:comment`: resolving closes out someone else's review note, which is a different authority from posting one. A project can want the agent to answer review notes without letting it declare them settled.
 - `ci:rerun` re-runs and cancels workflow runs. It is not part of `ci:read`, because a re-run consumes Actions minutes and executes workflow code that has access to the repository's secrets.
 - `release:publish` publishes a draft release. `release create --draft` exists so that publishing can be left to a human; folding publishing into `release:create` would remove that separation. Editing a release that remains a draft requires only `release:create`.
