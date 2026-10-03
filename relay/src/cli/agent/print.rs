@@ -253,7 +253,10 @@ mod tests {
         };
         let line = super::more_items(&resp(true)).expect("more");
         assert!(line.contains("2 of 250"), "{line}");
-        assert!(line.contains("--after Y3Vy") && line.contains("--all"), "{line}");
+        assert!(
+            line.contains("--after Y3Vy") && line.contains("--all"),
+            "{line}"
+        );
         assert_eq!(super::more_items(&resp(false)), None);
     }
 
