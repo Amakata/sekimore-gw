@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.62 -->
+<!-- reviewed-up-to: 0.2.63 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*

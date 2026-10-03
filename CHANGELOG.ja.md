@@ -11,6 +11,16 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.63（2026-10-03）
+
+### Fix
+
+- `project list` が 100 件を超えるボードの続きを読める。`--after <カーソル>` でページの続きから、`--all` で全ページを読み、続きがあれば一覧の後に示す。`--first` に 100 を超える値を渡すと、黙って 20 件にせずエラーにする (#346)
+
+### Enhancement
+
+- `issue check` / `pr check --match "文言"` で、本文や誰のコメントでもチェックボックスを 1 つ入れる・外す。新しい権限 `issue:check` / `pr:check` の下で、関所はその印だけを書き戻す。`issue tasks` / `pr tasks` でチェックボックスを一覧する (#347)
+
 ## 0.2.62（2026-10-01）
 
 ### Fix
