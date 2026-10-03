@@ -555,8 +555,12 @@ endpoints! {
             board: Option<u32>,
             #[arg(long, help = t("agent.project.project_id"))]
             project_id: Option<String>,
-            #[arg(long, default_value_t = 20)]
+            #[arg(long, default_value_t = 20, help = t("agent.project.list.first"))]
             first: u32,
+            #[arg(long, help = t("agent.project.list.after"))]
+            after: Option<String>,
+            #[arg(long, help = t("agent.project.list.all"), conflicts_with = "first")]
+            all: bool,
         },
         Fields("/project/fields") = t("agent.project.fields") => {
             #[arg(long, help = t("agent.project.board"))]

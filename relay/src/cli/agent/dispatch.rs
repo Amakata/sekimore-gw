@@ -480,10 +480,14 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
                     board,
                     project_id,
                     first,
+                    after,
+                    all,
                 } => {
                     req.board = board;
                     req.project_id = project_id.unwrap_or_default();
                     req.first = first;
+                    req.after = after.unwrap_or_default();
+                    req.all = all;
                     leaf
                 }
                 ProjectCmd::Fields {
