@@ -2077,20 +2077,23 @@ impl GitHub {
     /// Without them a write could not be read back: `update-item` answered `ok` and nothing said
     /// what the field now held, or whether it still held it. An agent asked to put a board in
     /// order could not see the board.
+    /// One page of a board's items, oldest first, and where the next page starts
+    /// (`items.pageInfo`). #344: `after` continues from a previous page's `endCursor`.
     pub async fn list_project_items(
         &self,
         auth: &Authorized<'_>,
         project_id: &str,
         first: u32,
+        after: Option<&str>,
     ) -> Result<Value, GhError> {
         auth.ensure(Resource::Project, Action::Read)?;
         /// Field values fetched per item. A board with more than this many fields has the rest
         /// left out of the listing; `project fields` still shows them all.
         const FIELDS_PER_ITEM: u32 = 20;
         const Q: &str = r#"
-query($project:ID!,$first:Int!,$fields:Int!){
+query($project:ID!,$first:Int!,$after:String,$fields:Int!){
   node(id:$project){ ... on ProjectV2 { title
-    items(first:$first){ nodes{
+    items(first:$first,after:$after){ totalCount pageInfo{ hasNextPage endCursor } nodes{
       id type
       content{ ... on Issue { number title } ... on PullRequest { number title } }
       fieldValues(first:$fields){ nodes{
@@ -2105,7 +2108,7 @@ query($project:ID!,$first:Int!,$fields:Int!){
 }"#;
         self.graphql(
             Q,
-            json!({"project": project_id, "first": first, "fields": FIELDS_PER_ITEM}),
+            json!({"project": project_id, "first": first, "after": after, "fields": FIELDS_PER_ITEM}),
         )
         .await
     }

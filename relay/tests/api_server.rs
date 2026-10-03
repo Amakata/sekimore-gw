@@ -4156,3 +4156,83 @@ async fn a_text_edited_meanwhile_is_not_overwritten() {
     assert!(resp.error.unwrap_or_default().contains("changed while"));
     assert!(patches(&f).is_empty());
 }
+
+fn board_items(resp: &sekimore_relay::api::types::ApiResponse) -> Vec<String> {
+    resp.raw
+        .as_ref()
+        .and_then(|r| r.pointer("/data/node/items/nodes"))
+        .and_then(|n| n.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|i| i.get("id").and_then(|v| v.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// #344: a board past one page is read on with the cursor the page ends at, and `--all` reads
+/// every page into one answer whose cursor says nothing is left.
+#[tokio::test]
+async fn a_board_past_one_page_is_read_on() {
+    let f = start_api(project_case_a(&["project:read"]), BootstrapMode::Auto, true).await;
+    let page = |first: u32, after: &str, all: bool| ApiRequest {
+        board: Some(TEST_BOARD_NUMBER),
+        first,
+        after: after.into(),
+        all,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &page(2, "", false)).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(board_items(&resp), vec!["PVTI_p1", "PVTI_p2"]);
+    let cursor = resp
+        .raw
+        .as_ref()
+        .and_then(|r| r.pointer("/data/node/items/pageInfo/endCursor"))
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .to_string();
+
+    let (code, resp) = post(
+        f.addr,
+        "/project/list",
+        Some(&f.token),
+        &page(2, &cursor, false),
+    )
+    .await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(
+        board_items(&resp),
+        vec!["PVTI_p3"],
+        "the page after the cursor"
+    );
+
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &page(0, "", true)).await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(board_items(&resp), vec!["PVTI_p1", "PVTI_p2", "PVTI_p3"]);
+    let more = resp
+        .raw
+        .as_ref()
+        .and_then(|r| r.pointer("/data/node/items/pageInfo/hasNextPage"))
+        .and_then(|v| v.as_bool());
+    assert_eq!(more, Some(false), "nothing is left after --all");
+}
+
+/// #344: more than a page used to fall back to 20 without a word, which read as a board of 20.
+#[tokio::test]
+async fn a_page_larger_than_github_allows_is_refused_not_shrunk() {
+    let f = start_api(project_case_a(&["project:read"]), BootstrapMode::Auto, true).await;
+    let r = ApiRequest {
+        board: Some(TEST_BOARD_NUMBER),
+        first: 101,
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 400);
+    let e = resp.error.unwrap_or_default();
+    assert!(e.contains("at most 100") && e.contains("--all"), "{e}");
+    assert!(
+        recorded(&f.recorder).is_empty(),
+        "refused before asking upstream"
+    );
+}

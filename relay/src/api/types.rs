@@ -147,9 +147,13 @@ pub struct ApiRequest {
     /// travels in `body`
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
-    /// 0.2.9: `ci rerun --all` re-runs every job instead of only the failed ones
+    /// 0.2.9: `ci rerun --all` re-runs every job instead of only the failed ones. #344: and
+    /// `project list --all` follows every page
     #[serde(default, skip_serializing_if = "is_false")]
     pub all: bool,
+    /// #344: where `project list` continues — the cursor the previous page ended at
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub after: String,
 }
 
 fn is_false(b: &bool) -> bool {

@@ -192,6 +192,33 @@ pub fn print_project_items(resp: &ApiResponse) {
         };
         println!("{head:<7} {id}{fields}  {title}");
     }
+    // #344: say when there is more, and how to read it. On stderr, so the listing itself stays
+    // one item per line for whatever reads it
+    if let Some(more) = more_items(resp) {
+        eprintln!("{more}");
+    }
+}
+
+/// The line that says a board has items past this listing, with the cursor to carry on from.
+fn more_items(resp: &ApiResponse) -> Option<String> {
+    let items = resp.raw.as_ref()?.pointer("/data/node/items")?;
+    let page = items.get("pageInfo")?;
+    if page.get("hasNextPage").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    let cursor = page.get("endCursor").and_then(Value::as_str)?;
+    let shown = items
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let total = items
+        .get("totalCount")
+        .and_then(Value::as_u64)
+        .map(|n| format!(" of {n}"))
+        .unwrap_or_default();
+    Some(format!(
+        "{shown}{total} items shown; the next page: --after {cursor} (or --all for every page)"
+    ))
 }
 
 pub fn print_response(resp: &ApiResponse) {
@@ -212,6 +239,26 @@ pub fn print_response(resp: &ApiResponse) {
 mod tests {
     use super::field_values;
     use serde_json::json;
+
+    /// #344: a listing with more behind it says how many it showed and the cursor to go on from;
+    /// the last page says nothing.
+    #[test]
+    fn a_listing_with_more_behind_it_gives_the_cursor() {
+        let resp = |next: bool| crate::api::types::ApiResponse {
+            raw: Some(json!({"data": {"node": {"items": {
+                "totalCount": 250,
+                "pageInfo": {"hasNextPage": next, "endCursor": "Y3Vy"},
+                "nodes": [{"id": "PVTI_1"}, {"id": "PVTI_2"}]}}}})),
+            ..Default::default()
+        };
+        let line = super::more_items(&resp(true)).expect("more");
+        assert!(line.contains("2 of 250"), "{line}");
+        assert!(
+            line.contains("--after Y3Vy") && line.contains("--all"),
+            "{line}"
+        );
+        assert_eq!(super::more_items(&resp(false)), None);
+    }
 
     fn item(values: serde_json::Value) -> serde_json::Value {
         json!({"fieldValues": {"nodes": values}})

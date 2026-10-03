@@ -107,6 +107,8 @@ sekimore release list                                         [release:read]
 sekimore release edit --tag vX.Y.Z --draft false              [release:publish]  publishing a draft only
                                                               #   editing a release that remains a draft requires release:create
 sekimore project list --board 2                               [project:read]  the items, with their Status and other field values
+                                                              #   oldest first, 20 a page (--first up to 100); past that
+                                                              #   it prints the cursor for --after, or --all reads every page
 sekimore project fields --board 2                             [project:read]  the field and option ids that update-item takes
 sekimore project add-item / update-item --board 2             [project:add_item] / [project:update_item]
 ```
