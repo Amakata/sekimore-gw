@@ -87,7 +87,8 @@ Changes to `domain_handlers` and `relay` take effect only when the container is 
 
 ```bash
 docker compose up -d --force-recreate sekimore-gw      # with Dev Containers: sgw recreate
-docker compose exec sekimore-gw sekimore-relay check   # policy and state (agent / known_hosts / token / keys)
+docker compose exec sekimore-gw sekimore-relay config  # what the configuration resolves to (no network)
+docker compose exec sekimore-gw sekimore-relay check   # state (agent / known_hosts / token / keys); exit 1 when one needs a human
 ```
 
 ### 4. Authenticate to the upstream (first time only)
@@ -357,7 +358,7 @@ specifies the base in the ref and is checked before the push is sent.
 
 - Effective permissions = (project allow ∪ upstream allow ∪ repo allow) − (project deny ∪ upstream deny ∪ repo deny). A deny takes precedence at any layer.
 - `push` / `tags` / `delete` are overridden in the order project → upstream → repo. Globs support `*` and `?`.
-- There are 34 permission keys, grouped by resource. `sekimore-relay check` prints the ones that a configuration grants.
+- There are 36 permission keys, grouped by resource. `sekimore-relay config` prints the ones that a configuration grants.
 
   ```
   pr:      create  read  comment  comment_update  comment_delete  review  request_review
@@ -376,7 +377,7 @@ specifies the base in the ref and is checked before the push is sent.
 - `release:publish` publishes a draft release. `release create --draft` exists so that publishing can be left to a human; folding publishing into `release:create` would remove that separation. Editing a release that remains a draft requires only `release:create`.
 - Closing and reopening share one permission (`pr:close` / `issue:close`), because reopening undoes a close rather than granting a new capability. Likewise, adding and removing a label or an assignee share one permission (`issue:label` / `issue:assign`). Editing a pull request's title or body requires `pr:create`, but a new base is checked again against the repository's `bases`.
 - `repo:read` is required for `repo vocabulary`, which lists a repository's labels, assignable users and milestones.
-- You can check the effective values with `sekimore-relay check` or in the Relay tab of the Web UI.
+- You can check the effective values with `sekimore-relay config` or in the Relay tab of the Web UI.
 
 ### Example: github.com and GHES together
 
@@ -508,7 +509,8 @@ Dev Containers setups also provide `sgw tokens` / `sgw revoke-project` / `sgw au
 
 | Command | Purpose |
 |---|---|
-| `sekimore-relay check` | List the policy and current state |
+| `sekimore-relay config` | What the configuration resolves to: upstreams, targets, permissions, repos, boards |
+| `sekimore-relay check` | The current state; exit 1 when one needs a human |
 | `sekimore-relay tokens` | List issued tokens (label / expiry / use count / state) |
 | `sekimore-relay revoke --label skm_xxxxxxxx` | Revoke one token |
 | `sekimore-relay revoke-project` | Revoke every token of the project (when the engagement ends) |
@@ -567,7 +569,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
 - Dev's ordinary traffic to a destination that is only in `allow_domains` does not: its DNS answer admits the address into the firewall and the packet is NATed straight out, leaving no line in Squid's access.log (#212).
 - `proxy.direct_egress: deny` stops admitting those addresses, so Squid is the only way out. DNS still answers, so names resolve; a client that ignores `HTTP_PROXY` then fails instead of leaving silently. `allow_ips` is unaffected. It needs an `upstream_proxy`, or the gateway refuses to start.
 - The dev container gets `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` at start: `sgw-agent setup` reads `GET /api/proxy-env` and writes `/etc/profile.d/sekimore-proxy.sh` plus a marked block in `/etc/environment`. `NO_PROXY` carries every `domain_handlers` target — Squid refuses CONNECT to them on purpose — plus `proxy.no_proxy`. The dev image has to source `/etc/profile.d`, which sgw-devcontainer-base does from the version that ships this.
-- `sekimore-relay check` prints the mode under `proxy:` as `egress:`, in yellow while direct egress is allowed.
+- `sekimore-relay config` prints the mode under `proxy:` as `egress:`, in yellow while direct egress is allowed.
 
 With `upstream_proxy_tls: true` and Squid enabled, the relay does not speak TLS to the upstream proxy at all: it sends its CONNECT to the local Squid, which takes the TLS hop with OpenSSL and presents the stored credential itself (`cache_peer … login=`). That works with a proxy offering only TLS 1.2 RSA key exchange — a Squid `https_port` without `tls-dh=` — which the relay's rustls cannot speak (#205). With Squid disabled the relay speaks TLS itself: TLS 1.3 or ECDHE only. `sekimore-relay check` prints which route is in use, under `route:`, and its `reach:` line probes that route.
 

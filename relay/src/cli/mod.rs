@@ -48,6 +48,8 @@ pub enum Command {
         #[arg(long, help = t("cli.upstream"))]
         upstream: Option<String>,
     },
+    #[command(about = t("cli.config_cmd"))]
+    Config,
     #[command(about = t("cli.check"))]
     Check,
     #[command(about = t("cli.unlock"))]
@@ -186,7 +188,8 @@ pub async fn run(cli: Cli) -> i32 {
         Command::Whoami { upstream } => operator::whoami(&cli.config, upstream.as_deref())
             .await
             .map(|_| 0),
-        Command::Check => operator::check(&cli.config).await.map(|_| 0),
+        Command::Config => operator::config(&cli.config).await.map(|_| 0),
+        Command::Check => operator::check(&cli.config).await,
         Command::Unlock { stdin } => operator::unlock(&cli.config, stdin).await.map(|_| 0),
         Command::Lock => operator::store_control(&cli.config, "lock")
             .await

@@ -224,6 +224,23 @@ fn unlock_auto_with_nothing_stored_exits_zero_and_says_where_it_looked() {
 }
 
 #[test]
+fn config_runs_the_relay_s_config_in_the_gateway() {
+    // #355: the configuration is its own command, apart from check's state
+    let f = fixture();
+    let out = sgw(&f, &["config"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = log(&f);
+    assert!(
+        log.contains("exec -i cid123 sekimore-relay config\n"),
+        "{log}"
+    );
+}
+
+#[test]
 fn inside_the_dev_container_it_refuses() {
     let f = fixture();
     let out = sgw(&f, &["check"])
@@ -500,21 +517,26 @@ fn verify_reports_every_item_with_its_ledger_rows() {
     let out = sgw(&f, &["verify"]).output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout);
-    for heading in [
-        "== gateway: sekimore-relay check",
-        "== host: the operator's ssh-agent socket named in .env answers",
-        "== host: a VS Code server on this host must not carry SSH_AUTH_SOCK",
+    // #355: a passing item is one line, a failing one a heading with what it said; both carry
+    // the item's ledger rows
+    for line in [
+        "OK   gateway: the configuration loads and the relay's state (sgw config, sgw check)",
+        "OK   dev: only the gateway's filtered signing key may be reachable [dev.signing]",
         "== dev: /etc/resolv.conf names the gateway [dev.dns]",
-        "== dev: only the gateway's filtered signing key may be reachable [dev.signing]",
         "== gateway: the secret store [operator.store]",
-        "== dev: git ls-remote through the relay (first repo of the project) [dev.relay.ssh, relay.ssh.upstream]",
+        "OK   dev: git ls-remote through the relay (first repo of the project) [dev.relay.ssh, relay.ssh.upstream]",
         "== dev: a root process must not route past the gateway (host-side FORWARD rules, gateway 0.2.37) [dev.egress.route_past_gateway]",
     ] {
-        assert!(stdout.contains(heading), "missing {heading} in {stdout}");
+        assert!(
+            stdout.lines().any(|l| l == line),
+            "missing {line} in {stdout}"
+        );
     }
+    // what a passing item said stays out of the way
+    assert!(!stdout.contains("OK: "), "{stdout}");
     assert!(stdout.contains("verify: FAILED"), "{stdout}");
     assert!(
-        stdout.contains("SKIP: no 443 target configured"),
+        stdout.contains("[dev.passthrough, passthrough.upstream]: no 443 target configured"),
         "{stdout}"
     );
 }

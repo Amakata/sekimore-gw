@@ -164,6 +164,7 @@ macro_rules! passthrough {
 }
 
 passthrough! {
+    Config => "sgw.cmd.config",
     Check => "sgw.cmd.check",
     Whoami => "sgw.cmd.whoami",
     Login => "sgw.cmd.login",
@@ -258,6 +259,7 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
     let tty = if no_tty { Tty::Never } else { Tty::Auto };
     use Cmd::*;
     match cli.cmd {
+        Config { args } => ops::relay(&docker, &relay_sub("config", &args), no_tty),
         Check { args } => ops::relay(&docker, &relay_sub("check", &args), no_tty),
         Whoami { args } => ops::relay(&docker, &relay_sub("whoami", &args), no_tty),
         Login { args } => ops::relay(&docker, &relay_sub("login", &args), no_tty),
