@@ -3,6 +3,7 @@ mod common;
 use common::*;
 use sekimore_relay::api::types::ApiRequest;
 use sekimore_relay::config::BootstrapMode;
+use sekimore_relay::policy::{Mode, RepoPolicy, SigningMode};
 
 fn req(repo: &str) -> ApiRequest {
     ApiRequest {
@@ -156,6 +157,71 @@ async fn whoami_lists_permissions_and_repos() {
         msg.contains("VendorOrg/reference-impl (read-only)"),
         "{msg}"
     );
+    // #352: a rule at its default says nothing
+    for absent in [
+        "  tags ",
+        "  merge ",
+        "  delete ",
+        "  force ",
+        "  signing ",
+        "is updated",
+    ] {
+        assert!(!msg.contains(absent), "{absent:?} at its default: {msg}");
+    }
+}
+
+#[tokio::test]
+async fn whoami_shows_the_push_and_merge_rules_a_repository_has_beyond_the_defaults() {
+    // #352: unshown, an agent learnt these from a refusal, or never tried what it was allowed to
+    // do — pushing a release tag, `pr merge --delete-branch`
+    let mut p = project_case_a(&["pr:merge"]);
+    p.branch.on_exists = sekimore_relay::config::OnExists::Update;
+    let lib = p
+        .repos
+        .iter_mut()
+        .find(|r| r.full_name == "LibOrg/awesome-lib")
+        .unwrap();
+    lib.tags = vec!["v*".into()];
+    lib.delete_merged_branch = true;
+    lib.delete = true;
+    lib.force_push = true;
+    lib.signing = SigningMode::Required;
+    let mut loose = RepoPolicy::new("LibOrg/loose", Mode::ReadWrite);
+    loose.signed_tags = false;
+    loose.tags = vec!["rc-*".into()];
+    loose.signing = SigningMode::Optional;
+    p.repos.push(loose);
+    let f = start_api(p, BootstrapMode::Auto, true).await;
+    let (code, resp) = post(f.addr, "/whoami", Some(&f.token), &ApiRequest::default()).await;
+    assert_eq!(code, 200);
+    let msg = resp.message.unwrap();
+    let block = |name: &str| -> Vec<String> {
+        msg.lines()
+            .skip_while(|l| !l.trim_start().starts_with(name))
+            .skip(1)
+            .take_while(|l| l.starts_with("  ") && !l.contains(" (read-"))
+            .map(|l| l.trim().to_string())
+            .collect()
+    };
+    let lib = block("LibOrg/awesome-lib");
+    for want in [
+        "tags   v* (annotated and signed)",
+        "merge  --delete-branch allowed",
+        "delete branches and tags may be deleted, and an existing tag moved",
+        "force  a push may rewrite a branch's history",
+    ] {
+        assert!(lib.iter().any(|l| l == want), "{want:?} in {lib:?}\n{msg}");
+    }
+    assert!(!lib.iter().any(|l| l.starts_with("signing")), "{msg}");
+    assert!(
+        lib.iter()
+            .any(|l| l.ends_with("PR against <base> (an existing branch is updated)")),
+        "{msg}"
+    );
+    let loose = block("LibOrg/loose");
+    assert!(loose.iter().any(|l| l == "tags   rc-*"), "{msg}");
+    assert!(loose.iter().any(|l| l == "signing optional"), "{msg}");
+    assert!(!loose.iter().any(|l| l.starts_with("merge")), "{msg}");
 }
 
 #[tokio::test]

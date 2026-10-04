@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::types::{ApiRequest, ApiResponse, BootstrapRequest, BootstrapResponse, SigningBlock};
 use super::{read_body, ApiContext, ApiError};
 use crate::audit::Actor;
-use crate::config::BootstrapMode;
+use crate::config::{BootstrapMode, OnExists};
 use crate::github::GitHub;
 use crate::github::SecurityAlert;
 use crate::paths;
@@ -343,6 +343,7 @@ pub async fn dispatch(
 
 async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiError> {
     let perms = ctx.project.granted();
+    let header_signing = strictest_signing(&ctx.project);
     // #143: a repository's own allow / deny change what the relay decides for it, so its line
     // says how its permissions differ from the project-wide ones: `+` what it adds, `-` what it
     // takes away. Printing only the project line had an agent conclude it could not merge where
@@ -386,8 +387,40 @@ async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiE
                     "refs/pr/<branch>   not available here: this repository restricts its bases"
                 };
                 line.push_str(&format!(
-                    "\n  push   {}\n  bases  {bases}\n  refs   {pr_line}\n         refs/for/<base>    {}, PR against <base>",
-                    r.push.join(" "),
+                    "\n  push   {}\n  bases  {bases}",
+                    r.push.join(" ")
+                ));
+                // #352: the rules that differ from the default, one line each. Unshown, an agent
+                // learnt them from a refusal, or never tried what it was allowed to do
+                if !r.tags.is_empty() {
+                    let signed = if r.signed_tags {
+                        " (annotated and signed)"
+                    } else {
+                        ""
+                    };
+                    line.push_str(&format!("\n  tags   {}{signed}", r.tags.join(" ")));
+                }
+                if r.delete_merged_branch {
+                    line.push_str("\n  merge  --delete-branch allowed");
+                }
+                if r.delete {
+                    line.push_str(
+                        "\n  delete branches and tags may be deleted, and an existing tag moved",
+                    );
+                }
+                if r.force_push {
+                    line.push_str("\n  force  a push may rewrite a branch's history");
+                }
+                // The header says "signing: required" for the project; a repository that asks less says so
+                if header_signing == SigningMode::Required && r.signing != SigningMode::Required {
+                    line.push_str(&format!("\n  signing {}", r.signing.as_str()));
+                }
+                let on_exists = match ctx.project.branch.on_exists {
+                    OnExists::Update => " (an existing branch is updated)",
+                    OnExists::Reject => "",
+                };
+                line.push_str(&format!(
+                    "\n  refs   {pr_line}\n         refs/for/<base>    {}, PR against <base>{on_exists}",
                     ctx.project
                         .branch
                         .template
@@ -401,7 +434,7 @@ async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiE
         .collect();
     // #59: said only when it is required. `optional` asks nothing of the agent, and a line about
     // a rule that does not apply is a line that gets ignored when it does.
-    let signing = match strictest_signing(&ctx.project) {
+    let signing = match header_signing {
         SigningMode::Required => {
             // "ok" has to mean the key is actually in the host agent. #59 was a signing key
             // that had silently gone, and a line that says ok without looking would be the same
