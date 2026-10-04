@@ -522,6 +522,10 @@ pub struct BoardRef {
     /// effective permissions
     #[serde(default)]
     pub permissions: Option<PermissionSpec>,
+    /// #350: what the board is for, in the operator's words. A board is named by owner and
+    /// number, which tells an agent reading `whoami` nothing about which board holds what
+    #[serde(default)]
+    pub comment: Option<String>,
 }
 
 impl BoardRef {
@@ -545,6 +549,17 @@ impl BoardRef {
                 self.number
             )),
             _ if self.number == 0 => Err("project board: number must not be 0".to_string()),
+            // whoami gives each board one line, and an agent reads it line by line
+            _ if self
+                .comment
+                .as_deref()
+                .is_some_and(|c| c.contains(['\n', '\r'])) =>
+            {
+                Err(format!(
+                    "project board {}: comment must be one line",
+                    self.label()
+                ))
+            }
             _ => Ok(()),
         }
     }
@@ -1945,12 +1960,23 @@ relay:
             ok.relay.project.boards[1].label(),
             "users/someone/projects/1"
         );
+        let commented = p(&body(
+            "      - { org: acme, number: 3, comment: \"releases: 0.2.x / 0.3.0\" }",
+        ))
+        .expect("a comment must parse")
+        .resolve()
+        .expect("and resolve");
+        assert_eq!(
+            commented.relay.project.boards[0].comment.as_deref(),
+            Some("releases: 0.2.x / 0.3.0")
+        );
 
         // Both owners, or neither, is a mistake worth catching at startup rather than at use
         for bad in [
             "      - { org: acme, user: someone, number: 3 }",
             "      - { number: 3 }",
             "      - { org: acme, number: 0 }",
+            "      - { org: acme, number: 3, comment: \"two\\nlines\" }",
         ] {
             assert!(
                 p(&body(bad)).and_then(|l| l.resolve()).is_err(),

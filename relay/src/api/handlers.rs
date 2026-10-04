@@ -429,10 +429,12 @@ async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiE
     ) {
         (labels, Some(anchor)) if !labels.is_empty() => {
             let upstreams = ctx.project_boards.declared_upstreams();
+            let comments = ctx.project_boards.declared_comments();
             let lines: Vec<String> = labels
                 .iter()
                 .zip(upstreams.iter())
-                .map(|(label, upstream)| {
+                .zip(comments.iter())
+                .map(|((label, upstream), comment)| {
                     let effective = ctx.project.effective_board_keys(anchor, label);
                     let mut delta: Vec<String> = effective
                         .iter()
@@ -450,11 +452,16 @@ async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiE
                         Some(u) => format!(" (on {u})"),
                         None => String::new(),
                     };
-                    if delta.is_empty() {
+                    let mut line = if delta.is_empty() {
                         format!("{label}{at}")
                     } else {
                         format!("{label}{at} {}", delta.join(" "))
+                    };
+                    // #350: last, so the label and the delta read the same with or without it
+                    if let Some(c) = comment.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+                        line.push_str(&format!(" — {c}"));
                     }
+                    line
                 })
                 .collect();
             format!(

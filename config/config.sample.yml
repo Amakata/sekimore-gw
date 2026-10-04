@@ -262,6 +262,8 @@ database_path: "/data/security_gateway.db"
 #     #   - { user: someone, number: 7, permissions: { deny: [project:add_item] } }  #   only; a plain list adds, deny wins
 #     #   - { org: acme, number: 1, upstream: ghe.example.com }   # 0.2.55+ a board on another upstream (a git-relay
 #     #                                                          #   domain); every call about it goes there
+#     #   - { user: someone, number: 2, comment: "releases" }   # 0.2.64+ one line on what the board is for;
+#     #                                                          #   whoami prints it after the board
 #     # Omitted or empty refuses every Projects operation: a board's node id is opaque and says nothing
 #     # about its owner, so without this list any board the upstream token can see would be reachable.
 #     # branch:                                 # 0.2.32+ how refs/for/<base> names the branch it creates

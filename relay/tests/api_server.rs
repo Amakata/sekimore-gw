@@ -3677,6 +3677,7 @@ async fn a_declared_board_is_resolved_on_first_use_not_at_start_up() {
             number: 2,
             permissions: None,
             upstream: None,
+            comment: None,
         }]),
     )
     .await;
@@ -3721,6 +3722,7 @@ async fn a_board_that_could_not_be_resolved_is_tried_again() {
             number: 2,
             permissions: None,
             upstream: None,
+            comment: None,
         }]),
     )
     .await;
@@ -3874,6 +3876,7 @@ async fn whoami_lists_each_board_with_its_delta() {
                 number: 2,
                 permissions: None,
                 upstream: None,
+                comment: None,
             },
             sekimore_relay::config::BoardRef {
                 org: None,
@@ -3881,6 +3884,8 @@ async fn whoami_lists_each_board_with_its_delta() {
                 number: 3,
                 permissions: None,
                 upstream: None,
+                // #350: said after the delta, so the line above still reads the same
+                comment: Some(" the release board ".into()),
             },
         ]),
     )
@@ -3890,11 +3895,13 @@ async fn whoami_lists_each_board_with_its_delta() {
     let msg = resp.message.unwrap_or_default();
     assert!(msg.contains("boards (--board <number>"), "{msg}");
     assert!(
-        msg.contains("users/tester/projects/2 -project:read"),
-        "{msg}"
+        msg.lines()
+            .any(|l| l.trim() == "users/tester/projects/2 -project:read"),
+        "a board without a comment ends at its delta: {msg}"
     );
     assert!(
-        msg.contains("users/tester/projects/3 +project:update_item"),
+        msg.lines()
+            .any(|l| l.trim() == "users/tester/projects/3 +project:update_item — the release board"),
         "{msg}"
     );
 }
@@ -3918,6 +3925,7 @@ async fn a_board_on_another_upstream_is_asked_there_whatever_repo_names() {
             number: 1,
             permissions: None,
             upstream: Some("ghe.example.com".into()),
+            comment: None,
         }]),
     )
     .await;
