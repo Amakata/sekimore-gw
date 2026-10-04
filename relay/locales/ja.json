@@ -13,7 +13,7 @@
   "cli.logout": "上流トークンを削除する",
   "cli.upstream": "上流（git-relay ドメイン）。省略時は既定上流",
   "cli.whoami": "関所がどの上流 identity として動くか",
-  "cli.check": "解決済みポリシーと状態（agent / known_hosts / token / keys）を表示する",
+  "cli.check": "状態（agent / 署名鍵 / known_hosts / 上流トークン / proxy 到達 / 鍵）を表示する",
   "cli.unlock": "秘密ストアを解錠する (プロンプト。初回はパスフレーズの設定)",
   "cli.unlock.stdin": "パスフレーズをプロンプトではなく標準入力から 1 行で読む (sgw unlock-auto が流し込む)。端末では拒否する",
   "cli.lock": "秘密ストアの鍵を忘れる (次の解錠まで使えなくなる)",
@@ -333,7 +333,7 @@
   "sgw.help.group_about": "sgw {group}: {about}",
   "sgw.help.group_usage": "使い方: sgw {group} <コマンド> [引数]",
   "sgw.help.unknown": "sgw {group} に '{leaf}' というコマンドはありません",
-  "sgw.cmd.check": "関所の設定と状態（ssh-agent / known_hosts / 上流トークン / 鍵 / トークン）",
+  "sgw.cmd.check": "関所の状態（ssh-agent / 署名鍵 / known_hosts / 上流トークン / proxy 到達 / 鍵 / トークン）",
   "sgw.cmd.whoami": "ゲートウェイがどの GitHub identity として動くか",
   "sgw.cmd.login": "GitHub に device flow でログインする（初回のみ。ホスト鍵を保存する前に確認する）",
   "sgw.cmd.logout": "上流トークンを削除する",
@@ -492,5 +492,7 @@
   "sgw.update.r_leftover": "もう使われていないファイル: git rm {files}",
   "sgw.update.r_poststart": "devcontainer.json の postStartCommand を次の 1 行にしてください（base 0.2.51: sgw-post-start が root の環境そのままで sgw-agent setup、docker-init、post-create.sh を実行します）:",
   "sgw.update.r_commit": "変更を確かめてコミットする: git diff",
-  "sgw.update.r_none": "なし"
+  "sgw.update.r_none": "なし",
+  "cli.config_cmd": "設定が解決した結果（上流 / 転送先 / 権限 / リポジトリ / ボード）を表示する。ネットワークには出ない",
+  "sgw.cmd.config": "設定が解決した結果（上流 / 転送先 / 権限 / リポジトリ / ボード）。ネットワークには出ない"
 }

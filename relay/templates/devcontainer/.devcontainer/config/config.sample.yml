@@ -283,6 +283,7 @@ relay:
     #   - { user: someone, number: 1 }  # github.com/users/someone/projects/1
     #   - { org: acme, number: 5, permissions: [project:update_item] }   # gw 0.2.54+: a board's own delta, project:*
     #   - { user: someone, number: 7, permissions: { deny: [project:add_item] } }  #   keys only; a list adds, deny wins
+    #   - { user: someone, number: 2, comment: "releases" }  # gw 0.2.64+: what the board is for; whoami shows it
     # Omitted or empty refuses every Projects operation: a board's node id is opaque and says nothing
     # about its owner, so without this list any board the upstream token can see would be reachable.
     #

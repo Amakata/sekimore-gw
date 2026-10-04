@@ -35,6 +35,7 @@ pub const TOP: &[Leaf] = &[
     leaf("self-update", "self-update", "sgw.cmd.self_update"),
     leaf("open", "open", "sgw.cmd.open"),
     leaf("verify", "verify", "sgw.cmd.verify"),
+    leaf("config", "config", "sgw.cmd.config"),
     leaf("check", "check", "sgw.cmd.check"),
 ];
 

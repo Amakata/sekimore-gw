@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.63 -->
+<!-- reviewed-up-to: 0.2.64 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -39,6 +39,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.52 – 0.2.54 | [0.2.55](#0255-a-push-that-does-not-fast-forward-is-refused), **only if the agent rewrites branches it pushed** |
 | 0.2.55 – 0.2.57 | [0.2.58](#0258-the-post-createsh-guard-lets-the-signing-key-through), **only if you edited `post-create.sh`** |
 | 0.2.58 – 0.2.59 | [0.2.60](#0260-configyml-is-yours-and-configsampleyml-is-the-template), **everyone: a new file appears, commit it** |
+| 0.2.60 – 0.2.63 | [0.2.64](#0264-the-configuration-listing-moved-from-sgw-check-to-sgw-config), **only if a script reads `sgw check`'s output** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -880,3 +881,19 @@ diff .devcontainer/config/config.yml .devcontainer/config/config.sample.yml
 ```
 
 `sgw init` writes both, so a new project still gets a `config.yml` it can run with.
+
+## 0.2.64 The configuration listing moved from `sgw check` to `sgw config`
+
+`sgw check` (`sekimore-relay check`) printed the configuration and the state together. They are
+now two commands:
+
+| Command | Prints |
+|---|---|
+| `sgw config` (`sekimore-relay config`) | What the configuration resolves to: upstreams, targets, permissions, repos, boards. No network. |
+| `sgw check` (`sekimore-relay check`) | The state only. Exits 1 when a state needs a human. |
+
+`sgw verify` prints a passing item as one line, and details only for a failure or a warning.
+
+Nothing to do unless a script reads `check`'s output. A script that read configuration lines
+from `check` (permissions, `force_push=`, `egress:`) should read `config`. A script that runs
+`check` should expect exit 1 when a state is red.
