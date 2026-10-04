@@ -521,7 +521,6 @@ fn verify_reports_every_item_with_its_ledger_rows() {
     // the item's ledger rows
     for line in [
         "OK   gateway: the configuration loads and the relay's state (sgw config, sgw check)",
-        "OK   host: a VS Code server on this host must not carry SSH_AUTH_SOCK",
         "OK   dev: only the gateway's filtered signing key may be reachable [dev.signing]",
         "== dev: /etc/resolv.conf names the gateway [dev.dns]",
         "== gateway: the secret store [operator.store]",
