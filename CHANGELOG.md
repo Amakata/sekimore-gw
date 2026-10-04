@@ -18,6 +18,7 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
 - `relay.project.boards[].comment` gives a board one line on what it is for; `whoami` prints it at the end of the board's line. A comment with a newline is refused at load (#351)
 - `whoami` shows a read-write repository's rules beyond the defaults: tags (and whether signed), `merge --delete-branch`, delete, force push, a weaker signing mode, `on_exists: update`. Defaults say nothing (#353)
+- `sekimore-relay config` / `sgw config` shows what the configuration resolves to, without the network. `check` shows state only and exits 1 when a state is red. `sgw verify` prints a passing item as one line (#356)
 
 ## 0.2.63 (2026-10-03)
 
