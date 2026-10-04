@@ -1,6 +1,7 @@
 //! Operator-facing subcommands (run inside the gateway container).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -960,7 +961,9 @@ pub async fn whoami(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn check(path: &Path) -> anyhow::Result<()> {
+/// #355: what the configuration resolves to, without touching the network or the store. `check`
+/// is the state; the two were one command, and the line that mattered was hard to find in it.
+pub async fn config(path: &Path) -> anyhow::Result<()> {
     let r = resolve(path)?;
     println!(
         "{}{}",
@@ -1089,21 +1092,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
     }
     // 0.1.9: tags, deletion and permissions are the project default plus the repo's overrides. The effective per-repo values are listed under repos below
     if let Some(px) = &r.proxy {
-        // #151: which credential the relay presents — the store's, or the environment's — since
-        // Squid reads the store and the two can disagree
-        crate::proxy_credential::prime(Some(px), &secret_source_via_socket(&r)).await;
-        // #194: `credential_source()` says "none" both for a locked store and an empty one, and
-        // the operator's next step differs — sgw unlock against sgw proxy-credential set`. Ask
-        // the store which it is, over the same control socket.
-        let state = store_state(&r.paths.control_sock).await;
-        println!(
-            "{}{}",
-            pad_label(&t("op.check.proxy"), 14),
-            tf(
-                "op.check.proxy_credential",
-                &[("url", &px.url), ("source", &credential_status(&state, px))]
-            )
-        );
+        println!("{}{}", pad_label(&t("op.check.proxy"), 14), px.url);
         // #205: which of the two routes this relay is on, before anything is tried. The line
         // under it means a different thing on each.
         println!(
@@ -1121,23 +1110,13 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
         // Nothing said so, and a 200 through Squid proves nothing, so it took comparing egress
         // IPs to find. Yellow, because it is legitimate and probably not what was wanted.
         println!("{}", proxy_egress_line(px.direct_egress));
-        // #206: until now nothing in `check` ever touched the upstream proxy, so a proxy the
-        // relay could not speak TLS to passed every check and surfaced only when real work
-        // started. Connect, handshake, say what came back.
-        print_proxy_reach(px, &squid_probe_target(&r.https_targets, px)).await;
     }
     println!("\n{}", t("op.check.permissions"));
     let granted = r.project.granted();
     let denied = r.project.denied();
-    for k in all_permission_keys() {
-        let mark = if denied.contains(&k) {
-            "-"
-        } else if granted.contains(&k) {
-            "x"
-        } else {
-            " "
-        };
-        println!("  [{mark}] {k}");
+    // #355: one line per resource. One per key was 36 lines, most of them not granted
+    for line in permission_lines(&all_permission_keys(), &granted, &denied) {
+        println!("{line}");
     }
     if !denied.is_empty() {
         println!("{}", t("op.check.deny_note"));
@@ -1187,7 +1166,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             rp.full_name.clone()
         };
         println!(
-            "  {:<40} {:<11} bases={:?} push={:?} tags={:?} delete={} force_push={} signed_tags={}",
+            "  {:<40} {:<11} bases={:?} push={:?} tags={:?} delete={} force_push={} signed_tags={} delete_merged_branch={} signing={}",
             shown,
             rp.mode.as_str(),
             rp.bases,
@@ -1195,7 +1174,9 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             rp.tags,
             rp.delete,
             rp.force_push,
-            rp.signed_tags
+            rp.signed_tags,
+            rp.delete_merged_branch,
+            rp.signing.as_str()
         );
         let eff = r.project.effective_keys(rp);
         if eff != granted || !rp.allow.is_empty() || !rp.deny.is_empty() {
@@ -1222,14 +1203,85 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             } else {
                 keys.join(" ")
             };
+            // #350: the operator's note on what the board is for, as whoami shows it
+            let comment = match b.comment.as_deref().map(str::trim) {
+                Some(c) if !c.is_empty() => format!(" — {c}"),
+                _ => String::new(),
+            };
             println!(
-                "  {:<40} {}",
+                "  {:<40} {}{comment}",
                 label,
                 tf("op.check.board_permissions", &[("perms", &perms)])
             );
         }
     }
-    println!("\n{}", t("op.check.state"));
+    Ok(())
+}
+
+/// `[x]` granted, `[-]` denied by the project, `[ ]` neither — grouped by resource, one line each.
+fn permission_lines(all: &[String], granted: &[String], denied: &[String]) -> Vec<String> {
+    let mut lines: Vec<(String, Vec<String>)> = Vec::new();
+    for k in all {
+        let (resource, action) = k.split_once(':').unwrap_or((k.as_str(), ""));
+        let mark = if denied.contains(k) {
+            "-"
+        } else if granted.contains(k) {
+            "x"
+        } else {
+            " "
+        };
+        let item = format!("[{mark}]{action}");
+        match lines.last_mut() {
+            Some((r, items)) if r == resource => items.push(item),
+            _ => lines.push((resource.to_string(), vec![item])),
+        }
+    }
+    lines
+        .into_iter()
+        .map(|(r, items)| format!("  {r:<9} {}", items.join(" ")))
+        .collect()
+}
+
+/// Set by `check` whenever it prints a state in red; its exit code.
+static CHECK_BAD: AtomicBool = AtomicBool::new(false);
+
+fn bad_word(s: &str) -> String {
+    CHECK_BAD.store(true, Ordering::Relaxed);
+    paint(Tone::Bad, s)
+}
+
+/// #355: the state — what the agent, the store, known_hosts and the upstream login are right now.
+/// What the configuration says is `config`.
+pub async fn check(path: &Path) -> anyhow::Result<i32> {
+    let r = resolve(path)?;
+    let multi = r.upstreams.len() > 1;
+    println!(
+        "{}{}",
+        pad_label(&t("op.check.project"), 14),
+        r.project.name
+    );
+    println!("{}", t("op.check.state"));
+    if let Some(px) = &r.proxy {
+        // #151: which credential the relay presents — the store's, or the environment's — since
+        // Squid reads the store and the two can disagree
+        crate::proxy_credential::prime(Some(px), &secret_source_via_socket(&r)).await;
+        // #194: `credential_source()` says "none" both for a locked store and an empty one, and
+        // the operator's next step differs — sgw unlock against sgw proxy-credential set`. Ask
+        // the store which it is, over the same control socket.
+        let state = store_state(&r.paths.control_sock).await;
+        println!(
+            "{}{}",
+            pad_label(&t("op.check.proxy"), 14),
+            tf(
+                "op.check.proxy_credential",
+                &[("url", &px.url), ("source", &credential_status(&state, px))]
+            )
+        );
+        // #206: until now nothing in `check` ever touched the upstream proxy, so a proxy the
+        // relay could not speak TLS to passed every check and surfaced only when real work
+        // started. Connect, handshake, say what came back.
+        print_proxy_reach(px, &squid_probe_target(&r.https_targets, px)).await;
+    }
     let sock = auth_sock_from_env();
     match preflight_agent(sock.as_deref()).await {
         Ok(n) => {
@@ -1269,7 +1321,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             tf(
                 "op.check.agent_bad",
                 &[
-                    ("state", &paint(Tone::Bad, &t("op.check.word.agent_bad"))),
+                    ("state", &bad_word(&t("op.check.word.agent_bad"))),
                     ("error", &e.to_string()),
                 ]
             )
@@ -1300,10 +1352,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 tf(
                     "op.check.signing_key_missing",
                     &[
-                        (
-                            "state",
-                            &paint(Tone::Bad, &t("op.check.word.signing_key_missing"))
-                        ),
+                        ("state", &bad_word(&t("op.check.word.signing_key_missing"))),
                         ("fingerprint", &sk.fingerprint),
                     ]
                 )
@@ -1351,10 +1400,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 tf(
                     "op.check.known_hosts_missing",
                     &[
-                        (
-                            "state",
-                            &paint(Tone::Bad, &t("op.check.word.known_hosts_missing"))
-                        ),
+                        ("state", &bad_word(&t("op.check.word.known_hosts_missing"))),
                         ("remedy", &up.known_hosts_remedy()),
                     ]
                 )
@@ -1364,7 +1410,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 tf(
                     "op.check.known_hosts_error",
                     &[
-                        ("state", &paint(Tone::Bad, &t("op.check.word.error"))),
+                        ("state", &bad_word(&t("op.check.word.error"))),
                         ("error", &e.to_string()),
                     ]
                 )
@@ -1389,10 +1435,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                     &[
                         ("host", bhost.as_str()),
                         ("port", port.as_str()),
-                        (
-                            "state",
-                            &paint(Tone::Bad, &t("op.check.word.known_hosts_missing")),
-                        ),
+                        ("state", &bad_word(&t("op.check.word.known_hosts_missing"))),
                         ("domain", &u.domain),
                     ],
                 ),
@@ -1401,7 +1444,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                     &[
                         ("host", bhost.as_str()),
                         ("port", port.as_str()),
-                        ("state", &paint(Tone::Bad, &t("op.check.word.error"))),
+                        ("state", &bad_word(&t("op.check.word.error"))),
                         ("error", &e.to_string()),
                     ],
                 ),
@@ -1442,10 +1485,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 tf(
                     "op.check.token_missing",
                     &[
-                        (
-                            "state",
-                            &paint(Tone::Bad, &t("op.check.word.token_missing"))
-                        ),
+                        ("state", &bad_word(&t("op.check.word.token_missing"))),
                         ("hint", &login_hint),
                     ]
                 )
@@ -1455,7 +1495,7 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
                 tf(
                     "op.check.token_error",
                     &[
-                        ("state", &paint(Tone::Bad, &t("op.check.word.error"))),
+                        ("state", &bad_word(&t("op.check.word.error"))),
                         ("error", &e.to_string()),
                     ]
                 )
@@ -1493,7 +1533,9 @@ pub async fn check(path: &Path) -> anyhow::Result<()> {
             ]
         )
     );
-    Ok(())
+    // #355: a state that needs a human is exit 1, so `sgw verify` can say so without printing
+    // every line of a check that passed
+    Ok(i32::from(CHECK_BAD.load(Ordering::Relaxed)))
 }
 
 pub fn token(path: &Path, ttl: Option<&str>) -> anyhow::Result<()> {
@@ -2047,6 +2089,7 @@ async fn print_proxy_reach(px: &ProxySpec, target: &str) {
         // Only when the path is broken is what the upstream offers worth the five seconds: a
         // working route has already proved the question moot.
         if squid_probe_failed(&outcome) {
+            CHECK_BAD.store(true, Ordering::Relaxed);
             print_openssl_offers(px).await;
         }
         return;
@@ -2057,6 +2100,7 @@ async fn print_proxy_reach(px: &ProxySpec, target: &str) {
     // let OpenSSL — which does have the RSA key exchange — report what the upstream actually
     // negotiates, so the operator need not run s_client by hand.
     if let Err(e) = &outcome {
+        CHECK_BAD.store(true, Ordering::Relaxed);
         if crate::netutil::is_handshake_failure(e) {
             println!("{}", t("op.check.proxy_handshake_hint"));
             print_openssl_offers(px).await;
@@ -2510,6 +2554,24 @@ async fn ask_missing_vars(r: &Resolved) -> anyhow::Result<crate::vars::Vars> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permissions_are_one_line_per_resource_with_each_key_marked() {
+        // #355: one line per key was 36 lines; the marks still say granted, denied and neither
+        let v = |s: &[&str]| s.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        let lines = permission_lines(
+            &v(&["ci:read", "pr:close", "pr:create", "pr:merge"]),
+            &v(&["pr:create", "pr:merge"]),
+            &v(&["pr:merge"]),
+        );
+        assert_eq!(
+            lines,
+            v(&[
+                "  ci        [ ]read",
+                "  pr        [ ]close [x]create [-]merge"
+            ])
+        );
+    }
 
     /// A config whose state dir is `dir`, and an unlocked store served on its control socket.
     async fn served_config(dir: &Path) -> (PathBuf, Resolved) {
