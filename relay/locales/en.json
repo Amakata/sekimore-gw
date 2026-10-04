@@ -9,7 +9,7 @@
   "cli.logout": "Delete the upstream token",
   "cli.upstream": "Upstream (git-relay domain). Defaults to the default upstream",
   "cli.whoami": "Show which upstream identity the relay acts as",
-  "cli.check": "Show the resolved policy and state (agent / known_hosts / token / keys)",
+  "cli.check": "Show the state: agent / signing key / known_hosts / upstream token / proxy reach / keys",
   "cli.unlock": "Unlock the secret store (prompts; sets the passphrase the first time)",
   "cli.unlock.stdin": "Read the passphrase from stdin as one line instead of prompting (what sgw unlock-auto pipes into). Refused at a terminal",
   "cli.lock": "Forget the secret store's key until it is unlocked again",
@@ -329,7 +329,7 @@
   "sgw.help.group_about": "sgw {group}: {about}",
   "sgw.help.group_usage": "Usage: sgw {group} <COMMAND> [ARGS]",
   "sgw.help.unknown": "sgw {group} has no command '{leaf}'",
-  "sgw.cmd.check": "the relay's configuration and state (ssh-agent / known_hosts / upstream token / keys / tokens)",
+  "sgw.cmd.check": "the relay's state (ssh-agent / signing key / known_hosts / upstream token / proxy reach / keys / tokens)",
   "sgw.cmd.whoami": "which GitHub identity the gateway acts as",
   "sgw.cmd.login": "log in to GitHub with the device flow (first time only; asks before saving a host key)",
   "sgw.cmd.logout": "delete the upstream token",
@@ -488,5 +488,7 @@
   "sgw.update.r_leftover": "no longer used: git rm {files}",
   "sgw.update.r_poststart": "make devcontainer.json's postStartCommand this one line (base 0.2.51: sgw-post-start runs sgw-agent setup as root with the whole environment, docker-init and post-create.sh):",
   "sgw.update.r_commit": "review the change and commit it: git diff",
-  "sgw.update.r_none": "nothing"
+  "sgw.update.r_none": "nothing",
+  "cli.config_cmd": "Show what the configuration resolves to: upstreams, targets, permissions, repos, boards. No network",
+  "sgw.cmd.config": "what the configuration resolves to (upstreams / targets / permissions / repos / boards). No network"
 }

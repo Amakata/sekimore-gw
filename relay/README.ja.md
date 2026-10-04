@@ -86,7 +86,8 @@ relay:
 
 ```bash
 docker compose up -d --force-recreate sekimore-gw      # Dev Containers 構成なら: sgw recreate
-docker compose exec sekimore-gw sekimore-relay check   # ポリシーと状態（agent / known_hosts / token / 鍵）
+docker compose exec sekimore-gw sekimore-relay config  # 設定が解決した結果（ネットワークに出ない）
+docker compose exec sekimore-gw sekimore-relay check   # 状態（agent / known_hosts / token / 鍵）。人の対応が要る状態があれば exit 1
 ```
 
 ### 4. 上流に認証する（初回のみ）
@@ -341,7 +342,7 @@ base を検査できません。そのため関所は、そのようなリポジ
 
 - 実効権限 = (プロジェクト allow ∪ 上流 allow ∪ repo allow) − (プロジェクト deny ∪ 上流 deny ∪ repo deny)。deny はどの層に書いても優先されます。
 - `push` / `tags` / `delete` は、プロジェクト → 上流 → repo の順で上書きされます。glob では `*` と `?` が使えます。
-- 権限キーは 34 個あり、リソースごとに次のとおりです。設定が許可している権限は `sekimore-relay check` で表示できます。
+- 権限キーは 36 個あり、リソースごとに次のとおりです。設定が許可している権限は `sekimore-relay config` で表示できます。
 
   ```
   pr:      create  read  comment  comment_update  comment_delete  review  request_review
@@ -360,7 +361,7 @@ base を検査できません。そのため関所は、そのようなリポジ
 - `release:publish` は、draft の Release を公開する権限です。`release create --draft` は公開を人間に委ねるためにあるので、公開を `release:create` に含めると、その区別が失われます。draft のまま編集するだけなら `release:create` で足ります。
 - 閉じることと開き直すことは同じ権限です（`pr:close` / `issue:close`）。開き直すことは閉じたことの取り消しであり、新しい能力を与えるものではないためです。同様に、ラベルと担当者の追加と削除も、それぞれ 1 つの権限です（`issue:label` / `issue:assign`）。PR のタイトルや本文の編集には `pr:create` が必要です。ただし、新しい base は、そのリポジトリの `bases` に対して改めて検査されます。
 - `repo:read` は `repo vocabulary`（そのリポジトリのラベル、担当者に指定できるユーザー、マイルストーンの一覧）に必要です。
-- 実効値は、`sekimore-relay check` と Web UI の Relay タブで確認できます。
+- 実効値は、`sekimore-relay config` と Web UI の Relay タブで確認できます。
 
 ### 例: github.com と GHES を同時に扱う
 
@@ -492,7 +493,8 @@ Dev Containers 構成では、`sgw tokens` / `sgw revoke-project` / `sgw audit` 
 
 | コマンド | 用途 |
 |---|---|
-| `sekimore-relay check` | ポリシーと現在の状態の一覧 |
+| `sekimore-relay config` | 設定が解決した結果（上流 / 転送先 / 権限 / リポジトリ / ボード） |
+| `sekimore-relay check` | 現在の状態。人の対応が要る状態があれば exit 1 |
 | `sekimore-relay tokens` | 発行済みトークンの一覧（ラベル / 期限 / 使用回数 / 状態） |
 | `sekimore-relay revoke --label skm_xxxxxxxx` | トークンを 1 つ失効 |
 | `sekimore-relay revoke-project` | プロジェクトの全トークンを失効（プロジェクト終了時） |
@@ -551,7 +553,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
 - dev から `allow_domains` にしかない宛先への通常の通信は通りません。DNS の応答でアドレスがファイアウォールに登録され、そのまま NAT で出ていくため、Squid の access.log に行が残りません（#212）。
 - `proxy.direct_egress: deny` はその登録をやめ、出口を Squid だけにします。DNS は応答を返すので名前は解決でき、`HTTP_PROXY` を無視するクライアントは黙って外へ出るかわりに失敗します。`allow_ips` は影響を受けません。`upstream_proxy` が必要で、なければゲートウェイは起動を拒否します。
 - dev コンテナは起動時に `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` を受け取ります。`sgw-agent setup` が `GET /api/proxy-env` を読み、`/etc/profile.d/sekimore-proxy.sh` と `/etc/environment` の印つきブロックを書きます。`NO_PROXY` には `domain_handlers` の宛先すべて（Squid は意図的に CONNECT を拒否します）と `proxy.no_proxy` が入ります。dev のイメージが `/etc/profile.d` を読む必要があり、sgw-devcontainer-base はこれを同梱する版から読みます。
-- 現在のモードは `sekimore-relay check` の `proxy:` の下に `egress:` として出ます。直接送出が許可されている間は黄色です。
+- 現在のモードは `sekimore-relay config` の `proxy:` の下に `egress:` として出ます。直接送出が許可されている間は黄色です。
 
 `upstream_proxy_tls: true` で Squid が有効なとき、関所は上流プロキシへ TLS を話しません。CONNECT をローカルの Squid に送り、Squid が OpenSSL で TLS を話し、保管した資格情報も Squid が提示します（`cache_peer … login=`）。これにより、TLS 1.2 の RSA 鍵交換しか提示しない上流（`tls-dh=` のない Squid の `https_port`）にも届きます。関所の rustls はこれを話せません（#205）。Squid が無効なときは関所自身が TLS を話し、TLS 1.3 か ECDHE のみです。どちらの経路かは `sekimore-relay check` の `route:` に出ます。`reach:` はその経路を実際に試します。
 

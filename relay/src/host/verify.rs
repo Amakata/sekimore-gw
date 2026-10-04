@@ -36,7 +36,7 @@ fn on_bridge(t: &Target) -> bool {
 pub const ITEMS: &[Item] = &[
     Item {
         name: "gateway_check",
-        title: "gateway: sekimore-relay check",
+        title: "gateway: the configuration loads and the relay's state (sgw config, sgw check)",
         edges: &[],
         applies: always,
         run: gateway_check,
@@ -167,29 +167,57 @@ pub struct Ctx<'a> {
     failed: bool,
     gateway: Option<String>,
     dev: Option<String>,
-    /// `sekimore-relay check`, kept whole: the `443 target:` lines pick the HTTPS probe's domain
-    gwcheck: String,
+    /// `sekimore-relay config`, kept whole: the `443 target:` lines pick the HTTPS probe's domain
+    gwconfig: String,
     /// `sekimore whoami`, kept whole: the permissions line picks the API probe
     who: String,
     bridge_gw: Option<String>,
+    /// #355: what the running item said. Printed whole only when it failed or warned; a passing
+    /// item is one line, so the one that did not pass is the one that stands out
+    item: Item_,
+}
+
+#[derive(Default)]
+struct Item_ {
+    lines: Vec<String>,
+    bad: bool,
+    passed: bool,
+    note: Option<String>,
+    skip: Option<String>,
 }
 
 impl<'a> Ctx<'a> {
     fn ok(&mut self, s: &str) {
-        println!("{} {s}", self.paint(Tone::Good, "OK:"));
+        let l = format!("{} {s}", self.paint(Tone::Good, "OK:"));
+        self.item.passed = true;
+        self.item.lines.push(l);
     }
     fn fail(&mut self, s: &str) {
-        println!("{} {s}", self.paint(Tone::Bad, "❌ FAIL:"));
+        let l = format!("{} {s}", self.paint(Tone::Bad, "❌ FAIL:"));
+        self.item.lines.push(l);
+        self.item.bad = true;
         self.failed = true;
     }
     fn skip(&mut self, s: &str) {
-        println!("SKIP: {s}");
+        self.item.lines.push(format!("SKIP: {s}"));
+        self.item.skip.get_or_insert_with(|| s.to_string());
     }
     fn warn(&mut self, s: &str) {
-        println!("{} {s}", self.paint(Tone::Warn, "WARN:"));
+        let l = format!("{} {s}", self.paint(Tone::Warn, "WARN:"));
+        self.item.lines.push(l);
+        self.item.bad = true;
     }
     fn note(&mut self, s: &str) {
-        println!("note: {s}");
+        self.item.lines.push(format!("note: {s}"));
+        self.item.note.get_or_insert_with(|| s.to_string());
+    }
+    /// A command's own output, shown only if the item does not pass
+    fn detail(&mut self, s: &str) {
+        self.item.lines.extend(
+            s.lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(str::to_string),
+        );
     }
     fn paint(&self, tone: Tone, s: &str) -> String {
         if self.colour {
@@ -246,23 +274,35 @@ pub fn run(docker: &Docker, project: &Project, target: Target) -> anyhow::Result
         failed: false,
         gateway: None,
         dev: None,
-        gwcheck: String::new(),
+        gwconfig: String::new(),
         who: String::new(),
         bridge_gw: None,
+        item: Item_::default(),
     };
     let items = applicable(&target);
-    for (i, item) in items.iter().enumerate() {
-        if i > 0 {
-            println!();
+    for item in items {
+        ctx.item = Item_::default();
+        if let Err(e) = (item.run)(&mut ctx) {
+            ctx.fail(&format!("{e:#}"));
         }
+        let said = std::mem::take(&mut ctx.item);
         let ids = if item.edges.is_empty() {
             String::new()
         } else {
             format!(" [{}]", item.edges.join(", "))
         };
-        println!("== {}{ids}", item.title);
-        if let Err(e) = (item.run)(&mut ctx) {
-            ctx.fail(&format!("{e:#}"));
+        if said.bad {
+            println!("\n== {}{ids}", item.title);
+            for l in &said.lines {
+                println!("{l}");
+            }
+            println!();
+        } else if let Some(n) = said.note {
+            println!("note {}{ids}: {n}", item.title);
+        } else if let Some(s) = said.skip.filter(|_| !said.passed) {
+            println!("SKIP {}{ids}: {s}", item.title);
+        } else {
+            println!("{}   {}{ids}", ctx.paint(Tone::Good, "OK"), item.title);
         }
     }
     println!();
@@ -278,23 +318,26 @@ pub fn run(docker: &Docker, project: &Project, target: Target) -> anyhow::Result
 // ---- the items ---------------------------------------------------------------------------
 
 fn gateway_check(ctx: &mut Ctx) -> anyhow::Result<()> {
-    let out = ctx.gw(&["sekimore-relay", "check"])?;
-    ctx.gwcheck = out.stdout.clone();
-    let mut printing = false;
-    for line in out.stdout.lines() {
-        if line.starts_with("state:") {
-            printing = true;
-        }
-        if printing {
-            println!("{line}");
-        }
-    }
-    if !printing {
+    // #355: the configuration first. It is what the HTTPS probe reads its target from, and a
+    // configuration that does not load is the whole answer
+    let conf = ctx.gw(&["sekimore-relay", "config"])?;
+    ctx.gwconfig = conf.stdout.clone();
+    if conf.code != 0 {
+        ctx.detail(&conf.stderr);
         ctx.fail(&format!(
-            "sekimore-relay check printed no state (exit {}): {}",
-            out.code,
-            out.stderr.trim()
+            "sekimore-relay config exited {} — run: sgw config",
+            conf.code
         ));
+        return Ok(());
+    }
+    let out = ctx.gw(&["sekimore-relay", "check"])?;
+    ctx.detail(&out.stdout);
+    ctx.detail(&out.stderr);
+    match out.code {
+        0 => ctx.ok("configuration loads; the relay's state is good"),
+        // check says exit 1 when a state it printed is red (#355)
+        1 => ctx.warn("the relay's state needs attention: the lines above, or run: sgw check"),
+        n => ctx.fail(&format!("sekimore-relay check exited {n}")),
     }
     Ok(())
 }
@@ -633,7 +676,8 @@ fn store(ctx: &mut Ctx) -> anyhow::Result<()> {
 fn whoami(ctx: &mut Ctx) -> anyhow::Result<()> {
     let out = ctx.dev(&["sekimore", "whoami"])?;
     ctx.who = out.stdout.clone();
-    print!("{}{}", out.stdout, out.stderr);
+    ctx.detail(&out.stdout);
+    ctx.detail(&out.stderr);
     if out.code != 0 {
         ctx.fail(&format!("sekimore whoami exited {}", out.code));
     }
@@ -644,7 +688,7 @@ fn git_ls_remote(ctx: &mut Ctx) -> anyhow::Result<()> {
     let out = ctx.dev_sh(
         r#". /etc/sekimore-agent/env && git ls-remote "git@$SEKIMORE_GIT_DOMAIN:$SEKIMORE_REPO.git" HEAD"#,
     )?;
-    print!("{}", out.stdout);
+    ctx.detail(&out.stdout);
     if out.code != 0 {
         let last = out
             .stderr
@@ -696,7 +740,7 @@ const HTTPS_HINT: &str = "the relay cut the connection — sgw logs for 'TLS to 
 fn https_passthrough(ctx: &mut Ctx) -> anyhow::Result<()> {
     // git through the relay is SSH and never touches the upstream proxy, so it stays green while
     // every HTTPS path through the relay is dead (base #85). This goes the way the API does
-    let Some(target) = pick_target(&targets_from_check(&ctx.gwcheck)) else {
+    let Some(target) = pick_target(&targets_from_check(&ctx.gwconfig)) else {
         ctx.skip("no 443 target configured");
         return Ok(());
     };
