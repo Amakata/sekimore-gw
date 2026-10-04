@@ -97,6 +97,7 @@ impl ProjectBoards {
                     number: b.number,
                     upstream: None,
                     permissions: None,
+                    comment: None,
                 })
                 .collect(),
             resolved: tokio::sync::Mutex::new(Some(boards)),
@@ -118,6 +119,11 @@ impl ProjectBoards {
     /// #291: the declared boards' upstreams, in the same order (`None` = the default upstream).
     pub fn declared_upstreams(&self) -> Vec<Option<String>> {
         self.declared.iter().map(|b| b.upstream.clone()).collect()
+    }
+
+    /// #350: the declared boards' comments, in the same order.
+    pub fn declared_comments(&self) -> Vec<Option<String>> {
+        self.declared.iter().map(|b| b.comment.clone()).collect()
     }
 
     /// The resolved boards, resolving them if this is the first call that needed them.
