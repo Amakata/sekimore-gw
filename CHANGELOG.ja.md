@@ -11,6 +11,13 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.64（2026-10-04）
+
+### Enhancement
+
+- `relay.project.boards[].comment` で、ボードに用途を 1 行で書ける。`whoami` はボードの行の末尾にそれを出す。改行を含むコメントは読み込み時に拒否する (#351)
+- `whoami` が、読み書きできるリポジトリについて既定から外れた規則を示す。タグ（署名が要るか）、`merge --delete-branch` の許可、削除、force push、ヘッダより弱い署名モード、`on_exists: update`。既定のままの規則は何も出さない (#353)
+
 ## 0.2.63（2026-10-03）
 
 ### Fix

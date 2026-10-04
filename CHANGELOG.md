@@ -12,6 +12,13 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.64 (2026-10-04)
+
+### Enhancement
+
+- `relay.project.boards[].comment` gives a board one line on what it is for; `whoami` prints it at the end of the board's line. A comment with a newline is refused at load (#351)
+- `whoami` shows a read-write repository's rules beyond the defaults: tags (and whether signed), `merge --delete-branch`, delete, force push, a weaker signing mode, `on_exists: update`. Defaults say nothing (#353)
+
 ## 0.2.63 (2026-10-03)
 
 ### Fix
