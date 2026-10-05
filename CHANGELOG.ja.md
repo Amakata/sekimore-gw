@@ -11,6 +11,12 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.65（2026-10-05）
+
+### Enhancement
+
+- `restart` / `recreate` / `update --apply` の後と、ストアが要るコマンドの前に、`sgw` が locked のストアをキーチェーンから開く。無ければこの端末で尋ね、それも無ければ `sgw unlock` を促す。`--no-unlock` / `SGW_NO_AUTO_UNLOCK` で省ける (#363)
+
 ## 0.2.64（2026-10-04）
 
 ### Enhancement
