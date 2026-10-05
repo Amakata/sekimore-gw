@@ -110,10 +110,11 @@ The settings are in `.devcontainer/config/config.yml`; [config.sample.yml](confi
 
 | To | Run |
 |---|---|
-| Unlock the secret store (it is locked again whenever the gateway container is recreated) | `sgw unlock` |
+| Unlock the secret store. `sgw restart` / `recreate` / `login` / `var` ask for it when it is locked; after a restart outside sgw, run it yourself | `sgw unlock` |
 | Make the unlock automatic | `sgw keychain-set` |
 | Log in to GitHub | `sgw login` |
 | Check the setup | `sgw verify` |
+| See what the configuration resolves to / the current state | `sgw config` / `sgw check` |
 | Apply a change to `config.yml` | `sgw restart`. When you added or changed an upstream, then `sgw refresh` (it rewrites the agent's ssh config) |
 | Move to a newer release | `sgw update --apply` (it installs the newer `sgw` first when there is one) |
 | See allowed and blocked access in the Web UI | `sgw web` |

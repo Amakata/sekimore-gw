@@ -33,6 +33,8 @@ fn fixture() -> Fixture {
 # every call: argv on one line, then stdin (if any) marked
 printf '%s\n' "$*" >> "{log}"
 printf 'HINTS=%s\n' "${{DOCKER_CLI_HINTS:-unset}}" >> "{log}"
+# #362: the store's state word, for the unlock step
+case "$*" in *"sekimore-relay store-status"*) echo "${{FAKE_STORE:-unlocked}}"; exit 0 ;; esac
 case "$1 $2" in
   "ps -q") echo cid123 ;;
   "ps -a")
@@ -523,7 +525,7 @@ fn verify_reports_every_item_with_its_ledger_rows() {
         "OK   gateway: the configuration loads and the relay's state (sgw config, sgw check)",
         "OK   dev: only the gateway's filtered signing key may be reachable [dev.signing]",
         "== dev: /etc/resolv.conf names the gateway [dev.dns]",
-        "== gateway: the secret store [operator.store]",
+        "OK   gateway: the secret store [operator.store]",
         "OK   dev: git ls-remote through the relay (first repo of the project) [dev.relay.ssh, relay.ssh.upstream]",
         "== dev: a root process must not route past the gateway (host-side FORWARD rules, gateway 0.2.37) [dev.egress.route_past_gateway]",
     ] {
@@ -1255,4 +1257,94 @@ fn a_project_from_before_the_split_gains_the_sample_and_keeps_its_config() {
         "{}",
         String::from_utf8_lossy(&out.stdout)
     );
+}
+
+// ---- #362: unlock on the spot ----
+
+fn stored_passphrase(f: &Fixture) -> PathBuf {
+    let dir = f.project.join("secrets");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("proj.passphrase"), "correct horse\n").unwrap();
+    dir
+}
+
+fn position(log: &str, needle: &str) -> usize {
+    log.find(needle)
+        .unwrap_or_else(|| panic!("no {needle:?} in {log}"))
+}
+
+#[test]
+fn restart_opens_a_locked_store_from_the_stored_passphrase() {
+    let f = fixture();
+    let out = sgw(&f, &["restart"])
+        .env("FAKE_STORE", "locked")
+        .env("SGW_PASSPHRASE_DIR", stored_passphrase(&f))
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let log = log(&f);
+    let restarted = position(&log, "restart cid123\n");
+    let asked = position(&log, " sekimore-relay store-status\n");
+    let unlocked = position(&log, "exec -i cid123 sekimore-relay unlock --stdin\n");
+    assert!(restarted < asked && asked < unlocked, "{log}");
+    assert!(log.contains("STDIN: correct horse\n"), "{log}");
+}
+
+#[test]
+fn restart_without_a_passphrase_or_a_terminal_names_the_command_and_does_not_wait() {
+    let f = fixture();
+    let out = sgw(&f, &["restart"])
+        .env("FAKE_STORE", "locked")
+        .env("SGW_PASSPHRASE_DIR", f.project.join("nowhere"))
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("sgw unlock"), "{stdout}");
+    assert!(!log(&f).contains(" sekimore-relay unlock"), "{}", log(&f));
+}
+
+#[test]
+fn a_store_command_on_an_unlocked_store_goes_straight_through() {
+    let f = fixture();
+    let out = sgw(&f, &["whoami"]).output().unwrap();
+    assert!(out.status.success());
+    let log = log(&f);
+    assert!(log.contains(" sekimore-relay whoami\n"), "{log}");
+    assert!(!log.contains(" sekimore-relay unlock"), "{log}");
+}
+
+#[test]
+fn a_store_command_on_a_locked_store_opens_it_first() {
+    let f = fixture();
+    let out = sgw(&f, &["var", "list"])
+        .env("FAKE_STORE", "locked")
+        .env("SGW_PASSPHRASE_DIR", stored_passphrase(&f))
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let log = log(&f);
+    let unlocked = position(&log, " sekimore-relay unlock --stdin\n");
+    let ran = position(&log, " sekimore-relay var list\n");
+    assert!(unlocked < ran, "{log}");
+}
+
+#[test]
+fn asking_for_help_or_turning_it_off_leaves_the_store_alone() {
+    let f = fixture();
+    let out = sgw(&f, &["var", "--help"])
+        .env("FAKE_STORE", "locked")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(!log(&f).contains("store-status"), "{}", log(&f));
+    let f = fixture();
+    let out = sgw(&f, &["restart"])
+        .env("FAKE_STORE", "locked")
+        .env("SGW_NO_AUTO_UNLOCK", "1")
+        .env("SGW_PASSPHRASE_DIR", stored_passphrase(&f))
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(!log(&f).contains(" sekimore-relay unlock"), "{}", log(&f));
 }
