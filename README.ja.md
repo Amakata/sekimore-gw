@@ -107,10 +107,11 @@ dev コンテナから外に出る道はゲートウェイだけです。
 
 | したいこと | コマンド |
 |---|---|
-| 秘密ストアを解錠する（ゲートウェイのコンテナを作り直したあとは施錠されている） | `sgw unlock` |
+| 秘密ストアを解錠する。`sgw restart` / `recreate` / `login` / `var` は施錠中ならその場で聞く。sgw 以外で再起動したときは自分で実行する | `sgw unlock` |
 | 解錠を自動にする | `sgw keychain-set` |
 | GitHub にログインする | `sgw login` |
 | 構成を確認する | `sgw verify` |
+| 設定が解決した結果 / いまの状態を見る | `sgw config` / `sgw check` |
 | `config.yml` の変更を反映する | `sgw restart`。上流を足した・変えたときは続けて `sgw refresh`（エージェントの ssh 設定を書き直す） |
 | 新しい版に上げる | `sgw update --apply`（新しい `sgw` があれば先にそれを入れる） |
 | 許可・ブロックされた通信を Web UI で見る | `sgw web` |
