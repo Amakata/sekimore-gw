@@ -74,7 +74,7 @@ services:
       - SEKIMORE_SIGNING_KEY_COMMENT=${SEKIMORE_SIGNING_KEY_COMMENT:-}
 
   sekimore-github:
-    image: ghcr.io/amakata/sekimore-gw:0.2.64
+    image: ghcr.io/amakata/sekimore-gw:0.2.65
     entrypoint:
       - sekimore-relay
       - sidecar

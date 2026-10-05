@@ -257,22 +257,27 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
     let docker = Docker::new(proj.compose_dir.clone());
     let no_tty = cli.no_tty;
     let tty = if no_tty { Tty::Never } else { Tty::Auto };
+    // #362: a command that reads or writes the store opens it first if it is locked
+    let store_cmd = |sub: &str, args: &[String]| {
+        if ops::needs_store(sub, args) {
+            ops::unlock_if_locked(&docker, &proj.name(), no_tty);
+        }
+        ops::relay(&docker, &relay_sub(sub, args), no_tty)
+    };
     use Cmd::*;
     match cli.cmd {
         Config { args } => ops::relay(&docker, &relay_sub("config", &args), no_tty),
         Check { args } => ops::relay(&docker, &relay_sub("check", &args), no_tty),
-        Whoami { args } => ops::relay(&docker, &relay_sub("whoami", &args), no_tty),
-        Login { args } => ops::relay(&docker, &relay_sub("login", &args), no_tty),
-        Logout { args } => ops::relay(&docker, &relay_sub("logout", &args), no_tty),
+        Whoami { args } => store_cmd("whoami", &args),
+        Login { args } => store_cmd("login", &args),
+        Logout { args } => store_cmd("logout", &args),
         Unlock { args } => ops::relay(&docker, &relay_sub("unlock", &args), no_tty),
         Lock { args } => ops::relay(&docker, &relay_sub("lock", &args), no_tty),
         StoreStatus { args } => ops::relay(&docker, &relay_sub("store-status", &args), no_tty),
         Passphrase { args } => ops::relay(&docker, &relay_sub("passphrase", &args), no_tty),
-        ProxyCredential { args } => {
-            ops::relay(&docker, &relay_sub("proxy-credential", &args), no_tty)
-        }
-        Var { args } => ops::relay(&docker, &relay_sub("var", &args), no_tty),
-        StoreExport { args } => ops::relay(&docker, &relay_sub("store-export", &args), no_tty),
+        ProxyCredential { args } => store_cmd("proxy-credential", &args),
+        Var { args } => store_cmd("var", &args),
+        StoreExport { args } => store_cmd("store-export", &args),
         StoreImport { args } => ops::relay(&docker, &relay_sub("store-import", &args), no_tty),
         Tokens { args } => ops::relay(&docker, &relay_sub("tokens", &args), no_tty),
         Revoke { args } => ops::relay(&docker, &relay_sub("revoke", &args), no_tty),
@@ -282,8 +287,8 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
         Relay { args } => ops::relay(&docker, &args, no_tty),
         UnlockAuto => passphrase::unlock_auto(&docker, &proj.name()),
         KeychainSet => passphrase::keychain_set(&proj.name()),
-        Recreate { no_unlock } => ops::recreate(&docker, &proj.name(), no_unlock),
-        Restart => ops::restart(&docker),
+        Recreate { no_unlock } => ops::recreate(&docker, &proj.name(), no_unlock, no_tty),
+        Restart => ops::restart(&docker, &proj.name(), no_tty),
         Logs { tail } => ops::logs(&docker, tail),
         Audit => ops::gateway(
             &docker,

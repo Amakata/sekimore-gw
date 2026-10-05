@@ -6,7 +6,7 @@
 
 use anyhow::bail;
 
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 
 use super::docker::{color_env, Docker, Tty, DEV, GATEWAY};
 
@@ -112,14 +112,92 @@ pub fn logs(docker: &Docker, tail: u32) -> anyhow::Result<i32> {
     ])
 }
 
-pub fn restart(docker: &Docker) -> anyhow::Result<i32> {
+pub fn restart(docker: &Docker, project: &str, no_tty: bool) -> anyhow::Result<i32> {
     let cid = docker.find_container(GATEWAY)?;
-    docker.run(&["restart".into(), cid])
+    let rc = docker.run(&["restart".into(), cid])?;
+    if rc != 0 {
+        return Ok(rc);
+    }
+    // #362: a restarted gateway comes back with its store locked, and nothing said so
+    unlock_if_locked(docker, project, no_tty);
+    Ok(0)
+}
+
+/// The store's state word (`unlocked` / `locked` / `not initialised`), waiting a little for a
+/// gateway that has just started to open its control socket. Empty when it never answered.
+fn store_state(docker: &Docker) -> String {
+    let argv = ["sekimore-relay".to_string(), "store-status".to_string()];
+    for _ in 0..20 {
+        // no gateway at all is not one still starting: the command after this says so
+        let Ok(cid) = docker.find_container(GATEWAY) else {
+            return String::new();
+        };
+        if let Ok(out) = docker.exec_capture(&cid, None, &argv) {
+            let word = out.stdout.trim();
+            if out.code == 0 && !word.is_empty() {
+                return word.to_string();
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    String::new()
+}
+
+/// #362: the one unlock step. A store already open, or one with no passphrase yet, is left alone;
+/// a locked one is opened from the keychain if a passphrase is stored there, else by asking on
+/// this terminal, else the operator is told the command. Never fails the command it runs for:
+/// a command that needs the store says so itself.
+pub fn unlock_if_locked(docker: &Docker, project: &str, no_tty: bool) {
+    use std::io::IsTerminal;
+    if store_state(docker) != "locked" {
+        return;
+    }
+    if std::env::var_os("SGW_NO_AUTO_UNLOCK").is_some() {
+        println!("{}", t("sgw.recreate.left_locked"));
+        return;
+    }
+    let (found, _) = super::passphrase::lookup(
+        project,
+        &super::passphrase::passphrase_dir(),
+        super::passphrase::have,
+        |p| p.exists(),
+        super::passphrase::run_capture,
+    );
+    if let Some(found) = found {
+        println!("{}", tf("sgw.unlock_auto.from", &[("from", &found.from)]));
+        let (argv, input) = super::passphrase::unlock_invocation(&found);
+        if let Ok(cid) = docker.find_container(GATEWAY) {
+            if matches!(docker.exec_with_stdin(&cid, &argv, &input), Ok(0)) {
+                return;
+            }
+        }
+    }
+    if !no_tty && std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        println!("{}", t("sgw.unlock.asking"));
+        if matches!(relay(docker, &["unlock".to_string()], no_tty), Ok(0)) {
+            return;
+        }
+    }
+    println!("{}", t("sgw.recreate.left_locked"));
+}
+
+/// #362: the relay commands that read or write the store. Run after the unlock step, so a locked
+/// store is opened first instead of failing them.
+pub fn needs_store(sub: &str, args: &[String]) -> bool {
+    matches!(
+        sub,
+        "login" | "logout" | "whoami" | "var" | "proxy-credential" | "store-export"
+    ) && !args.iter().any(|a| a == "-h" || a == "--help")
 }
 
 /// `recreate`, then the automatic unlock unless told not to (`--no-unlock`, or
 /// `SGW_NO_AUTO_UNLOCK` in the environment).
-pub fn recreate(docker: &Docker, project: &str, no_unlock: bool) -> anyhow::Result<i32> {
+pub fn recreate(
+    docker: &Docker,
+    project: &str,
+    no_unlock: bool,
+    no_tty: bool,
+) -> anyhow::Result<i32> {
     docker.recreate_gateway()?;
     // #274: a dev container already up keeps the old gateway's address in /etc/resolv.conf and
     // its default route; Docker may hand the new container another one. The setup points dev
@@ -136,11 +214,9 @@ pub fn recreate(docker: &Docker, project: &str, no_unlock: bool) -> anyhow::Resu
         println!("{}", t("sgw.recreate.left_locked"));
         return Ok(0);
     }
-    match super::passphrase::unlock_auto(docker, project) {
-        Ok(0) => Ok(0),
-        Ok(rc) => bail!("{} (exit {rc})", t("sgw.recreate.unlock_failed")),
-        Err(e) => bail!("{}: {e:#}", t("sgw.recreate.unlock_failed")),
-    }
+    // #362: the keychain, else this terminal, else the command to run
+    unlock_if_locked(docker, project, no_tty);
+    Ok(0)
 }
 
 /// The whole stack, dev container included, gone; the volumes stay. Also the way out of a start
