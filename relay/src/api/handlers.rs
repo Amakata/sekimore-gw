@@ -300,6 +300,7 @@ pub async fn dispatch(
 ) -> Result<ApiResponse, ApiError> {
     match path {
         "/whoami" => whoami(ctx, rec).await,
+        "/relays" => relays(ctx).await,
         "/signing/owner" => signing_owner(ctx, req).await,
         "/pr/create" => pr_create(ctx, req).await,
         "/pr/comment" => pr_comment(ctx, req).await,
@@ -363,6 +364,62 @@ pub async fn dispatch(
             message: format!("unknown endpoint {path}"),
         }),
     }
+}
+
+/// #330: the relays this project can use, each with what it is for and, for a command sidecar,
+/// its commands and whether the project may run each. Agent setup saves this; the CLI builds its
+/// commands and the guide from the saved copy, so it never asks the gateway just to show --help.
+async fn relays(ctx: &ApiContext) -> Result<ApiResponse, ApiError> {
+    use crate::forge::command::{GrantedCommand, RelayInfo, RelayList};
+    let mut relays = vec![RelayInfo {
+        name: "github".into(),
+        kind: "forge".into(),
+        available: !ctx.relays.is_empty(),
+        reason: None,
+        version: String::new(),
+        resources: Vec::new(),
+        guide: String::new(),
+        commands: Vec::new(),
+    }];
+    for (name, s) in &ctx.commands {
+        relays.push(match s.describe().await {
+            Ok(d) => RelayInfo {
+                name: name.clone(),
+                kind: "command".into(),
+                available: true,
+                reason: None,
+                version: d.version.clone(),
+                resources: d.resources.clone(),
+                guide: d.guide.clone(),
+                commands: d
+                    .commands
+                    .iter()
+                    .map(|c| GrantedCommand {
+                        spec: c.clone(),
+                        granted: ctx.project.authorize_command(&c.permission).is_ok(),
+                    })
+                    .collect(),
+            },
+            Err(e) => RelayInfo {
+                name: name.clone(),
+                kind: "command".into(),
+                available: false,
+                reason: Some(e.message),
+                version: String::new(),
+                resources: Vec::new(),
+                guide: String::new(),
+                commands: Vec::new(),
+            },
+        });
+    }
+    let raw = serde_json::to_value(RelayList { relays }).map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("encode the relays: {e}"),
+    })?;
+    Ok(ApiResponse {
+        raw: Some(raw),
+        ..Default::default()
+    })
 }
 
 /// #366: `/x/<sidecar>/<word>/<word>…` — a command sidecar's command. The permission is checked

@@ -173,6 +173,16 @@ async fn setup_writes_everything_and_a_second_run_changes_nothing() {
         !env.contains("SSH_AUTH_SOCK="),
         "no gateway socket, so none exported: {env}"
     );
+    // #330: the relays, saved beside the env file for the CLI, and the env file says where
+    let relays = b.dir.path().join("etc/relays.json");
+    assert!(
+        env.contains(&format!("SEKIMORE_RELAYS_FILE={}\n", relays.display())),
+        "{env}"
+    );
+    let saved: sekimore_relay::forge::command::RelayList =
+        serde_json::from_str(&text(&relays)).unwrap();
+    assert_eq!(saved.relays[0].name, "github");
+    assert!(saved.relays[0].available);
 
     // the keys
     let keydir = b.home.join(".ssh/sekimore");

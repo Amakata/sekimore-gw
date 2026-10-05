@@ -64,7 +64,7 @@ fn remove_old_skill(home: &std::path::Path) {
     }
 }
 
-pub fn skill_text(lang: Option<&str>, signing_required: bool) -> String {
+pub fn skill_text(lang: Option<&str>, signing_required: bool, sidecar_guides: &str) -> String {
     let mut s = format!(
         "---\nname: sgw-agent\ndescription: In this environment git push, pull requests, CI checks, issues and the GitHub API all go through sekimore-relay. Read this before pushing, opening a PR, checking CI or calling GitHub. sekimore-relay {}\n---\n\n{}",
         env!("CARGO_PKG_VERSION"),
@@ -73,6 +73,8 @@ pub fn skill_text(lang: Option<&str>, signing_required: bool) -> String {
     if !s.ends_with('\n') {
         s.push('\n');
     }
+    // #330: each connected command sidecar's own guide, after the gateway's
+    s.push_str(sidecar_guides);
     if signing_required {
         s.push_str(SIGNING_NOTE);
     }
@@ -99,6 +101,7 @@ pub fn write(
     targets: &str,
     lang: Option<&str>,
     signing_required: bool,
+    sidecar_guides: &str,
 ) -> anyhow::Result<()> {
     let targets: Vec<&str> = targets.split(',').map(str::trim).collect();
     if targets.contains(&"none") {
@@ -111,7 +114,7 @@ pub fn write(
         ensure_dir(&dir, 0o755)?;
         write_atomic(
             &dir.join("SKILL.md"),
-            &skill_text(lang, signing_required),
+            &skill_text(lang, signing_required, sidecar_guides),
             0o644,
         )?;
         chown_all(&home.join(".claude/skills"), owner).context("chown ~/.claude/skills")?;

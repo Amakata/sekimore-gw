@@ -291,3 +291,50 @@ async fn whoami_lists_a_sidecar_s_permissions_apart_from_the_repositories() {
     // a repository line says only how it differs from the project; it has no say over these
     assert!(!msg.contains("-notes:"), "{msg}");
 }
+
+#[tokio::test]
+async fn relays_lists_each_sidecar_with_what_the_project_may_run() {
+    use sekimore_relay::forge::command::RelayList;
+    let r = run(&["notes:read"], describe(), State::Set(SECRET.into())).await;
+    let (code, resp) = post(
+        r.f.addr,
+        "/relays",
+        Some(&r.f.token),
+        &ApiRequest::default(),
+    )
+    .await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    let list: RelayList = serde_json::from_value(resp.raw.unwrap()).unwrap();
+    let names: Vec<&str> = list.relays.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["github", "notes"]);
+    let notes = &list.relays[1];
+    assert!(notes.available && notes.guide.contains("## Notes"));
+    let granted: Vec<(&str, bool)> = notes
+        .commands
+        .iter()
+        .map(|c| (c.spec.name.as_str(), c.granted))
+        .collect();
+    assert_eq!(granted, [("note add", false), ("note list", true)]);
+    // nothing is sent to run a command just to list them
+    assert!(commands_sent(&r.seen).is_empty());
+}
+
+#[tokio::test]
+async fn relays_says_why_a_sidecar_is_not_there() {
+    use sekimore_relay::forge::command::RelayList;
+    let mut d = describe();
+    d["name"] = json!("other");
+    let r = run(&["notes:read"], d, State::Set(SECRET.into())).await;
+    let (_, resp) = post(
+        r.f.addr,
+        "/relays",
+        Some(&r.f.token),
+        &ApiRequest::default(),
+    )
+    .await;
+    let list: RelayList = serde_json::from_value(resp.raw.unwrap()).unwrap();
+    let notes = &list.relays[1];
+    assert!(!notes.available);
+    assert!(notes.reason.as_deref().unwrap().contains("names itself"));
+    assert!(notes.commands.is_empty());
+}
