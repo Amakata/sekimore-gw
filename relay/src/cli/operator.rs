@@ -1118,6 +1118,22 @@ pub async fn config(path: &Path) -> anyhow::Result<()> {
     for line in permission_lines(&all_permission_keys(), &granted, &denied) {
         println!("{line}");
     }
+    // #366: the command sidecars' keys, the project's alone
+    let theirs: Vec<String> = r
+        .project
+        .granted_commands()
+        .iter()
+        .map(|k| format!("[x]{k}"))
+        .chain(
+            r.project
+                .denied_commands()
+                .iter()
+                .map(|k| format!("[-]{k}")),
+        )
+        .collect();
+    if !theirs.is_empty() {
+        println!("  {:<9} {}", "sidecars", theirs.join(" "));
+    }
     if !denied.is_empty() {
         println!("{}", t("op.check.deny_note"));
     }

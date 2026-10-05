@@ -186,6 +186,12 @@ relay:
       resources: [pr, issue, project, repo, ci, release, search, security]
                                 # what the sidecar may claim; one that claims more is not connected
       # upstreams: [github.com]  # the git-relay domains whose API it serves (default: all)
+    # notes:                    # gw 0.3.0+ any other name is a command sidecar: resources and commands
+    #   socket: /run/sekimore-sidecars/notes.sock      # of its own (docs/sidecar-protocol.md)
+    #   resources: [notes]      # never one of the gateway's; grant notes:<action> in
+    #                           # relay.project.permissions (the project level only)
+    #   credentials:            # sent with each call, from the secret store: sgw var set notes/api_key
+    #     api_key: "{notes/api_key}"
   # store:                      # gw 0.2.17+ how the secret store is unlocked when the relay starts
   #   unlock: prompt            # prompt (the default: `mise run gw:unlock`) | file | env.
                                 # file and env put the passphrase at rest, which is what prompt avoids.

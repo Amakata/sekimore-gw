@@ -197,6 +197,57 @@ pub struct Describe {
     /// How to use it, for the agent's guide (#330). Required: a relay that cannot say how it is
     /// used is not connected
     pub guide: String,
+    /// #366: a command sidecar's commands. A forge relay has none: its operations are the gateway's
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<super::command::CommandSpec>,
+}
+
+/// One request to a sidecar over its socket: HTTP/1.1, JSON, the reply capped at [`REPLY_CAP`] and
+/// the whole exchange at [`CALL_TIMEOUT`]. A non-2xx answer is an error, with the start of its body.
+pub(crate) async fn exchange(
+    socket: &Path,
+    method: Method,
+    path: &str,
+    body: Bytes,
+) -> Result<Bytes, String> {
+    let fut = async {
+        let stream = tokio::net::UnixStream::connect(socket)
+            .await
+            .map_err(|e| format!("connect: {e}"))?;
+        let (mut send, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+            .await
+            .map_err(|e| format!("handshake: {e}"))?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        let req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(hyper::header::HOST, "sidecar")
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(Full::new(body))
+            .map_err(|e| format!("request: {e}"))?;
+        let resp = send
+            .send_request(req)
+            .await
+            .map_err(|e| format!("send: {e}"))?;
+        let status = resp.status();
+        let bytes = Limited::new(resp.into_body(), REPLY_CAP)
+            .collect()
+            .await
+            .map_err(|e| format!("reply: {e}"))?
+            .to_bytes();
+        if !status.is_success() {
+            return Err(format!(
+                "HTTP {status}: {}",
+                String::from_utf8_lossy(&bytes[..bytes.len().min(200)])
+            ));
+        }
+        Ok(bytes)
+    };
+    tokio::time::timeout(CALL_TIMEOUT, fut)
+        .await
+        .unwrap_or_else(|_| Err(format!("no reply in {}s", CALL_TIMEOUT.as_secs())))
 }
 
 // ---- the gateway's side --------------------------------------------------------------------
@@ -279,44 +330,7 @@ impl SocketRelay {
     }
 
     async fn exchange(&self, method: Method, path: &str, body: Bytes) -> Result<Bytes, String> {
-        let fut = async {
-            let stream = tokio::net::UnixStream::connect(&self.socket)
-                .await
-                .map_err(|e| format!("connect: {e}"))?;
-            let (mut send, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-                .await
-                .map_err(|e| format!("handshake: {e}"))?;
-            tokio::spawn(async move {
-                let _ = conn.await;
-            });
-            let req = Request::builder()
-                .method(method)
-                .uri(path)
-                .header(hyper::header::HOST, "sidecar")
-                .header(hyper::header::CONTENT_TYPE, "application/json")
-                .body(Full::new(body))
-                .map_err(|e| format!("request: {e}"))?;
-            let resp = send
-                .send_request(req)
-                .await
-                .map_err(|e| format!("send: {e}"))?;
-            let status = resp.status();
-            let bytes = Limited::new(resp.into_body(), REPLY_CAP)
-                .collect()
-                .await
-                .map_err(|e| format!("reply: {e}"))?
-                .to_bytes();
-            if !status.is_success() {
-                return Err(format!(
-                    "HTTP {status}: {}",
-                    String::from_utf8_lossy(&bytes[..bytes.len().min(200)])
-                ));
-            }
-            Ok(bytes)
-        };
-        tokio::time::timeout(CALL_TIMEOUT, fut)
-            .await
-            .unwrap_or_else(|_| Err(format!("no reply in {}s", CALL_TIMEOUT.as_secs())))
+        exchange(&self.socket, method, path, body).await
     }
 
     /// Read `/describe` once and hold the sidecar to the configuration.
@@ -540,6 +554,7 @@ impl Sidecar {
             .map(String::from)
             .to_vec(),
             guide: "GitHub: pull requests, issues, CI, releases, Projects v2, search and Dependabot alerts; see `sgw-agent guide`.".into(),
+            commands: Vec::new(),
         }
     }
 
