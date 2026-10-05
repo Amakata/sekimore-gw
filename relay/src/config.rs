@@ -698,6 +698,13 @@ pub struct SidecarConfig {
 /// is a command sidecar (#366).
 pub const FORGE_RELAYS: &[&str] = &["github"];
 
+/// #330: `sgw-agent`'s own first words. A command sidecar's name sits beside them, so it may not
+/// be one of them. A test holds this to the CLI.
+pub const AGENT_COMMANDS: &[&str] = &[
+    "setup", "guide", "whoami", "github", "pr", "issue", "ci", "project", "release", "repo",
+    "security", "search", "help",
+];
+
 /// #366: a sidecar's name, a resource it declares, a word of a command or an argument: lower-case
 /// letters, digits, `_` and `-`, starting with a letter. Each ends up as a CLI word and in a
 /// permission key, so nothing that needs quoting.
@@ -758,6 +765,12 @@ impl SidecarConfig {
             return Err(bad(format!(
                 "{name:?} is not a usable name: lower-case letters, digits, _ and -, starting with a letter. (The forge relays are {}.)",
                 FORGE_RELAYS.join(", ")
+            )));
+        }
+        // #330: the name is the agent's first word (`sgw-agent notes …`), so not one it already has
+        if AGENT_COMMANDS.contains(&name) {
+            return Err(bad(format!(
+                "{name:?} is an sgw-agent command already; give the sidecar another name"
             )));
         }
         if self.resources.is_empty() {
@@ -2153,6 +2166,12 @@ mod tests {
                 "[]",
                 "",
                 "claimed by both",
+            ),
+            (
+                "    pr: { socket: /run/sekimore/pr.sock, resources: [notes] }\n",
+                "[]",
+                "",
+                "is an sgw-agent command already",
             ),
             (notes, "[notes:Read]", "", "the action must be"),
             (notes, "[]", ", permissions: [notes:read]", "project.permissions only"),

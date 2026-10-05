@@ -130,6 +130,14 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 - The first comment of each review conversation also carries its thread (`thread PRRT_…`), and `(resolved)` when that conversation is already settled. Once you have dealt with a note, close it out with `sgw-agent pr resolve --number N --thread-id PRRT_…`. Answering a note and declaring it settled are different permissions, so `pr resolve` may be refused where `pr reply` is not.
 - Read a line before you comment on it. `sgw-agent pr files --number N` lists the files that the pull request changes, and `sgw-agent pr diff --number N --path <path>` prints one of them with line numbers. The number in the left column is the `line` in `pr review --comment <path>:<line>:<body>`. A deleted line has no number because it does not exist in the new file, so you cannot comment on it. If a file does not fit on one page, read the rest with `--before <the previous end>`.
 
+## Sidecars (other services through the relay)
+
+- `sgw-agent github pr …` is the same as `sgw-agent pr …`. The short form stays.
+- A project may add sidecars: other services with commands of their own, run as `sgw-agent <sidecar> <command> --<arg> …`. `sgw-agent --help` lists the ones you can use, and `sgw-agent <sidecar> --help` their commands. Each sidecar's guide is at the end of this guide.
+- `whoami` lists their permissions on a line of their own (`sidecar permissions`). They are the project's alone: a repository line never changes them.
+- What you cannot use is hidden. `--show-unavailable` lists it too, with why (`[not allowed: needs notes:delete]`, `[not available: …]`).
+- The commands come from what `sgw-agent setup` saved when the container started. When a sidecar is added or changed, ask a human to run `sgw refresh` on the host.
+
 ## The usual flow
 
 1. Work on a branch and make the tests pass.

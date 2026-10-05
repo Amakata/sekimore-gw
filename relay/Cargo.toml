@@ -32,7 +32,7 @@ humantime-serde = "1.1"
 sha2 = "0.11"
 hex = "0.4"
 getrandom = "0.4"
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.5", features = ["derive", "env", "string"] }
 anyhow = "1.0"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }

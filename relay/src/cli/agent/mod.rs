@@ -12,6 +12,7 @@ pub mod client;
 pub mod cmd;
 pub mod dispatch;
 pub mod print;
+pub mod sidecars;
 pub mod standalone;
 
 /// What the agent's own lines on stderr start with. `sgw-agent` from 0.2.50 (#257); the

@@ -207,6 +207,67 @@ async fn token_valid(endpoint: &str, token: &str) -> bool {
     )
 }
 
+/// #330: the relays this project can use, from the gateway, saved beside the env file for the CLI
+/// to build its commands and the guide from. A failure keeps the copy already there: the CLI goes
+/// on with what it knew rather than with nothing. Returns what is saved now.
+async fn save_relays(
+    endpoint: &str,
+    token: &str,
+    file: &Path,
+    owner: &Owner,
+) -> crate::forge::command::RelayList {
+    use crate::forge::command::RelayList;
+    let kept = || -> RelayList {
+        std::fs::read(file)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    };
+    let fetched: anyhow::Result<RelayList> = async {
+        let resp: crate::api::types::ApiResponse = http(10)?
+            .post(format!("{endpoint}/relays"))
+            .bearer_auth(token)
+            .json(&ApiRequest::default())
+            .send()
+            .await?
+            .json()
+            .await?;
+        if !resp.ok {
+            anyhow::bail!("{}", resp.error.unwrap_or_default());
+        }
+        Ok(serde_json::from_value(resp.raw.unwrap_or_default())?)
+    }
+    .await;
+    let list = match fetched {
+        Ok(l) => l,
+        Err(e) => {
+            println!(
+                "[agent] relay: WARNING: could not read the relays from the gateway ({e:#}); keeping {}",
+                file.display()
+            );
+            return kept();
+        }
+    };
+    let text = serde_json::to_string_pretty(&list).unwrap_or_default();
+    if let Err(e) = write_atomic(file, &(text + "\n"), 0o644).and_then(|_| chown(file, owner)) {
+        println!(
+            "[agent] relay: WARNING: could not write {}: {e:#}",
+            file.display()
+        );
+    }
+    for r in list.relays.iter().filter(|r| r.kind == "command") {
+        match &r.reason {
+            None => println!(
+                "[agent] relay: sidecar {}: {} command(s) allowed",
+                r.name,
+                r.commands.iter().filter(|c| c.granted).count()
+            ),
+            Some(why) => println!("[agent] relay: sidecar {} is not available: {why}", r.name),
+        }
+    }
+    list
+}
+
 async fn bootstrap(endpoint: &str, public_key: &str) -> Option<BootstrapResponse> {
     let c = http(10).ok()?;
     c.post(format!("{endpoint}/bootstrap"))
@@ -609,6 +670,12 @@ pub async fn setup(s: &Settings, gw: Ipv4Addr) -> anyhow::Result<Option<Outcome>
         "SEKIMORE_AGENT_KEY={}\n",
         keydir.join("id_ed25519.pub").display()
     ));
+    // #330: where the relays are saved, beside this file
+    let relays_file = env_file
+        .parent()
+        .unwrap_or(Path::new("/etc/sekimore-agent"))
+        .join("relays.json");
+    text.push_str(&format!("SEKIMORE_RELAYS_FILE={}\n", relays_file.display()));
     if let Some(sock) = &sig_sock {
         text.push_str(&format!("SEKIMORE_SIGNING_SOCK={sock}\n"));
         if let Some(f) = &sig_fp {
@@ -724,9 +791,19 @@ pub async fn setup(s: &Settings, gw: Ipv4Addr) -> anyhow::Result<Option<Outcome>
 
     // ---- the agent guide where each tool reads it ----
     let required = sig_mode.as_deref() == Some("required");
-    if let Err(e) =
-        super::instructions::write(&owner, &s.instructions, s.guide_lang.as_deref(), required)
-    {
+    // #330: the relays, for the CLI's commands and for the guide below
+    let relays = match &token {
+        Some(t) => save_relays(&endpoint, t, &relays_file, &owner).await,
+        None => Default::default(),
+    };
+    let sidecar_guides = crate::cli::agent::sidecars::guides(&relays);
+    if let Err(e) = super::instructions::write(
+        &owner,
+        &s.instructions,
+        s.guide_lang.as_deref(),
+        required,
+        &sidecar_guides,
+    ) {
         println!("[agent] relay: WARNING: could not write agent instructions: {e:#}");
     }
 

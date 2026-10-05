@@ -87,6 +87,43 @@ pub struct CommandRequest {
     pub credentials: BTreeMap<String, String>,
 }
 
+/// #330: what `/relays` says about one relay — for agent setup to save, and for the CLI to build
+/// its commands and the guide from without asking the gateway each time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RelayInfo {
+    pub name: String,
+    /// `forge` (the gateway's own operations: `github`) or `command`
+    pub kind: String,
+    /// Whether it answered and was connected. A command sidecar that is down or refused is listed
+    /// with the reason, so `--show-unavailable` can say why it is missing
+    pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub guide: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<GrantedCommand>,
+}
+
+/// A command and whether this project may run it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GrantedCommand {
+    #[serde(flatten)]
+    pub spec: CommandSpec,
+    #[serde(default)]
+    pub granted: bool,
+}
+
+/// The body of `/relays` and of the file agent setup saves it to.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RelayList {
+    pub relays: Vec<RelayInfo>,
+}
+
 /// What `POST /command` answers: a result or an error, and every upstream call made.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CommandReply {

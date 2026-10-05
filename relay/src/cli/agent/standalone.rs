@@ -26,6 +26,9 @@ pub struct AgentCli {
     pub repo: Option<String>,
     #[arg(short, long, action = clap::ArgAction::Count, global = true, help = t("cli.verbose"))]
     pub verbose: u8,
+    /// #330: list the sidecars and commands this project cannot use too, each with why
+    #[arg(long = "show-unavailable", global = true, help = t("cli.agent.show_unavailable"))]
+    pub show_unavailable: bool,
     #[command(subcommand)]
     pub cmd: Top,
 }
@@ -243,9 +246,79 @@ async fn token_rejected() -> bool {
     }
 }
 
+/// What the command line asks for: one of the CLI's own commands, or a command sidecar's.
+pub enum Parsed {
+    Cli(AgentCli),
+    Sidecar {
+        call: super::sidecars::Call,
+        verbose: u8,
+    },
+}
+
+/// #330: the CLI's own tree with the saved command sidecars grafted on, parsed.
+pub fn parse(argv: &[String]) -> Result<Parsed, clap::Error> {
+    parse_with(argv, &super::sidecars::load())
+}
+
+/// `parse` against a given list of relays.
+pub fn parse_with(
+    argv: &[String],
+    list: &crate::forge::command::RelayList,
+) -> Result<Parsed, clap::Error> {
+    use clap::{CommandFactory, FromArgMatches};
+    let show = argv.iter().any(|a| a == "--show-unavailable");
+    let matches = super::sidecars::graft(with_github(AgentCli::command()), list, show)
+        .try_get_matches_from(argv)?;
+    if let Some(call) = super::sidecars::matched(&matches, list) {
+        return Ok(Parsed::Sidecar {
+            call,
+            verbose: matches.get_count("verbose"),
+        });
+    }
+    if matches.subcommand_name() == Some(GITHUB) {
+        // the long form names the same command as the short one: drop the word and parse that
+        let mut short = argv.to_vec();
+        if let Some(i) = short.iter().skip(1).position(|a| a == GITHUB) {
+            short.remove(i + 1);
+        }
+        return AgentCli::try_parse_from(short).map(Parsed::Cli);
+    }
+    AgentCli::from_arg_matches(&matches).map(Parsed::Cli)
+}
+
+/// #330: the forge relay's first word. Its commands are the CLI's own GitHub ones, so `github`
+/// is a group of copies of them rather than a variant of its own: the derive cannot hold a
+/// command tree that contains itself.
+const GITHUB: &str = "github";
+
+/// The CLI's own GitHub commands — every first word but the ones that are not about GitHub.
+fn with_github(cli: clap::Command) -> clap::Command {
+    let own: Vec<clap::Command> = cli
+        .get_subcommands()
+        .filter(|c| !matches!(c.get_name(), "setup" | "guide" | "whoami"))
+        .cloned()
+        .collect();
+    cli.subcommand(
+        clap::Command::new(GITHUB)
+            .about(t("agent.github"))
+            .subcommand_required(true)
+            .arg_required_else_help(true)
+            .subcommands(own),
+    )
+}
+
 async fn run_once(argv: &[String]) -> i32 {
-    let cli = match AgentCli::try_parse_from(argv) {
-        Ok(c) => c,
+    let cli = match parse(argv) {
+        Ok(Parsed::Cli(c)) => c,
+        Ok(Parsed::Sidecar { call, .. }) => {
+            return match super::sidecars::run(call).await {
+                Ok(code) => code,
+                Err(e) => {
+                    eprintln!("{NAME}: {e:#}");
+                    1
+                }
+            }
+        }
         Err(e) => e.exit(),
     };
     let result = match cli.cmd {
@@ -266,11 +339,12 @@ async fn run_once(argv: &[String]) -> i32 {
 pub fn main() -> i32 {
     let argv: Vec<String> = std::env::args().collect();
     // --help / --version / a parse error: before anything touches the network or the env file
-    let cli = match AgentCli::try_parse_from(&argv) {
-        Ok(c) => c,
+    let verbose = match parse(&argv) {
+        Ok(Parsed::Cli(c)) => c.verbose,
+        Ok(Parsed::Sidecar { verbose, .. }) => verbose,
         Err(e) => e.exit(),
     };
-    let level = match cli.verbose {
+    let level = match verbose {
         0 => "warn",
         1 => "info",
         _ => "debug",
@@ -280,7 +354,6 @@ pub fn main() -> i32 {
     )
     .try_init()
     .ok();
-    drop(cli);
 
     let env_file = std::env::var("SEKIMORE_AGENT_ENV_FILE")
         .ok()
@@ -382,6 +455,48 @@ mod tests {
         );
     }
 
+    /// #330: a command sidecar may not take a first word the CLI has. The config refuses the names
+    /// in AGENT_COMMANDS, so that list has to be every one of them.
+    #[test]
+    fn the_names_a_sidecar_may_not_take_are_every_first_word_the_cli_has() {
+        use clap::CommandFactory;
+        let cli = with_github(AgentCli::command());
+        let mut missing: Vec<&str> = cli
+            .get_subcommands()
+            .map(|c| c.get_name())
+            .filter(|n| !crate::config::AGENT_COMMANDS.contains(n))
+            .collect();
+        missing.sort();
+        assert!(
+            missing.is_empty(),
+            "add to config::AGENT_COMMANDS: {missing:?}"
+        );
+    }
+
+    /// #330: `github pr …` is the same command as `pr …`, and a saved sidecar parses as its call.
+    #[test]
+    fn github_is_the_long_form_and_a_saved_sidecar_is_a_command() {
+        let list: crate::forge::command::RelayList = serde_json::from_str(
+            r#"{"relays":[{"name":"notes","kind":"command","available":true,"guide":"Notes","commands":[{"name":"note list","about":"List","permission":"notes:read","granted":true}]}]}"#,
+        )
+        .unwrap();
+        let argv = |s: &str| -> Vec<String> { s.split(' ').map(String::from).collect() };
+        let long = match parse_with(&argv("sgw-agent github pr view --number 3"), &list).unwrap() {
+            Parsed::Cli(c) => format!("{:?}", c.cmd),
+            Parsed::Sidecar { .. } => panic!("github is not a sidecar"),
+        };
+        assert!(
+            long.contains("Pr") && long.contains("View") && long.contains("3"),
+            "{long}"
+        );
+        match parse_with(&argv("sgw-agent notes note list"), &list).unwrap() {
+            Parsed::Sidecar { call, .. } => {
+                assert_eq!(call.sidecar, "notes");
+                assert_eq!(call.words, ["note", "list"]);
+            }
+            Parsed::Cli(c) => panic!("parsed as {:?}", c.cmd),
+        }
+    }
     #[test]
     fn only_the_relays_own_token_reasons_trigger_a_refresh() {
         assert!(is_token_error("token expired at 2026-09-26T19:14:14Z"));

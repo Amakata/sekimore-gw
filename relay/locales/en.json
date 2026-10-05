@@ -495,5 +495,7 @@
   "sgw.update.r_none": "nothing",
   "cli.config_cmd": "Show what the configuration resolves to: upstreams, targets, permissions, repos, boards. No network",
   "sgw.cmd.config": "what the configuration resolves to (upstreams / targets / permissions / repos / boards). No network",
-  "sgw.unlock.asking": "the secret store is locked; unlock it here (Ctrl-C to leave it locked)"
+  "sgw.unlock.asking": "the secret store is locked; unlock it here (Ctrl-C to leave it locked)",
+  "agent.github": "GitHub: the same commands as at the top level (pr, issue, ci, …)",
+  "cli.agent.show_unavailable": "Also list the sidecars and commands this project cannot use, each with why"
 }
