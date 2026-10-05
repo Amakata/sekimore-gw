@@ -494,5 +494,6 @@
   "sgw.update.r_commit": "変更を確かめてコミットする: git diff",
   "sgw.update.r_none": "なし",
   "cli.config_cmd": "設定が解決した結果（上流 / 転送先 / 権限 / リポジトリ / ボード）を表示する。ネットワークには出ない",
-  "sgw.cmd.config": "設定が解決した結果（上流 / 転送先 / 権限 / リポジトリ / ボード）。ネットワークには出ない"
+  "sgw.cmd.config": "設定が解決した結果（上流 / 転送先 / 権限 / リポジトリ / ボード）。ネットワークには出ない",
+  "sgw.unlock.asking": "秘密ストアが locked です。ここで unlock します（Ctrl-C で locked のまま）"
 }

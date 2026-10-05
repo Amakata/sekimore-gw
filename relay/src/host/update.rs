@@ -896,7 +896,7 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         if docker.find_container(GATEWAY).is_ok() {
             let go = opts.yes || ask(&tf("sgw.update.ask_recreate", &[("version", &new_gw)]));
             if go {
-                let rc = super::ops::recreate(docker, &project.name(), false).unwrap_or(1);
+                let rc = super::ops::recreate(docker, &project.name(), false, false).unwrap_or(1);
                 if rc != 0 {
                     remain.push(t("sgw.update.r_unlock"));
                 }

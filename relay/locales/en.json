@@ -494,5 +494,6 @@
   "sgw.update.r_commit": "review the change and commit it: git diff",
   "sgw.update.r_none": "nothing",
   "cli.config_cmd": "Show what the configuration resolves to: upstreams, targets, permissions, repos, boards. No network",
-  "sgw.cmd.config": "what the configuration resolves to (upstreams / targets / permissions / repos / boards). No network"
+  "sgw.cmd.config": "what the configuration resolves to (upstreams / targets / permissions / repos / boards). No network",
+  "sgw.unlock.asking": "the secret store is locked; unlock it here (Ctrl-C to leave it locked)"
 }
