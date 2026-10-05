@@ -162,6 +162,7 @@ Does not fit when the agent should:
 - [CHANGELOG.md](CHANGELOG.md) — the changes
 - [docs/paths.md](docs/paths.md) — every path a request can take, who checks it, and what `sgw verify` probes
 - [docs/localization.md](docs/localization.md) — English and Japanese
+- [docs/sidecar-protocol.md](docs/sidecar-protocol.md) — write a command sidecar: commands of your own, checked and audited by the gateway
 - [CONTRIBUTING.md](CONTRIBUTING.md), [RELEASING.md](RELEASING.md)
 
 ## Troubleshooting
