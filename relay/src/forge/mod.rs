@@ -14,6 +14,7 @@
 //! Unix socket with the same requests as JSON. The git path and the operator's commands always use
 //! the built-in one, so a push does not depend on a sidecar being up.
 
+pub mod command;
 pub mod github;
 pub mod sidecar;
 

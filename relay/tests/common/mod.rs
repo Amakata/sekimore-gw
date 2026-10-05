@@ -919,6 +919,31 @@ pub async fn start_api_on(
     declared: Option<Vec<sekimore_relay::config::BoardRef>>,
     forge: Forge,
 ) -> ApiFixture {
+    start_api_with_commands(
+        project,
+        bootstrap,
+        upstream_token,
+        project_boards,
+        declared,
+        forge,
+        |_| Default::default(),
+    )
+    .await
+}
+
+/// #366: the command sidecars the test runs, given the fixture's audit.
+pub type Commands =
+    std::collections::BTreeMap<String, Arc<sekimore_relay::forge::command::CommandSidecar>>;
+
+pub async fn start_api_with_commands(
+    project: Project,
+    bootstrap: BootstrapMode,
+    upstream_token: bool,
+    project_boards: Vec<ResolvedBoard>,
+    declared: Option<Vec<sekimore_relay::config::BoardRef>>,
+    forge: Forge,
+    commands: impl FnOnce(Arc<Audit>) -> Commands,
+) -> ApiFixture {
     let dir = tempfile::tempdir().unwrap();
     let (api_base, recorder) = mock_github().await;
     let graphql = Url::parse(&format!(
@@ -964,6 +989,7 @@ pub async fn start_api_on(
         store.clone(),
         audit.clone(),
     ));
+    let audit_for_commands = audit.clone();
     let tokens = TokenStore::new(&dir.path().join("tokens.json"));
     let (token, _) = tokens
         .issue(&project.name, Duration::from_secs(3600))
@@ -996,6 +1022,7 @@ pub async fn start_api_on(
             None => sekimore_relay::api::ProjectBoards::already_resolved(project_boards),
         },
         signing: None,
+        commands: commands(audit_for_commands),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

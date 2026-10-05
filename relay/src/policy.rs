@@ -12,7 +12,7 @@
 //!   - Those are only constructed by passing the policy check
 //!   - So **forgetting the check does not compile**
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 
 // ---- resources x actions ----
@@ -492,6 +492,10 @@ pub struct Project {
     default_host: String,
     /// 0.3.0 (#158): how `refs/for/<base>` names the branch it creates
     pub branch: crate::config::BranchConfig,
+    /// #366: the command sidecars' permissions (`notes:read`) the project grants, and denies.
+    /// Strings, not `(Resource, Action)`: the resources are whatever the sidecars declare
+    ext_allow: BTreeSet<String>,
+    ext_deny: BTreeSet<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -517,6 +521,10 @@ pub enum Denied {
     NotPermitted {
         resource: &'static str,
         action: &'static str,
+    },
+    /// #366: a command sidecar's permission the project does not grant
+    CommandNotPermitted {
+        permission: String,
     },
     /// Anything other than git-upload-pack / git-receive-pack
     UnsupportedCommand {
@@ -592,6 +600,9 @@ impl fmt::Display for Denied {
             Denied::NotPermitted { resource, action } => {
                 write!(f, "{resource}:{action} is not allowed by policy")
             }
+            Denied::CommandNotPermitted { permission } => {
+                write!(f, "{permission} is not allowed by policy")
+            }
             Denied::BoardNotPermitted {
                 board,
                 resource,
@@ -652,7 +663,7 @@ impl Denied {
             Denied::RepoReadOnly { .. } => "repo_read_only",
             Denied::BaseNotAllowed { .. } => "base_not_allowed",
             Denied::HeadNotAllowed { .. } => "head_not_allowed",
-            Denied::NotPermitted { .. } => "not_permitted",
+            Denied::NotPermitted { .. } | Denied::CommandNotPermitted { .. } => "not_permitted",
             Denied::BoardNotPermitted { .. } => "board_not_permitted",
             Denied::UnsupportedCommand { .. } => "unsupported_command",
             Denied::RefNotAllowed { .. } => "ref_not_allowed",
@@ -664,6 +675,23 @@ impl Denied {
             Denied::ForcePushNotAllowed { .. } => "force_push_not_allowed",
             Denied::InvalidRef { .. } => "invalid_ref",
         }
+    }
+}
+
+/// #366: **proof that a command sidecar's command passed the policy check.** Only
+/// `Project::authorize_command` makes one; the call to the sidecar demands it.
+#[derive(Debug, PartialEq)]
+pub struct CommandAuthorized<'p> {
+    permission: &'p str,
+    project: &'p str,
+}
+
+impl<'p> CommandAuthorized<'p> {
+    pub fn permission(&self) -> &'p str {
+        self.permission
+    }
+    pub fn project(&self) -> &'p str {
+        self.project
     }
 }
 
@@ -767,6 +795,8 @@ impl Project {
             denies: HashSet::new(),
             default_host: String::new(),
             branch: crate::config::BranchConfig::default(),
+            ext_allow: BTreeSet::new(),
+            ext_deny: BTreeSet::new(),
         }
     }
 
@@ -1251,7 +1281,8 @@ impl Project {
         })
     }
 
-    /// The project's default permissions (allow − deny).
+    /// The project's default permissions (allow − deny). The gateway's own keys: a command
+    /// sidecar's are `granted_commands`, since no repository has a say over them
     pub fn granted(&self) -> Vec<String> {
         let mut v: Vec<String> = self
             .perms
@@ -1270,6 +1301,35 @@ impl Project {
             .collect();
         v.sort();
         v
+    }
+
+    /// #366: the command sidecars' permissions the project grants (allow − deny), and denies.
+    pub fn granted_commands(&self) -> Vec<String> {
+        self.ext_allow.difference(&self.ext_deny).cloned().collect()
+    }
+    pub fn denied_commands(&self) -> Vec<String> {
+        self.ext_deny.iter().cloned().collect()
+    }
+
+    /// #366: the command sidecars' permissions from `relay.project.permissions`, already checked
+    /// for shape by the config.
+    pub fn set_extensions(&mut self, allow: &[String], deny: &[String]) {
+        self.ext_allow = allow.iter().cloned().collect();
+        self.ext_deny = deny.iter().cloned().collect();
+    }
+
+    /// #366: the only way to an [`CommandAuthorized`]. A command sidecar's permission is the
+    /// project's alone — granted, and not denied.
+    pub fn authorize_command(&self, permission: &str) -> Result<CommandAuthorized<'_>, Denied> {
+        match self.ext_allow.get(permission) {
+            Some(p) if !self.ext_deny.contains(permission) => Ok(CommandAuthorized {
+                permission: p,
+                project: &self.name,
+            }),
+            _ => Err(Denied::CommandNotPermitted {
+                permission: permission.to_string(),
+            }),
+        }
     }
 }
 

@@ -357,11 +357,41 @@ pub async fn dispatch(
         "/issue/tasks" => task_list(ctx, req, Resource::Issue).await,
         "/pr/tasks" => task_list(ctx, req, Resource::Pr).await,
         "/issue/check" | "/pr/check" => task_check(ctx, req).await,
+        p if p.starts_with("/x/") => sidecar_command(ctx, p, req).await,
         _ => Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: format!("unknown endpoint {path}"),
         }),
     }
+}
+
+/// #366: `/x/<sidecar>/<word>/<word>…` — a command sidecar's command. The permission is checked
+/// before anything is sent, and the sidecar is asked only for what the project allows.
+async fn sidecar_command(
+    ctx: &ApiContext,
+    path: &str,
+    req: &ApiRequest,
+) -> Result<ApiResponse, ApiError> {
+    let mut words = path.trim_start_matches("/x/").split('/');
+    let name = words.next().unwrap_or_default();
+    let command = words.collect::<Vec<_>>().join(" ");
+    let sidecar = ctx.commands.get(name).ok_or_else(|| ApiError {
+        status: StatusCode::NOT_FOUND,
+        message: format!(
+            "no sidecar named {name:?} is configured{}",
+            if ctx.commands.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; the configured ones are {}",
+                    ctx.commands.keys().cloned().collect::<Vec<_>>().join(", ")
+                )
+            }
+        ),
+    })?;
+    let spec = sidecar.command(&command).await?;
+    let auth = ctx.project.authorize_command(&spec.permission)?;
+    sidecar.call(&auth, &spec, &req.args).await
 }
 
 // ---- Permission checks ----
@@ -529,8 +559,18 @@ async fn whoami(ctx: &ApiContext, rec: &TokenRecord) -> Result<ApiResponse, ApiE
         }
         _ => String::new(),
     };
+    // #366: a command sidecar's keys are the project's alone, so they are not on the repo lines
+    let commands = ctx.project.granted_commands();
+    let commands = if commands.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nsidecar permissions (sgw-agent <sidecar> …): {}",
+            commands.join(" ")
+        )
+    };
     let msg = format!(
-        "project={} token={} expires={}\npermissions (every repo; a repo line's +/- adds or removes): {}{signing}\nrepos:\n  {}{boards}",
+        "project={} token={} expires={}\npermissions (every repo; a repo line's +/- adds or removes): {}{commands}{signing}\nrepos:\n  {}{boards}",
         rec.project,
         rec.label,
         humantime::format_rfc3339_seconds(rec.expires_at),

@@ -12,6 +12,9 @@ fn is_zero32(n: &u32) -> bool {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ApiRequest {
+    /// #366: a command sidecar's arguments, by name, as its `/describe` declares them
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub args: serde_json::Map<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub repo: String,
     #[serde(default, skip_serializing_if = "is_zero")]

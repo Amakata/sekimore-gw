@@ -314,6 +314,38 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
         git_domains: git_domains(&r),
         project_boards: ProjectBoards::new(r.relay.project.boards.clone()),
         signing: signing.clone(),
+        // #366: the command sidecars, each with the credentials it is sent, read from the store
+        commands: r
+            .relay
+            .sidecars
+            .iter()
+            .filter(|(name, _)| crate::config::SidecarConfig::is_command(name))
+            .map(|(name, s)| {
+                log::info!(
+                    "the {name} command sidecar is at {} ({})",
+                    s.socket.display(),
+                    s.resources.join(" ")
+                );
+                let credentials = s
+                    .credentials
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        crate::proxy_credential::reference(Some(v)).map(|key| (k.clone(), key))
+                    })
+                    .collect();
+                (
+                    name.clone(),
+                    Arc::new(crate::forge::command::CommandSidecar::new(
+                        name,
+                        &s.socket,
+                        s.resources.clone(),
+                        credentials,
+                        vars.clone(),
+                        audit.clone(),
+                    )),
+                )
+            })
+            .collect(),
     });
     // The control socket last, now that the token caches exist. `lock` has to reach them: a key
     // dropped from the store while a decrypted token sits in a cache is a lock that leaves that
@@ -588,7 +620,8 @@ fn sidecar_for<'a>(
     r.relay
         .sidecars
         .iter()
-        .find(|(_, s)| s.serves(domain))
+        // #366: a command sidecar serves no upstream's API
+        .find(|(n, s)| !crate::config::SidecarConfig::is_command(n) && s.serves(domain))
         .map(|(n, s)| (n.as_str(), s))
 }
 

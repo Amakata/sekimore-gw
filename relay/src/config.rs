@@ -673,7 +673,8 @@ fn d_signing_socket_uid() -> u32 {
     1000
 }
 
-/// #329: a forge relay reached over a Unix socket.
+/// #329: a forge relay reached over a Unix socket. #366: or, under any other name, a command
+/// sidecar — a relay with resources and commands of its own, which a third party can write.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SidecarConfig {
@@ -683,28 +684,45 @@ pub struct SidecarConfig {
     /// The resources it may serve (`pr`, `issue`, …). A sidecar that claims one not listed here is
     /// not connected: the claim is checked against this, not trusted
     pub resources: Vec<String>,
-    /// The upstreams (git-relay domains) whose API it serves. Empty: every upstream
+    /// The upstreams (git-relay domains) whose API it serves. Empty: every upstream. A forge
+    /// relay's only
     #[serde(default)]
     pub upstreams: Vec<String>,
+    /// #366: what a command sidecar is sent with each call, by name: each a reference to a value
+    /// in the secret store (`"{notes/api_key}"`). A forge relay gets the upstream token instead
+    #[serde(default)]
+    pub credentials: BTreeMap<String, String>,
 }
 
-/// The forge relays that exist. A sidecar names one of these.
+/// The forge relays that exist. A sidecar named one of these is that forge relay; any other name
+/// is a command sidecar (#366).
 pub const FORGE_RELAYS: &[&str] = &["github"];
 
+/// #366: a sidecar's name, a resource it declares, a word of a command or an argument: lower-case
+/// letters, digits, `_` and `-`, starting with a letter. Each ends up as a CLI word and in a
+/// permission key, so nothing that needs quoting.
+pub fn valid_word(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
 impl SidecarConfig {
+    /// Whether this is a command sidecar rather than a forge relay.
+    pub fn is_command(name: &str) -> bool {
+        !FORGE_RELAYS.contains(&name)
+    }
+
     pub fn validate(&self, name: &str, domains: &[String]) -> Result<(), ConfigError> {
         let bad = |m: String| ConfigError::Invalid(format!("relay.sidecars.{name}: {m}"));
-        if !FORGE_RELAYS.contains(&name) {
-            return Err(bad(format!(
-                "there is no forge relay named {name:?}; the known ones are {}",
-                FORGE_RELAYS.join(", ")
-            )));
-        }
         if !self.socket.is_absolute() {
             return Err(bad(format!(
                 "socket {} must be an absolute path on a volume the gateway and the sidecar share",
                 self.socket.display()
             )));
+        }
+        if Self::is_command(name) {
+            return self.validate_command(name);
         }
         if self.resources.is_empty() {
             return Err(bad(
@@ -723,7 +741,70 @@ impl SidecarConfig {
                 )));
             }
         }
+        if !self.credentials.is_empty() {
+            return Err(bad(
+                "credentials are for a command sidecar; a forge relay is given the upstream token"
+                    .to_string(),
+            ));
+        }
         Ok(())
+    }
+
+    /// #366: a command sidecar names resources of its own, never one the gateway already serves,
+    /// and its credentials are references to the secret store, never values.
+    fn validate_command(&self, name: &str) -> Result<(), ConfigError> {
+        let bad = |m: String| ConfigError::Invalid(format!("relay.sidecars.{name}: {m}"));
+        if !valid_word(name) {
+            return Err(bad(format!(
+                "{name:?} is not a usable name: lower-case letters, digits, _ and -, starting with a letter. (The forge relays are {}.)",
+                FORGE_RELAYS.join(", ")
+            )));
+        }
+        if self.resources.is_empty() {
+            return Err(bad(
+                "resources is empty; list the resources its permissions are written with (notes, for notes:read)"
+                    .to_string(),
+            ));
+        }
+        for r in &self.resources {
+            if crate::policy::parse_resource(r).is_ok() {
+                return Err(bad(format!(
+                    "resource {r:?} is the gateway's own; a command sidecar names resources of its own"
+                )));
+            }
+            if !valid_word(r) {
+                return Err(bad(format!(
+                    "resource {r:?}: lower-case letters, digits, _ and -, starting with a letter"
+                )));
+            }
+        }
+        if !self.upstreams.is_empty() {
+            return Err(bad(
+                "upstreams is for a forge relay; a command sidecar reaches its service through the gateway's 443 passthrough (domain_handlers)"
+                    .to_string(),
+            ));
+        }
+        for (k, v) in &self.credentials {
+            if !valid_word(k) {
+                return Err(bad(format!(
+                    "credential name {k:?}: lower-case letters, digits, _ and -, starting with a letter"
+                )));
+            }
+            if crate::proxy_credential::reference(Some(v)).is_none() {
+                return Err(bad(format!(
+                    "credentials.{k} must be a reference to the secret store, written \"{{name}}\" (set the value with sgw var set name); a value written here would be readable from dev"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The secret-store keys its credentials refer to.
+    pub fn credential_refs(&self) -> Vec<String> {
+        self.credentials
+            .values()
+            .filter_map(|v| crate::proxy_credential::reference(Some(v)))
+            .collect()
     }
 
     /// Whether this sidecar serves the API of `domain`.
@@ -736,6 +817,56 @@ impl SidecarConfig {
     }
 }
 
+/// Every sidecar on its own, and across them: two command sidecars may not claim one resource,
+/// or a permission key would not say which of them it lets act (#366).
+fn validate_sidecars(relay: &RelayConfig, domains: &[String]) -> Result<(), ConfigError> {
+    let mut owner: BTreeMap<&str, &str> = BTreeMap::new();
+    for (name, s) in &relay.sidecars {
+        s.validate(name, domains)?;
+        if !SidecarConfig::is_command(name) {
+            continue;
+        }
+        for r in &s.resources {
+            if let Some(other) = owner.insert(r, name) {
+                return Err(ConfigError::Invalid(format!(
+                    "relay.sidecars: resource {r:?} is claimed by both {other} and {name}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// #366: the resources command sidecars declare, each with the sidecar that serves it.
+pub fn command_resources(relay: &RelayConfig) -> BTreeMap<String, String> {
+    relay
+        .sidecars
+        .iter()
+        .filter(|(name, _)| SidecarConfig::is_command(name))
+        .flat_map(|(name, s)| s.resources.iter().map(move |r| (r.clone(), name.clone())))
+        .collect()
+}
+
+/// #366: whether `key` (`notes:read`) is a command sidecar's permission.
+fn is_command_key(key: &str, resources: &BTreeMap<String, String>) -> bool {
+    key.split_once(':')
+        .is_some_and(|(r, _)| resources.contains_key(r.trim()))
+}
+
+/// #366: a command sidecar's permission, checked for shape: one of its resources and an action
+/// written as a CLI word would be.
+fn check_command_key(key: &str) -> Result<String, String> {
+    let (r, a) = key
+        .split_once(':')
+        .ok_or_else(|| format!("{key:?}: must be resource:action"))?;
+    let (r, a) = (r.trim(), a.trim());
+    if !valid_word(a) {
+        return Err(format!(
+            "{key:?}: the action must be lower-case letters, digits, _ and -, starting with a letter"
+        ));
+    }
+    Ok(format!("{r}:{a}"))
+}
 impl SigningKeyConfig {
     /// Everything that can be decided without talking to the agent.
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -1052,9 +1183,7 @@ impl Loaded {
         if let Some(sk) = &relay.signing_key {
             sk.validate()?;
         }
-        for (name, s) in &relay.sidecars {
-            s.validate(name, &self.git_relay_domains())?;
-        }
+        validate_sidecars(relay, &self.git_relay_domains())?;
         Ok(true)
     }
 
@@ -1227,9 +1356,7 @@ impl Loaded {
         if let Some(sk) = &relay.signing_key {
             sk.validate()?;
         }
-        for (name, s) in &relay.sidecars {
-            s.validate(name, &self.git_relay_domains())?;
-        }
+        validate_sidecars(&relay, &self.git_relay_domains())?;
         let upstreams = self.resolve_upstreams(&relay)?;
         let default_up = upstreams[0].clone();
         let domain = default_up.domain.clone();
@@ -1358,13 +1485,63 @@ impl Loaded {
             rp.deny.dedup();
             repos.push(rp);
         }
-        let mut project = Project::try_new_rules(
-            pc.name.clone(),
-            repos,
-            pc.permissions.allow(),
-            pc.permissions.deny(),
-        )
-        .map_err(ConfigError::Invalid)?;
+        // #366: a command sidecar's keys are the project's alone. A repository, an upstream or a
+        // board has no say over a relay that is not about repositories
+        let ext = command_resources(&relay);
+        let mut layered: Vec<(String, &PermissionSpec)> = Vec::new();
+        for (d, l) in &pc.upstreams {
+            if let Some(p) = &l.permissions {
+                layered.push((format!("relay.project.upstreams.{d}.permissions"), p));
+            }
+            for r in &l.repos {
+                if let Some(p) = &r.permissions {
+                    layered.push((format!("relay.project.repos[{}].permissions", r.name), p));
+                }
+            }
+        }
+        for r in &pc.repos {
+            if let Some(p) = &r.permissions {
+                layered.push((format!("relay.project.repos[{}].permissions", r.name), p));
+            }
+        }
+        for b in &pc.boards {
+            if let Some(p) = &b.permissions {
+                layered.push((
+                    format!("relay.project.boards[{}].permissions", b.label()),
+                    p,
+                ));
+            }
+        }
+        for (at, p) in &layered {
+            if let Some(k) = p
+                .allow()
+                .iter()
+                .chain(p.deny())
+                .find(|k| is_command_key(k, &ext))
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "{at}: {k} is a sidecar's permission (relay.sidecars.{}); those are set in relay.project.permissions only",
+                    ext[k.split_once(':').map(|(r, _)| r.trim()).unwrap_or_default()]
+                )));
+            }
+        }
+        let split = |keys: &[String]| -> Result<(Vec<String>, Vec<String>), ConfigError> {
+            let mut own = Vec::new();
+            let mut theirs = Vec::new();
+            for k in keys {
+                if is_command_key(k, &ext) {
+                    theirs.push(check_command_key(k).map_err(ConfigError::Invalid)?);
+                } else {
+                    own.push(k.clone());
+                }
+            }
+            Ok((own, theirs))
+        };
+        let (allow, ext_allow) = split(pc.permissions.allow())?;
+        let (deny, ext_deny) = split(pc.permissions.deny())?;
+        let mut project = Project::try_new_rules(pc.name.clone(), repos, &allow, &deny)
+            .map_err(ConfigError::Invalid)?;
+        project.set_extensions(&ext_allow, &ext_deny);
         // #277: the boards' own deltas, validated to project:* keys
         project
             .set_boards(
@@ -1788,6 +1965,14 @@ impl Resolved {
                 }
             }
         }
+        // #366: and every command sidecar's credentials
+        for s in self.relay.sidecars.values() {
+            for k in s.credential_refs() {
+                if !out.contains(&k) {
+                    out.push(k);
+                }
+            }
+        }
         out
     }
 
@@ -1876,7 +2061,7 @@ mod tests {
         for (sidecar, says) in [
             (
                 "    gitlab: { socket: /run/sekimore/gitlab.sock, resources: [pr] }\n",
-                "no forge relay named",
+                "is the gateway's own",
             ),
             (
                 "    github: { socket: run/github.sock, resources: [pr] }\n",
@@ -1901,6 +2086,83 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(e.contains(says), "{sidecar}: {e}");
+        }
+    }
+
+    /// #366: a command sidecar names resources of its own and takes its credentials from the
+    /// secret store; its permissions are the project's alone.
+    #[test]
+    fn a_command_sidecar_and_its_permissions_are_checked_where_they_are_written() {
+        let body = |sidecars: &str, permissions: &str, repo: &str| {
+            format!(
+                "domain_handlers:\n  github.com: {{ handler: github }}\nrelay:\n  project:\n    name: case-cmd\n    permissions: {permissions}\n    repos:\n      - {{ name: Org/App, mode: read-write{repo} }}\n  sidecars:\n{sidecars}"
+            )
+        };
+        let notes = "    notes: { socket: /run/sekimore/notes.sock, resources: [notes], credentials: { api_key: \"{notes/api_key}\" } }\n";
+        let ok = p(&body(notes, "[pr:create, notes:read, notes:write]", ""))
+            .unwrap()
+            .resolve()
+            .unwrap();
+        let granted = ok.project.granted_commands();
+        assert_eq!(granted, vec!["notes:read", "notes:write"]);
+        assert_eq!(
+            ok.project.granted(),
+            vec!["pr:create"],
+            "a sidecar's keys are not the repos'"
+        );
+        assert!(ok.project.authorize_command("notes:write").is_ok());
+        assert!(ok.project.authorize_command("notes:delete").is_err());
+        assert_eq!(ok.var_refs(), vec!["notes/api_key"]);
+        let denied = p(&body(
+            notes,
+            "{ allow: [notes:read], deny: [notes:read] }",
+            "",
+        ))
+        .unwrap()
+        .resolve()
+        .unwrap();
+        assert!(denied.project.authorize_command("notes:read").is_err());
+
+        for (sidecars, permissions, repo, says) in [
+            (
+                "    notes: { socket: /run/sekimore/notes.sock, resources: [pr] }\n",
+                "[]",
+                "",
+                "is the gateway's own",
+            ),
+            (
+                "    notes: { socket: /run/sekimore/notes.sock, resources: [notes], credentials: { api_key: k-123 } }\n",
+                "[]",
+                "",
+                "must be a reference to the secret store",
+            ),
+            (
+                "    notes: { socket: /run/sekimore/notes.sock, resources: [notes], upstreams: [github.com] }\n",
+                "[]",
+                "",
+                "upstreams is for a forge relay",
+            ),
+            (
+                "    Notes: { socket: /run/sekimore/notes.sock, resources: [notes] }\n",
+                "[]",
+                "",
+                "not a usable name",
+            ),
+            (
+                "    notes: { socket: /run/sekimore/notes.sock, resources: [notes] }\n    memo: { socket: /run/sekimore/memo.sock, resources: [notes] }\n",
+                "[]",
+                "",
+                "claimed by both",
+            ),
+            (notes, "[notes:Read]", "", "the action must be"),
+            (notes, "[]", ", permissions: [notes:read]", "project.permissions only"),
+            ("", "[s3:read]", "", "unknown resource"),
+        ] {
+            let e = p(&body(sidecars, permissions, repo))
+                .and_then(|l| l.resolve())
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(says), "{sidecars} {permissions} {repo}: {e}");
         }
     }
 

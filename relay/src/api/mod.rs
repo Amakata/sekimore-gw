@@ -58,6 +58,8 @@ pub struct ApiContext {
     /// 0.2.29 (#59): the filtered signing agent, when one is running. `/bootstrap` tells the dev
     /// container where the socket is and which public key to point `user.signingkey` at
     pub signing: Option<Arc<crate::git::agent_proxy::SigningAgent>>,
+    /// #366: the command sidecars, by name
+    pub commands: std::collections::BTreeMap<String, Arc<crate::forge::command::CommandSidecar>>,
 }
 
 /// The declared boards, and their node ids once something has needed them.
