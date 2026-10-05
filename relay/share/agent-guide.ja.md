@@ -130,6 +130,14 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 - 各やり取りの最初のコメントには、そのスレッド（`thread PRRT_…`）も表示されます。すでに解決済みなら `(resolved)` が付きます。指摘に対応し終えたら `sgw-agent pr resolve --number N --thread-id PRRT_…` で解決済みにします。返信することと解決済みにすることは別の権限なので、`pr reply` が通っても `pr resolve` は拒否されることがあります。
 - 行にコメントする前に、その行を読んでください。`sgw-agent pr files --number N` は PR が変更したファイルを一覧表示し、`sgw-agent pr diff --number N --path <path>` はそのうち 1 つを行番号付きで表示します。左の列の番号が、`pr review --comment <path>:<line>:<body>` の `line` です。削除された行は新しいファイルに存在しないため番号がなく、コメントを付けられません。1 ページに収まらない場合は、`--before <前ページの end>` で続きを読みます。
 
+## サイドカー（関所を通るほかのサービス）
+
+- `sgw-agent github pr …` は `sgw-agent pr …` と同じです。短い形はそのまま使えます。
+- 案件はサイドカーを足せます。独自のコマンドを持つほかのサービスで、`sgw-agent <サイドカー> <コマンド> --<引数> …` で使います。使えるものは `sgw-agent --help`、そのコマンドは `sgw-agent <サイドカー> --help` に出ます。各サイドカーのガイドはこのガイドの末尾にあります。
+- 権限は `whoami` の別の行（`sidecar permissions`）に出ます。案件だけが決めるもので、リポジトリの行では変わりません。
+- 使えないものは表示されません。`--show-unavailable` を付けると、理由つきで出ます（`[not allowed: needs notes:delete]`、`[not available: …]`）。
+- コマンドの定義は、コンテナの起動時に `sgw-agent setup` が保存したものです。サイドカーが追加・変更されたら、ホストで `sgw refresh` を実行するよう人間に頼んでください。
+
 ## 標準的な流れ
 
 1. ブランチで作業し、テストを通します。

@@ -41,6 +41,8 @@ pub async fn run(repo: Option<&str>, cmd: AgentCmd) -> anyhow::Result<i32> {
     if let AgentCmd::Guide { lang } = &cmd {
         // Needs neither connection details nor a token (it never touches the network)
         print!("{}", guide_for(lang.as_deref()));
+        // #330: and each connected command sidecar's own, from what setup saved
+        print!("{}", super::sidecars::guides(&super::sidecars::load()));
         return Ok(0);
     }
     let client = AgentClient::from_env()?;
