@@ -159,6 +159,7 @@ dev コンテナから外に出る道はゲートウェイだけです。
 - [CHANGELOG.ja.md](CHANGELOG.ja.md) — 変更履歴
 - [docs/paths.ja.md](docs/paths.ja.md) — 通信が通りうる経路の一覧。誰が確かめ、`sgw verify` が何を見るか
 - [docs/localization.ja.md](docs/localization.ja.md) — 英語と日本語
+- [docs/sidecar-protocol.md](docs/sidecar-protocol.md) — コマンドサイドカーの書き方。独自のコマンドを関所が確かめ、監査する（英語）
 - [CONTRIBUTING.md](CONTRIBUTING.md)、[RELEASING.md](RELEASING.md)
 
 ## トラブルシューティング

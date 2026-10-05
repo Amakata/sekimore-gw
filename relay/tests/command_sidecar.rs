@@ -98,12 +98,20 @@ async fn run(grants: &[&str], describe: Value, credential: State) -> Run {
     let tmp = tempfile::tempdir().unwrap();
     let sock: PathBuf = tmp.path().join("notes.sock");
     let seen = fake_sidecar(&sock, describe);
+    let f = start(sock, grants, credential).await;
+    // the socket's directory lives as long as the fixture
+    std::mem::forget(tmp);
+    Run { f, seen }
+}
+
+/// The gateway's API with the `notes` sidecar at `sock`.
+async fn start(sock: PathBuf, grants: &[&str], credential: State) -> ApiFixture {
     let vars = Vars::new();
     vars.replace_all(HashMap::from([(KEY.to_string(), credential)]));
     let mut project = project_case_a(&["pr:create"]);
     let grants: Vec<String> = grants.iter().map(|g| g.to_string()).collect();
     project.set_extensions(&grants, &[]);
-    let f = start_api_with_commands(
+    start_api_with_commands(
         project,
         BootstrapMode::Auto,
         true,
@@ -124,10 +132,7 @@ async fn run(grants: &[&str], describe: Value, credential: State) -> Run {
             )])
         },
     )
-    .await;
-    // the socket's directory lives as long as the fixture
-    std::mem::forget(tmp);
-    Run { f, seen }
+    .await
 }
 
 fn add(text: Value) -> ApiRequest {
@@ -290,4 +295,109 @@ async fn whoami_lists_a_sidecar_s_permissions_apart_from_the_repositories() {
     );
     // a repository line says only how it differs from the project; it has no say over these
     assert!(!msg.contains("-notes:"), "{msg}");
+}
+
+/// The template sidecar (examples/sidecar-template), a stopped child when dropped.
+struct Template(std::process::Child);
+
+impl Drop for Template {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// #331: the template a third party copies is run as it is, through the gateway. Skipped where
+/// there is no Python (`PYTHON` names one other than `python3`).
+#[tokio::test]
+async fn the_template_sidecar_works_through_the_gateway() {
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".into());
+    let has_python = std::process::Command::new(&python)
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !has_python {
+        eprintln!("skipped: no {python} to run the template with");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let sock = tmp.path().join("notes.sock");
+    let script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/sidecar-template/sidecar.py");
+    let mut child = Template(
+        std::process::Command::new(&python)
+            .arg(&script)
+            .arg("--socket")
+            .arg(&sock)
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    for _ in 0..200 {
+        if sock.exists() {
+            break;
+        }
+        assert!(child.0.try_wait().unwrap().is_none(), "the template exited");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let f = start(
+        sock,
+        &["notes:read", "notes:write"],
+        State::Set(SECRET.into()),
+    )
+    .await;
+
+    let (code, resp) = post(
+        f.addr,
+        "/x/notes/note/add",
+        Some(&f.token),
+        &ApiRequest {
+            args: json!({"text": "hi", "tag": ["a"], "pin": true})
+                .as_object()
+                .unwrap()
+                .clone(),
+            ..ApiRequest::default()
+        },
+    )
+    .await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(resp.message.as_deref(), Some("added note 1"));
+    let (code, resp) = post(
+        f.addr,
+        "/x/notes/note/list",
+        Some(&f.token),
+        &ApiRequest::default(),
+    )
+    .await;
+    assert_eq!(code, 200, "{:?}", resp.error);
+    assert_eq!(resp.message.as_deref(), Some("1: hi"));
+    assert_eq!(resp.raw.unwrap()[0]["tags"], json!(["a"]));
+    // the gateway's argument check comes before the template's own
+    let (code, resp) = post(
+        f.addr,
+        "/x/notes/note/list",
+        Some(&f.token),
+        &ApiRequest {
+            args: json!({"limit": "1"}).as_object().unwrap().clone(),
+            ..ApiRequest::default()
+        },
+    )
+    .await;
+    assert_eq!(code, 400);
+    assert!(resp.error.unwrap().contains("an integer"));
+    // and a failure the template reports keeps its status
+    let (code, _) = post(
+        f.addr,
+        "/x/notes/note/list",
+        Some(&f.token),
+        &ApiRequest {
+            args: json!({"limit": 0}).as_object().unwrap().clone(),
+            ..ApiRequest::default()
+        },
+    )
+    .await;
+    assert_eq!(code, 400);
+    let audit = std::fs::read_to_string(&f.audit_path).unwrap();
+    assert!(!audit.contains(SECRET), "{audit}");
+    drop(child);
 }
