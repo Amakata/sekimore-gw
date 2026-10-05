@@ -12,6 +12,12 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.65 (2026-10-05)
+
+### Enhancement
+
+- After `restart` / `recreate` / `update --apply` and before commands that need it, `sgw` opens a locked store from the keychain, else asks on this terminal, else says `sgw unlock`. `--no-unlock` / `SGW_NO_AUTO_UNLOCK` skip it (#363)
+
 ## 0.2.64 (2026-10-04)
 
 ### Enhancement
