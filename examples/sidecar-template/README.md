@@ -54,7 +54,13 @@ services:
     restart: unless-stopped
 ```
 
-Then recreate the containers (Rebuild Container, or `sgw recreate`).
+Then Rebuild Container: a new service is started only by compose. Later changes to `config.yml`
+or to the sidecar's commands need, on the host:
+
+```sh
+sgw recreate      # the gateway reads config.yml again
+sgw refresh       # the agent's CLI picks up the commands
+```
 
 ## Use it
 

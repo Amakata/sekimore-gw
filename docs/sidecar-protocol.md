@@ -112,17 +112,23 @@ A **word** is lower-case letters, digits, `_` and `-`, starting with a letter.
 | no argument is declared twice | two `text` |
 | a `bool` argument is not `required` | `{"kind": "bool", "required": true}` |
 
-The configuration adds: its resources are never the gateway's (`ci`, `issue`, `pr`, `project`,
-`release`, `repo`, `search`, `security`), and no two sidecars claim the same resource.
+The configuration adds:
+
+- its name is not an `sgw-agent` command (`setup`, `guide`, `whoami`, `github`, `pr`, `issue`,
+  `ci`, `project`, `release`, `repo`, `security`, `search`, `help`);
+- its resources are never the gateway's (`ci`, `issue`, `pr`, `project`, `release`, `repo`,
+  `search`, `security`);
+- no two sidecars claim the same resource.
 
 A refused describe is audited as `sidecar_refused`, and every call answers 503 with the reason.
 
 ### When it is read
 
-- On the first call, then kept.
+- On the first call or the first `GET /relays` (agent setup), then kept.
 - A failed read is not kept: the sidecar may still be starting, and the next call looks again.
 - When a call names a command the kept describe does not have, it is read once more. A sidecar
-  updated in place gets its new commands without restarting the gateway.
+  updated in place gets its new commands without restarting the gateway (and into
+  the agent's CLI with `sgw refresh`).
 
 ## `POST /command`
 
@@ -166,7 +172,7 @@ The reply. Every field is optional; `calls` defaults to `[]`.
 | Field | Meaning |
 |---|---|
 | `message` | For the agent to read: what happened, in a sentence or a few lines |
-| `data` | For the agent to parse (shown with `--json`) |
+| `data` | For the agent to parse. `sgw-agent` prints it (as JSON) when there is no `message` |
 | `error.status` | The HTTP status the agent gets (an invalid one becomes 502) |
 | `error.message` | What went wrong and what to do; the agent reads it |
 | `calls` | Every upstream call made for this command. The gateway writes each to its audit as `api_call` |
@@ -220,6 +226,8 @@ relay:
 
   A value written in `config.yml` is refused: the file is in the worktree, readable from dev.
 - `upstreams` is for forge relays only.
+- After adding or changing a sidecar, the operator runs `sgw refresh` on the host. It re-runs the
+  agent's setup in dev, which picks up the new commands and guide.
 - A sidecar's permissions (`notes:read`) go in `relay.project.permissions` **only**. Repository,
   upstream and board layers refuse them: the resource is not about a repository.
 
@@ -228,24 +236,37 @@ See [the template's README](../examples/sidecar-template/README.md#compose).
 
 ## What the agent sees
 
-The command line is the describe:
+1. Agent setup asks the gateway's `GET /relays` (agent token). It lists each relay: connected or
+   not (with the reason), its guide, and each command with whether the project may run it.
+2. Setup saves the list as `relays.json` beside the env file (`SEKIMORE_RELAYS_FILE`), and appends
+   each connected sidecar's guide, with the commands the project may run, to the agent's skill
+   file. `sgw-agent guide` prints the same.
+3. `sgw-agent` builds its commands from that file. The command line is the describe:
 
-```sh
-sgw-agent notes note add --text hi --tag a --tag b --pin
-sgw-agent notes note list --limit 5 --json
-```
+   ```sh
+   sgw-agent notes note add --text hi --tag a --tag b --pin
+   sgw-agent notes note list --limit 5
+   sgw-agent notes --help
+   ```
 
-(The `sgw-agent` side of this lands with #330; the gateway's API below is in place.)
+   Each argument is typed as declared: `int` must parse as an integer, `bool` is a flag, `list` is
+   the option repeated.
+4. Commands the project may not run, and sidecars that are not connected, are hidden.
+   `--show-unavailable` shows them (with the reason); the gateway refuses them anyway.
 
-Underneath, it is `POST /x/<sidecar>/<word>/<word>` with the project token:
+Underneath, a command is `POST /x/<sidecar>/<word>/<word>` with the project token:
 
 ```json
 {"args": {"text": "hi", "tag": ["a", "b"], "pin": true}}
 ```
 
 The answer is `{"ok": true, "message": …, "raw": <data>}`, or `{"ok": false, "error": …}` with
-the status above. `sgw-agent whoami` lists the granted ones on a line of their own:
+the status above. `sgw-agent` prints `message`, or `data` when there is no message, or the error.
+`sgw-agent whoami` lists the granted permissions on a line of their own:
 `sidecar permissions (sgw-agent <sidecar> …): notes:read notes:write`.
+
+The GitHub commands keep their short form (`sgw-agent pr …`); `sgw-agent github <command>` is the
+long form.
 
 ## What the gateway guarantees
 
