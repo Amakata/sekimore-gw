@@ -305,9 +305,13 @@ Naming and granting are separate. The sidecar names what it does; only `config.y
 Run the sidecar on the internal network only. It reaches its service through the gateway's 443
 passthrough, so its traffic passes the same SNI check, upload cap and audit as dev's.
 
-1. List the service's host under `domain_handlers` with `handler: https-relay`:
+1. List the service's host under `domain_handlers` with `handler: https-relay`, and under
+   `allow_domains` too. A handler domain resolves to the gateway; without the allow entry the
+   gateway has nowhere to send it on to.
 
    ```yaml
+   allow_domains:
+     - api.notes.example
    domain_handlers:
      api.notes.example:
        handler: https-relay
