@@ -6,7 +6,7 @@ networks:
 
 services:
   sekimore-gw:
-    image: ghcr.io/amakata/sekimore-gw:0.2.65
+    image: ghcr.io/amakata/sekimore-gw:0.3.0-alpha.1
     cap_add:
       - NET_ADMIN
       - NET_RAW

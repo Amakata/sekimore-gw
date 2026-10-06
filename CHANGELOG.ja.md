@@ -11,6 +11,18 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.3.0-alpha.1（2026-10-06）
+
+### Enhancement
+
+- `vX.Y.Z-pre` のタグは GHCR にその版のタグだけを出し、Release はプレリリースにする。`0.3` / `0` / `latest` は 0.2 系のまま (#326)
+- `sgw update` が版を SemVer として比べる。`0.3.0-alpha.N` は `0.3.0` より前。0.2 の sgw にはプレリリースを勧めず、プレリリースの sgw には最新の版を勧める (#327)
+- GitHub を forge relay のインタフェースの裏に置き、gateway に組み込んだ。検査と認可は gateway、上流への呼び出しは relay が受け持つ。挙動は変わらない (#332)
+- `relay.sidecars.github` で、エージェントの API 呼び出しを `sekimore-github` サイドカー（gateway と同じイメージ、Unix ソケット経由）に通す。git と運用者のコマンドは gateway に残る。雛形の relay オーバーレイに含む (#333)
+- コマンドサイドカー: 別の名前のサイドカーは、独自の資源、秘密ストアから渡す認証情報、コマンドを持つ。gateway は権限と引数を検査してから `POST /command` を呼ぶ (#367)
+- `GET /relays` が各 relay とそのコマンドを返す。`sgw-agent setup` がそれを保存し、サイドカーのガイドをスキルファイルに足す。`sgw-agent <sidecar> <words>` でコマンドサイドカーのコマンドを実行する (#368)
+- `docs/sidecar-protocol.md` にコマンドサイドカーのプロトコルを書いた。`examples/sidecar-template` は標準ライブラリだけの Python で動くサイドカー (#369)
+
 ## 0.2.65（2026-10-05）
 
 ### Enhancement
