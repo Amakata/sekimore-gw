@@ -33,6 +33,9 @@ use crate::tokens::TokenStore;
 pub const DEVICE_FLOW_SCOPES: &[&str] = &["repo", "project", "security_events"];
 
 /// Pad a label to `width` display columns (CJK characters count as two).
+/// #371: the width of a label under `state:` (`  ssh-agent:       `), so a value starts in one column
+const STATE_LABEL: usize = 19;
+
 fn pad_label(label: &str, width: usize) -> String {
     let shown: usize = label.chars().map(|c| if is_wide(c) { 2 } else { 1 }).sum();
     let mut out = label.to_string();
@@ -1250,6 +1253,23 @@ fn bad_word(s: &str) -> String {
     paint(Tone::Bad, s)
 }
 
+/// #371: the `values:` line. A value that is not there is an upstream ssh cannot reach — and a
+/// ProxyJump that cannot be filled in drops its bastion from the lines after it — so anything but
+/// `set` is red, and makes `check` exit 1.
+fn values_line(keys: &[String], vars: &crate::vars::Vars) -> String {
+    let states: Vec<String> = keys
+        .iter()
+        .map(|k| {
+            let st = vars.state(k);
+            let word = match st {
+                crate::vars::State::Set(_) => paint(Tone::Good, st.word()),
+                _ => bad_word(st.word()),
+            };
+            format!("{{{k}}}: {word}")
+        })
+        .collect();
+    tf("op.check.values", &[("values", &states.join(", "))])
+}
 /// #355: the state — what the agent, the store, known_hosts and the upstream login are right now.
 /// What the configuration says is `config`.
 pub async fn check(path: &Path) -> anyhow::Result<i32> {
@@ -1271,7 +1291,7 @@ pub async fn check(path: &Path) -> anyhow::Result<i32> {
         let state = store_state(&r.paths.control_sock).await;
         println!(
             "{}{}",
-            pad_label(&t("op.check.proxy"), 14),
+            pad_label(&format!("  {}", t("op.check.proxy")), STATE_LABEL),
             tf(
                 "op.check.proxy_credential",
                 &[("url", &px.url), ("source", &credential_status(&state, px))]
@@ -1374,14 +1394,16 @@ pub async fn check(path: &Path) -> anyhow::Result<i32> {
         .with_options(u.ssh_options.clone())
         .with_vars(vars.clone());
         if !u.ssh_options.is_empty() {
-            println!("  ssh options:     {}", u.ssh_options.join(" "));
+            println!(
+                "{}",
+                tf(
+                    "op.check.ssh_options_state",
+                    &[("options", &u.ssh_options.join(" "))]
+                )
+            );
             let keys = crate::vars::refs(u.ssh_options.iter());
             if !keys.is_empty() {
-                let states: Vec<String> = keys
-                    .iter()
-                    .map(|k| format!("{{{k}}}: {}", vars.state(k).word()))
-                    .collect();
-                println!("  values:          {}", states.join(", "));
+                println!("{}", values_line(&keys, &vars));
             }
         }
         match up.known_hosts_has_upstream() {
@@ -2136,7 +2158,7 @@ fn squid_probe_failed(outcome: &Result<crate::netutil::SquidProbe, String>) -> b
 
 /// The `reach:` line on the via-Squid route (#205), apart from the socket so it can be tested.
 fn squid_reach_line(outcome: &Result<crate::netutil::SquidProbe, String>) -> String {
-    let label = pad_label(&t("op.check.proxy_reach"), 14);
+    let label = pad_label(&t("op.check.proxy_reach"), STATE_LABEL);
     let body = match outcome {
         Ok(p) if p.status == "200" => {
             let word = paint(Tone::Good, &t("op.check.word.proxy_reachable"));
@@ -2186,7 +2208,7 @@ fn squid_reach_line(outcome: &Result<crate::netutil::SquidProbe, String>) -> Str
 
 /// The `reach:` line itself, apart from the socket, so its wording can be tested (#206).
 fn proxy_reach_line(outcome: &Result<crate::netutil::ProbeReport, String>) -> String {
-    let label = pad_label(&t("op.check.proxy_reach"), 14);
+    let label = pad_label(&t("op.check.proxy_reach"), STATE_LABEL);
     let body = match outcome {
         Ok(report) => {
             // #202: paint the state word alone, never the values after it.
@@ -2573,6 +2595,36 @@ mod tests {
         );
     }
 
+    /// #371: a value missing or locked is red and fails `check`; one that is set is neither.
+    #[test]
+    fn a_value_that_is_not_there_fails_check() {
+        use super::super::color::set_for_tests;
+        use crate::vars::{State, Vars};
+        let vars = Vars::new();
+        vars.replace_all(std::collections::HashMap::from([
+            ("bastion/user".to_string(), State::Set("me".into())),
+            ("bastion/key".to_string(), State::Locked),
+        ]));
+        set_for_tests(Some(false));
+        CHECK_BAD.store(false, Ordering::Relaxed);
+        let set = values_line(&["bastion/user".into()], &vars);
+        assert!(set.contains("{bastion/user}: set"), "{set}");
+        assert!(!CHECK_BAD.load(Ordering::Relaxed));
+        let line = values_line(
+            &[
+                "bastion/user".into(),
+                "bastion/key".into(),
+                "bastion/host".into(),
+            ],
+            &vars,
+        );
+        assert!(
+            line.contains("{bastion/key}: locked") && line.contains("{bastion/host}: missing"),
+            "{line}"
+        );
+        assert!(CHECK_BAD.load(Ordering::Relaxed));
+        set_for_tests(None);
+    }
     /// A config whose state dir is `dir`, and an unlocked store served on its control socket.
     async fn served_config(dir: &Path) -> (PathBuf, Resolved) {
         use crate::store::crypto::{Kdf, KdfParams, Secret};
@@ -2946,10 +2998,10 @@ garbage line\n";
             proxy_egress_line(DirectEgress::Deny),
             format!("  egress:     {}", t("op.check.proxy_egress_squid"))
         );
-        // `proxy:`, `route:`, `egress:` and `reach:` all line up.
+        // under `sgw config`, `proxy:`, `route:` and `egress:` line up
         assert_eq!(
             pad_label(&t("op.check.proxy_egress"), 14).len(),
-            pad_label(&t("op.check.proxy_reach"), 14).len()
+            pad_label(&t("op.check.proxy"), 14).len()
         );
 
         set_for_tests(None);
@@ -2976,7 +3028,7 @@ garbage line\n";
         assert_eq!(
             line,
             format!(
-                "  reach:      \u{1b}[32m{ok_word}\u{1b}[0m (TLS 1.3, TLS13_AES_256_GCM_SHA384)"
+                "    reach:         \u{1b}[32m{ok_word}\u{1b}[0m (TLS 1.3, TLS13_AES_256_GCM_SHA384)"
             )
         );
 
@@ -3003,7 +3055,9 @@ garbage line\n";
             Err("TLS to the proxy failed: received fatal alert: HandshakeFailure".into());
         let line = proxy_reach_line(&bad);
         assert!(
-            line.starts_with(&format!("  reach:      \u{1b}[31m{bad_word}\u{1b}[0m — ")),
+            line.starts_with(&format!(
+                "    reach:         \u{1b}[31m{bad_word}\u{1b}[0m — "
+            )),
             "{line}"
         );
         assert!(line.contains("HandshakeFailure"), "{line}");
@@ -3013,12 +3067,12 @@ garbage line\n";
         set_for_tests(Some(false));
         assert_eq!(
             proxy_reach_line(&good),
-            format!("  reach:      {ok_word} (TLS 1.3, TLS13_AES_256_GCM_SHA384)")
+            format!("    reach:         {ok_word} (TLS 1.3, TLS13_AES_256_GCM_SHA384)")
         );
-        // `proxy:` and `reach:` line up: both labels are padded to the same width.
+        // #371: under `state:`, `proxy:` sits indented like every other line, and `reach:` under it
         assert_eq!(
-            pad_label(&t("op.check.proxy"), 14).len(),
-            pad_label(&t("op.check.proxy_reach"), 14).len()
+            pad_label(&format!("  {}", t("op.check.proxy")), STATE_LABEL).len(),
+            pad_label(&t("op.check.proxy_reach"), STATE_LABEL).len()
         );
 
         set_for_tests(None);
@@ -3044,7 +3098,7 @@ garbage line\n";
 
         let open = Ok(probe("200", "HTTP/1.1 200 Connection established"));
         let line = squid_reach_line(&open);
-        assert!(line.starts_with("  reach:      "), "{line}");
+        assert!(line.starts_with("    reach:         "), "{line}");
         assert!(line.contains(&ok_word), "{line}");
         assert!(line.contains("127.0.0.1:3128"), "{line}");
         assert!(line.contains("api.github.com:443"), "{line}");
@@ -3107,7 +3161,7 @@ garbage line\n";
         set_for_tests(Some(true));
         let line = squid_reach_line(&open);
         assert!(
-            line.starts_with(&format!("  reach:      \u{1b}[32m{ok_word}\u{1b}[0m")),
+            line.starts_with(&format!("    reach:         \u{1b}[32m{ok_word}\u{1b}[0m")),
             "{line}"
         );
         assert!(!line.trim_end().ends_with("\u{1b}[0m"), "{line}");
