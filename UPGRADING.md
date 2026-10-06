@@ -40,7 +40,8 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.55 – 0.2.57 | [0.2.58](#0258-the-post-createsh-guard-lets-the-signing-key-through), **only if you edited `post-create.sh`** |
 | 0.2.58 – 0.2.59 | [0.2.60](#0260-configyml-is-yours-and-configsampleyml-is-the-template), **everyone: a new file appears, commit it** |
 | 0.2.60 – 0.2.63 | [0.2.64](#0264-the-configuration-listing-moved-from-sgw-check-to-sgw-config), **only if a script reads `sgw check`'s output** |
-| 0.2.64 – 0.2.65 | [0.3.0-alpha.1](#030-alpha1-the-github-api-can-run-in-a-sidecar-prerelease), **only if you move to the 0.3 prerelease and want the github sidecar** |
+| 0.2.64 – 0.2.65 | [0.2.66](#0266-sgw-check-exits-1-on-a-missing-value), **only if a script runs `sgw check`** |
+| 0.2.66 | [0.3.0-alpha.1](#030-alpha1-the-github-api-can-run-in-a-sidecar-prerelease), **only if you move to the 0.3 prerelease and want the github sidecar** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -898,6 +899,12 @@ now two commands:
 Nothing to do unless a script reads `check`'s output. A script that read configuration lines
 from `check` (permissions, `force_push=`, `egress:`) should read `config`. A script that runs
 `check` should expect exit 1 when a state is red.
+
+## 0.2.66 `sgw check` exits 1 on a missing value
+
+A per-person value (`values:`) that is missing, locked or unavailable is now red, so `check` exits 1
+and `sgw verify` warns. A script that runs `check` and expected exit 0 with such a value should set
+the value (`sgw var set <name>`) or expect exit 1.
 
 ## 0.3.0-alpha.1 The GitHub API can run in a sidecar (prerelease)
 
