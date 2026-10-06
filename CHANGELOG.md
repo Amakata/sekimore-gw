@@ -24,6 +24,12 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 - `GET /relays` lists each relay and its commands. `sgw-agent setup` saves it and adds the sidecars' guides to the skill file; `sgw-agent <sidecar> <words>` runs a command sidecar's commands (#368)
 - `docs/sidecar-protocol.md` describes the command sidecar protocol; `examples/sidecar-template` is a working sidecar in standard-library Python (#369)
 
+## 0.2.66 (2026-10-06)
+
+### Fix
+
+- `sgw check`: `proxy:` and `reach:` are indented under `state:` like other state lines. A per-person value that is missing / locked / unavailable is red and makes `check` exit 1, so `sgw verify` warns. `ssh options:` / `values:` localised (#372)
+
 ## 0.2.65 (2026-10-05)
 
 ### Enhancement
