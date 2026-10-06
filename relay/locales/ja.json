@@ -239,7 +239,7 @@
   "op.check.proxy_reach_squid_peer": "{state} — Squid（{endpoint}）が上流プロキシに届きません: {status}。proxy.upstream_proxy と資格情報、Squid の cache.log を確認してください",
   "op.check.proxy_reach_squid_refused": "{state} — Squid（{endpoint}）が CONNECT {target}:443 を拒否しました: {status}",
   "op.check.proxy_reach_squid_down": "{state} — Squid が listen していません: {error}",
-  "op.check.proxy_reach": "  reach:",
+  "op.check.proxy_reach": "    reach:",
   "op.check.proxy_reach_tls": "{state} ({protocol}, {cipher})",
   "op.check.proxy_reach_plain": "{state} (TCP。プロキシへの TLS なし)",
   "op.check.proxy_reach_failed": "{state} — {error}",
@@ -491,5 +491,7 @@
   "sgw.update.r_none": "なし",
   "cli.config_cmd": "設定が解決した結果（上流 / 転送先 / 権限 / リポジトリ / ボード）を表示する。ネットワークには出ない",
   "sgw.cmd.config": "設定が解決した結果（上流 / 転送先 / 権限 / リポジトリ / ボード）。ネットワークには出ない",
-  "sgw.unlock.asking": "秘密ストアが locked です。ここで unlock します（Ctrl-C で locked のまま）"
+  "sgw.unlock.asking": "秘密ストアが locked です。ここで unlock します（Ctrl-C で locked のまま）",
+  "op.check.values": "  値:              {values}（sgw var set <名前>）",
+  "op.check.ssh_options_state": "  ssh options:     {options}"
 }
