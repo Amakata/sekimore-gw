@@ -12,6 +12,18 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.3.0-alpha.1 (2026-10-06)
+
+### Enhancement
+
+- A `vX.Y.Z-pre` tag publishes only its own version tag on GHCR and a Release marked prerelease; `0.3`, `0` and `latest` stay on the 0.2 line (#326)
+- `sgw update` compares versions the SemVer way: `0.3.0-alpha.N` sorts below `0.3.0`. A 0.2 sgw is never offered a prerelease; a prerelease sgw is offered the newest version (#327)
+- GitHub sits behind a forge relay interface, built into the gateway: the gateway checks and authorizes, the relay makes the upstream calls. Behaviour is unchanged (#332)
+- `relay.sidecars.github` sends the agent's API calls through the `sekimore-github` sidecar (the gateway's image, over a Unix socket); git and the operator's commands stay in the gateway. The template's relay overlay ships it (#333)
+- Command sidecars: a sidecar under any other name brings its own resources, credentials from the secret store and commands; the gateway checks the permission and the arguments before it calls `POST /command` (#367)
+- `GET /relays` lists each relay and its commands. `sgw-agent setup` saves it and adds the sidecars' guides to the skill file; `sgw-agent <sidecar> <words>` runs a command sidecar's commands (#368)
+- `docs/sidecar-protocol.md` describes the command sidecar protocol; `examples/sidecar-template` is a working sidecar in standard-library Python (#369)
+
 ## 0.2.65 (2026-10-05)
 
 ### Enhancement

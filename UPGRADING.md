@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.65 -->
+<!-- reviewed-up-to: 0.3.0-alpha.1 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -40,6 +40,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.55 – 0.2.57 | [0.2.58](#0258-the-post-createsh-guard-lets-the-signing-key-through), **only if you edited `post-create.sh`** |
 | 0.2.58 – 0.2.59 | [0.2.60](#0260-configyml-is-yours-and-configsampleyml-is-the-template), **everyone: a new file appears, commit it** |
 | 0.2.60 – 0.2.63 | [0.2.64](#0264-the-configuration-listing-moved-from-sgw-check-to-sgw-config), **only if a script reads `sgw check`'s output** |
+| 0.2.64 – 0.2.65 | [0.3.0-alpha.1](#030-alpha1-the-github-api-can-run-in-a-sidecar-prerelease), **only if you move to the 0.3 prerelease and want the github sidecar** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -897,3 +898,20 @@ now two commands:
 Nothing to do unless a script reads `check`'s output. A script that read configuration lines
 from `check` (permissions, `force_push=`, `egress:`) should read `config`. A script that runs
 `check` should expect exit 1 when a state is red.
+
+## 0.3.0-alpha.1 The GitHub API can run in a sidecar (prerelease)
+
+A prerelease of the 0.3 line. `sgw update` on a 0.2 sgw does not offer it; install this sgw first:
+
+```
+curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh -s -- --version 0.3.0-alpha.1
+sgw update --apply
+```
+
+`sgw update --apply` adds the `sekimore-github` service and the `sekimore-sidecars` volume to
+`.devcontainer/docker-compose.relay.yml`. If you edited that file, merge them in from
+`docker-compose.relay.yml.sgw-new`. The service idles until `config.yml` names it.
+
+Nothing else to do: without `relay.sidecars.github` the gateway serves the API itself, as in 0.2.
+To send the agent's API calls through the sidecar, copy the `relay.sidecars.github` block from
+`config.sample.yml` into `config.yml`, then `sgw recreate`.

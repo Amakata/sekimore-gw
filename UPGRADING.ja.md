@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.65 -->
+<!-- reviewed-up-to: 0.3.0-alpha.1 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -40,6 +40,7 @@
 | 0.2.55 〜 0.2.57 | 下の 0.2.58。**`post-create.sh` を編集した場合だけ** |
 | 0.2.58 〜 0.2.59 | 下の 0.2.60。**すべてのプロジェクト: ファイルが 1 つ増えるのでコミットする** |
 | 0.2.60 〜 0.2.63 | 下の 0.2.64。**`sgw check` の出力をスクリプトが読む場合だけ** |
+| 0.2.64 〜 0.2.65 | 下の 0.3.0-alpha.1。**0.3 のプレリリースに移り、github サイドカーを使う場合だけ** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -860,3 +861,20 @@ diff .devcontainer/config/config.yml .devcontainer/config/config.sample.yml
 `check` の出力をスクリプトが読んでいなければ作業はありません。`check` から設定の行（権限、`force_push=`、
 `egress:`）を読んでいたスクリプトは `config` を読むようにしてください。`check` を実行するスクリプトは、
 状態が赤のとき exit 1 になることを前提にしてください。
+
+## 0.3.0-alpha.1 GitHub API をサイドカーで動かせる（プレリリース）
+
+0.3 系のプレリリースです。0.2 の sgw の `sgw update` はこの版を勧めません。先にこの版の sgw を入れます。
+
+```
+curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/install.sh | sh -s -- --version 0.3.0-alpha.1
+sgw update --apply
+```
+
+`sgw update --apply` が `.devcontainer/docker-compose.relay.yml` に `sekimore-github` サービスと
+`sekimore-sidecars` ボリュームを足します。このファイルを編集していた場合は、
+`docker-compose.relay.yml.sgw-new` から取り込んでください。`config.yml` で指定するまで、サービスは何もしません。
+
+ほかにすることはありません。`relay.sidecars.github` が無ければ、0.2 と同じく gateway が API を受け持ちます。
+エージェントの API 呼び出しをサイドカーに通すには、`config.sample.yml` の `relay.sidecars.github` の
+ブロックを `config.yml` に写し、`sgw recreate` を実行します。
