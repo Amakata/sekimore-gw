@@ -12,6 +12,12 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.66 (2026-10-06)
+
+### Fix
+
+- `sgw check`: `proxy:` and `reach:` are indented under `state:` like other state lines. A per-person value that is missing / locked / unavailable is red and makes `check` exit 1, so `sgw verify` warns. `ssh options:` / `values:` localised (#372)
+
 ## 0.2.65 (2026-10-05)
 
 ### Enhancement

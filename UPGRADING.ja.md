@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.65 -->
+<!-- reviewed-up-to: 0.2.66 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -40,6 +40,7 @@
 | 0.2.55 〜 0.2.57 | 下の 0.2.58。**`post-create.sh` を編集した場合だけ** |
 | 0.2.58 〜 0.2.59 | 下の 0.2.60。**すべてのプロジェクト: ファイルが 1 つ増えるのでコミットする** |
 | 0.2.60 〜 0.2.63 | 下の 0.2.64。**`sgw check` の出力をスクリプトが読む場合だけ** |
+| 0.2.64 〜 0.2.65 | 下の 0.2.66。**`sgw check` をスクリプトが実行する場合だけ** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -860,3 +861,9 @@ diff .devcontainer/config/config.yml .devcontainer/config/config.sample.yml
 `check` の出力をスクリプトが読んでいなければ作業はありません。`check` から設定の行（権限、`force_push=`、
 `egress:`）を読んでいたスクリプトは `config` を読むようにしてください。`check` を実行するスクリプトは、
 状態が赤のとき exit 1 になることを前提にしてください。
+
+## 0.2.66 値が無いと `sgw check` が exit 1 で終わる
+
+人ごとの値（`values:`）が missing / locked / unavailable のとき赤になり、`check` は exit 1 で終わり、
+`sgw verify` は警告します。そのような値があっても exit 0 を前提に `check` を実行していたスクリプトは、
+値を設定する（`sgw var set <name>`）か、exit 1 を前提にしてください。

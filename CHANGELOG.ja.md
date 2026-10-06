@@ -11,6 +11,12 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.66（2026-10-06）
+
+### Fix
+
+- `sgw check`: `proxy:` と `reach:` を他の状態の行と同じく `state:` の下に字下げした。人ごとの値が missing / locked / unavailable なら赤で、`check` は exit 1 で終わり `sgw verify` が警告する。`ssh options:` / `values:` の見出しを翻訳した (#372)
+
 ## 0.2.65（2026-10-05）
 
 ### Enhancement
