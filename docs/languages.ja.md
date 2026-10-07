@@ -69,8 +69,12 @@ mise use -g node@24.21.0
 | node | `nodejs.org` |
 | python（ビルド済み）、uv | `github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com` |
 | そのほか多く（aqua、GitHub のリリース） | `github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`、`api.github.com` |
+| yarn | `repo.yarnpkg.com` |
+| mise 自身（どの言語でも。版の一覧） | `mise.jdx.dev`、`mise-versions.jdx.dev` |
 
 拒否されたダウンロードは、`sgw web` や `sgw audit` にホスト名が出ます。
+
+Dockerfile のビルドはホストの docker が行い、gateway を通らないので、その中の `mise install --system` にはこれらは要りません。ビルド自体を gateway の内側で行う構成（dev コンテナの中の docker）では同じホストが要り、Docker の apt リポジトリを足すイメージなら `download.docker.com` も要ります。
 
 ## 0.3 への移行
 

@@ -13,7 +13,8 @@ echo "=== sgw-sample devcontainer post-create ==="
 # more: a copy of the image's versions there would win over a newer image.
 # ---------------------------------------------------------------------------
 if command -v mise >/dev/null 2>&1; then
-  mise reshim
+  # #393: a shim that cannot be written is not worth stopping the start for
+  mise reshim || echo "WARNING: mise reshim failed; check who owns ~/.local/share/mise (ls -ld ~/.local/share/mise)"
 fi
 
 # ---------------------------------------------------------------------------

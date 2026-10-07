@@ -13,7 +13,7 @@ carries the same files, byte for byte. Do not copy them by hand.
 <your project>/
 ├── sgw.toml                        # sgw's record: the sha of each file as it wrote it (do not edit)
 └── .devcontainer/
-    ├── devcontainer.json
+    ├── devcontainer.json           # also turns off the host credentials VS Code would hand dev (#392)
     ├── docker-compose.yml          # two services, dev and sekimore-gw
     ├── docker-compose.relay.yml    # the overlay for sekimore-relay (the agent socket mount, the key volume)
     ├── Dockerfile                  # FROM sgw-devcontainer-base, plus specific versions installed with mise
@@ -33,6 +33,8 @@ carries the same files, byte for byte. Do not copy them by hand.
 ## Worth knowing
 
 - VS Code must start without `SSH_AUTH_SOCK`, which is what `sgw open` does. Opened the usual way, post-create stops with an ERROR
+- devcontainer.json turns off what the Dev Containers extension would otherwise hand dev from the host: a Docker credential helper (the host's registry logins), a Git credential helper, and Git answers from VS Code's GitHub sign-in. Keep those four settings; `sgw verify` warns when dev can reach a helper
+- What it cannot turn off: `BROWSER` and the `code` command open a URL in the host's browser, which does not go through the gateway. The browser shows it; nothing reads the reply back into dev
 - The secret store is locked after every recreate. Locked, the relay cannot use the GitHub API; git over SSH still works
 - After adding or changing an upstream in `config.yml`: `sgw restart`, then `sgw refresh`
 - The signing key's title on GitHub is `sekimore-agent-signing: <project> / <name> <email>`; `SEKIMORE_SIGNING_KEY_COMMENT` in `.env` changes it

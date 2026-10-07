@@ -761,20 +761,21 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         t("sgw.update.col_pinned"),
         t("sgw.update.col_newest")
     );
-    println!(
-        "{:<12} {:<10} {:<10} {}",
-        "gateway",
-        cur_gw,
-        new_gw,
-        state(&cur_gw, &new_gw)
-    );
-    println!(
-        "{:<12} {:<10} {:<10} {}",
-        "base",
-        cur_base,
-        new_base,
-        state(&cur_base, &new_base)
-    );
+    // #390: a release newer than this sgw is what the project moves to, through `--apply`; showing
+    // this sgw's own version as the newest read as "nothing to do"
+    let row = |cur: &str, new: &str| -> (String, String) {
+        match &newer_sgw {
+            Some(v) if ver_lt(cur, v) => (v.clone(), t("sgw.update.update_sgw_first")),
+            _ => (new.to_string(), state(cur, new)),
+        }
+    };
+    for (what, cur, new) in [
+        ("gateway", &cur_gw, &new_gw),
+        ("base", &cur_base, &new_base),
+    ] {
+        let (newest, st) = row(cur, new);
+        println!("{:<12} {:<10} {:<10} {}", what, cur, newest, st);
+    }
     for (pin, to) in &lang_rows {
         let to = to.as_deref().unwrap_or(&pin.tag);
         println!(
@@ -922,10 +923,11 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
             }
             println!();
         }
-        if up_to_date {
+        // #390: a newer release first: the project is current only against this sgw
+        if newer_sgw.is_some() && cur_gw == new_gw {
+            println!("{}", t("sgw.update.next_apply_sgw"));
+        } else if up_to_date {
             println!("{}", t("sgw.update.all_current"));
-        } else if newer_sgw.is_some() && cur_gw == new_gw {
-            println!("{}", tf("sgw.update.next_sgw", &[("install", INSTALL)]));
         } else {
             println!("{}", t("sgw.update.next_apply"));
         }

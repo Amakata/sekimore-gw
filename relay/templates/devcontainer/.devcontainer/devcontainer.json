@@ -15,7 +15,15 @@
         },
         "accessibility.signals.sounds.volume": 100,
         "audioCues.terminalBell": "on",
-        "audioCues.volume": 100
+        "audioCues.volume": 100,
+        // Keep the host's credentials out of dev (#392): the Dev Containers extension reads these
+        // from here when it sets the container up, so each project gets them without anyone
+        // editing their own settings. No Docker credential helper (the host's registry logins),
+        // no Git credential helper, and no Git answers from the host's GitHub sign-in
+        "dev.containers.dockerCredentialHelper": false,
+        "dev.containers.gitCredentialHelperConfigLocation": "none",
+        "git.terminalAuthentication": false,
+        "github.gitAuthentication": false
       }
     }
   },
