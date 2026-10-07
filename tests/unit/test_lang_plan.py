@@ -101,3 +101,11 @@ def describe_a_publish():
             "build": [e("php", "8.3.26", 2)],
             "adopt": [],
         }
+
+
+def describe_a_base_branch_from_before_revisions():
+    def it_reads_the_old_list_form_as_revision_1():
+        old = 'pin:\n  php: ["8.3.26"]\n  python: ["2.7.18"]\n'
+        base = plan.entries(old, before_revisions=True)
+        assert base == [e("php", "8.3.26"), e("python", "2.7.18")]
+        assert plan.plan_pr(plan.entries(HEAD), base, ["lang/versions.yml"]) == [e("php", "8.3.33")]

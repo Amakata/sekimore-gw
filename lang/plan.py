@@ -32,11 +32,15 @@ COMMON = ("lang/Dockerfile", "lang/runtime-packages.sh")
 _VERSION = re.compile(r"^\d+(\.\d+){1,3}$")
 
 
-def entries(text: str) -> list[dict]:
-    """`pin: {lang: {version: revision}}` as a list, checked."""
+def entries(text: str, *, before_revisions: bool = False) -> list[dict]:
+    """`pin: {lang: {version: revision}}` as a list, checked. `before_revisions` also reads the
+    list form the file had before (`php: ["8.3.26"]`), each as revision 1: a pull request's base
+    branch may still have it."""
     data = yaml.safe_load(text) or {}
     out = []
     for lang, versions in (data.get("pin") or {}).items():
+        if before_revisions and isinstance(versions, list):
+            versions = {str(v): 1 for v in versions}
         if not isinstance(versions, dict):
             raise ValueError(f'{lang}: write each version with its revision, `"8.3.33": 1`')
         for version, revision in versions.items():
@@ -109,7 +113,11 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
     head = entries(Path(a.versions).read_text(encoding="utf-8"))
     if a.mode == "pr":
-        base = entries(Path(a.base).read_text(encoding="utf-8")) if a.base else []
+        base = (
+            entries(Path(a.base).read_text(encoding="utf-8"), before_revisions=True)
+            if a.base
+            else []
+        )
         changed = Path(a.changed).read_text(encoding="utf-8").split() if a.changed else []
         result = {"build": plan_pr(head, base, changed), "adopt": []}
     else:
