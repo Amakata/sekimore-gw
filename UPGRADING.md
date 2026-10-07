@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.66 -->
+<!-- reviewed-up-to: 0.2.67 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -904,3 +904,11 @@ from `check` (permissions, `force_push=`, `egress:`) should read `config`. A scr
 A per-person value (`values:`) that is missing, locked or unavailable is now red, so `check` exits 1
 and `sgw verify` warns. A script that runs `check` and expected exit 0 with such a value should set
 the value (`sgw var set <name>`) or expect exit 1.
+
+## 0.2.67 Languages can be baked into the image
+
+Nothing to do. A project can now install languages into the base's read-only system directory
+`/opt/mise` in its own Dockerfile; see [docs/languages.md](docs/languages.md).
+
+After updating, `sgw verify` may warn that `codex` is an old copy in the mise-store volume. It
+gives the command that removes it.

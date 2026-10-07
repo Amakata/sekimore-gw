@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.66 -->
+<!-- reviewed-up-to: 0.2.67 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -867,3 +867,11 @@ diff .devcontainer/config/config.yml .devcontainer/config/config.sample.yml
 人ごとの値（`values:`）が missing / locked / unavailable のとき赤になり、`check` は exit 1 で終わり、
 `sgw verify` は警告します。そのような値があっても exit 0 を前提に `check` を実行していたスクリプトは、
 値を設定する（`sgw var set <name>`）か、exit 1 を前提にしてください。
+
+## 0.2.67 言語をイメージに焼き込めるようになった
+
+作業はありません。プロジェクトの Dockerfile で、base の読み取り専用の system ディレクトリ
+`/opt/mise` に言語を入れられるようになりました。[docs/languages.ja.md](docs/languages.ja.md) を参照してください。
+
+更新後、`sgw verify` が「`codex` が mise-store ボリュームの古いコピーだ」と警告することがあります。
+それを消すコマンドが表示されます。

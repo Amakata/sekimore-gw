@@ -11,6 +11,13 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.67（2026-10-07）
+
+### Enhancement
+
+- base: root 所有で読み取り専用の system mise ディレクトリ（`MISE_SYSTEM_DATA_DIR=/opt/mise`）を置き、その shims を利用者のものの後ろで PATH に入れた。codex はそこに固定した node 24.21.0 で `/usr/local/bin/codex` から動く。利用者の既定の node は `lts` でなく 24.21.0。docs/languages.md を追加 (#379)
+- `sgw verify`: `codex` が mise-store ボリュームの古いコピーを指すとき警告し、それを消すコマンドを示す (#380)
+
 ## 0.2.66（2026-10-06）
 
 ### Fix
