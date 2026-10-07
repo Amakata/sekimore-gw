@@ -84,6 +84,13 @@ pub const ITEMS: &[Item] = &[
         run: env_survives_sudo,
     },
     Item {
+        name: "codex_from_base",
+        title: "dev: codex is the base image's",
+        edges: &[],
+        applies: always,
+        run: codex_from_base,
+    },
+    Item {
         name: "store",
         title: "gateway: the secret store",
         edges: &[paths::OPERATOR_STORE],
@@ -556,6 +563,50 @@ fn signing_key_only(ctx: &mut Ctx) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// #375: what `codex` resolves to in dev — the base's wrapper, or a copy in the mise-store volume.
+const CODEX_SCRIPT: &str = r#"p=$(command -v codex 2>/dev/null) || { echo none; exit; }
+[ "$p" = /usr/local/bin/codex ] && { echo base; exit; }
+[ -x /usr/local/bin/codex ] || { echo older-base; exit; }
+echo "shadow $(mise which codex 2>/dev/null || echo "$p")""#;
+
+/// The node version a path under `…/installs/node/<version>/…` belongs to.
+pub fn node_version_of(path: &str) -> Option<&str> {
+    let rest = path.split("/installs/node/").nth(1)?;
+    rest.split('/').next().filter(|v| !v.is_empty())
+}
+
+fn codex_from_base(ctx: &mut Ctx) -> anyhow::Result<()> {
+    // From base 0.2.67 codex runs on a node of its own in /opt/mise. A mise-store volume filled by
+    // an older base still holds the codex that base put in the user's node, and the volume wins,
+    // so that old copy keeps answering `codex` until someone removes it. Said, not removed: a
+    // person may have installed a newer one on purpose
+    let out = ctx.dev_sh(CODEX_SCRIPT)?;
+    if out.code != 0 {
+        ctx.skip("dev unavailable");
+        return Ok(());
+    }
+    let said = out.stdout.trim().to_string();
+    match said.split_once(' ').unwrap_or((said.as_str(), "")) {
+        ("base", _) => ctx.ok("codex is /usr/local/bin/codex, on the base's own node"),
+        ("older-base", _) => {
+            ctx.note("this base predates the system codex (0.2.67); nothing to compare")
+        }
+        ("none", _) => ctx.warn("codex is not on PATH in dev"),
+        ("shadow", at) => {
+            let fix = match node_version_of(at) {
+                Some(v) => format!(
+                    "in dev: mise exec node@{v} -- npm uninstall -g @openai/codex && mise reshim"
+                ),
+                None => format!("in dev: remove {at}, then mise reshim"),
+            };
+            ctx.warn(&format!(
+                "codex resolves to {at}, a copy in the mise-store volume, not the base's /usr/local/bin/codex; it is not updated with the image. Unless it is there on purpose: {fix}"
+            ));
+        }
+        _ => ctx.warn(&format!("could not tell where codex comes from: {said}")),
+    }
+    Ok(())
+}
 const GIT_SIGNS_SCRIPT: &str = r#"set -a; . /etc/sekimore-agent/env 2>/dev/null; set +a
 [ "$(git config --get commit.gpgsign 2>/dev/null)" = true ] || { echo off; exit; }
 k=$(git config --get user.signingkey 2>/dev/null)
@@ -1060,6 +1111,20 @@ fn host_input(ctx: &mut Ctx) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #375: the fix names the node the stale codex sits in.
+    #[test]
+    fn a_stale_codex_is_traced_to_its_node() {
+        assert_eq!(
+            node_version_of("/home/vscode/.local/share/mise/installs/node/24.21.0/bin/codex"),
+            Some("24.21.0")
+        );
+        assert_eq!(
+            node_version_of("/home/vscode/.local/share/mise/installs/node/lts/bin/codex"),
+            Some("lts")
+        );
+        assert_eq!(node_version_of("/home/vscode/.local/bin/codex"), None);
+    }
 
     /// #274: Docker's default is named for what it is; the gateway's address anywhere in the
     /// list passes; a comment or an indented `nameserver` in a word is not a nameserver line.

@@ -154,6 +154,7 @@ Does not fit when the agent should:
 ## Documentation
 
 - [docs/template.md](docs/template.md) — the files `sgw init` writes
+- [docs/languages.md](docs/languages.md) — languages in the dev container: the read-only system directory, prebuilt images, and what a person adds
 - [docs/remote-ssh.md](docs/remote-ssh.md) — run the dev container on a Linux VM reached by Remote-SSH
 - [base/README.md](base/README.md) — what the dev container's image holds
 - [relay/README.md](relay/README.md) — the relay's configuration and the permission catalog

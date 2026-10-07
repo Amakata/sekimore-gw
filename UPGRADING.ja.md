@@ -41,7 +41,7 @@
 | 0.2.58 〜 0.2.59 | 下の 0.2.60。**すべてのプロジェクト: ファイルが 1 つ増えるのでコミットする** |
 | 0.2.60 〜 0.2.63 | 下の 0.2.64。**`sgw check` の出力をスクリプトが読む場合だけ** |
 | 0.2.64 〜 0.2.65 | 下の 0.2.66。**`sgw check` をスクリプトが実行する場合だけ** |
-| 0.2.66 | 下の 0.3.0-alpha.1。**0.3 のプレリリースに移り、github サイドカーを使う場合だけ** |
+| 0.2.66 〜 0.2.67 | 下の 0.3.0-alpha.1。**0.3 のプレリリースに移り、github サイドカーを使う場合だけ** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -868,6 +868,14 @@ diff .devcontainer/config/config.yml .devcontainer/config/config.sample.yml
 人ごとの値（`values:`）が missing / locked / unavailable のとき赤になり、`check` は exit 1 で終わり、
 `sgw verify` は警告します。そのような値があっても exit 0 を前提に `check` を実行していたスクリプトは、
 値を設定する（`sgw var set <name>`）か、exit 1 を前提にしてください。
+
+## 0.2.67 言語をイメージに焼き込めるようになった
+
+作業はありません。プロジェクトの Dockerfile で、base の読み取り専用の system ディレクトリ
+`/opt/mise` に言語を入れられるようになりました。[docs/languages.ja.md](docs/languages.ja.md) を参照してください。
+
+更新後、`sgw verify` が「`codex` が mise-store ボリュームの古いコピーだ」と警告することがあります。
+それを消すコマンドが表示されます。
 
 ## 0.3.0-alpha.1 GitHub API をサイドカーで動かせる（プレリリース）
 
