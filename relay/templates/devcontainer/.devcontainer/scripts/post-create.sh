@@ -21,7 +21,8 @@ if [ -d "$HOME/.local/share/mise/installs-default" ]; then
     "$HOME/.local/share/mise/installs-default/" \
     "$HOME/.local/share/mise/installs/"
   if command -v mise >/dev/null 2>&1; then
-    mise reshim
+    # #393: a shim that cannot be written is not worth stopping the start for
+    mise reshim || echo "WARNING: mise reshim failed; check who owns ~/.local/share/mise (ls -ld ~/.local/share/mise)"
   fi
 fi
 
