@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.68 -->
+<!-- reviewed-up-to: 0.2.69 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -41,6 +41,7 @@
 | 0.2.58 〜 0.2.59 | 下の 0.2.60。**すべてのプロジェクト: ファイルが 1 つ増えるのでコミットする** |
 | 0.2.60 〜 0.2.63 | 下の 0.2.64。**`sgw check` の出力をスクリプトが読む場合だけ** |
 | 0.2.64 〜 0.2.65 | 下の 0.2.66。**`sgw check` をスクリプトが実行する場合だけ** |
+| 0.2.66 〜 0.2.68 | 下の 0.2.69。**`devcontainer.json` か `post-create.sh` を編集した場合だけ** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -883,3 +884,35 @@ diff .devcontainer/config/config.yml .devcontainer/config/config.sample.yml
 
 `sgw update` は、プロジェクトの Dockerfile の `sgw-lang-*` タグについても、追従する系列内の新しい版を
 表示し、`--apply` で書き込むようになりました。
+
+## 0.2.69 ホストの資格情報を dev に渡さない
+
+雛形の `.devcontainer/devcontainer.json` は、dev がホストに資格情報を問い合わせないよう VS Code に指示する
+ようになりました。Docker の資格情報ヘルパー（ホストのレジストリのログイン）、Git の資格情報ヘルパー、
+VS Code の GitHub サインインによる Git への応答を止めます。この設定が無いと、dev のどのプロセスも
+ホストにそれらを問い合わせられます。設定が入るまで `sgw verify` が警告します。
+
+`devcontainer.json` を編集していなければ作業はありません（`sgw update` が編集済みと報告するもの）。
+編集した場合は `customizations.vscode.settings` に次の 4 行を足し、Rebuild Container してください。
+
+```jsonc
+"dev.containers.dockerCredentialHelper": false,
+"dev.containers.gitCredentialHelperConfigLocation": "none",
+"git.terminalAuthentication": false,
+"github.gitAuthentication": false
+```
+
+base 0.2.67 〜 0.2.68 では、mise-store ボリュームをマウントすると `~/.local/share/mise` が root のものになり、
+雛形の `mise reshim` が `postStartCommand` を止めることがありました。base が利用者の mise のディレクトリを作り、
+`sgw-post-start` がディレクトリを取り戻すようになりました。`post-create.sh` を編集した場合は、
+`mise reshim` が失敗しても止まらないようにしてください。
+
+```sh
+mise reshim || echo "WARNING: mise reshim failed; check who owns ~/.local/share/mise"
+```
+
+Dockerfile で mise を `/opt/mise` に移した場合は、利用者のディレクトリも利用者として作ってください。
+
+```dockerfile
+RUN mkdir -p "$HOME/.local/share/mise/installs" "$HOME/.local/share/mise/shims"
+```

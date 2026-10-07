@@ -12,7 +12,7 @@ This page is what the image holds, and where to change the base itself.
 
 ```dockerfile
 # a version, not latest: sgw update --apply raises it
-FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.68
+FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.69
 
 # only what this project adds, e.g. mise use -g python@3.13.0 && mise reshim
 ```
@@ -31,7 +31,7 @@ The template's [Dockerfile](../relay/templates/devcontainer/.devcontainer/Docker
 | Languages | `mise`. No language version |
 | AI | Claude Code CLI, OpenAI Codex CLI, the official Anthropic skills |
 | Cloud | AWS CLI v2, Docker CE with buildx and compose |
-| Gateway | four tools copied out of `ghcr.io/amakata/sekimore-gw:0.2.68`, below |
+| Gateway | four tools copied out of `ghcr.io/amakata/sekimore-gw:0.2.69`, below |
 | zsh defaults | `/etc/skel/zsh-rc.d/`, copied into `~/.config/zsh/rc.d/` by post-create |
 
 From the gateway image:
