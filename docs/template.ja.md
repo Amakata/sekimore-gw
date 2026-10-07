@@ -12,7 +12,7 @@
 <あなたのプロジェクト>/
 ├── sgw.toml                        # sgw の記録: 各ファイルを書いたときの sha（編集しない）
 └── .devcontainer/
-    ├── devcontainer.json
+    ├── devcontainer.json           # VS Code が dev に渡すホストの資格情報も止める（#392）
     ├── docker-compose.yml          # dev と sekimore-gw の 2 サービス
     ├── docker-compose.relay.yml    # sekimore-relay 用の overlay（agent ソケットのマウント、鍵のボリューム）
     ├── Dockerfile                  # FROM sgw-devcontainer-base に、mise で入れる言語の版
@@ -32,6 +32,8 @@
 ## 知っておくこと
 
 - VS Code は `SSH_AUTH_SOCK` なしで起動する必要がある。`sgw open` がそうする。ふつうに開くと post-create が ERROR で止まる
+- devcontainer.json は、Dev Containers 拡張がホストから dev に渡すもの（docker の資格情報ヘルパー＝ホストのレジストリのログイン、git の資格情報ヘルパー、VS Code の GitHub サインインによる git への応答）を止める。この 4 つの設定は残す。dev からヘルパーに届くと `sgw verify` が警告する
+- 止められないもの: `BROWSER` と `code` コマンドは、ホストのブラウザで URL を開く。ホストのブラウザは gateway を通らない。ブラウザに表示されるので人の目には触れ、返事が dev に戻ることもない
 - 秘密ストアは作り直すたびに施錠される。施錠中は関所が GitHub API を使えない。SSH の git は動く
 - `config.yml` に上流を足したり変えたりしたら: `sgw restart`、そのあと `sgw refresh`
 - 署名鍵の GitHub での題名は `sekimore-agent-signing: <project> / <name> <email>`。`.env` の `SEKIMORE_SIGNING_KEY_COMMENT` で変えられる
