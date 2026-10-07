@@ -38,13 +38,14 @@ jobs:
           LANG_IN: ${{ inputs.lang }}
           VERSION_IN: ${{ inputs.version }}
         run: |
-          set -eu
+          set -euo pipefail
           if [ -n "${LANG_IN}" ] && [ -n "${VERSION_IN}" ]; then
             m=$(jq -cn --arg l "$LANG_IN" --arg v "$VERSION_IN" '[{lang: $l, version: $v}]')
           else
-            m=$(yq -o=json '.pin | to_entries | map(.key as $l | .value[] | {lang: $l, version: .})' lang/versions.yml \
-              | jq -c --arg l "${LANG_IN}" 'map(select($l == "" or .lang == $l))')
+            m=$(yq -o=json '.pin' lang/versions.yml \
+              | jq -c --arg l "${LANG_IN}" '[to_entries[] | .key as $k | .value[] | {lang: $k, version: .}] | map(select($l == "" or .lang == $l))')
           fi
+          [ "$m" != "[]" ] || { echo "nothing to build"; exit 1; }
           echo "matrix=$m" >> "$GITHUB_OUTPUT"
           echo "$m"
 
