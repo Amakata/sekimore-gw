@@ -1,0 +1,81 @@
+# Languages in the dev container
+
+The base image has mise and nothing else of a language's but the node codex runs on. A project
+adds its languages one of three ways.
+
+| Who | How | Where it lands |
+|---|---|---|
+| The project, a language with a prebuilt image | `COPY --from=` the language image | `/opt/mise` (read-only) |
+| The project, any other language | `mise install --system` in the Dockerfile | `/opt/mise` (read-only) |
+| One person | `mise use -g <lang>@<version>` in the container | the mise-store volume |
+
+- `/opt/mise` is mise's system directory (`MISE_SYSTEM_DATA_DIR`). Root owns it; the user's mise
+  reads it and never writes it, and nothing chowns it at start.
+- A version in the mise-store volume wins over the same version in `/opt/mise`.
+- Write versions as `x.y.z`. `node@24` or `latest` resolves to whatever is newest, which may not be
+  the version in the image, and mise then installs another one in the volume.
+
+## The project: in the Dockerfile
+
+Install as root into the system directory, publish its shims, close it:
+
+```dockerfile
+USER root
+RUN umask 022 \
+ && HOME=/root mise install --system python@3.13.7 node@22.21.1 uv@0.8.22 \
+ && HOME=/root mise reshim --system \
+ && chmod -R a-w /opt/mise
+USER vscode
+RUN mise use -g python@3.13.7 node@22.21.1 uv@0.8.22
+```
+
+- `mise reshim --system` is needed: without it the user's mise tries to publish the system shims
+  itself and fails (`refusing to publish outside the system installs or shims directories`).
+- `mise use -g` as the user only records the versions; nothing is downloaded or copied.
+
+### From a prebuilt language image
+
+Source-built languages (PHP, Python 2.7) take minutes to build. Their prebuilt images (#376, when published) hold them
+under `/opt/mise`:
+
+```dockerfile
+FROM ghcr.io/amakata/sgw-lang-php:8.3.26-bookworm AS php
+FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.67
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends <the image's runtime packages> \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=php /opt/mise/installs/php/ /opt/mise/installs/php/
+RUN HOME=/root mise reshim --system && chmod -R a-w /opt/mise
+USER vscode
+RUN mise use -g php@8.3.26
+```
+
+Each language image lists the apt packages its binaries need at run time.
+
+### Global npm tools
+
+The system node is read-only, so `npm install -g` fails with EACCES. Install a CLI as a mise tool
+instead: `HOME=/root mise install --system npm:<package>@<version>` (or `pnpm@<version>`).
+
+## One person: in the container
+
+```sh
+mise use -g node@24.21.0
+```
+
+It downloads into `~/.local/share/mise/installs`, the mise-store volume, so it survives a
+rebuild. The download goes through the gateway, so its hosts have to be in `allow_domains`:
+
+| Language | Hosts |
+|---|---|
+| node | `nodejs.org` |
+| python (prebuilt), uv | `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com` |
+| most others (aqua, GitHub releases) | `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `api.github.com` |
+
+A refused download names its host in `sgw web` / `sgw audit`.
+
+## The older way
+
+Installing into the user's data directory and copying it to
+`~/.local/share/mise/installs-default`, which post-create copies into an empty mise-store volume,
+still works on 0.2.x. 0.3 drops it; see UPGRADING when moving there.

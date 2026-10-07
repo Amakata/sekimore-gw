@@ -151,6 +151,7 @@ dev コンテナから外に出る道はゲートウェイだけです。
 ## ドキュメント
 
 - [docs/template.ja.md](docs/template.ja.md) — `sgw init` が書くファイル
+- [docs/languages.ja.md](docs/languages.ja.md) — dev コンテナの言語: 読み取り専用の system ディレクトリ、ビルド済みのイメージ、各自が足す方法
 - [docs/remote-ssh.ja.md](docs/remote-ssh.ja.md) — Remote-SSH で繋ぐ Linux VM の上で dev コンテナを動かす
 - [base/README.ja.md](base/README.ja.md) — dev コンテナのイメージの中身
 - [relay/README.ja.md](relay/README.ja.md) — 関所の設定と権限の一覧

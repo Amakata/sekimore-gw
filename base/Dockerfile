@@ -143,11 +143,11 @@ RUN git clone --depth 1 https://github.com/zsh-users/zsh-completions.git        
 # ---------------------------------------------------------------------------
 # mise (jdx/mise) — unified version manager
 #
-# Only mise itself is installed here — no specific language versions.
-# Downstream images run e.g. `mise use -g python@3.13.0` as needed.
+# mise itself, and the node codex runs on (below). A project bakes its languages into the system
+# directory, /opt/mise (#375, docs/languages.md).
 #
-# ~/.local/share/mise/installs is the data directory. Downstream images that
-# pre-install languages should stage a copy at ~/.local/share/mise/installs-default
+# The older way still works: install into ~/.local/share/mise/installs (the user's data
+# directory) and stage a copy at ~/.local/share/mise/installs-default
 # so a devcontainer that mounts an empty volume there can restore via:
 #   rsync -a --ignore-existing \
 #     ~/.local/share/mise/installs-default/ \
@@ -166,12 +166,24 @@ RUN install -dm 0755 /etc/apt/keyrings && \
 
 USER ${USERNAME}
 
+# #375: the system data directory. Languages a project bakes into its image go here, root-owned
+# and read-only: `mise install --system …`, or `COPY --from=` a prebuilt language image, then
+# `HOME=/root mise reshim --system && chmod -R a-w /opt/mise` (docs/languages.md). The user's
+# mise reads it and never writes it; what a person adds with `mise use -g` stays in
+# ~/.local/share/mise/installs (the mise-store volume), and wins for the same version. Not under
+# /usr/local/share: that is handed to the user below, and mise refuses a system directory a user
+# owns. Only an environment variable sets it.
+ENV MISE_SYSTEM_DATA_DIR=/opt/mise
+USER root
+RUN install -d -m 0755 /opt/mise /opt/mise/installs /opt/mise/shims
+USER ${USERNAME}
+
 # Put the mise shims directory on PATH for EVERY process — including non-login
 # and non-interactive ones (Claude Code tool subprocesses, `docker exec cmd`,
 # postCreateCommand, make, etc.). /etc/profile.d is NOT read by those paths,
 # so we rely on Docker ENV here. `mise activate` in the zsh rc.d adds the
-# interactive-only cd hook on top of this.
-ENV PATH="/home/${USERNAME}/.local/share/mise/shims:${PATH}"
+# interactive-only cd hook on top of this. The user's shims first, then the system's (#375).
+ENV PATH="/home/${USERNAME}/.local/share/mise/shims:/opt/mise/shims:${PATH}"
 
 # ...and put it back for LOGIN shells, which is the one path ENV does not cover.
 # Debian's /etc/profile assigns PATH rather than appending to it, so a login shell
@@ -181,6 +193,10 @@ ENV PATH="/home/${USERNAME}/.local/share/mise/shims:${PATH}"
 USER root
 RUN printf '%s\n' \
       '# mise shims: /etc/profile assigns PATH, so a login shell would drop the image ENV (#60)' \
+      'case ":$PATH:" in' \
+      '  *":/opt/mise/shims:"*) ;;' \
+      '  *) PATH="/opt/mise/shims:$PATH" ;;' \
+      'esac' \
       'case ":$PATH:" in' \
       '  *":$HOME/.local/share/mise/shims:"*) ;;' \
       '  *) PATH="$HOME/.local/share/mise/shims:$PATH" ;;' \
@@ -228,12 +244,26 @@ RUN curl -fsSL https://claude.ai/install.sh | bash -s stable
 
 # ---------------------------------------------------------------------------
 # OpenAI Codex CLI
-# Requires Node.js 18+. mise is already on PATH, so we install a temporary
-# Node runtime via mise, install codex globally with npm, then leave the
-# shims in place. Downstream images that `mise use -g node@...` will
-# naturally keep codex available.
+# #375: on a node of its own in the system directory, started through /usr/local/bin/codex with
+# that node named, so whatever node a project or a person selects, codex keeps running. In
+# /opt/codex rather than inside the node install, so no mise shim for it shadows the wrapper.
+# The node is pinned: `lts` moved with every base rebuild.
 # ---------------------------------------------------------------------------
-RUN mise use -g node@lts && npm install -g @openai/codex
+ARG NODE_VERSION=24.21.0
+USER root
+RUN umask 022 && \
+    HOME=/root mise install --system "node@${NODE_VERSION}" && \
+    PATH="/opt/mise/installs/node/${NODE_VERSION}/bin:$PATH" \
+      npm install -g --prefix /opt/codex @openai/codex && \
+    printf '#!/bin/sh\nexec /opt/mise/installs/node/%s/bin/node /opt/codex/lib/node_modules/@openai/codex/bin/codex.js "$@"\n' \
+      "${NODE_VERSION}" > /usr/local/bin/codex && \
+    chmod 0755 /usr/local/bin/codex && \
+    HOME=/root mise reshim --system && \
+    chmod -R a-w /opt/mise /opt/codex
+USER ${USERNAME}
+# The user's default node, as before, now the same pinned version: a project that never named a
+# node still has one, and a downstream image that copies its installs keeps getting it
+RUN mise use -g "node@${NODE_VERSION}"
 
 # ---------------------------------------------------------------------------
 # Default zsh rc.d snippets
