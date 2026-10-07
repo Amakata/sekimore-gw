@@ -1,0 +1,27 @@
+# apt packages PHP's build needs (asdf-php through mise), bookworm
+build-essential
+autoconf
+bison
+re2c
+pkg-config
+libssl-dev
+libreadline-dev
+zlib1g-dev
+libxml2-dev
+libsqlite3-dev
+libcurl4-openssl-dev
+libbz2-dev
+libzip-dev
+libonig-dev
+libpng-dev
+libjpeg-dev
+libfreetype-dev
+libwebp-dev
+libavif-dev
+libgd-dev
+libtidy-dev
+libxslt1-dev
+libsodium-dev
+libicu-dev
+libgmp-dev
+libffi-dev

@@ -40,12 +40,17 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends <イメージが示す実行時のパッケージ> \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=php /opt/mise/installs/php/ /opt/mise/installs/php/
+COPY --from=php --chown=vscode:vscode /home/ /home/
 RUN HOME=/root mise reshim --system && chmod -R a-w /opt/mise
 USER vscode
 RUN mise use -g php@8.3.26
 ```
 
-言語イメージはそれぞれ、実行時に要る apt のパッケージを示しています。
+- タグ: `<版>-<リビジョン>-bookworm`（`8.3.33-1-bookworm`）は中身が変わりません。同じ版を作り直すと、リビジョンが上がった新しいタグになります。`<版>-bookworm` は最新のリビジョンを指します。イメージを完全に固定したいときはリビジョンまで書きます。
+- 追う系列: `lang/versions.yml` の `track` にある系列（PHP 8.3）は、新しいパッチ版が出た日に公開されます。それ以外の版は、そこに固定した版を一度だけ作ります。プロジェクトの Dockerfile にある追う系列の版は、`sgw update` が新しいパッチ版を知らせ、`--apply` で書き換えます（タグを直接書いた行だけで、ARG を通した行は対象外）。別の系列へは上げず、それ以外の版は触りません。
+- `/opt/mise/installs/<言語>/` はディレクトリごとコピーします。版のほかに、mise のバックエンドの記録と版の別名（`8.3`、`latest`）があります。
+- `/home/` には、実行時に要る mise のプラグインがあります（PHP なら vfox-php）。mise には system 側のプラグイン置き場が無いので、ユーザーの mise が見る場所に置きます。プラグインの要らない言語（Python）では `/home/` は空です。
+- `/opt/mise/installs/<言語>/<版>/.sgw-runtime-packages` に、実行時に要る apt のパッケージの一覧があります。
 
 ### npm のグローバルな道具
 

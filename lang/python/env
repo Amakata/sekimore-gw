@@ -1,0 +1,2 @@
+# Python 2.7 has no prebuilt binary; mise builds it with python-build (#376)
+MISE_PYTHON_COMPILE=1
