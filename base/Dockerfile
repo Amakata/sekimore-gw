@@ -77,8 +77,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN if [ "$(getent group dialout | cut -d: -f3)" = 20 ]; then groupmod -g 9920 dialout; fi \
     && ! getent group 20 >/dev/null
 
-# Ensure default vscode user has access to /usr/local/share
-RUN chown -R ${USERNAME}:${USERNAME} /usr/local/share
+# 0.3 (#377): /usr/local/share stays root's. It used to be handed to the user, which made every
+# language a project installed there writable by the agent, and kept mise from using a system
+# directory beside it. Languages go in /opt/mise (below); a project that needs a writable directory
+# makes one of its own.
 
 # Persist zsh history via a well-known path (devcontainer mounts /commandhistory).
 RUN mkdir -p /commandhistory \
@@ -146,13 +148,8 @@ RUN git clone --depth 1 https://github.com/zsh-users/zsh-completions.git        
 # mise itself, and the node codex runs on (below). A project bakes its languages into the system
 # directory, /opt/mise (#375, docs/languages.md).
 #
-# The older way still works: install into ~/.local/share/mise/installs (the user's data
-# directory) and stage a copy at ~/.local/share/mise/installs-default
-# so a devcontainer that mounts an empty volume there can restore via:
-#   rsync -a --ignore-existing \
-#     ~/.local/share/mise/installs-default/ \
-#     ~/.local/share/mise/installs/
-#   mise reshim
+# 0.3 (#377): the template no longer stages ~/.local/share/mise/installs-default for post-create
+# to copy into the mise-store volume; that volume holds only what a person adds.
 # ---------------------------------------------------------------------------
 USER root
 RUN install -dm 0755 /etc/apt/keyrings && \
@@ -170,9 +167,8 @@ USER ${USERNAME}
 # and read-only: `mise install --system …`, or `COPY --from=` a prebuilt language image, then
 # `HOME=/root mise reshim --system && chmod -R a-w /opt/mise` (docs/languages.md). The user's
 # mise reads it and never writes it; what a person adds with `mise use -g` stays in
-# ~/.local/share/mise/installs (the mise-store volume), and wins for the same version. Not under
-# /usr/local/share: that is handed to the user below, and mise refuses a system directory a user
-# owns. Only an environment variable sets it.
+# ~/.local/share/mise/installs (the mise-store volume), and wins for the same version. Only an
+# environment variable sets it.
 ENV MISE_SYSTEM_DATA_DIR=/opt/mise
 USER root
 RUN install -d -m 0755 /opt/mise /opt/mise/installs /opt/mise/shims

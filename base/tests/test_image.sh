@@ -116,6 +116,10 @@ codex_at=$(in_image /bin/sh -lc 'command -v codex')
 [ "$codex_at" = /usr/local/bin/codex ] || fail "codex resolves to $codex_at, not the wrapper"
 in_image /bin/sh -lc 'codex --version' >/dev/null || fail "codex does not run: $(in_image /bin/sh -lc 'codex --version')"
 echo "== /opt/mise is the system directory, root-owned and read-only; codex runs on its own node"
+# 0.3 (#377): /usr/local/share is root's again, so nothing a project puts there is the agent's to change
+share_owner=$(in_image /usr/bin/stat -c %U /usr/local/share)
+[ "$share_owner" = root ] || fail "/usr/local/share is owned by $share_owner, not root"
+echo "== /usr/local/share stays root's"
 
 # The recipe docs/languages.md gives a project, end to end: root installs into the system directory
 # and reshims, and the user then selects that version without installing anything of its own.

@@ -79,8 +79,27 @@ rebuild. The download goes through the gateway, so its hosts have to be in `allo
 
 A refused download names its host in `sgw web` / `sgw audit`.
 
-## The older way
+## Moving to 0.3
 
-Installing into the user's data directory and copying it to
-`~/.local/share/mise/installs-default`, which post-create copies into an empty mise-store volume,
-still works on 0.2.x. 0.3 drops it; see UPGRADING when moving there.
+0.3 stops two things 0.2 did (#377):
+
+- `/usr/local/share` is no longer handed to the user (`chown -R vscode`), and post-start no longer
+  chowns it.
+- The template no longer copies `~/.local/share/mise/installs` to `installs-default`, and
+  post-create no longer copies that into the mise-store volume.
+
+What to change in a project's Dockerfile, by what it does now:
+
+| It does | Change it to |
+|---|---|
+| `mise use -g <lang>@<v>` as vscode, then `cp -a … installs-default` | `mise install --system` as root, `mise reshim --system`, `chmod -R a-w /opt/mise`, then `mise use -g` as vscode ([above](#the-project-in-the-dockerfile)); drop the `cp -a` |
+| `ENV MISE_DATA_DIR=/usr/local/share/mise` | remove it |
+| a path under `/usr/local/share/mise/installs/…` (`ls -d node/24.*`, a symlink, `cp -a`) | `mise where <lang>@<v>` |
+| `node@24`, `php@8.3`, `latest` | `x.y.z`: a vague version may resolve to another one than the image's, and mise installs that in the volume (PHP from source) |
+| `npm install -g <cli>` | `HOME=/root mise install --system npm:<cli>@<v>` (or `pnpm@<v>`) |
+| relies on writing under `/usr/local/share` | a directory of its own, created and chowned in the Dockerfile |
+| rust from the Dockerfile | each person: `mise use -g rust@<v>` (rustup does not work from the system directory) |
+
+The mise-store volume may still hold the versions the old way copied into it, and a version there
+wins over the same one in the image. Start it empty once: remove the volume (`docker volume rm
+mise-store-<id>`, with the dev container stopped) or give it a new name in docker-compose.yml.
