@@ -61,6 +61,11 @@ allow_domains:
   - npmjs.com
   - nodejs.org
   - .npmjs.org
+  # mise: a version a person adds in the container with `mise use -g` (docs/languages.md)
+  - mise.jdx.dev                         # mise's own lookups
+  - mise-versions.jdx.dev                # the version lists
+  - objects.githubusercontent.com        # GitHub release downloads (python, uv, aqua tools)
+  # - repo.yarnpkg.com                   # yarn
   # docker compose service names
   - sekimore-gw
   - dev

@@ -76,8 +76,15 @@ rebuild. The download goes through the gateway, so its hosts have to be in `allo
 | node | `nodejs.org` |
 | python (prebuilt), uv | `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com` |
 | most others (aqua, GitHub releases) | `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `api.github.com` |
+| yarn | `repo.yarnpkg.com` |
+| mise itself, for any of them (the version lists) | `mise.jdx.dev`, `mise-versions.jdx.dev` |
 
 A refused download names its host in `sgw web` / `sgw audit`.
+
+A Dockerfile is built by the Docker on the host, which does not go through the gateway, so its
+`mise install --system` needs none of this. Where the build itself runs behind the gateway (Docker
+in the dev container), it needs the same hosts, and `download.docker.com` for an image that adds
+Docker's apt repository.
 
 ## The older way
 

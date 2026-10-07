@@ -579,7 +579,9 @@ fn codex_from_base(ctx: &mut Ctx) -> anyhow::Result<()> {
     // From base 0.2.67 codex runs on a node of its own in /opt/mise. A mise-store volume filled by
     // an older base still holds the codex that base put in the user's node, and the volume wins,
     // so that old copy keeps answering `codex` until someone removes it. Said, not removed: a
-    // person may have installed a newer one on purpose
+    // person may have installed a newer one on purpose. The fix takes ~/.local/share/mise back
+    // first: a container made from base 0.2.67–0.2.68 may have it root-owned, and the reshim at
+    // the end then fails the first time (#393)
     let out = ctx.dev_sh(CODEX_SCRIPT)?;
     if out.code != 0 {
         ctx.skip("dev unavailable");
@@ -595,9 +597,11 @@ fn codex_from_base(ctx: &mut Ctx) -> anyhow::Result<()> {
         ("shadow", at) => {
             let fix = match node_version_of(at) {
                 Some(v) => format!(
-                    "in dev: mise exec node@{v} -- npm uninstall -g @openai/codex && mise reshim"
+                    "in dev: sudo chown -R \"$(id -u):$(id -g)\" ~/.local/share/mise && mise exec node@{v} -- npm uninstall -g @openai/codex && mise reshim"
                 ),
-                None => format!("in dev: remove {at}, then mise reshim"),
+                None => format!(
+                    "in dev: remove {at}, then sudo chown -R \"$(id -u):$(id -g)\" ~/.local/share/mise && mise reshim"
+                ),
             };
             ctx.warn(&format!(
                 "codex resolves to {at}, a copy in the mise-store volume, not the base's /usr/local/bin/codex; it is not updated with the image. Unless it is there on purpose: {fix}"
