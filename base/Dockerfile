@@ -258,8 +258,12 @@ RUN umask 022 && \
     chmod -R a-w /opt/mise /opt/codex
 USER ${USERNAME}
 # The user's default node, as before, now the same pinned version: a project that never named a
-# node still has one, and a downstream image that copies its installs keeps getting it
-RUN mise use -g "node@${NODE_VERSION}"
+# node still has one, and a downstream image that copies its installs keeps getting it.
+# #393: and the user's mise directories, made by the user here. The mise-store volume is mounted
+# on installs; where the image lacks it, Docker creates the mount point and its missing parents as
+# root, and the user's `mise reshim` can no longer write its shims
+RUN mise use -g "node@${NODE_VERSION}" \
+ && mkdir -p "$HOME/.local/share/mise/installs" "$HOME/.local/share/mise/shims"
 
 # ---------------------------------------------------------------------------
 # Default zsh rc.d snippets

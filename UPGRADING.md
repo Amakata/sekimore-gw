@@ -41,7 +41,8 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.58 – 0.2.59 | [0.2.60](#0260-configyml-is-yours-and-configsampleyml-is-the-template), **everyone: a new file appears, commit it** |
 | 0.2.60 – 0.2.63 | [0.2.64](#0264-the-configuration-listing-moved-from-sgw-check-to-sgw-config), **only if a script reads `sgw check`'s output** |
 | 0.2.64 – 0.2.65 | [0.2.66](#0266-sgw-check-exits-1-on-a-missing-value), **only if a script runs `sgw check`** |
-| 0.2.66 – 0.2.68 | [0.3.0-alpha.1](#030-alpha1-the-github-api-can-run-in-a-sidecar-prerelease), **only if you move to the 0.3 prerelease and want the github sidecar** |
+| 0.2.66 – 0.2.68 | [0.2.69](#0269-the-hosts-credentials-stay-out-of-dev), **only if you edited `devcontainer.json` or `post-create.sh`** |
+| 0.2.69 | [0.3.0-alpha.1](#030-alpha1-the-github-api-can-run-in-a-sidecar-prerelease), **only if you move to the 0.3 prerelease and want the github sidecar** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -921,6 +922,38 @@ copied into a project's image; see [docs/languages.md](docs/languages.md).
 
 `sgw update` now also reports a newer `sgw-lang-*` tag in the project's Dockerfile within the line
 it tracks, and `--apply` writes it.
+
+## 0.2.69 The host's credentials stay out of dev
+
+The template's `.devcontainer/devcontainer.json` now tells VS Code not to let dev ask the host for
+its credentials: no Docker credential helper (the host's registry logins), no Git credential
+helper, and no Git answers from VS Code's GitHub sign-in. Without these settings, any process in
+dev can ask the host for them. `sgw verify` warns until they are in.
+
+Nothing to do unless you edited `devcontainer.json` (`sgw update` reports it as edited): add these
+four lines to `customizations.vscode.settings`, then Rebuild Container.
+
+```jsonc
+"dev.containers.dockerCredentialHelper": false,
+"dev.containers.gitCredentialHelperConfigLocation": "none",
+"git.terminalAuthentication": false,
+"github.gitAuthentication": false
+```
+
+On base 0.2.67 – 0.2.68, a mounted mise-store volume could leave `~/.local/share/mise` owned by
+root, and the template's `mise reshim` then stopped `postStartCommand`. The base now creates the
+user's mise directories, and `sgw-post-start` takes the directory back. If you edited
+`post-create.sh`, make its `mise reshim` non-fatal:
+
+```sh
+mise reshim || echo "WARNING: mise reshim failed; check who owns ~/.local/share/mise"
+```
+
+If your Dockerfile moved mise to `/opt/mise`, also create the user's directories as the user:
+
+```dockerfile
+RUN mkdir -p "$HOME/.local/share/mise/installs" "$HOME/.local/share/mise/shims"
+```
 
 ## 0.3.0-alpha.1 The GitHub API can run in a sidecar (prerelease)
 

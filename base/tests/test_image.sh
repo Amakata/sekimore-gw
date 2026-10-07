@@ -120,6 +120,16 @@ echo "== /opt/mise is the system directory, root-owned and read-only; codex runs
 share_owner=$(in_image /usr/bin/stat -c %U /usr/local/share)
 [ "$share_owner" = root ] || fail "/usr/local/share is owned by $share_owner, not root"
 echo "== /usr/local/share stays root's"
+# #393: with the mise-store volume mounted on installs, as the dev container runs, the user still
+# owns its mise directory and can reshim. Docker makes a missing mount point's parents root's
+vol=sgw-test-mise-store-$$
+out=$(docker run --rm -v "$vol:/home/vscode/.local/share/mise/installs" --entrypoint /bin/sh "$IMAGE" -c 'stat -c %U ~/.local/share/mise && mise reshim && echo reshim-ok' 2>&1) || true
+docker volume rm "$vol" >/dev/null 2>&1 || true
+case "$out" in
+  vscode*reshim-ok*) ;;
+  *) fail "with the mise-store volume mounted, the user's mise directory or reshim fails: $out" ;;
+esac
+echo "== with the mise-store volume mounted, the user owns ~/.local/share/mise and reshim works"
 
 # The recipe docs/languages.md gives a project, end to end: root installs into the system directory
 # and reshims, and the user then selects that version without installing anything of its own.

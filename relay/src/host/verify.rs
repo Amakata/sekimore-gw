@@ -70,6 +70,13 @@ pub const ITEMS: &[Item] = &[
         run: signing_key_only,
     },
     Item {
+        name: "no_host_credentials",
+        title: "dev: no credential helper from the host",
+        edges: &[],
+        applies: always,
+        run: no_host_credentials,
+    },
+    Item {
         name: "git_signs",
         title: "dev: git signs with the key it is meant to",
         edges: &[paths::DEV_SIGNING],
@@ -549,16 +556,76 @@ fn vscode_server_env(ctx: &mut Ctx) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// #392: the agent dev's environment names, then every agent socket VS Code forwarded into /tmp
+/// whatever the environment says — a `remoteEnv` that points SSH_AUTH_SOCK elsewhere leaves the
+/// forwarded socket where anything can use it.
+const AGENTS_SCRIPT: &str = r#"set -a; . /etc/sekimore-agent/env 2>/dev/null; set +a
+echo "env $(ssh-add -l 2>/dev/null | grep -c .)"
+for s in /tmp/vscode-ssh-auth-*.sock /tmp/ssh-*/agent.*; do
+  [ -S "$s" ] || continue
+  echo "forwarded $(SSH_AUTH_SOCK=$s ssh-add -l 2>/dev/null | grep -c .) $s"
+done"#;
+
 fn signing_key_only(ctx: &mut Ctx) -> anyhow::Result<()> {
-    let out = ctx
-        .dev_sh("set -a; . /etc/sekimore-agent/env 2>/dev/null; set +a; ssh-add -l 2>/dev/null")?;
-    let n = out.stdout.lines().filter(|l| !l.trim().is_empty()).count();
+    let out = ctx.dev_sh(AGENTS_SCRIPT)?;
+    let said = out.stdout;
+    let n: usize = said
+        .lines()
+        .find_map(|l| l.strip_prefix("env "))
+        .and_then(|n| n.trim().parse().ok())
+        .unwrap_or(0);
+    let forwarded: Vec<&str> = said
+        .lines()
+        .filter_map(|l| l.strip_prefix("forwarded "))
+        .filter(|rest| rest.split_whitespace().next() != Some("0"))
+        .collect();
+    if !forwarded.is_empty() {
+        ctx.fail(&format!(
+            "the host's ssh-agent is forwarded into dev ({}) — the operator's keys are reachable from the AI whatever SSH_AUTH_SOCK says. Reopen with: sgw open",
+            forwarded.join(", ")
+        ));
+        return Ok(());
+    }
     match n {
         1 => ctx.ok("exactly one key (the signing key, via the gateway's filtered agent)"),
         0 => ctx.ok("no ssh-agent in dev"),
         n => ctx.fail(&format!(
             "ssh-add -l lists {n} keys inside dev — the operator's keys are exposed to the AI. Reopen with: sgw open"
         )),
+    }
+    Ok(())
+}
+
+/// #392: what the Dev Containers extension hands dev from the host unless devcontainer.json turns
+/// it off — a Docker credential helper answering with the host's registry logins, and a Git
+/// credential helper.
+const HOST_CREDENTIALS_SCRIPT: &str = r#"c="$HOME/.docker/config.json"
+[ -f "$c" ] && grep -qE '"(credsStore|credHelpers)"' "$c" && echo "docker $c"
+for h in /usr/local/bin/docker-credential-dev-containers-*; do [ -e "$h" ] && echo "helper $h"; done
+git config --get-all credential.helper 2>/dev/null | grep -v '^$' | sed 's/^/git /'
+true"#;
+
+/// The lines a devcontainer.json needs to keep the host's credentials out of dev.
+pub const NO_HOST_CREDENTIALS: &str = r#""dev.containers.dockerCredentialHelper": false, "dev.containers.gitCredentialHelperConfigLocation": "none", "git.terminalAuthentication": false, "github.gitAuthentication": false"#;
+
+fn no_host_credentials(ctx: &mut Ctx) -> anyhow::Result<()> {
+    let out = ctx.dev_sh(HOST_CREDENTIALS_SCRIPT)?;
+    if out.code != 0 {
+        ctx.skip("dev unavailable");
+        return Ok(());
+    }
+    let found: Vec<&str> = out
+        .stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    if found.is_empty() {
+        ctx.ok("no Docker or Git credential helper from the host");
+    } else {
+        ctx.warn(&format!(
+            "dev can ask the host for credentials ({}). In .devcontainer/devcontainer.json, customizations.vscode.settings: {NO_HOST_CREDENTIALS}; then Rebuild Container",
+            found.join("; ")
+        ));
     }
     Ok(())
 }
@@ -579,7 +646,9 @@ fn codex_from_base(ctx: &mut Ctx) -> anyhow::Result<()> {
     // From base 0.2.67 codex runs on a node of its own in /opt/mise. A mise-store volume filled by
     // an older base still holds the codex that base put in the user's node, and the volume wins,
     // so that old copy keeps answering `codex` until someone removes it. Said, not removed: a
-    // person may have installed a newer one on purpose
+    // person may have installed a newer one on purpose. The fix takes ~/.local/share/mise back
+    // first: a container made from base 0.2.67–0.2.68 may have it root-owned, and the reshim at
+    // the end then fails the first time (#393)
     let out = ctx.dev_sh(CODEX_SCRIPT)?;
     if out.code != 0 {
         ctx.skip("dev unavailable");
@@ -595,9 +664,11 @@ fn codex_from_base(ctx: &mut Ctx) -> anyhow::Result<()> {
         ("shadow", at) => {
             let fix = match node_version_of(at) {
                 Some(v) => format!(
-                    "in dev: mise exec node@{v} -- npm uninstall -g @openai/codex && mise reshim"
+                    "in dev: sudo chown -R \"$(id -u):$(id -g)\" ~/.local/share/mise && mise exec node@{v} -- npm uninstall -g @openai/codex && mise reshim"
                 ),
-                None => format!("in dev: remove {at}, then mise reshim"),
+                None => format!(
+                    "in dev: remove {at}, then sudo chown -R \"$(id -u):$(id -g)\" ~/.local/share/mise && mise reshim"
+                ),
             };
             ctx.warn(&format!(
                 "codex resolves to {at}, a copy in the mise-store volume, not the base's /usr/local/bin/codex; it is not updated with the image. Unless it is there on purpose: {fix}"

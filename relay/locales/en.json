@@ -451,7 +451,7 @@
   "sgw.update.col_newest": "newest",
   "sgw.update.up_to_date": "up to date",
   "sgw.update.update": "← update available",
-  "sgw.update.newer_sgw": "a newer release, {version}, is out; this sgw is {sgw}. Install it first: {install}",
+  "sgw.update.newer_sgw": "a newer release, {version}, is out; this sgw is {sgw}. sgw update --apply installs it and moves the project to it (by hand: {install})",
   "sgw.update.f_same": "same",
   "sgw.update.f_changes": "changes (as sgw wrote it; this version changes it — overwritten)",
   "sgw.update.f_forced": "edited, and this version changes it too — overwritten (--force)",
@@ -499,5 +499,7 @@
   "agent.github": "GitHub: the same commands as at the top level (pr, issue, ci, …)",
   "cli.agent.show_unavailable": "Also list the sidecars and commands this project cannot use, each with why",
   "op.check.values": "  values:          {values} (sgw var set <name>)",
-  "op.check.ssh_options_state": "  ssh options:     {options}"
+  "op.check.ssh_options_state": "  ssh options:     {options}",
+  "sgw.update.update_sgw_first": "← update (sgw update --apply moves sgw first)",
+  "sgw.update.next_apply_sgw": "Next: sgw update --apply — it installs the newer sgw, then moves the project to it."
 }

@@ -23,6 +23,17 @@ base イメージは 0.2.45 まで独立したリポジトリで、版番号も�
 - `GET /relays` が各 relay とそのコマンドを返す。`sgw-agent setup` がそれを保存し、サイドカーのガイドをスキルファイルに足す。`sgw-agent <sidecar> <words>` でコマンドサイドカーのコマンドを実行する (#368)
 - `docs/sidecar-protocol.md` にコマンドサイドカーのプロトコルを書いた。`examples/sidecar-template` は標準ライブラリだけの Python で動くサイドカー (#369)
 
+## 0.2.69（2026-10-07）
+
+### Security
+
+- 雛形の devcontainer.json が、Docker の資格情報ヘルパー（ホストのレジストリのログイン）、Git の資格情報ヘルパー、VS Code の GitHub サインインによる Git への応答を止める。`sgw verify` は dev から資格情報ヘルパーに届くと警告し、/tmp に転送された ssh-agent のソケットがあると失敗する (#395)
+
+### Fix
+
+- base が利用者の `~/.local/share/mise/installs` と `shims` を作るので、mise-store ボリュームをマウントしても `~/.local/share/mise` が root のものにならず `mise reshim` が失敗しない（base 0.2.67〜0.2.68）。post-create は reshim の失敗で止まらない (#394)
+- `sgw update` が sgw 自身より新しいリリースを最新として表示し、`sgw update --apply` が先に sgw を上げると伝える (#396)
+
 ## 0.2.68（2026-10-07）
 
 ### Enhancement

@@ -18,7 +18,7 @@ ws=${SGW_WORKSPACE:-/workspace}
 # stat per directory and nothing more. On Docker Desktop the uid stays 1000 and this does nothing.
 uid=${SGW_UID:-$(id -u)}
 gid=${SGW_GID:-$(id -g)}
-for d in ${SGW_OWNED_DIRS:-"$HOME/.claude" "$HOME/.local/share/mise/installs" /commandhistory /pnpm-store}; do
+for d in ${SGW_OWNED_DIRS:-"$HOME/.claude" "$HOME/.local/share/mise" "$HOME/.local/share/mise/installs" /commandhistory /pnpm-store}; do
   [ -e "$d" ] || continue
   [ "$(stat -c %u "$d")" = "$uid" ] && continue
   echo "[sgw-post-start] $d belongs to uid $(stat -c %u "$d"), handing it to $uid:$gid"

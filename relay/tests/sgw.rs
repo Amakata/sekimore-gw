@@ -1459,3 +1459,37 @@ fn update_raises_a_tracked_language_image_and_leaves_a_legacy_one() {
         "{after}"
     );
 }
+
+/// #390: with a release newer than this sgw, the report names it as the newest and says that
+/// `--apply` moves sgw first — not this sgw's own version as though nothing were to do.
+#[test]
+fn update_reports_a_newer_release_than_this_sgw_as_the_newest() {
+    let registry = fake_registry(Box::leak(Box::new([(
+        "amakata/sekimore-gw",
+        &["0.2.40", "9.9.9"][..],
+    )])));
+    let f = fixture();
+    let dir = f._tmp.path().join("newer");
+    assert!(sgw(&f, &["init", dir.to_str().unwrap()])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let out = sgw(&f, &["update"])
+        .env("SGW_REGISTRY_URL", &registry)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    let gateway = stdout
+        .lines()
+        .find(|l| l.starts_with("gateway"))
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        gateway.contains("9.9.9") && gateway.contains("sgw update --apply"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("Everything is up to date."), "{stdout}");
+}
