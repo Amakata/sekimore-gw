@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.67 -->
+<!-- reviewed-up-to: 0.2.68 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -875,3 +875,11 @@ diff .devcontainer/config/config.yml .devcontainer/config/config.sample.yml
 
 更新後、`sgw verify` が「`codex` が mise-store ボリュームの古いコピーだ」と警告することがあります。
 それを消すコマンドが表示されます。
+
+## 0.2.68 ビルド済みの言語イメージ
+
+作業はありません。ビルド済みの PHP 8.3 と Python 2.7 のイメージ（`ghcr.io/amakata/sgw-lang-<lang>`）を
+プロジェクトのイメージに取り込めるようになりました。[docs/languages.ja.md](docs/languages.ja.md) を参照してください。
+
+`sgw update` は、プロジェクトの Dockerfile の `sgw-lang-*` タグについても、追従する系列内の新しい版を
+表示し、`--apply` で書き込むようになりました。
