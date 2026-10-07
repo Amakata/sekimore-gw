@@ -10,8 +10,8 @@
 # has only the base, the runtime packages and the language — and no network).
 #
 # Targets: `build` installs it; `test` is a downstream image made the documented way, and runs
-# check.sh; the default, `image`, holds only /opt/mise/installs/<lang>/<version> and the list of
-# runtime packages, which is all a project copies.
+# check.sh; the default, `image`, holds only /opt/mise/installs/<lang>/ — the version, its aliases,
+# mise's backend note and the list of runtime packages — which is all a project copies.
 
 ARG BASE=ghcr.io/amakata/sgw-devcontainer-base:0.2.67
 
@@ -33,13 +33,24 @@ RUN dir="/opt/mise/installs/${LANG_NAME}/${LANG_VERSION}" \
  && test -d "$dir" \
  && sh /tmp/runtime-packages.sh "$dir" /tmp/base-packages > "$dir/.sgw-runtime-packages" \
  && echo "runtime packages:" && cat "$dir/.sgw-runtime-packages"
+# A language mise reaches through a plugin (PHP: vfox-php) needs that plugin at run time too, and
+# mise has no system directory for plugins: it goes where the user's mise looks, an image layer
+# (the mise-store volume covers installs only). Staged under /export with the path it lands on
+RUN mkdir -p /export/home \
+ && if [ -d "/root/.local/share/mise/plugins/${LANG_NAME}" ]; then \
+      mkdir -p /export/home/vscode/.local/share/mise/plugins \
+      && cp -a "/root/.local/share/mise/plugins/${LANG_NAME}" /export/home/vscode/.local/share/mise/plugins/ ; \
+    fi
 
 # A downstream image, the way docs/languages.md says to make one
 FROM ${BASE} AS test
 ARG LANG_NAME
 ARG LANG_VERSION
 USER root
-COPY --from=build /opt/mise/installs/${LANG_NAME}/${LANG_VERSION}/ /opt/mise/installs/${LANG_NAME}/${LANG_VERSION}/
+# the whole language directory: beside the version it holds .mise.backend.toml and the version's
+# aliases (2.7, latest). Without them the user's mise tries to recreate them, and may not write here
+COPY --from=build /opt/mise/installs/${LANG_NAME}/ /opt/mise/installs/${LANG_NAME}/
+COPY --from=build --chown=vscode:vscode /export/home/ /home/
 RUN apt-get update \
  && xargs apt-get install -y --no-install-recommends < "/opt/mise/installs/${LANG_NAME}/${LANG_VERSION}/.sgw-runtime-packages" \
  && rm -rf /var/lib/apt/lists/* \
@@ -53,4 +64,5 @@ RUN --network=none cd /tmp && mise use -g "${LANG_NAME}@${LANG_VERSION}" && sh /
 FROM scratch AS image
 ARG LANG_NAME
 ARG LANG_VERSION
-COPY --from=build /opt/mise/installs/${LANG_NAME}/${LANG_VERSION}/ /opt/mise/installs/${LANG_NAME}/${LANG_VERSION}/
+COPY --from=build /opt/mise/installs/${LANG_NAME}/ /opt/mise/installs/${LANG_NAME}/
+COPY --from=build /export/home/ /home/

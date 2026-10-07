@@ -45,12 +45,15 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends <the image's runtime packages> \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=php /opt/mise/installs/php/ /opt/mise/installs/php/
+COPY --from=php --chown=vscode:vscode /home/ /home/
 RUN HOME=/root mise reshim --system && chmod -R a-w /opt/mise
 USER vscode
 RUN mise use -g php@8.3.26
 ```
 
-Each language image lists the apt packages its binaries need at run time.
+- Copy the whole `/opt/mise/installs/<lang>/`: beside the version it holds mise's backend note and the version's aliases (`8.3`, `latest`).
+- `/home/` carries the mise plugin a language needs at run time (PHP: vfox-php). mise has no system directory for plugins, so it goes where the user's mise looks. A language without one (Python) has an empty `/home/`.
+- `/opt/mise/installs/<lang>/<version>/.sgw-runtime-packages` lists the apt packages its binaries need at run time.
 
 ### Global npm tools
 
