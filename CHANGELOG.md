@@ -24,6 +24,13 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 - `GET /relays` lists each relay and its commands. `sgw-agent setup` saves it and adds the sidecars' guides to the skill file; `sgw-agent <sidecar> <words>` runs a command sidecar's commands (#368)
 - `docs/sidecar-protocol.md` describes the command sidecar protocol; `examples/sidecar-template` is a working sidecar in standard-library Python (#369)
 
+## 0.2.67 (2026-10-07)
+
+### Enhancement
+
+- base: a read-only system mise directory, `MISE_SYSTEM_DATA_DIR=/opt/mise`, shims on PATH after the user's. codex runs from `/usr/local/bin/codex` on a pinned node 24.21.0; the user's default node is 24.21.0, not `lts`. docs/languages.md (#379)
+- `sgw verify` warns when `codex` resolves to a stale copy in the mise-store volume, and gives the command that removes it (#380)
+
 ## 0.2.66 (2026-10-06)
 
 ### Fix
