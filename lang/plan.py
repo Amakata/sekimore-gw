@@ -11,6 +11,10 @@ So nothing already published is built again:
 - pr: the versions the pull request adds or re-revisions, and — when a recipe changed — the newest
   version of each language that recipe builds, to check it still builds.
 
+`track` (#378) names minor lines (`php: ["8.3"]`) whose newest patch, asked of the base image's
+mise, is published as revision 1 without being written into the file: the registry's tags are the
+record. A daily run picks each new patch up; on most days it finds nothing to build.
+
 Prints a JSON object: `build` (each `{lang, version, revision}`) and `adopt` (the same shape).
 """
 
@@ -51,6 +55,61 @@ def entries(text: str, *, before_revisions: bool = False) -> list[dict]:
                 raise ValueError(f"{lang} {version}: the revision is a whole number from 1")
             out.append({"lang": lang, "version": version, "revision": revision})
     return out
+
+
+_LINE = re.compile(r"^\d+\.\d+$")
+
+
+def tracks(text: str) -> list[tuple[str, str]]:
+    """`track: {lang: [line, …]}` (#378): the minor lines whose newest patch is built."""
+    data = yaml.safe_load(text) or {}
+    out = []
+    for lang, lines in (data.get("track") or {}).items():
+        if not isinstance(lines, list):
+            raise ValueError(f'{lang}: track lists minor lines, `["8.3"]`')
+        for line in lines:
+            line = str(line)
+            if not _LINE.match(line):
+                raise ValueError(f"{lang} {line}: a tracked line is x.y")
+            out.append((lang, line))
+    return out
+
+
+def resolve(pinned: list[dict], lines: list[tuple[str, str]], latest) -> list[dict]:
+    """Each tracked line's newest patch, as revision 1 — unless a pin already names that version
+    (a pin can raise its revision; the track never does)."""
+    have = {(e["lang"], e["version"]) for e in pinned}
+    out = []
+    for lang, line in lines:
+        version = latest(lang, line)
+        if not version.startswith(line + ".") or not _VERSION.match(version):
+            raise ValueError(f"{lang} {line}: the newest patch came back as {version!r}")
+        if (lang, version) not in have and {
+            "lang": lang,
+            "version": version,
+            "revision": 1,
+        } not in out:
+            out.append({"lang": lang, "version": version, "revision": 1})
+    return out
+
+
+def base_image(dockerfile: str = "lang/Dockerfile") -> str:
+    """The base the images are built on, from lang/Dockerfile's `ARG BASE=`."""
+    for line in Path(dockerfile).read_text(encoding="utf-8").splitlines():
+        if line.startswith("ARG BASE="):
+            return line.split("=", 1)[1].strip()
+    raise ValueError(f"{dockerfile} has no ARG BASE=")
+
+
+def latest_from_mise(lang: str, line: str) -> str:
+    """Ask the base image's mise, the one that will build it, for the line's newest patch."""
+    out = subprocess.run(
+        ["docker", "run", "--rm", base_image(), "mise", "latest", f"{lang}@{line}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return out.strip().splitlines()[-1].strip()
 
 
 def tag(e: dict) -> str:
@@ -111,16 +170,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--lang", default="", help="publish: only this language")
     p.add_argument("--version", default="", help="publish: only this version")
     a = p.parse_args(argv)
-    head = entries(Path(a.versions).read_text(encoding="utf-8"))
+    text = Path(a.versions).read_text(encoding="utf-8")
+    head = entries(text)
+    lines = tracks(text)
     if a.mode == "pr":
-        base = (
-            entries(Path(a.base).read_text(encoding="utf-8"), before_revisions=True)
-            if a.base
-            else []
-        )
+        base_text = Path(a.base).read_text(encoding="utf-8") if a.base else ""
+        base = entries(base_text, before_revisions=True)
         changed = Path(a.changed).read_text(encoding="utf-8").split() if a.changed else []
-        result = {"build": plan_pr(head, base, changed), "adopt": []}
+        build = plan_pr(head, base, changed)
+        # a line the pull request starts tracking: check its newest patch builds
+        new_lines = [t for t in lines if t not in tracks(base_text)]
+        build += [e for e in resolve(head, new_lines, latest_from_mise) if e not in build]
+        result = {"build": build, "adopt": []}
     else:
+        head = head + resolve(head, lines, latest_from_mise)
         chosen = [
             e
             for e in head
