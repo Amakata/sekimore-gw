@@ -109,3 +109,36 @@ def describe_a_base_branch_from_before_revisions():
         base = plan.entries(old, before_revisions=True)
         assert base == [e("php", "8.3.26"), e("python", "2.7.18")]
         assert plan.plan_pr(plan.entries(HEAD), base, ["lang/versions.yml"]) == [e("php", "8.3.33")]
+
+
+def describe_tracked_lines():
+    tracked = HEAD + 'track:\n  php: ["8.3"]\n'
+
+    def it_reads_the_lines():
+        assert plan.tracks(tracked) == [("php", "8.3")]
+
+    @pytest.mark.parametrize("text", ['track:\n  php: "8.3"\n', 'track:\n  php: ["8"]\n'])
+    def it_refuses_what_is_not_a_list_of_minor_lines(text):
+        with pytest.raises(ValueError):
+            plan.tracks(text)
+
+    def it_adds_the_newest_patch_as_revision_1():
+        pinned = plan.entries(tracked)
+        got = plan.resolve(pinned, plan.tracks(tracked), lambda lang, line: "8.3.35")
+        assert got == [e("php", "8.3.35")]
+
+    def it_leaves_a_patch_a_pin_already_names_to_the_pin():
+        pinned = plan.entries(tracked)
+        assert plan.resolve(pinned, [("php", "8.3")], lambda lang, line: "8.3.33") == []
+
+    def it_refuses_an_answer_outside_the_line():
+        with pytest.raises(ValueError):
+            plan.resolve([], [("php", "8.3")], lambda lang, line: "8.4.1")
+
+    def it_publishes_the_newest_patch_only_once():
+        pinned = plan.entries(tracked)
+        head = pinned + plan.resolve(pinned, [("php", "8.3")], lambda lang, line: "8.3.35")
+        on = {f"ghcr.io/amakata/sgw-lang-{x['lang']}:{plan.tag(x)}" for x in pinned} | {
+            "ghcr.io/amakata/sgw-lang-php:8.3.35-1-bookworm"
+        }
+        assert plan.plan_publish(head, on.__contains__) == {"build": [], "adopt": []}

@@ -7,7 +7,8 @@ name: Language images
 # lang/plan.py decides what runs, so nothing already published is built again:
 # - a pull request checks the versions it adds or re-revisions, and the newest version of each
 #   language whose recipe it changes (amd64; the `test` target, with no network)
-# - dispatching publishes what the registry lacks: both architectures on native runners, then the
+# - dispatching, and the daily run, publish what the registry lacks — the pins, and the newest
+#   patch of each tracked line (#378): both architectures on native runners, then the
 #   two tags. An image published before revisions existed is adopted as revision 1, not rebuilt.
 
 on:
@@ -15,6 +16,9 @@ on:
     paths:
       - "lang/**"
       - ".github/workflows/lang-images.yml"
+  # #378: every day, the newest patch of each tracked line; on most days there is nothing to build
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       lang:
@@ -79,7 +83,7 @@ jobs:
             --build-arg LANG_NAME=${{ matrix.lang }} --build-arg LANG_VERSION=${{ matrix.version }}
 
   build:
-    if: github.event_name == 'workflow_dispatch' && needs.plan.outputs.build != '[]'
+    if: github.event_name != 'pull_request' && needs.plan.outputs.build != '[]'
     needs: plan
     strategy:
       fail-fast: false
@@ -158,7 +162,7 @@ jobs:
             $(printf "${repo}@sha256:%s " *)
 
   adopt:
-    if: github.event_name == 'workflow_dispatch' && needs.plan.outputs.adopt != '[]'
+    if: github.event_name != 'pull_request' && needs.plan.outputs.adopt != '[]'
     needs: plan
     strategy:
       matrix:
