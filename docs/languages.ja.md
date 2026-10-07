@@ -59,10 +59,15 @@ system 側の node は読み取り専用なので、`npm install -g` は EACCES 
 ## 各自: コンテナの中で入れる
 
 ```sh
-mise use -g node@24.21.0
+mise use node@24.21.0          # ./mise.toml に記録される。リビルドしても残る
+mise use -p mise.local.toml node@24.21.0   # 同じことを自分だけに（mise.local.toml は git に入れない）
 ```
 
-`~/.local/share/mise/installs`（mise-store の volume）にダウンロードされるので、リビルドしても残ります。ダウンロードは gateway を通るので、配布元のホストが `allow_domains` に要ります。
+- 版は `~/.local/share/mise/installs`（mise-store の volume）にダウンロードされるので、リビルドしても残ります。
+- `mise use -g` も使えますが、書き込む先の `~/.config/mise/config.toml` はイメージの一部です。リビルドすると、どの版を使うかはイメージの設定に戻ります（ダウンロードした版は volume に残ります）。プロジェクトの `mise.toml` か `mise.local.toml` に書くほうを勧めます。
+- 古い Python（署名の付く前の python-build-standalone。例: 3.12.7）は `No GitHub artifact attestations found` で止まります。そのコマンドだけ確認を外します。新しい版では確認が働いたままです: `MISE_PYTHON_GITHUB_ATTESTATIONS=false mise use python@3.12.7`
+
+ダウンロードは gateway を通るので、配布元のホストが `allow_domains` に要ります。
 
 | 言語 | ホスト |
 |---|---|
