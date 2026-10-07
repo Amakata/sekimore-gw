@@ -102,6 +102,37 @@ for t in gh; do
 done
 echo "== the tools the base leaves out are absent"
 
+# ---- #375: the system mise directory ----
+# Root-owned and read-only, so a project's baked languages are neither changed nor chowned by the
+# user; codex runs on its own node whatever node the user selects.
+env_dir=$(in_image /usr/bin/env | sed -n 's/^MISE_SYSTEM_DATA_DIR=//p')
+[ "$env_dir" = /opt/mise ] || fail "MISE_SYSTEM_DATA_DIR is '$env_dir', not /opt/mise"
+owner=$(in_image /usr/bin/stat -c %U /opt/mise/installs)
+[ "$owner" = root ] || fail "/opt/mise/installs is owned by $owner, not root"
+if in_image /bin/sh -c 'test -w /opt/mise/installs'; then
+  fail "/opt/mise/installs is writable by the user"
+fi
+codex_at=$(in_image /bin/sh -lc 'command -v codex')
+[ "$codex_at" = /usr/local/bin/codex ] || fail "codex resolves to $codex_at, not the wrapper"
+in_image /bin/sh -lc 'codex --version' >/dev/null || fail "codex does not run: $(in_image /bin/sh -lc 'codex --version')"
+echo "== /opt/mise is the system directory, root-owned and read-only; codex runs on its own node"
+
+# The recipe docs/languages.md gives a project, end to end: root installs into the system directory
+# and reshims, and the user then selects that version without installing anything of its own.
+# Needs the network for node's download; SGW_TEST_OFFLINE=1 skips it.
+if [ -n "${SGW_TEST_OFFLINE:-}" ]; then
+  echo "SKIP: the system-install recipe (SGW_TEST_OFFLINE)"
+elif docker run --rm --user root --entrypoint /bin/sh "$IMAGE" -c \
+  'umask 022 && HOME=/root mise install --system node@22.21.1 >/dev/null 2>&1 && HOME=/root mise reshim --system && chmod -R a-w /opt/mise && su vscode -s /bin/sh -c "cd /tmp && mise use -g node@22.21.1 >/dev/null && node --version && test ! -d ~/.local/share/mise/installs/node/22.21.1"' \
+  > /tmp/sgw-system-node.$$ 2>&1; then
+  grep -q '^v22.21.1$' /tmp/sgw-system-node.$$ ||
+    fail "a system-installed node did not run for the user: $(cat /tmp/sgw-system-node.$$)"
+  echo "== a language installed with mise install --system is the user's without a copy of its own"
+else
+  fail "the system-install recipe failed: $(tail -5 /tmp/sgw-system-node.$$)"
+fi
+rm -f /tmp/sgw-system-node.$$
+
 # ---- #339: GID 20 is free ----
 # Dev Containers' updateRemoteUserUID changes nothing when the host's GID is taken, and 20 is the
 # Mac's `staff`: a Linux VM built with 501:20 left the user at 1000:1000.
