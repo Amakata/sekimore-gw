@@ -4,25 +4,16 @@ set -e
 echo "=== sgw-sample devcontainer post-create ==="
 
 # ---------------------------------------------------------------------------
-# Restore mise installs from the image-staged copy.
+# Shims for the versions a person added (0.3, #377).
 #
-# docker-compose mounts a named volume onto ~/.local/share/mise/installs,
-# which shadows whatever was baked into the image. On first run the volume
-# is empty, so we copy the staged installs-default back into place. On
-# subsequent runs the volume already has content and rsync is a no-op.
-#
-# After restoring, regenerate shims so ~/.local/share/mise/shims points to
-# the (possibly newly-restored) installs tree.
+# The project's languages are in the image, in /opt/mise. What a person added
+# with `mise use -g` is in the mise-store volume, which outlives the image; its
+# shims are in the image's own ~/.local/share/mise/shims, made fresh by every
+# rebuild, so they are made again here. Nothing is copied into the volume any
+# more: a copy of the image's versions there would win over a newer image.
 # ---------------------------------------------------------------------------
-if [ -d "$HOME/.local/share/mise/installs-default" ]; then
-  echo "Restoring mise installs from installs-default..."
-  mkdir -p "$HOME/.local/share/mise/installs"
-  rsync -a --ignore-existing \
-    "$HOME/.local/share/mise/installs-default/" \
-    "$HOME/.local/share/mise/installs/"
-  if command -v mise >/dev/null 2>&1; then
-    mise reshim
-  fi
+if command -v mise >/dev/null 2>&1; then
+  mise reshim
 fi
 
 # ---------------------------------------------------------------------------

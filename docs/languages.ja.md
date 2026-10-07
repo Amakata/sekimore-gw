@@ -72,6 +72,23 @@ mise use -g node@24.21.0
 
 拒否されたダウンロードは、`sgw web` や `sgw audit` にホスト名が出ます。
 
-## 以前のやり方
+## 0.3 への移行
 
-ユーザーのデータディレクトリに入れて `~/.local/share/mise/installs-default` にコピーし、post-create が空の mise-store にコピーし直すやり方は、0.2.x では今も動きます。0.3 で廃止します。移るときは UPGRADING を見てください。
+0.3 では、0.2 がしていた 2 つのことをやめます（#377）。
+
+- `/usr/local/share` をユーザーに渡さない（`chown -R vscode` をしない）。post-start も chown しない。
+- template は `~/.local/share/mise/installs` を `installs-default` にコピーしない。post-create もそれを mise-store の volume にコピーしない。
+
+プロジェクトの Dockerfile で変えること:
+
+| 今していること | 変え方 |
+|---|---|
+| vscode で `mise use -g <言語>@<版>` し、`cp -a … installs-default` | root で `mise install --system`、`mise reshim --system`、`chmod -R a-w /opt/mise`、そのあと vscode で `mise use -g`（[上](#プロジェクト-dockerfile-で入れる)）。`cp -a` は消す |
+| `ENV MISE_DATA_DIR=/usr/local/share/mise` | 消す |
+| `/usr/local/share/mise/installs/…` のパスを直接使う（`ls -d node/24.*`、symlink、`cp -a`） | `mise where <言語>@<版>` |
+| `node@24`、`php@8.3`、`latest` | `x.y.z`。あいまいな指定はイメージと違う版に解決され、mise がその版を volume に入れる（PHP ならソースビルドが始まる） |
+| `npm install -g <CLI>` | `HOME=/root mise install --system npm:<CLI>@<版>`（または `pnpm@<版>`） |
+| `/usr/local/share` の下に書き込む前提 | 専用のディレクトリを Dockerfile で作り、chown する |
+| Dockerfile で rust を入れている | 各自が `mise use -g rust@<版>`（rustup は system ディレクトリでは動かない） |
+
+mise-store の volume には、以前のやり方でコピーされた版が残っていることがあります。volume 側の版は、イメージの同じ版より優先されます。一度だけ空にしてください。dev コンテナを止めて volume を消す（`docker volume rm mise-store-<id>`）か、docker-compose.yml で volume の名前を変えます。

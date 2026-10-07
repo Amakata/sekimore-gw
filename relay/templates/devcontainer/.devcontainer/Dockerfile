@@ -31,52 +31,44 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #  libtidy-dev libxslt1-dev libsodium-dev libicu-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-USER vscode
-
 # ---------------------------------------------------------------------------
-# Install specific language versions via mise (pre-installed in base image).
+# The project's languages, in mise's system directory (/opt/mise; 0.3, #377).
 #
-# Adjust versions to taste, or remove blocks you don't need. After adding a
-# version with `mise use -g`, run `mise reshim` to regenerate the shims.
+# Installed as root, read-only, and part of the image: a rebuild brings the
+# versions written here, and the agent cannot change them. Write versions as
+# x.y.z. A person adds a version of their own with `mise use -g <lang>@<x.y.z>`
+# in the container; it goes to the mise-store volume and survives a rebuild.
 #
-# The base image puts ~/.local/share/mise/shims first in ENV PATH, so the
-# languages resolve from non-interactive processes too (Claude Code tool
-# calls, `docker exec`, postCreateCommand). Debian's /etc/profile resets PATH
-# for login shells, and a script in /etc/profile.d in the base image adds the
-# shims directory back.
+# PHP and Python 2.7 have prebuilt images, which take seconds instead of a
+# source build (docs/languages.md):
+#   FROM ghcr.io/amakata/sgw-lang-php:8.3.35-1-bookworm AS php   (above FROM base)
+#   COPY --from=php /opt/mise/installs/php/ /opt/mise/installs/php/
+#   COPY --from=php --chown=vscode:vscode /home/ /home/
+#   then apt-get install the packages in
+#   /opt/mise/installs/php/8.3.35/.sgw-runtime-packages
+#
+# Rust is a person's: `mise use -g rust@<x.y.z>` in the container. mise installs
+# it through rustup, which does not work from the system directory.
 # ---------------------------------------------------------------------------
 ARG PYTHON_VERSION=3.13.0
 ARG NODE_VERSION=22.11.0
 ARG RUBY_VERSION=3.3.6
-ARG RUST_VERSION=stable
-# Uncomment to enable PHP (also uncomment the PHP build deps above):
-# ARG PHP_VERSION=8.3.12
 
 # Disable GitHub attestation verification for pre-built Python binaries.
 # python-build-standalone artifacts for some versions lack attestations,
-# causing `mise use` to fail. This is safe in a Docker build context.
+# causing `mise install` to fail. This is safe in a Docker build context.
 ENV MISE_PYTHON_GITHUB_ATTESTATIONS=false
 
-RUN mise use -g "python@${PYTHON_VERSION}" \
-             "node@${NODE_VERSION}" \
-             "ruby@${RUBY_VERSION}" \
-             "rust@${RUST_VERSION}" \
-    && mise reshim
+RUN umask 022 \
+ && HOME=/root mise install --system \
+      "python@${PYTHON_VERSION}" \
+      "node@${NODE_VERSION}" \
+      "ruby@${RUBY_VERSION}" \
+ && HOME=/root mise reshim --system \
+ && chmod -R a-w /opt/mise
 
-# Uncomment to enable PHP:
-# RUN mise use -g "php@${PHP_VERSION}" && mise reshim
-
-# ---------------------------------------------------------------------------
-# Stage the populated mise installs so the sample's mise-store volume
-# can be bootstrapped on first start (see scripts/post-create.sh).
-#
-# docker-compose.yml mounts the mise-store volume over
-# ~/.local/share/mise/installs, which hides what this image installed there.
-# On the first start the volume is empty, and post-create.sh restores the
-# copy made here:
-#   rsync -a --ignore-existing ~/.local/share/mise/installs-default/ ~/.local/share/mise/installs/
-#   mise reshim
-# ---------------------------------------------------------------------------
-RUN cp -a ~/.local/share/mise/installs ~/.local/share/mise/installs-default
+USER vscode
+# records the versions for the user; nothing is downloaded or copied
+RUN mise use -g "python@${PYTHON_VERSION}" "node@${NODE_VERSION}" "ruby@${RUBY_VERSION}"
 
 WORKDIR /workspace
