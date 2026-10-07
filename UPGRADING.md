@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.67 -->
+<!-- reviewed-up-to: 0.2.68 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -912,3 +912,11 @@ Nothing to do. A project can now install languages into the base's read-only sys
 
 After updating, `sgw verify` may warn that `codex` is an old copy in the mise-store volume. It
 gives the command that removes it.
+
+## 0.2.68 Prebuilt language images
+
+Nothing to do. Prebuilt PHP 8.3 and Python 2.7 images (`ghcr.io/amakata/sgw-lang-<lang>`) can be
+copied into a project's image; see [docs/languages.md](docs/languages.md).
+
+`sgw update` now also reports a newer `sgw-lang-*` tag in the project's Dockerfile within the line
+it tracks, and `--apply` writes it.
