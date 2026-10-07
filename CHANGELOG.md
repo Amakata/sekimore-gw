@@ -12,6 +12,13 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.67 (2026-10-07)
+
+### Enhancement
+
+- base: a read-only system mise directory, `MISE_SYSTEM_DATA_DIR=/opt/mise`, shims on PATH after the user's. codex runs from `/usr/local/bin/codex` on a pinned node 24.21.0; the user's default node is 24.21.0, not `lts`. docs/languages.md (#379)
+- `sgw verify` warns when `codex` resolves to a stale copy in the mise-store volume, and gives the command that removes it (#380)
+
 ## 0.2.66 (2026-10-06)
 
 ### Fix
