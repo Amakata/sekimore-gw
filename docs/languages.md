@@ -51,6 +51,7 @@ USER vscode
 RUN mise use -g php@8.3.26
 ```
 
+- Tags: `<version>-<revision>-bookworm` (`8.3.33-1-bookworm`) never changes; a rebuild of the same version is a new revision. `<version>-bookworm` follows the newest revision. Name the revision to pin the exact image.
 - Copy the whole `/opt/mise/installs/<lang>/`: beside the version it holds mise's backend note and the version's aliases (`8.3`, `latest`).
 - `/home/` carries the mise plugin a language needs at run time (PHP: vfox-php). mise has no system directory for plugins, so it goes where the user's mise looks. A language without one (Python) has an empty `/home/`.
 - `/opt/mise/installs/<lang>/<version>/.sgw-runtime-packages` lists the apt packages its binaries need at run time.
