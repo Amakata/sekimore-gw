@@ -447,7 +447,7 @@
   "sgw.update.col_newest": "最新",
   "sgw.update.up_to_date": "最新",
   "sgw.update.update": "← 更新あり",
-  "sgw.update.newer_sgw": "新しい版 {version} が出ています。この sgw は {sgw} です。先にそちらを入れてください: {install}",
+  "sgw.update.newer_sgw": "新しい版 {version} が出ています。この sgw は {sgw} です。sgw update --apply が sgw を入れ、プロジェクトもその版に上げます（手で入れるなら: {install}）",
   "sgw.update.f_same": "同じ",
   "sgw.update.f_changes": "変わる（sgw が書いたまま。この版が変えるので上書き）",
   "sgw.update.f_forced": "編集済みで、この版も変える — 上書き（--force）",
@@ -493,5 +493,7 @@
   "sgw.cmd.config": "設定が解決した結果（上流 / 転送先 / 権限 / リポジトリ / ボード）。ネットワークには出ない",
   "sgw.unlock.asking": "秘密ストアが locked です。ここで unlock します（Ctrl-C で locked のまま）",
   "op.check.values": "  値:              {values}（sgw var set <名前>）",
-  "op.check.ssh_options_state": "  ssh options:     {options}"
+  "op.check.ssh_options_state": "  ssh options:     {options}",
+  "sgw.update.update_sgw_first": "← 更新あり（sgw update --apply が先に sgw を上げる）",
+  "sgw.update.next_apply_sgw": "次: sgw update --apply（新しい sgw を入れてから、プロジェクトをその版に上げます）"
 }
