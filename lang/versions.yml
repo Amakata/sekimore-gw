@@ -1,0 +1,5 @@
+# The language images built (#376). `pin`: that version only. #378 adds `track` (follow a line's
+# patch releases).
+pin:
+  php: ["8.3.26"]
+  python: ["2.7.18"]

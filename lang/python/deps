@@ -1,0 +1,14 @@
+# apt packages Python 2.7's build needs (python-build through mise), bookworm
+build-essential
+pkg-config
+libssl-dev
+libreadline-dev
+zlib1g-dev
+libbz2-dev
+libsqlite3-dev
+libffi-dev
+libncurses-dev
+libgdbm-dev
+liblzma-dev
+tk-dev
+uuid-dev

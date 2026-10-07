@@ -1,0 +1,142 @@
+name: Language images
+
+# Prebuilt languages for the dev container (#376): lang/Dockerfile, one language at one version
+# per image, ghcr.io/amakata/sgw-lang-<lang>:<version>-bookworm.
+#
+# A pull request that touches lang/ builds every version in lang/versions.yml and runs its check
+# (amd64; the `test` target, with no network). Dispatching publishes: both architectures on
+# native runners, then one multi-arch tag per version.
+
+on:
+  pull_request:
+    paths:
+      - "lang/**"
+      - ".github/workflows/lang-images.yml"
+  workflow_dispatch:
+    inputs:
+      lang:
+        description: "One language (php, python). Empty: every one in lang/versions.yml"
+        required: false
+        default: ""
+      version:
+        description: "One version of it. Empty: every one in lang/versions.yml"
+        required: false
+        default: ""
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  plan:
+    runs-on: ubuntu-26.04
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: m
+        env:
+          LANG_IN: ${{ inputs.lang }}
+          VERSION_IN: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${LANG_IN}" ] && [ -n "${VERSION_IN}" ]; then
+            m=$(jq -cn --arg l "$LANG_IN" --arg v "$VERSION_IN" '[{lang: $l, version: $v}]')
+          else
+            m=$(yq -o=json '.pin' lang/versions.yml \
+              | jq -c --arg l "${LANG_IN}" '[to_entries[] | .key as $k | .value[] | {lang: $k, version: .}] | map(select($l == "" or .lang == $l))')
+          fi
+          [ "$m" != "[]" ] || { echo "nothing to build"; exit 1; }
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
+          echo "$m"
+
+  test:
+    if: github.event_name == 'pull_request'
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build ${{ matrix.lang }} ${{ matrix.version }} and run its check
+        run: |
+          docker buildx build lang/ --target test --progress plain \
+            --build-arg LANG_NAME=${{ matrix.lang }} --build-arg LANG_VERSION=${{ matrix.version }}
+
+  build:
+    if: github.event_name == 'workflow_dispatch'
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        item: ${{ fromJSON(needs.plan.outputs.matrix) }}
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check (the test target, no network)
+        run: |
+          docker buildx build lang/ --target test --progress plain \
+            --build-arg LANG_NAME=${{ matrix.item.lang }} --build-arg LANG_VERSION=${{ matrix.item.version }}
+      - name: Push by digest
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: lang/
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          build-args: |
+            LANG_NAME=${{ matrix.item.lang }}
+            LANG_VERSION=${{ matrix.item.version }}
+          outputs: type=image,name=${{ env.REGISTRY }}/amakata/sgw-lang-${{ matrix.item.lang }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          d="${{ steps.push.outputs.digest }}"
+          test -n "$d"
+          touch "/tmp/digests/${d#sha256:}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digests-${{ matrix.item.lang }}-${{ matrix.item.version }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+
+  merge:
+    needs: [plan, build]
+    strategy:
+      matrix:
+        item: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.item.lang }}-${{ matrix.item.version }}-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag ${{ matrix.item.version }}-bookworm
+        working-directory: /tmp/digests
+        run: |
+          set -eu
+          repo="${REGISTRY}/amakata/sgw-lang-${{ matrix.item.lang }}"
+          n=$(ls | wc -l); test "$n" -eq 2 || { echo "expected 2 digests, got $n"; ls; exit 1; }
+          # shellcheck disable=SC2046
+          docker buildx imagetools create -t "${repo}:${{ matrix.item.version }}-bookworm" $(printf "${repo}@sha256:%s " *)

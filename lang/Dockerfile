@@ -1,0 +1,68 @@
+# syntax=docker/dockerfile:1.7
+#
+# A prebuilt language for the dev container (#376): one language at one version, installed into
+# mise's system directory (/opt/mise) on the base image, for a project to `COPY --from=`.
+#
+#   docker build --build-arg LANG_NAME=php --build-arg LANG_VERSION=8.3.26 -t sgw-lang-php lang/
+#
+# Each language has a directory beside this file: `deps` (apt packages the build needs), `env`
+# (the build's environment, `KEY=value` lines) and `check.sh` (run as the user in a container that
+# has only the base, the runtime packages and the language — and no network).
+#
+# Targets: `build` installs it; `test` is a downstream image made the documented way, and runs
+# check.sh; the default, `image`, holds only /opt/mise/installs/<lang>/ — the version, its aliases,
+# mise's backend note and the list of runtime packages — which is all a project copies.
+
+ARG BASE=ghcr.io/amakata/sgw-devcontainer-base:0.2.67
+
+FROM ${BASE} AS build
+ARG LANG_NAME
+ARG LANG_VERSION
+USER root
+COPY ${LANG_NAME}/ /tmp/lang/
+# what the base has, before the build's own packages: a runtime need it covers is not one to list
+RUN dpkg-query -W -f '${Package}\n' > /tmp/base-packages
+RUN apt-get update \
+ && grep -v '^#' /tmp/lang/deps | xargs apt-get install -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+RUN set -a && . /tmp/lang/env && set +a \
+ && umask 022 \
+ && HOME=/root mise install --system "${LANG_NAME}@${LANG_VERSION}"
+COPY runtime-packages.sh /tmp/runtime-packages.sh
+RUN dir="/opt/mise/installs/${LANG_NAME}/${LANG_VERSION}" \
+ && test -d "$dir" \
+ && sh /tmp/runtime-packages.sh "$dir" /tmp/base-packages > "$dir/.sgw-runtime-packages" \
+ && echo "runtime packages:" && cat "$dir/.sgw-runtime-packages"
+# A language mise reaches through a plugin (PHP: vfox-php) needs that plugin at run time too, and
+# mise has no system directory for plugins: it goes where the user's mise looks, an image layer
+# (the mise-store volume covers installs only). Staged under /export with the path it lands on
+RUN mkdir -p /export/home \
+ && if [ -d "/root/.local/share/mise/plugins/${LANG_NAME}" ]; then \
+      mkdir -p /export/home/vscode/.local/share/mise/plugins \
+      && cp -a "/root/.local/share/mise/plugins/${LANG_NAME}" /export/home/vscode/.local/share/mise/plugins/ ; \
+    fi
+
+# A downstream image, the way docs/languages.md says to make one
+FROM ${BASE} AS test
+ARG LANG_NAME
+ARG LANG_VERSION
+USER root
+# the whole language directory: beside the version it holds .mise.backend.toml and the version's
+# aliases (2.7, latest). Without them the user's mise tries to recreate them, and may not write here
+COPY --from=build /opt/mise/installs/${LANG_NAME}/ /opt/mise/installs/${LANG_NAME}/
+COPY --from=build --chown=vscode:vscode /export/home/ /home/
+RUN apt-get update \
+ && xargs apt-get install -y --no-install-recommends < "/opt/mise/installs/${LANG_NAME}/${LANG_VERSION}/.sgw-runtime-packages" \
+ && rm -rf /var/lib/apt/lists/* \
+ && HOME=/root mise reshim --system \
+ && chmod -R a-w /opt/mise
+COPY ${LANG_NAME}/check.sh /tmp/check.sh
+USER vscode
+# no network: whatever the language needs at run time has to be in the image already
+RUN --network=none cd /tmp && mise use -g "${LANG_NAME}@${LANG_VERSION}" && sh /tmp/check.sh
+
+FROM scratch AS image
+ARG LANG_NAME
+ARG LANG_VERSION
+COPY --from=build /opt/mise/installs/${LANG_NAME}/ /opt/mise/installs/${LANG_NAME}/
+COPY --from=build /export/home/ /home/

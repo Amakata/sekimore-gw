@@ -40,12 +40,15 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends <イメージが示す実行時のパッケージ> \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=php /opt/mise/installs/php/ /opt/mise/installs/php/
+COPY --from=php --chown=vscode:vscode /home/ /home/
 RUN HOME=/root mise reshim --system && chmod -R a-w /opt/mise
 USER vscode
 RUN mise use -g php@8.3.26
 ```
 
-言語イメージはそれぞれ、実行時に要る apt のパッケージを示しています。
+- `/opt/mise/installs/<言語>/` はディレクトリごとコピーします。版のほかに、mise のバックエンドの記録と版の別名（`8.3`、`latest`）があります。
+- `/home/` には、実行時に要る mise のプラグインがあります（PHP なら vfox-php）。mise には system 側のプラグイン置き場が無いので、ユーザーの mise が見る場所に置きます。プラグインの要らない言語（Python）では `/home/` は空です。
+- `/opt/mise/installs/<言語>/<版>/.sgw-runtime-packages` に、実行時に要る apt のパッケージの一覧があります。
 
 ### npm のグローバルな道具
 
