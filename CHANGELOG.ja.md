@@ -23,6 +23,15 @@ base イメージは 0.2.45 まで独立したリポジトリで、版番号も�
 - `GET /relays` が各 relay とそのコマンドを返す。`sgw-agent setup` がそれを保存し、サイドカーのガイドをスキルファイルに足す。`sgw-agent <sidecar> <words>` でコマンドサイドカーのコマンドを実行する (#368)
 - `docs/sidecar-protocol.md` にコマンドサイドカーのプロトコルを書いた。`examples/sidecar-template` は標準ライブラリだけの Python で動くサイドカー (#369)
 
+## 0.2.68（2026-10-07）
+
+### Enhancement
+
+- ビルド済みの言語イメージ: `lang/Dockerfile` が PHP 8.3 と Python 2.7 を `/opt/mise` に入れ、`ghcr.io/amakata/sgw-lang-<lang>:<version>-<revision>-bookworm` として作る。下流のイメージとしてネットワークなしで検査する。docs/languages.md を追加 (#383)
+- 言語イメージ: PHP 8.3.33。Debian 式のリビジョン（`8.3.33-1-bookworm`）。`lang/plan.py` はレジストリに無いものだけをビルドする (#384)
+- 言語イメージが、追従する系列（php 8.3）のパッチリリースに毎日追従する (#385)
+- `sgw update`: プロジェクトの Dockerfile の `sgw-lang-*` タグについて、追従する系列内の新しい版を表示し、`--apply` で書き込む (#386)
+
 ## 0.2.67（2026-10-07）
 
 ### Enhancement

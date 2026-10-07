@@ -24,6 +24,15 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 - `GET /relays` lists each relay and its commands. `sgw-agent setup` saves it and adds the sidecars' guides to the skill file; `sgw-agent <sidecar> <words>` runs a command sidecar's commands (#368)
 - `docs/sidecar-protocol.md` describes the command sidecar protocol; `examples/sidecar-template` is a working sidecar in standard-library Python (#369)
 
+## 0.2.68 (2026-10-07)
+
+### Enhancement
+
+- Prebuilt language images: `lang/Dockerfile` builds PHP 8.3 and Python 2.7 into `/opt/mise` as `ghcr.io/amakata/sgw-lang-<lang>:<version>-<revision>-bookworm`, checked offline as a downstream image. docs/languages.md (#383)
+- Language images: PHP 8.3.33; Debian-style revisions (`8.3.33-1-bookworm`); `lang/plan.py` builds only what the registry lacks (#384)
+- Language images follow a tracked line's patch releases daily (php 8.3) (#385)
+- `sgw update` reports a newer `sgw-lang-*` tag within its tracked line in a project's Dockerfile, and `--apply` writes it (#386)
+
 ## 0.2.67 (2026-10-07)
 
 ### Enhancement

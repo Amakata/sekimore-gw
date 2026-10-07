@@ -41,7 +41,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.58 – 0.2.59 | [0.2.60](#0260-configyml-is-yours-and-configsampleyml-is-the-template), **everyone: a new file appears, commit it** |
 | 0.2.60 – 0.2.63 | [0.2.64](#0264-the-configuration-listing-moved-from-sgw-check-to-sgw-config), **only if a script reads `sgw check`'s output** |
 | 0.2.64 – 0.2.65 | [0.2.66](#0266-sgw-check-exits-1-on-a-missing-value), **only if a script runs `sgw check`** |
-| 0.2.66 – 0.2.67 | [0.3.0-alpha.1](#030-alpha1-the-github-api-can-run-in-a-sidecar-prerelease), **only if you move to the 0.3 prerelease and want the github sidecar** |
+| 0.2.66 – 0.2.68 | [0.3.0-alpha.1](#030-alpha1-the-github-api-can-run-in-a-sidecar-prerelease), **only if you move to the 0.3 prerelease and want the github sidecar** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -913,6 +913,14 @@ Nothing to do. A project can now install languages into the base's read-only sys
 
 After updating, `sgw verify` may warn that `codex` is an old copy in the mise-store volume. It
 gives the command that removes it.
+
+## 0.2.68 Prebuilt language images
+
+Nothing to do. Prebuilt PHP 8.3 and Python 2.7 images (`ghcr.io/amakata/sgw-lang-<lang>`) can be
+copied into a project's image; see [docs/languages.md](docs/languages.md).
+
+`sgw update` now also reports a newer `sgw-lang-*` tag in the project's Dockerfile within the line
+it tracks, and `--apply` writes it.
 
 ## 0.3.0-alpha.1 The GitHub API can run in a sidecar (prerelease)
 

@@ -1,0 +1,186 @@
+name: Language images
+
+# Prebuilt languages for the dev container (#376): lang/Dockerfile, one language at one version
+# per image, ghcr.io/amakata/sgw-lang-<lang>:<version>-<revision>-bookworm, with
+# <version>-bookworm following the newest revision.
+#
+# lang/plan.py decides what runs, so nothing already published is built again:
+# - a pull request checks the versions it adds or re-revisions, and the newest version of each
+#   language whose recipe it changes (amd64; the `test` target, with no network)
+# - dispatching, and the daily run, publish what the registry lacks — the pins, and the newest
+#   patch of each tracked line (#378): both architectures on native runners, then the
+#   two tags. An image published before revisions existed is adopted as revision 1, not rebuilt.
+
+on:
+  pull_request:
+    paths:
+      - "lang/**"
+      - ".github/workflows/lang-images.yml"
+  # #378: every day, the newest patch of each tracked line; on most days there is nothing to build
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      lang:
+        description: "Only this language (php, python). Empty: every one in lang/versions.yml"
+        required: false
+        default: ""
+      version:
+        description: "Only this version of it. Empty: every one in lang/versions.yml"
+        required: false
+        default: ""
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  plan:
+    runs-on: ubuntu-26.04
+    outputs:
+      build: ${{ steps.m.outputs.build }}
+      adopt: ${{ steps.m.outputs.adopt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - run: pip install pyyaml
+      - id: m
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          LANG_IN: ${{ inputs.lang }}
+          VERSION_IN: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = pull_request ]; then
+            git show "origin/${BASE_REF}:lang/versions.yml" > /tmp/base.yml 2>/dev/null || : > /tmp/base.yml
+            git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/changed
+            out=$(python lang/plan.py pr --base /tmp/base.yml --changed /tmp/changed)
+          else
+            out=$(python lang/plan.py publish --lang "${LANG_IN}" --version "${VERSION_IN}")
+          fi
+          echo "$out"
+          echo "build=$(jq -c .build <<<"$out")" >> "$GITHUB_OUTPUT"
+          echo "adopt=$(jq -c .adopt <<<"$out")" >> "$GITHUB_OUTPUT"
+
+  test:
+    if: github.event_name == 'pull_request' && needs.plan.outputs.build != '[]'
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.build) }}
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build ${{ matrix.lang }} ${{ matrix.version }}-${{ matrix.revision }} and run its check
+        run: |
+          docker buildx build lang/ --target test --progress plain \
+            --build-arg LANG_NAME=${{ matrix.lang }} --build-arg LANG_VERSION=${{ matrix.version }}
+
+  build:
+    if: github.event_name != 'pull_request' && needs.plan.outputs.build != '[]'
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        item: ${{ fromJSON(needs.plan.outputs.build) }}
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check (the test target, no network)
+        run: |
+          docker buildx build lang/ --target test --progress plain \
+            --build-arg LANG_NAME=${{ matrix.item.lang }} --build-arg LANG_VERSION=${{ matrix.item.version }}
+      - name: Push by digest
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: lang/
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          build-args: |
+            LANG_NAME=${{ matrix.item.lang }}
+            LANG_VERSION=${{ matrix.item.version }}
+          outputs: type=image,name=${{ env.REGISTRY }}/amakata/sgw-lang-${{ matrix.item.lang }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          d="${{ steps.push.outputs.digest }}"
+          test -n "$d"
+          touch "/tmp/digests/${d#sha256:}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digests-${{ matrix.item.lang }}-${{ matrix.item.version }}-${{ matrix.item.revision }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+
+  merge:
+    if: needs.plan.outputs.build != '[]'
+    needs: [plan, build]
+    strategy:
+      matrix:
+        item: ${{ fromJSON(needs.plan.outputs.build) }}
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.item.lang }}-${{ matrix.item.version }}-${{ matrix.item.revision }}-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag ${{ matrix.item.version }}-${{ matrix.item.revision }}-bookworm and ${{ matrix.item.version }}-bookworm
+        working-directory: /tmp/digests
+        run: |
+          set -eu
+          repo="${REGISTRY}/amakata/sgw-lang-${{ matrix.item.lang }}"
+          v="${{ matrix.item.version }}"
+          n=$(ls | wc -l); test "$n" -eq 2 || { echo "expected 2 digests, got $n"; ls; exit 1; }
+          # shellcheck disable=SC2046
+          docker buildx imagetools create -t "${repo}:${v}-${{ matrix.item.revision }}-bookworm" -t "${repo}:${v}-bookworm" \
+            $(printf "${repo}@sha256:%s " *)
+
+  adopt:
+    if: github.event_name != 'pull_request' && needs.plan.outputs.adopt != '[]'
+    needs: plan
+    strategy:
+      matrix:
+        item: ${{ fromJSON(needs.plan.outputs.adopt) }}
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag the image published before revisions as ${{ matrix.item.version }}-1-bookworm
+        run: |
+          set -eu
+          repo="${REGISTRY}/amakata/sgw-lang-${{ matrix.item.lang }}"
+          v="${{ matrix.item.version }}"
+          docker buildx imagetools create -t "${repo}:${v}-1-bookworm" "${repo}:${v}-bookworm"

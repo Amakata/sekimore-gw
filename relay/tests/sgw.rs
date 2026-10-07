@@ -1348,3 +1348,114 @@ fn asking_for_help_or_turning_it_off_leaves_the_store_alone() {
     assert!(out.status.success());
     assert!(!log(&f).contains(" sekimore-relay unlock"), "{}", log(&f));
 }
+
+// ---- #378: language images in a project's Dockerfile ----
+
+/// A registry that answers the token request and each image's tag list, and nothing else.
+fn fake_registry(tags: &'static [(&'static str, &'static [&'static str])]) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut first = String::new();
+            reader.read_line(&mut first).unwrap_or(0);
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 2 {
+                line.clear();
+            }
+            let path = first.split_whitespace().nth(1).unwrap_or("");
+            let body = if path.starts_with("/token") {
+                r#"{"token":"t"}"#.to_string()
+            } else {
+                let found = tags
+                    .iter()
+                    .find(|(name, _)| path.starts_with(&format!("/v2/{name}/tags/list")));
+                let list: Vec<String> = found
+                    .map(|(_, t)| t.iter().map(|s| format!("\"{s}\"")).collect())
+                    .unwrap_or_default();
+                format!(r#"{{"tags":[{}]}}"#, list.join(","))
+            };
+            let mut s = stream;
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[test]
+fn update_raises_a_tracked_language_image_and_leaves_a_legacy_one() {
+    let version: &'static str = env!("CARGO_PKG_VERSION");
+    let gw_tags: &'static [&'static str] = Box::leak(Box::new([version]));
+    let registry = fake_registry(Box::leak(Box::new([
+        ("amakata/sekimore-gw", gw_tags),
+        (
+            "amakata/sgw-lang-php",
+            &[
+                "8.3.26-1-bookworm",
+                "8.3.33-1-bookworm",
+                "8.3.35-1-bookworm",
+                "8.4.2-1-bookworm",
+            ][..],
+        ),
+        ("amakata/sgw-lang-python", &["2.7.18-1-bookworm"][..]),
+    ])));
+    let f = fixture();
+    let dir = f._tmp.path().join("langs");
+    assert!(sgw(&f, &["init", dir.to_str().unwrap()])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let dockerfile = dir.join(".devcontainer/Dockerfile");
+    let text = std::fs::read_to_string(&dockerfile).unwrap();
+    std::fs::write(
+        &dockerfile,
+        format!(
+            "FROM ghcr.io/amakata/sgw-lang-php:8.3.26-1-bookworm AS php\nFROM ghcr.io/amakata/sgw-lang-python:2.7.18-1-bookworm AS py27\n{text}"
+        ),
+    )
+    .unwrap();
+
+    let out = sgw(&f, &["update"])
+        .env("SGW_REGISTRY_URL", &registry)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("8.3.26-1-bookworm") && stdout.contains("8.3.35-1-bookworm"),
+        "{stdout}"
+    );
+
+    let out = sgw(&f, &["update", "--apply", "--yes"])
+        .env("SGW_REGISTRY_URL", &registry)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let after = std::fs::read_to_string(&dockerfile).unwrap();
+    assert!(
+        after.contains("sgw-lang-php:8.3.35-1-bookworm AS php"),
+        "{after}"
+    );
+    assert!(!after.contains("8.4.2"), "never across a line: {after}");
+    assert!(
+        after.contains("sgw-lang-python:2.7.18-1-bookworm AS py27"),
+        "{after}"
+    );
+}
