@@ -377,6 +377,11 @@ pub fn next_link(header: &str) -> Option<String> {
 }
 
 pub async fn newest_on_ghcr(image: &str) -> anyhow::Result<Option<String>> {
+    Ok(newest_tag(&tags_on_ghcr(image).await?))
+}
+
+/// Every tag of an image on GHCR, every page.
+pub async fn tags_on_ghcr(image: &str) -> anyhow::Result<Vec<String>> {
     let (host, name) = image.split_once('/').context("image without a registry")?;
     if host != "ghcr.io" {
         bail!(tf("sgw.update.registry", &[("image", image)]));
@@ -421,9 +426,106 @@ pub async fn newest_on_ghcr(image: &str) -> anyhow::Result<Option<String>> {
             }
         });
     }
-    Ok(newest_tag(&tags))
+    Ok(tags)
 }
 
+// ---- #378: the language images a project's Dockerfile copies from ---------------------------
+
+/// The prefix of a language image (`ghcr.io/amakata/sgw-lang-php`).
+pub const LANG_IMAGE: &str = "ghcr.io/amakata/sgw-lang-";
+/// What this sgw knows the language images follow: lang/versions.yml as of its release.
+const LANG_VERSIONS: &str = include_str!("../../../lang/versions.yml");
+
+/// The tracked lines (`php` → `["8.3"]`) of a versions.yml. A version on one of them is raised
+/// to its newest patch; any other (a legacy pin, Python 2.7) is left where the project put it.
+pub fn tracked_lines(versions_yml: &str) -> Vec<(String, String)> {
+    #[derive(serde::Deserialize, Default)]
+    struct File {
+        #[serde(default)]
+        track: std::collections::BTreeMap<String, Vec<String>>,
+    }
+    let f: File = serde_yaml_ng::from_str(versions_yml).unwrap_or_default();
+    f.track
+        .into_iter()
+        .flat_map(|(lang, lines)| lines.into_iter().map(move |l| (lang.clone(), l)))
+        .collect()
+}
+
+/// A language image a Dockerfile's `FROM` names: the image and its tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LangPin {
+    pub image: String,
+    pub tag: String,
+}
+
+/// Every `FROM [--flag …] ghcr.io/amakata/sgw-lang-<lang>:<tag> [AS name]` with a literal tag.
+/// A tag written through an ARG (`${PHP}-bookworm`) is the project's to move.
+pub fn lang_pins(dockerfile: &str) -> Vec<LangPin> {
+    dockerfile
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            if words.next()? != "FROM" {
+                return None;
+            }
+            let image = words.find(|w| !w.starts_with("--"))?;
+            let (name, tag) = image.split_once(':')?;
+            (name.starts_with(LANG_IMAGE) && !tag.contains('$')).then(|| LangPin {
+                image: name.to_string(),
+                tag: tag.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// A language image tag, read: the version, the revision if it names one, the distribution.
+pub type LangTag<'a> = ((u64, u64, u64), Option<u64>, &'a str);
+
+/// `8.3.26-1-bookworm` → (`8.3.26`, Some(1), `bookworm`); `8.3.26-bookworm` → (…, None, …).
+pub fn lang_tag(tag: &str) -> Option<LangTag<'_>> {
+    let mut parts = tag.split('-');
+    let version = ver_key(parts.next()?)?;
+    let rest: Vec<&str> = parts.collect();
+    match rest.as_slice() {
+        [suffix] if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_lowercase()) => {
+            Some((version, None, suffix))
+        }
+        [rev, suffix] if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_lowercase()) => {
+            Some((version, Some(rev.parse().ok()?), suffix))
+        }
+        _ => None,
+    }
+}
+
+/// The tag a pinned tag moves to, if any: the newest patch of the same minor line (and, for a
+/// tag that names a revision, the newest revision of it), on the same distribution — only where
+/// that line is tracked. A tag keeps its form: with a revision or without.
+pub fn newer_lang_tag(
+    lang: &str,
+    pinned: &str,
+    tags: &[String],
+    tracked: &[(String, String)],
+) -> Option<String> {
+    let (v, rev, suffix) = lang_tag(pinned)?;
+    let line = format!("{}.{}", v.0, v.1);
+    if !tracked.iter().any(|(l, t)| l == lang && *t == line) {
+        return None;
+    }
+    let best = tags
+        .iter()
+        .filter_map(|t| lang_tag(t).map(|parsed| (t, parsed)))
+        .filter(|(_, (tv, trev, ts))| {
+            *ts == suffix && (tv.0, tv.1) == (v.0, v.1) && trev.is_some() == rev.is_some()
+        })
+        .max_by_key(|(_, (tv, trev, _))| (*tv, trev.unwrap_or(0)))?;
+    let (_, (bv, brev, _)) = best;
+    ((bv, brev.unwrap_or(0)) > (v, rev.unwrap_or(0))).then(|| best.0.clone())
+}
+
+/// The language of an image name (`…/sgw-lang-php` → `php`).
+pub fn lang_of(image: &str) -> &str {
+    image.strip_prefix(LANG_IMAGE).unwrap_or(image)
+}
 // ---- the run ---------------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -488,6 +590,7 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         )
     };
     let mut newer_sgw: Option<String> = None;
+    let mut lang_rows: Vec<(LangPin, Option<String>)> = Vec::new();
     if !opts.offline {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -503,7 +606,26 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
                 )
             ),
         }
+        // #378: each language image the Dockerfile copies from, raised within its tracked line
+        let tracked = tracked_lines(LANG_VERSIONS);
+        for pin in lang_pins(&dockerfile) {
+            match rt.block_on(tags_on_ghcr(&pin.image)) {
+                Ok(tags) => {
+                    let to = newer_lang_tag(lang_of(&pin.image), &pin.tag, &tags, &tracked);
+                    lang_rows.push((pin, to));
+                }
+                Err(e) => eprintln!(
+                    "{}",
+                    tf(
+                        "sgw.update.no_newest",
+                        &[("image", &pin.image), ("error", &format!("{e:#}"))]
+                    )
+                ),
+            }
+        }
     }
+    let lang_moves: Vec<&(LangPin, Option<String>)> =
+        lang_rows.iter().filter(|(_, to)| to.is_some()).collect();
 
     // #294: a newer release means a newer sgw. With --apply, become it first and run this
     // command again as it, so the pins are raised by the sgw of the release the project moves
@@ -576,6 +698,16 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         new_base,
         state(&cur_base, &new_base)
     );
+    for (pin, to) in &lang_rows {
+        let to = to.as_deref().unwrap_or(&pin.tag);
+        println!(
+            "{:<12} {:<10} {:<10} {}",
+            lang_of(&pin.image),
+            pin.tag,
+            to,
+            state(&pin.tag, to)
+        );
+    }
     if let Some(v) = &newer_sgw {
         println!(
             "{}",
@@ -696,6 +828,7 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
     };
     let up_to_date = cur_gw == new_gw
         && cur_base == new_base
+        && lang_moves.is_empty()
         && to_write.is_empty()
         && conflicts.is_empty()
         && !migrate
@@ -758,11 +891,22 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
                 )
             );
         }
+        // the base and the language images are in one file: rewrite it once
+        let mut df = dockerfile.clone();
         if cur_base != new_base {
-            write_in_place(
-                &dockerfile_path,
-                &retag(&dockerfile, BASE_IMAGE, &cur_base, &new_base),
-            )?;
+            df = retag(&df, BASE_IMAGE, &cur_base, &new_base);
+        }
+        for (pin, to) in &lang_moves {
+            let to = to.as_deref().unwrap_or(&pin.tag);
+            df = df.replace(
+                &format!("{}:{}", pin.image, pin.tag),
+                &format!("{}:{to}", pin.image),
+            );
+        }
+        if df != dockerfile {
+            write_in_place(&dockerfile_path, &df)?;
+        }
+        if cur_base != new_base {
             println!(
                 "{}",
                 tf(
@@ -771,6 +915,20 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
                         ("what", "base"),
                         ("from", &cur_base),
                         ("to", &new_base),
+                        ("file", &rel(&dockerfile_path))
+                    ]
+                )
+            );
+        }
+        for (pin, to) in &lang_moves {
+            println!(
+                "{}",
+                tf(
+                    "sgw.update.tag",
+                    &[
+                        ("what", lang_of(&pin.image)),
+                        ("from", &pin.tag),
+                        ("to", to.as_deref().unwrap_or(&pin.tag)),
                         ("file", &rel(&dockerfile_path))
                     ]
                 )
@@ -915,6 +1073,90 @@ fn ask(prompt: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// #378: the language images a Dockerfile copies from, with literal tags only.
+    #[test]
+    fn a_dockerfile_s_language_images_are_found() {
+        let df = "FROM ghcr.io/amakata/sgw-lang-php:8.3.26-1-bookworm AS php\nFROM --platform=linux/arm64 ghcr.io/amakata/sgw-lang-python:2.7.18-bookworm AS py\nFROM ghcr.io/amakata/sgw-lang-php:${PHP}-bookworm AS php2\nFROM ghcr.io/amakata/sgw-devcontainer-base:0.2.67\n# FROM ghcr.io/amakata/sgw-lang-node:22.21.1-1-bookworm\n";
+        assert_eq!(
+            lang_pins(df),
+            vec![
+                LangPin {
+                    image: "ghcr.io/amakata/sgw-lang-php".into(),
+                    tag: "8.3.26-1-bookworm".into()
+                },
+                LangPin {
+                    image: "ghcr.io/amakata/sgw-lang-python".into(),
+                    tag: "2.7.18-bookworm".into()
+                },
+            ]
+        );
+    }
+
+    /// #378: within a tracked line, to its newest patch, keeping the tag's form; never across a
+    /// line, never on an untracked one, never onto another distribution.
+    #[test]
+    fn a_language_tag_moves_within_its_tracked_line_only() {
+        let tracked = vec![("php".to_string(), "8.3".to_string())];
+        let tags = strings(&[
+            "8.3.26-bookworm",
+            "8.3.26-1-bookworm",
+            "8.3.33-1-bookworm",
+            "8.3.33-bookworm",
+            "8.3.35-1-bookworm",
+            "8.3.35-2-bookworm",
+            "8.3.35-bookworm",
+            "8.4.1-1-bookworm",
+            "8.3.40-1-trixie",
+            "latest",
+        ]);
+        let up = |pinned: &str| newer_lang_tag("php", pinned, &tags, &tracked);
+        assert_eq!(
+            up("8.3.26-1-bookworm").as_deref(),
+            Some("8.3.35-2-bookworm")
+        );
+        assert_eq!(up("8.3.26-bookworm").as_deref(), Some("8.3.35-bookworm"));
+        assert_eq!(up("8.3.35-2-bookworm"), None, "already the newest");
+        assert_eq!(
+            up("8.3.35-1-bookworm").as_deref(),
+            Some("8.3.35-2-bookworm"),
+            "a raised revision"
+        );
+        // not tracked: a legacy pin stays put
+        assert_eq!(
+            newer_lang_tag(
+                "python",
+                "2.7.18-1-bookworm",
+                &strings(&["2.7.19-1-bookworm"]),
+                &tracked
+            ),
+            None
+        );
+        assert_eq!(
+            newer_lang_tag(
+                "php",
+                "8.2.1-1-bookworm",
+                &strings(&["8.2.9-1-bookworm"]),
+                &tracked
+            ),
+            None
+        );
+    }
+
+    /// #378: what this sgw knows is tracked comes from the lang/versions.yml it was built with.
+    #[test]
+    fn the_tracked_lines_are_read_from_versions_yml() {
+        assert_eq!(
+            tracked_lines("track:\n  php: [\"8.3\"]\npin:\n  python:\n    \"2.7.18\": 1\n"),
+            vec![("php".to_string(), "8.3".to_string())]
+        );
+        assert!(tracked_lines(LANG_VERSIONS).iter().any(|(l, _)| l == "php"));
+        assert_eq!(tracked_lines("pin: {}\n"), vec![]);
+    }
 
     #[test]
     fn the_pins_are_read_the_way_upgrade_sh_read_them() {
