@@ -12,6 +12,17 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.69 (2026-10-07)
+
+### Security
+
+- The template's devcontainer.json turns off the Docker and Git credential helpers and Git answers from VS Code's GitHub sign-in; `sgw verify` warns when dev can reach a credential helper, and fails on a forwarded ssh-agent socket in /tmp (#395)
+
+### Fix
+
+- The base creates the user's `~/.local/share/mise/installs` and `shims`, so a mounted mise-store volume no longer leaves the directory root-owned and `mise reshim` failing (base 0.2.67–0.2.68); post-create goes on past a failing reshim (#394)
+- `sgw update` shows a release newer than the sgw itself as the newest, and says `sgw update --apply` moves sgw first (#396)
+
 ## 0.2.68 (2026-10-07)
 
 ### Enhancement
