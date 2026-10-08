@@ -16,7 +16,7 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
 ### Fix
 
-- `sgw open` starts VS Code with `BUILDX_BAKE_ENTITLEMENTS_FS=0`, so the dev container builds through buildx 0.37.2, which refuses the `Dockerfile-with-features` the devcontainer CLI writes under `$TMPDIR` (docker/compose#14285); drop it once docker/compose#14286 ships (#402)
+- `sgw open` starts VS Code with `BUILDX_BAKE_ENTITLEMENTS_FS=0`, so the dev container builds through buildx 0.37.2 (docker/compose#14285); drop it once docker/compose#14286 ships (#402)
 
 ## 0.2.69 (2026-10-07)
 
