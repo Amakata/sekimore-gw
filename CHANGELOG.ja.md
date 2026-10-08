@@ -11,6 +11,12 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.70（2026-10-08）
+
+### Fix
+
+- `sgw open` が VS Code を `BUILDX_BAKE_ENTITLEMENTS_FS=0` 付きで起動する。buildx 0.37.2 が devcontainer CLI の `$TMPDIR` 下の `Dockerfile-with-features` の読み取りを拒み、dev コンテナのビルドが止まっていた（docker/compose#14285）。docker/compose#14286 が出たら外す (#402)
+
 ## 0.2.69（2026-10-07）
 
 ### Security

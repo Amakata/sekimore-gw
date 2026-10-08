@@ -12,6 +12,12 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.70 (2026-10-08)
+
+### Fix
+
+- `sgw open` starts VS Code with `BUILDX_BAKE_ENTITLEMENTS_FS=0`, so the dev container builds through buildx 0.37.2, which refuses the `Dockerfile-with-features` the devcontainer CLI writes under `$TMPDIR` (docker/compose#14285); drop it once docker/compose#14286 ships (#402)
+
 ## 0.2.69 (2026-10-07)
 
 ### Security

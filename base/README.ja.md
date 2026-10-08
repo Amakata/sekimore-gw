@@ -12,7 +12,7 @@ dev コンテナの元になるイメージ。使い方は[最上位の README](
 
 ```dockerfile
 # 版を書く。latest ではなく: sgw update --apply が上げる
-FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.69
+FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.70
 
 # プロジェクト固有の追加だけ。例: mise use -g python@3.13.0 && mise reshim
 ```
@@ -31,7 +31,7 @@ FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.69
 | 言語 | `mise`。言語のバージョンは含まない |
 | AI | Claude Code CLI、OpenAI Codex CLI、Anthropic 公式の skills |
 | クラウド | AWS CLI v2、Docker CE（buildx、compose） |
-| ゲートウェイ | `ghcr.io/amakata/sekimore-gw:0.2.69` から取り込む 4 つ。下の表 |
+| ゲートウェイ | `ghcr.io/amakata/sekimore-gw:0.2.70` から取り込む 4 つ。下の表 |
 | zsh の既定設定 | `/etc/skel/zsh-rc.d/`。post-create が `~/.config/zsh/rc.d/` に複製する |
 
 ゲートウェイのイメージから:
