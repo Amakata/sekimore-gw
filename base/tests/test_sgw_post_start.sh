@@ -84,4 +84,10 @@ run
 [ "$(cat "$TMP/.claude/skills/mine/SKILL.md")" = mine ] || fail "a skill of another name was touched"
 run
 [ ! -e "$TMP/.claude/skills/pptx/pptx" ] || fail "a second start nested pptx inside itself"
+echo "== #407: a skill that cannot be copied is reported and the start goes on"
+rm -rf "$TMP/.claude/skills" "$TMP/log/order"
+touch "$TMP/.claude/skills"
+run 2> "$TMP/log/err" || fail "the start stopped when a skill could not be copied"
+grep -q 'could not copy the skill pptx' "$TMP/log/err" || fail "the failure was not reported: $(cat "$TMP/log/err")"
+[ "$(tr '\n' ' ' < "$TMP/log/order")" = "sgw-agent setup docker-init " ] || fail "steps were skipped: $(cat "$TMP/log/order")"
 echo "PASS: sgw-post-start runs setup, copies the skills, then docker-init and post-create"

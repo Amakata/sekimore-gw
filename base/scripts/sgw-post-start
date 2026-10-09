@@ -28,14 +28,15 @@ done
 sudo -E "${SGW_AGENT_BIN:-/usr/local/bin/sgw-agent}" setup
 # #407: sgw-install-ai stages the Anthropic skills in /etc/skel, which only a new user gets, and
 # Claude Code reads skills only from ~/.claude/skills/. Each staged skill replaces the one of its
-# name, so it follows the image; skills of other names are left alone.
+# name, so it follows the image; skills of other names are left alone. A skill that cannot be
+# copied is reported and the start goes on: the Docker daemon and post-create matter more.
 skel=${SGW_SKEL_SKILLS:-/etc/skel/.claude/skills}
 for s in "$skel"/*/; do
   [ -d "$s" ] || continue
   name=$(basename "$s")
-  mkdir -p "$HOME/.claude/skills"
-  rm -rf "$HOME/.claude/skills/$name"
-  cp -R "$skel/$name" "$HOME/.claude/skills/$name"
+  { mkdir -p "$HOME/.claude/skills" && rm -rf "$HOME/.claude/skills/$name" &&
+    cp -R "$skel/$name" "$HOME/.claude/skills/$name"; } ||
+    echo "[sgw-post-start] could not copy the skill $name into $HOME/.claude/skills" >&2
 done
 "${SGW_DOCKER_INIT:-/usr/local/bin/docker-init.sh}"
 post_create=${SGW_POST_CREATE:-$ws/.devcontainer/scripts/post-create.sh}
