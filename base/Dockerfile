@@ -14,8 +14,8 @@
 #     shims are on PATH via ENV, so non-interactive subprocesses (Claude Code
 #     tool invocations, `docker exec cmd`, make, etc.) resolve language binaries
 #     without needing `mise activate` to run.
-#   - Claude Code CLI
-#   - OpenAI Codex CLI
+#   - sgw-install-ai, which a project image runs to install Claude Code, Codex and the
+#     Anthropic skills (#405: not in this image; they are not ours to redistribute)
 #   - sekimore-gw agent-setup script (at /usr/local/bin/sekimore-agent-setup.sh)
 #   - AWS CLI v2                (== devcontainers/features/aws-cli)
 #   - Docker CE + buildx + compose plugin   (== devcontainers/features/docker-in-docker)
@@ -188,7 +188,7 @@ ENV PATH="/home/${USERNAME}/.local/share/mise/shims:/opt/mise/shims:${PATH}"
 # ...and put it back for LOGIN shells, which is the one path ENV does not cover.
 # Debian's /etc/profile assigns PATH rather than appending to it, so a login shell
 # (`docker exec -l`, `sh -lc`, a terminal a person opens) throws the line above away
-# and loses node, npm and codex with it (#60). /etc/profile.d runs after that
+# and loses node and npm with it (#60). /etc/profile.d runs after that
 # assignment, so this is where it goes back.
 USER root
 RUN printf '%s\n' \
@@ -212,54 +212,23 @@ RUN mkdir -p /etc/claude-code
 COPY managed-settings.json /etc/claude-code/managed-settings.json
 
 # ---------------------------------------------------------------------------
-# Bundle official Anthropic skills (pptx / docx / xlsx / pdf)
-#
-# Skills are placed in /etc/skel/.claude/skills/ so that post-create.sh can
-# copy them to each user's ~/.claude/skills/. Claude Code only resolves
-# skills from ~/.claude/skills/ or <workspace>/.claude/skills/, so a true
-# system-wide path is not supported.
-#
-# Source: https://github.com/anthropics/skills (main branch, sparse checkout)
-# ---------------------------------------------------------------------------
-RUN mkdir -p /etc/skel/.claude/skills && \
-  tmpdir="$(mktemp -d)" && \
-  git clone --depth 1 --filter=blob:none --sparse \
-    https://github.com/anthropics/skills.git "$tmpdir/skills" && \
-  git -C "$tmpdir/skills" sparse-checkout set \
-    skills/pptx \
-    skills/docx \
-    skills/xlsx \
-    skills/pdf && \
-  cp -r "$tmpdir/skills/skills/pptx" /etc/skel/.claude/skills/ && \
-  cp -r "$tmpdir/skills/skills/docx" /etc/skel/.claude/skills/ && \
-  cp -r "$tmpdir/skills/skills/xlsx" /etc/skel/.claude/skills/ && \
-  cp -r "$tmpdir/skills/skills/pdf"  /etc/skel/.claude/skills/ && \
-  rm -rf "$tmpdir"
-
-# ---------------------------------------------------------------------------
-# Claude Code CLI
-# ---------------------------------------------------------------------------
-USER ${USERNAME}
-RUN curl -fsSL https://claude.ai/install.sh | bash -s stable
-
-# ---------------------------------------------------------------------------
-# OpenAI Codex CLI
-# #375: on a node of its own in the system directory, started through /usr/local/bin/codex with
-# that node named, so whatever node a project or a person selects, codex keeps running. In
-# /opt/codex rather than inside the node install, so no mise shim for it shadows the wrapper.
-# The node is pinned: `lts` moved with every base rebuild.
+# The node codex runs on
+# #405: Claude Code, Codex and the Anthropic skills are not in this image. A project's image
+# installs them with sgw-install-ai (below), when the person who uses it builds it. The node
+# stays: sgw-install-ai puts codex on it, a node of its own in the system directory, so whatever
+# node a project or a person selects, codex keeps running (#375). Pinned: `lts` moved with every
+# base rebuild.
 # ---------------------------------------------------------------------------
 ARG NODE_VERSION=24.21.0
 USER root
 RUN umask 022 && \
     HOME=/root mise install --system "node@${NODE_VERSION}" && \
-    PATH="/opt/mise/installs/node/${NODE_VERSION}/bin:$PATH" \
-      npm install -g --prefix /opt/codex @openai/codex && \
-    printf '#!/bin/sh\nexec /opt/mise/installs/node/%s/bin/node /opt/codex/lib/node_modules/@openai/codex/bin/codex.js "$@"\n' \
-      "${NODE_VERSION}" > /usr/local/bin/codex && \
-    chmod 0755 /usr/local/bin/codex && \
     HOME=/root mise reshim --system && \
-    chmod -R a-w /opt/mise /opt/codex
+    chmod -R a-w /opt/mise
+# sgw-install-ai: the template's Dockerfile runs it. The node codex goes on is written in here
+COPY scripts/sgw-install-ai /usr/local/bin/sgw-install-ai
+RUN sed -i "s/@NODE_VERSION@/${NODE_VERSION}/" /usr/local/bin/sgw-install-ai && \
+    chmod 0755 /usr/local/bin/sgw-install-ai
 USER ${USERNAME}
 # The user's default node, as before, now the same pinned version: a project that never named a
 # node still has one, and a downstream image that copies its installs keeps getting it.
@@ -293,7 +262,7 @@ USER root
 #
 # Last on purpose. The relay binary changes with every sekimore-gw release and
 # nothing below depends on these three files, so a gateway bump invalidates only
-# these layers — not node, codex, Claude Code or the oh-my-zsh plugins, which is
+# these layers — not node or the oh-my-zsh plugins, which is
 # what made every bump a full re-pull.
 # ---------------------------------------------------------------------------
 COPY --from=sekimore-gw /usr/local/bin/sekimore-relay /usr/local/bin/sekimore-relay

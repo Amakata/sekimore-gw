@@ -29,7 +29,7 @@ The template's [Dockerfile](../relay/templates/devcontainer/.devcontainer/Docker
 | Git | `git-delta` |
 | DB headers | `libpq-dev`, `default-libmysqlclient-dev` |
 | Languages | `mise`. No language version |
-| AI | Claude Code CLI, OpenAI Codex CLI, the official Anthropic skills |
+| AI | `sgw-install-ai` only, and the node Codex runs on. Claude Code, Codex and the Anthropic skills are not ours to redistribute: the template's Dockerfile runs `sgw-install-ai` to download them when you build your image |
 | Cloud | AWS CLI v2, Docker CE with buildx and compose |
 | Gateway | four tools copied out of `ghcr.io/amakata/sekimore-gw:0.2.70`, below |
 | zsh defaults | `/etc/skel/zsh-rc.d/`, copied into `~/.config/zsh/rc.d/` by post-create |
@@ -46,6 +46,7 @@ From the gateway image:
 Not in the image:
 
 - the GitHub CLI: a token in dev would act past the relay's permissions
+- Claude Code, Codex, the Anthropic skills: `sgw-install-ai` installs them in your image (#405)
 - anything project-specific: language versions, build dependencies, `config.yml`
 
 ## Where to change what
@@ -53,7 +54,8 @@ Not in the image:
 | To change | Edit |
 |---|---|
 | apt packages | the `Base apt packages` block of [Dockerfile](Dockerfile) |
-| git-delta, AWS CLI, Docker CE, Claude Code, Codex, the skills | the section of [Dockerfile](Dockerfile) with that name |
+| git-delta, AWS CLI, Docker CE | the section of [Dockerfile](Dockerfile) with that name |
+| How Claude Code, Codex and the skills are installed | [scripts/sgw-install-ai](scripts/sgw-install-ai) |
 | What every zsh starts with | [zsh-config/rc.d/](zsh-config/rc.d/) |
 | Claude Code's managed settings | [managed-settings.json](managed-settings.json) |
 | The `sekimore` wrapper, `docker-init.sh`, the Docker install | [scripts/](scripts/) |

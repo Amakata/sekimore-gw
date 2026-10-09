@@ -12,6 +12,12 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## Unreleased
+
+### Fix
+
+- The base image no longer ships Claude Code, Codex or the Anthropic skills; the template's Dockerfile runs the base's `sgw-install-ai` to download them, and `sgw update --apply` adds that line (UPGRADING) (#406)
+
 ## 0.2.70 (2026-10-08)
 
 ### Fix
