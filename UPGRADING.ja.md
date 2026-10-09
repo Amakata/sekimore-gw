@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.70 -->
+<!-- reviewed-up-to: 0.2.71 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -42,6 +42,7 @@
 | 0.2.60 〜 0.2.63 | 下の 0.2.64。**`sgw check` の出力をスクリプトが読む場合だけ** |
 | 0.2.64 〜 0.2.65 | 下の 0.2.66。**`sgw check` をスクリプトが実行する場合だけ** |
 | 0.2.66 〜 0.2.68 | 下の 0.2.69。**`devcontainer.json` か `post-create.sh` を編集した場合だけ** |
+| 0.2.69 〜 0.2.70 | 下の 0.2.71。**すべてのプロジェクト: Dockerfile に `sgw-install-ai` の行があるか確かめ、Rebuild Container** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -917,7 +918,7 @@ Dockerfile で mise を `/opt/mise` に移した場合は、利用者のディ�
 RUN mkdir -p "$HOME/.local/share/mise/installs" "$HOME/.local/share/mise/shims"
 ```
 
-## Unreleased Claude Code・Codex・skills はあなたのイメージが入れる
+## 0.2.71 Claude Code・Codex・skills はあなたのイメージが入れる
 
 base イメージから Claude Code、Codex、Anthropic の skills（pptx、docx、xlsx、pdf）を外しました。
 Claude Code と skills は公開イメージで再配布できるものではなく、Codex もそれに合わせました。

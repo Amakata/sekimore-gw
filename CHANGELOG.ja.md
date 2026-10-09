@@ -11,7 +11,7 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
-## Unreleased
+## 0.2.71（2026-10-09）
 
 ### Fix
 
