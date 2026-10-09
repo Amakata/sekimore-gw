@@ -7,6 +7,12 @@
 # are already baked in.
 FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.1
 
+# Claude Code, Codex and the Anthropic skills: not in the base image, downloaded here when you
+# build this image. `sgw-install-ai claude codex skills` picks; remove the lines for none of them
+USER root
+RUN sgw-install-ai
+USER vscode
+
 # ---------------------------------------------------------------------------
 # Language build dependencies
 #

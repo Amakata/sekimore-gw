@@ -29,7 +29,7 @@ The template's [Dockerfile](../relay/templates/devcontainer/.devcontainer/Docker
 | Git | `git-delta` |
 | DB headers | `libpq-dev`, `default-libmysqlclient-dev` |
 | Languages | `mise`. No language version |
-| AI | Claude Code CLI, OpenAI Codex CLI, the official Anthropic skills |
+| AI | `sgw-install-ai` only, and the node Codex runs on. Claude Code, Codex and the Anthropic skills are not ours to redistribute: the template's Dockerfile runs `sgw-install-ai` to download them when you build your image |
 | Cloud | AWS CLI v2, Docker CE with buildx and compose |
 | Gateway | four tools copied out of `ghcr.io/amakata/sekimore-gw:0.3.0-alpha.1`, below |
 | zsh defaults | `/etc/skel/zsh-rc.d/`, copied into `~/.config/zsh/rc.d/` by post-create |
@@ -41,11 +41,12 @@ From the gateway image:
 | `sgw-agent` | the AI's command for git through the relay and the GitHub API. `sgw-agent setup` runs at every start: it points the container at the gateway, fetches the proxy environment, makes the disposable key and gets the project token, writes `~/.ssh/config` and known_hosts, sets up commit signing, and installs the usage guide at `~/.claude/skills/sgw-agent/SKILL.md` and in `~/.codex/AGENTS.md` (`SEKIMORE_AGENT_INSTRUCTIONS=none\|claude\|codex` limits that). `sgw-agent guide` prints the same guide |
 | `sekimore-relay` | the relay itself, for `sgw-agent setup` to talk to the gateway with |
 | `sekimore` | the former name of `sgw-agent`, kept as an alias; its removal will be announced in UPGRADING.md |
-| `sgw-post-start` | what `postStartCommand` runs: the setup, the inner Docker daemon, the project's post-create.sh |
+| `sgw-post-start` | what `postStartCommand` runs: the setup, the skills staged by `sgw-install-ai` copied into `~/.claude/skills/`, the inner Docker daemon, the project's post-create.sh |
 
 Not in the image:
 
 - the GitHub CLI: a token in dev would act past the relay's permissions
+- Claude Code, Codex, the Anthropic skills: `sgw-install-ai` installs them in your image (#405)
 - anything project-specific: language versions, build dependencies, `config.yml`
 
 ## Where to change what
@@ -53,7 +54,8 @@ Not in the image:
 | To change | Edit |
 |---|---|
 | apt packages | the `Base apt packages` block of [Dockerfile](Dockerfile) |
-| git-delta, AWS CLI, Docker CE, Claude Code, Codex, the skills | the section of [Dockerfile](Dockerfile) with that name |
+| git-delta, AWS CLI, Docker CE | the section of [Dockerfile](Dockerfile) with that name |
+| How Claude Code, Codex and the skills are installed | [scripts/sgw-install-ai](scripts/sgw-install-ai) |
 | What every zsh starts with | [zsh-config/rc.d/](zsh-config/rc.d/) |
 | Claude Code's managed settings | [managed-settings.json](managed-settings.json) |
 | The `sekimore` wrapper, `docker-init.sh`, the Docker install | [scripts/](scripts/) |
