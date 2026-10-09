@@ -953,3 +953,24 @@ If your Dockerfile moved mise to `/opt/mise`, also create the user's directories
 ```dockerfile
 RUN mkdir -p "$HOME/.local/share/mise/installs" "$HOME/.local/share/mise/shims"
 ```
+
+## Unreleased Claude Code, Codex and the skills come from your image
+
+The base image no longer contains Claude Code, Codex or the Anthropic skills (pptx, docx, xlsx,
+pdf): Claude Code and the skills are not ours to redistribute in a public image, and Codex goes
+with them. The base has a script instead, `sgw-install-ai`, which downloads them when your
+project's image is built.
+
+**Everyone.** Your `.devcontainer/Dockerfile` needs these lines after its `FROM`. `sgw update
+--apply` adds them when it moves the base past this release; check they are there, commit, then
+Rebuild Container.
+
+```dockerfile
+USER root
+RUN sgw-install-ai
+USER vscode
+```
+
+Without them the dev container has no `claude` and no `codex`, and `sgw verify` warns.
+`sgw-install-ai claude codex skills` installs only the ones you name. To go without them, remove
+the lines after the update; `sgw update` adds them only once.

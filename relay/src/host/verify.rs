@@ -91,11 +91,11 @@ pub const ITEMS: &[Item] = &[
         run: env_survives_sudo,
     },
     Item {
-        name: "codex_from_base",
-        title: "dev: codex is the base image's",
+        name: "ai_tools",
+        title: "dev: claude and codex come from the project image (sgw-install-ai)",
         edges: &[],
         applies: always,
-        run: codex_from_base,
+        run: ai_tools,
     },
     Item {
         name: "store",
@@ -630,11 +630,19 @@ fn no_host_credentials(ctx: &mut Ctx) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// #375: what `codex` resolves to in dev — the base's wrapper, or a copy in the mise-store volume.
-const CODEX_SCRIPT: &str = r#"p=$(command -v codex 2>/dev/null) || { echo none; exit; }
-[ "$p" = /usr/local/bin/codex ] && { echo base; exit; }
-[ -x /usr/local/bin/codex ] || { echo older-base; exit; }
-echo "shadow $(mise which codex 2>/dev/null || echo "$p")""#;
+/// #375, #405: whether dev has `claude`, and what `codex` resolves to — the wrapper
+/// sgw-install-ai writes, or a copy in the mise-store volume. `claude` lives in ~/.local/bin, which
+/// only an interactive shell puts on PATH. First word: claude found or missing; then codex's case.
+const AI_TOOLS_SCRIPT: &str = r#"c=missing
+{ command -v claude || [ -x "$HOME/.local/bin/claude" ]; } >/dev/null 2>&1 && c=found
+p=$(command -v codex 2>/dev/null) || { echo "$c none"; exit; }
+[ "$p" = /usr/local/bin/codex ] && { echo "$c image"; exit; }
+[ -x /usr/local/bin/codex ] && { echo "$c shadow $(mise which codex 2>/dev/null || echo "$p")"; exit; }
+command -v sgw-install-ai >/dev/null 2>&1 || { echo "$c older-base"; exit; }
+echo "$c other $p""#;
+
+/// What a project's Dockerfile needs from base 0.2.71 on (`update::INSTALL_AI`).
+const INSTALL_AI_FIX: &str = "add after FROM in .devcontainer/Dockerfile: `USER root`, `RUN sgw-install-ai`, `USER vscode`; then Rebuild Container (UPGRADING)";
 
 /// The node version a path under `…/installs/node/<version>/…` belongs to.
 pub fn node_version_of(path: &str) -> Option<&str> {
@@ -642,26 +650,42 @@ pub fn node_version_of(path: &str) -> Option<&str> {
     rest.split('/').next().filter(|v| !v.is_empty())
 }
 
-fn codex_from_base(ctx: &mut Ctx) -> anyhow::Result<()> {
-    // From base 0.2.67 codex runs on a node of its own in /opt/mise. A mise-store volume filled by
-    // an older base still holds the codex that base put in the user's node, and the volume wins,
+fn ai_tools(ctx: &mut Ctx) -> anyhow::Result<()> {
+    // #405: the base has no Claude Code and no Codex; the project's image installs them with
+    // sgw-install-ai, and a Dockerfile without that line leaves dev without them.
+    // #375: codex runs on a node of its own in /opt/mise. A mise-store volume filled by a base
+    // before 0.2.67 still holds the codex that base put in the user's node, and the volume wins,
     // so that old copy keeps answering `codex` until someone removes it. Said, not removed: a
     // person may have installed a newer one on purpose. The fix takes ~/.local/share/mise back
     // first: a container made from base 0.2.67–0.2.68 may have it root-owned, and the reshim at
     // the end then fails the first time (#393)
-    let out = ctx.dev_sh(CODEX_SCRIPT)?;
+    let out = ctx.dev_sh(AI_TOOLS_SCRIPT)?;
     if out.code != 0 {
         ctx.skip("dev unavailable");
         return Ok(());
     }
     let said = out.stdout.trim().to_string();
-    match said.split_once(' ').unwrap_or((said.as_str(), "")) {
-        ("base", _) => ctx.ok("codex is /usr/local/bin/codex, on the base's own node"),
-        ("older-base", _) => {
+    let (claude, rest) = said.split_once(' ').unwrap_or((said.as_str(), ""));
+    let (codex, at) = rest.split_once(' ').unwrap_or((rest, ""));
+    let mut warned = false;
+    if claude == "missing" {
+        ctx.warn(&format!("claude is not installed in dev: {INSTALL_AI_FIX}"));
+        warned = true;
+    }
+    match codex {
+        "image" if !warned => {
+            ctx.ok("claude is installed; codex is /usr/local/bin/codex, on the base's own node")
+        }
+        "image" => {}
+        "older-base" if !warned => {
             ctx.note("this base predates the system codex (0.2.67); nothing to compare")
         }
-        ("none", _) => ctx.warn("codex is not on PATH in dev"),
-        ("shadow", at) => {
+        "older-base" => {}
+        "none" => ctx.warn(&format!("codex is not on PATH in dev: {INSTALL_AI_FIX}")),
+        "other" => ctx.warn(&format!(
+            "codex resolves to {at}, not /usr/local/bin/codex from sgw-install-ai: {INSTALL_AI_FIX}"
+        )),
+        "shadow" => {
             let fix = match node_version_of(at) {
                 Some(v) => format!(
                     "in dev: sudo chown -R \"$(id -u):$(id -g)\" ~/.local/share/mise && mise exec node@{v} -- npm uninstall -g @openai/codex && mise reshim"
@@ -671,7 +695,7 @@ fn codex_from_base(ctx: &mut Ctx) -> anyhow::Result<()> {
                 ),
             };
             ctx.warn(&format!(
-                "codex resolves to {at}, a copy in the mise-store volume, not the base's /usr/local/bin/codex; it is not updated with the image. Unless it is there on purpose: {fix}"
+                "codex resolves to {at}, a copy in the mise-store volume, not the image's /usr/local/bin/codex; it is not updated with the image. Unless it is there on purpose: {fix}"
             ));
         }
         _ => ctx.warn(&format!("could not tell where codex comes from: {said}")),

@@ -15,7 +15,7 @@
     ├── devcontainer.json           # VS Code が dev に渡すホストの資格情報も止める（#392）
     ├── docker-compose.yml          # dev と sekimore-gw の 2 サービス
     ├── docker-compose.relay.yml    # sekimore-relay 用の overlay（agent ソケットのマウント、鍵のボリューム）
-    ├── Dockerfile                  # FROM sgw-devcontainer-base に、mise で入れる言語の版
+    ├── Dockerfile                  # FROM sgw-devcontainer-base に、sgw-install-ai（Claude Code・Codex・skills）と mise で入れる言語の版
     ├── .env.sample                 # sgw init が .env に写す
     ├── .gitignore
     ├── config/

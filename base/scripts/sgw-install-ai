@@ -1,0 +1,89 @@
+#!/bin/sh
+# sgw-install-ai — install the AI tools into a project's dev-container image (#405).
+#
+#   sgw-install-ai [claude] [codex] [skills]      (no argument: all three)
+#
+# The base image ships none of them: Claude Code and the Anthropic skills are not ours to
+# redistribute, and Codex is left out with them so the base carries no AI agent. This script holds
+# no third-party code; it downloads each tool when it runs, which is when the person who uses the
+# image builds it. The template's .devcontainer/Dockerfile calls it as root, right after FROM:
+#
+#   USER root
+#   RUN sgw-install-ai
+#   USER vscode
+#
+#   claude  Claude Code, with claude.ai/install.sh, for the user ($SGW_AI_USER, default vscode):
+#           ~/.local/bin/claude
+#   codex   OpenAI Codex (npm @openai/codex) in /opt/codex, on the base's own pinned node in
+#           /opt/mise, started through /usr/local/bin/codex with that node named, so whatever node
+#           a project or a person selects, codex keeps running (#375)
+#   skills  the official Anthropic skills (pptx, docx, xlsx, pdf) in /etc/skel/.claude/skills/
+set -eu
+
+# The node codex runs on: the base's, written in when the base is built
+NODE_VERSION=@NODE_VERSION@
+user=${SGW_AI_USER:-vscode}
+
+usage() {
+  echo "usage: sgw-install-ai [claude] [codex] [skills]   (no argument: all three)" >&2
+  exit 2
+}
+
+[ "$(id -u)" = 0 ] || {
+  echo "sgw-install-ai: run it as root (USER root before the RUN line in the Dockerfile)" >&2
+  exit 1
+}
+
+install_claude() {
+  home=$(getent passwd "$user" | cut -d: -f6)
+  [ -n "$home" ] || {
+    echo "sgw-install-ai: no user $user (set SGW_AI_USER)" >&2
+    exit 1
+  }
+  echo "[sgw-install-ai] Claude Code for $user"
+  su "$user" -s /bin/sh -c 'cd "$HOME" && curl -fsSL https://claude.ai/install.sh | bash -s stable'
+}
+
+install_codex() {
+  node_bin=/opt/mise/installs/node/$NODE_VERSION/bin
+  [ -x "$node_bin/node" ] || {
+    echo "sgw-install-ai: the base's node $NODE_VERSION is not at $node_bin" >&2
+    exit 1
+  }
+  echo "[sgw-install-ai] Codex in /opt/codex, on node $NODE_VERSION"
+  cache=$(mktemp -d)
+  (umask 022 && PATH="$node_bin:$PATH" HOME=/root \
+    npm install -g --prefix /opt/codex --cache "$cache" @openai/codex)
+  rm -rf "$cache"
+  printf '#!/bin/sh\nexec %s/node /opt/codex/lib/node_modules/@openai/codex/bin/codex.js "$@"\n' \
+    "$node_bin" > /usr/local/bin/codex
+  chmod 0755 /usr/local/bin/codex
+  chmod -R a-w /opt/codex
+}
+
+# Claude Code resolves skills only from ~/.claude/skills/ or <workspace>/.claude/skills/, so they
+# are staged here for a project's post-create to copy
+install_skills() {
+  echo "[sgw-install-ai] the Anthropic skills in /etc/skel/.claude/skills"
+  tmp=$(mktemp -d)
+  git clone --quiet --depth 1 --filter=blob:none --sparse \
+    https://github.com/anthropics/skills.git "$tmp/skills"
+  git -C "$tmp/skills" sparse-checkout set skills/pptx skills/docx skills/xlsx skills/pdf
+  install -d -m 0755 /etc/skel/.claude/skills
+  for s in pptx docx xlsx pdf; do
+    rm -rf "/etc/skel/.claude/skills/$s"
+    cp -r "$tmp/skills/skills/$s" /etc/skel/.claude/skills/
+  done
+  rm -rf "$tmp"
+}
+
+[ $# -gt 0 ] || set -- claude codex skills
+for what in "$@"; do
+  case $what in
+    claude | codex | skills) ;;
+    *) usage ;;
+  esac
+done
+for what in "$@"; do
+  "install_$what"
+done

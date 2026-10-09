@@ -29,7 +29,7 @@ FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.70
 | Git | `git-delta` |
 | DB ヘッダ | `libpq-dev`, `default-libmysqlclient-dev` |
 | 言語 | `mise`。言語のバージョンは含まない |
-| AI | Claude Code CLI、OpenAI Codex CLI、Anthropic 公式の skills |
+| AI | `sgw-install-ai` と、Codex が動く node だけ。Claude Code・Codex・Anthropic の skills は再配布できないので入れない。雛形の Dockerfile が `sgw-install-ai` を実行し、イメージのビルド時にダウンロードする |
 | クラウド | AWS CLI v2、Docker CE（buildx、compose） |
 | ゲートウェイ | `ghcr.io/amakata/sekimore-gw:0.2.70` から取り込む 4 つ。下の表 |
 | zsh の既定設定 | `/etc/skel/zsh-rc.d/`。post-create が `~/.config/zsh/rc.d/` に複製する |
@@ -46,6 +46,7 @@ FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.70
 入れていないもの:
 
 - GitHub CLI: dev にトークンがあると、関所の権限を素通りして GitHub を操作できる
+- Claude Code・Codex・Anthropic の skills: あなたのイメージに `sgw-install-ai` が入れる（#405）
 - プロジェクト固有のもの: 言語のバージョン、ビルド依存、`config.yml`
 
 ## どこを変えると何が変わるか
@@ -53,7 +54,8 @@ FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.70
 | 変えたいもの | 触る場所 |
 |---|---|
 | apt パッケージ | [Dockerfile](Dockerfile) の `Base apt packages` ブロック |
-| git-delta、AWS CLI、Docker CE、Claude Code、Codex、skills | [Dockerfile](Dockerfile) のその名前の節 |
+| git-delta、AWS CLI、Docker CE | [Dockerfile](Dockerfile) のその名前の節 |
+| Claude Code・Codex・skills の入れ方 | [scripts/sgw-install-ai](scripts/sgw-install-ai) |
 | すべての zsh が最初に読むもの | [zsh-config/rc.d/](zsh-config/rc.d/) |
 | Claude Code の managed settings | [managed-settings.json](managed-settings.json) |
 | `sekimore` ラッパー、`docker-init.sh`、Docker のインストール | [scripts/](scripts/) |

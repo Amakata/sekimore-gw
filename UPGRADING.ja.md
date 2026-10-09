@@ -916,3 +916,24 @@ Dockerfile で mise を `/opt/mise` に移した場合は、利用者のディ�
 ```dockerfile
 RUN mkdir -p "$HOME/.local/share/mise/installs" "$HOME/.local/share/mise/shims"
 ```
+
+## Unreleased Claude Code・Codex・skills はあなたのイメージが入れる
+
+base イメージから Claude Code、Codex、Anthropic の skills（pptx、docx、xlsx、pdf）を外しました。
+Claude Code と skills は公開イメージで再配布できるものではなく、Codex もそれに合わせました。
+代わりに base にはスクリプト `sgw-install-ai` があり、プロジェクトのイメージをビルドするときにそれらを
+ダウンロードします。
+
+**全員。** `.devcontainer/Dockerfile` の `FROM` の後に次の行が要ります。`sgw update --apply` は、
+base をこの版より先へ上げるときにこの行を足します。入っていることを確かめてコミットし、
+Rebuild Container してください。
+
+```dockerfile
+USER root
+RUN sgw-install-ai
+USER vscode
+```
+
+この行が無いと dev コンテナに `claude` も `codex` も無く、`sgw verify` が警告します。
+`sgw-install-ai claude codex skills` は指定したものだけを入れます。どれも要らなければ、更新の後で
+この行を消してください。`sgw update` が足すのは 1 回だけです。
