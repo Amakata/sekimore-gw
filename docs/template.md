@@ -16,7 +16,7 @@ carries the same files, byte for byte. Do not copy them by hand.
     ├── devcontainer.json           # also turns off the host credentials VS Code would hand dev (#392)
     ├── docker-compose.yml          # two services, dev and sekimore-gw
     ├── docker-compose.relay.yml    # the overlay for sekimore-relay (the agent socket mount, the key volume)
-    ├── Dockerfile                  # FROM sgw-devcontainer-base, plus specific versions installed with mise
+    ├── Dockerfile                  # FROM sgw-devcontainer-base, sgw-install-ai (Claude Code, Codex, skills), languages via mise
     ├── .env.sample                 # sgw init copies it to .env
     ├── .gitignore
     ├── config/

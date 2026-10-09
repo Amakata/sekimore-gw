@@ -23,6 +23,13 @@ base イメージは 0.2.45 まで独立したリポジトリで、版番号も�
 - `GET /relays` が各 relay とそのコマンドを返す。`sgw-agent setup` がそれを保存し、サイドカーのガイドをスキルファイルに足す。`sgw-agent <sidecar> <words>` でコマンドサイドカーのコマンドを実行する (#368)
 - `docs/sidecar-protocol.md` にコマンドサイドカーのプロトコルを書いた。`examples/sidecar-template` は標準ライブラリだけの Python で動くサイドカー (#369)
 
+## 0.2.71（2026-10-09）
+
+### Fix
+
+- base イメージから Claude Code・Codex・Anthropic の skills を外した。雛形の Dockerfile が base の `sgw-install-ai` でダウンロードし、`sgw update --apply` がその行を足す（UPGRADING） (#406)
+- `sgw-post-start` が起動のたびに、`sgw-install-ai` が `/etc/skel/.claude/skills/` に置いた skills を `~/.claude/skills/` に複製する。これで Claude Code から見える (#408)
+
 ## 0.2.70（2026-10-08）
 
 ### Fix

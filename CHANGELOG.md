@@ -24,6 +24,13 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 - `GET /relays` lists each relay and its commands. `sgw-agent setup` saves it and adds the sidecars' guides to the skill file; `sgw-agent <sidecar> <words>` runs a command sidecar's commands (#368)
 - `docs/sidecar-protocol.md` describes the command sidecar protocol; `examples/sidecar-template` is a working sidecar in standard-library Python (#369)
 
+## 0.2.71 (2026-10-09)
+
+### Fix
+
+- The base image no longer ships Claude Code, Codex or the Anthropic skills; the template's Dockerfile runs the base's `sgw-install-ai` to download them, and `sgw update --apply` adds that line (UPGRADING) (#406)
+- `sgw-post-start` copies the skills `sgw-install-ai` stages in `/etc/skel/.claude/skills/` into `~/.claude/skills/` at every start, so Claude Code sees them (#408)
+
 ## 0.2.70 (2026-10-08)
 
 ### Fix

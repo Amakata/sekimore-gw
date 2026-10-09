@@ -333,6 +333,47 @@ pub fn devcontainer_with_sgw_post_start(text: &str) -> Option<String> {
     Some(format!("{}sgw-post-start{}", &text[..a], &text[b..]))
 }
 
+/// #405: what the template has after its `FROM`. The base no longer carries Claude Code, Codex
+/// or the Anthropic skills; these lines install them when the project's image is built.
+pub const INSTALL_AI: &str = "\
+# Claude Code, Codex and the Anthropic skills: not in the base image, downloaded here when you
+# build this image. `sgw-install-ai claude codex skills` picks; remove the lines for none of them
+USER root
+RUN sgw-install-ai
+USER vscode
+";
+
+/// The first base without the AI tools.
+pub const BASE_WITHOUT_AI: &str = "0.2.71";
+
+/// The Dockerfile with `INSTALL_AI` after the line that pins the base, when the move from
+/// `cur_base` to `new_base` crosses `BASE_WITHOUT_AI` and the file does not name
+/// `sgw-install-ai`: without it, the project has no `claude` and no `codex` after the move. Only
+/// on that move, so a project that removed the lines later keeps them out. None when there is
+/// nothing to do.
+pub fn dockerfile_with_install_ai(text: &str, cur_base: &str, new_base: &str) -> Option<String> {
+    if !ver_lt(cur_base, BASE_WITHOUT_AI)
+        || ver_lt(new_base, BASE_WITHOUT_AI)
+        || text.contains("sgw-install-ai")
+    {
+        return None;
+    }
+    let mut out = String::with_capacity(text.len() + INSTALL_AI.len() + 2);
+    let mut done = false;
+    for line in text.split_inclusive('\n') {
+        out.push_str(line);
+        if !done && pinned_base(line).is_some() {
+            if !line.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push('\n');
+            out.push_str(INSTALL_AI);
+            done = true;
+        }
+    }
+    done.then_some(out)
+}
+
 /// Only comments, blank lines and table headers: nothing of the project's own.
 pub fn mise_has_nothing_own(text: &str) -> bool {
     text.lines()
@@ -866,6 +907,19 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
     if dcj_new.is_some() {
         println!("  {}", t("sgw.update.m_poststart"));
     }
+    // #405: not when the template is about to replace the Dockerfile, which has the lines already
+    let df_replaced = states.iter().any(|(tpl, st, _)| {
+        tpl.path == ".devcontainer/Dockerfile"
+            && (*st == FileState::Changes || (*st == FileState::Conflict && opts.force))
+    });
+    let df_ai = if df_replaced {
+        None
+    } else {
+        dockerfile_with_install_ai(&dockerfile, &cur_base, &new_base)
+    };
+    if df_ai.is_some() {
+        println!("  {}", t("sgw.update.m_install_ai"));
+    }
     println!();
     let notes = sections(upgrading(l), &cur_gw, &new_gw, &cur_base, &new_base, false);
     if notes.trim().is_empty() {
@@ -912,6 +966,7 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         && !migrate
         && mise_new.is_none()
         && dcj_new.is_none()
+        && df_ai.is_none()
         && std::fs::read_to_string(&toml_path).ok().as_deref() == Some(toml_new.render().as_str());
 
     if opts.mode == Mode::Check {
@@ -971,7 +1026,7 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
             );
         }
         // the base and the language images are in one file: rewrite it once
-        let mut df = dockerfile.clone();
+        let mut df = df_ai.clone().unwrap_or_else(|| dockerfile.clone());
         if cur_base != new_base {
             df = retag(&df, BASE_IMAGE, &cur_base, &new_base);
         }
@@ -984,6 +1039,9 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         }
         if df != dockerfile {
             write_in_place(&dockerfile_path, &df)?;
+        }
+        if df_ai.is_some() {
+            println!("{}", t("sgw.update.m_install_ai_done"));
         }
         if cur_base != new_base {
             println!(
@@ -1443,6 +1501,55 @@ mod tests {
             file_state(Some("older"), Some("mine"), "n", Some("old")),
             Conflict,
             "edited, and the template changed in more than the pin"
+        );
+    }
+
+    /// #405: a project's Dockerfile from before gets the template's lines after the base's FROM,
+    /// once, on the move past the base that dropped the AI tools.
+    #[test]
+    fn the_ai_tools_install_goes_in_after_the_base_s_from_on_the_move() {
+        let df = "# syntax=docker/dockerfile:1.7\nFROM ghcr.io/amakata/sgw-devcontainer-base:0.2.70 AS dev\nUSER root\nRUN apt-get update\n";
+        let out = dockerfile_with_install_ai(df, "0.2.70", BASE_WITHOUT_AI).unwrap();
+        assert_eq!(
+            out,
+            format!("# syntax=docker/dockerfile:1.7\nFROM ghcr.io/amakata/sgw-devcontainer-base:0.2.70 AS dev\n\n{INSTALL_AI}USER root\nRUN apt-get update\n")
+        );
+        // once: the result names the script
+        assert_eq!(
+            dockerfile_with_install_ai(&out, "0.2.70", BASE_WITHOUT_AI),
+            None
+        );
+        // only on the move across: a project already past it removed the lines on purpose
+        assert_eq!(
+            dockerfile_with_install_ai(df, BASE_WITHOUT_AI, BASE_WITHOUT_AI),
+            None
+        );
+        assert_eq!(dockerfile_with_install_ai(df, "0.2.69", "0.2.70"), None);
+        // a FROM without a newline at the end, and a file that pins no base
+        let bare = "FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.60";
+        assert_eq!(
+            dockerfile_with_install_ai(bare, "0.2.60", BASE_WITHOUT_AI).unwrap(),
+            format!("{bare}\n\n{INSTALL_AI}")
+        );
+        assert_eq!(
+            dockerfile_with_install_ai("FROM debian\n", "0.2.60", BASE_WITHOUT_AI),
+            None
+        );
+    }
+
+    /// #405: what the migration adds is what the template has, after the same line.
+    #[test]
+    fn the_template_carries_the_ai_tools_install_the_migration_adds() {
+        let tpl = templates::FILES
+            .iter()
+            .find(|t| t.path == ".devcontainer/Dockerfile")
+            .unwrap()
+            .content;
+        let without = tpl.replacen(&format!("\n{INSTALL_AI}"), "", 1);
+        assert_ne!(without, tpl, "the template has no INSTALL_AI block");
+        assert_eq!(
+            dockerfile_with_install_ai(&without, "0.2.70", BASE_WITHOUT_AI).as_deref(),
+            Some(tpl)
         );
     }
 

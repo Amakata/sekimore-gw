@@ -11,7 +11,7 @@
 #
 #   - the relay CLI runs, and is the version ARG SEKIMORE_GW_IMAGE pins
 #   - the agent guide ships in both languages and came from that same release
-#   - the tools the base promises are on PATH
+#   - the tools the base promises are on PATH, and the AI tools are not (#405)
 #
 # Needs docker and a built image. Pass one, or let it build:
 #
@@ -82,10 +82,9 @@ echo "== the agent guide ships in both languages"
 # calls case-specific (uv, language runtimes) are deliberately not here.
 # A login shell, because that is how a person and a `docker exec -l` reach them; some land in
 # ~/.local/bin, which the shell rc adds rather than ENV PATH.
-# node, npm and codex come from the mise shims, which Debian's /etc/profile would drop from a
-# login shell if /etc/profile.d did not put them back (#60) — so checking them here is checking
-# that too.
-for t in git delta zsh mise claude codex node npm aws docker sekimore sgw-agent sgw-post-start; do
+# node and npm come from the mise shims, which Debian's /etc/profile would drop from a login shell
+# if /etc/profile.d did not put them back (#60) — so checking them here is checking that too.
+for t in git delta zsh mise node npm aws docker sekimore sgw-agent sgw-post-start sgw-install-ai; do
   in_image /bin/sh -lc "command -v $t >/dev/null" ||
     fail "$t is not on PATH in the image"
 done
@@ -95,16 +94,23 @@ echo "== the tools the base promises are on PATH"
 # `gh` reaches api.github.com through the relay's 443 passthrough, which forwards without reading:
 # a `gh` holding a token would act with none of the per-action permissions the relay enforces, and
 # on repositories outside the project. Absent on purpose, so its return is a failure (#62).
-for t in gh; do
-  if in_image /bin/sh -lc "command -v $t >/dev/null"; then
-    fail "$t is in the image; it bypasses the relay's permission checks, and sekimore covers it"
+# #405: Claude Code, Codex and the Anthropic skills are not ours to put in a public image; the
+# project's image installs them with sgw-install-ai (below).
+for t in gh claude codex; do
+  if in_image /bin/sh -lc "command -v $t >/dev/null || test -e \"\$HOME/.local/bin/$t\""; then
+    fail "$t is in the image"
+  fi
+done
+for p in /etc/skel/.claude/skills /opt/codex /usr/local/bin/codex; do
+  if in_image /bin/sh -c "test -e $p"; then
+    fail "$p is in the image (#405)"
   fi
 done
 echo "== the tools the base leaves out are absent"
 
 # ---- #375: the system mise directory ----
 # Root-owned and read-only, so a project's baked languages are neither changed nor chowned by the
-# user; codex runs on its own node whatever node the user selects.
+# user.
 env_dir=$(in_image /usr/bin/env | sed -n 's/^MISE_SYSTEM_DATA_DIR=//p')
 [ "$env_dir" = /opt/mise ] || fail "MISE_SYSTEM_DATA_DIR is '$env_dir', not /opt/mise"
 owner=$(in_image /usr/bin/stat -c %U /opt/mise/installs)
@@ -112,10 +118,7 @@ owner=$(in_image /usr/bin/stat -c %U /opt/mise/installs)
 if in_image /bin/sh -c 'test -w /opt/mise/installs'; then
   fail "/opt/mise/installs is writable by the user"
 fi
-codex_at=$(in_image /bin/sh -lc 'command -v codex')
-[ "$codex_at" = /usr/local/bin/codex ] || fail "codex resolves to $codex_at, not the wrapper"
-in_image /bin/sh -lc 'codex --version' >/dev/null || fail "codex does not run: $(in_image /bin/sh -lc 'codex --version')"
-echo "== /opt/mise is the system directory, root-owned and read-only; codex runs on its own node"
+echo "== /opt/mise is the system directory, root-owned and read-only"
 # 0.3 (#377): /usr/local/share is root's again, so nothing a project puts there is the agent's to change
 share_owner=$(in_image /usr/bin/stat -c %U /usr/local/share)
 [ "$share_owner" = root ] || fail "/usr/local/share is owned by $share_owner, not root"
@@ -146,6 +149,32 @@ else
   fail "the system-install recipe failed: $(tail -5 /tmp/sgw-system-node.$$)"
 fi
 rm -f /tmp/sgw-system-node.$$
+
+# ---- #405: sgw-install-ai, the way the template's Dockerfile runs it ----
+# As root, then the user finds claude, codex on its own node through the wrapper, and the skills.
+# Needs the network for the downloads; SGW_TEST_OFFLINE=1 skips it.
+if in_image /usr/local/bin/sgw-install-ai >/dev/null; then
+  fail "sgw-install-ai ran as the user; it installs into /opt and /etc/skel, and has to refuse"
+fi
+if [ -n "${SGW_TEST_OFFLINE:-}" ]; then
+  echo "SKIP: sgw-install-ai (SGW_TEST_OFFLINE)"
+elif docker run --rm --user root --entrypoint /bin/sh "$IMAGE" -c \
+  'sgw-install-ai >/dev/null 2>&1 || { sgw-install-ai; exit 1; }
+   su vscode -s /bin/sh -c "cd /tmp && sh -lc \"command -v claude && claude --version && command -v codex && codex --version\" && ls /etc/skel/.claude/skills && test ! -w /opt/codex"' \
+  > /tmp/sgw-install-ai.$$ 2>&1; then
+  out=$(cat /tmp/sgw-install-ai.$$)
+  case "$out" in
+    */home/vscode/.local/bin/claude*/usr/local/bin/codex*) ;;
+    *) fail "after sgw-install-ai, claude or codex is not where it belongs: $out" ;;
+  esac
+  for s in docx pdf pptx xlsx; do
+    printf '%s\n' "$out" | grep -qx "$s" || fail "sgw-install-ai left out the $s skill: $out"
+  done
+  echo "== sgw-install-ai installs claude, codex (/usr/local/bin/codex) and the skills"
+else
+  fail "sgw-install-ai failed: $(tail -20 /tmp/sgw-install-ai.$$)"
+fi
+rm -f /tmp/sgw-install-ai.$$
 
 # ---- #339: GID 20 is free ----
 # Dev Containers' updateRemoteUserUID changes nothing when the host's GID is taken, and 20 is the
