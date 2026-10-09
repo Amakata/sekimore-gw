@@ -41,7 +41,7 @@ From the gateway image:
 | `sgw-agent` | the AI's command for git through the relay and the GitHub API. `sgw-agent setup` runs at every start: it points the container at the gateway, fetches the proxy environment, makes the disposable key and gets the project token, writes `~/.ssh/config` and known_hosts, sets up commit signing, and installs the usage guide at `~/.claude/skills/sgw-agent/SKILL.md` and in `~/.codex/AGENTS.md` (`SEKIMORE_AGENT_INSTRUCTIONS=none\|claude\|codex` limits that). `sgw-agent guide` prints the same guide |
 | `sekimore-relay` | the relay itself, for `sgw-agent setup` to talk to the gateway with |
 | `sekimore` | the former name of `sgw-agent`, kept as an alias; its removal will be announced in UPGRADING.md |
-| `sgw-post-start` | what `postStartCommand` runs: the setup, the inner Docker daemon, the project's post-create.sh |
+| `sgw-post-start` | what `postStartCommand` runs: the setup, the skills staged by `sgw-install-ai` copied into `~/.claude/skills/`, the inner Docker daemon, the project's post-create.sh |
 
 Not in the image:
 
