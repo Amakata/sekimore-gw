@@ -16,6 +16,7 @@ base イメージは 0.2.45 まで独立したリポジトリで、版番号も�
 ### Fix
 
 - base イメージから Claude Code・Codex・Anthropic の skills を外した。雛形の Dockerfile が base の `sgw-install-ai` でダウンロードし、`sgw update --apply` がその行を足す（UPGRADING） (#406)
+- `sgw-post-start` が起動のたびに、`sgw-install-ai` が `/etc/skel/.claude/skills/` に置いた skills を `~/.claude/skills/` に複製する。これで Claude Code から見える (#408)
 
 ## 0.2.70（2026-10-08）
 

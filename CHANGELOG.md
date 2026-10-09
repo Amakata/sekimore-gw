@@ -17,6 +17,7 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 ### Fix
 
 - The base image no longer ships Claude Code, Codex or the Anthropic skills; the template's Dockerfile runs the base's `sgw-install-ai` to download them, and `sgw update --apply` adds that line (UPGRADING) (#406)
+- `sgw-post-start` copies the skills `sgw-install-ai` stages in `/etc/skel/.claude/skills/` into `~/.claude/skills/` at every start, so Claude Code sees them (#408)
 
 ## 0.2.70 (2026-10-08)
 
