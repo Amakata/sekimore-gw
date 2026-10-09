@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# scripts/sgw-post-start runs setup as root with the whole environment, then docker-init, then the
-# project's post-create.sh — in that order, and stops when setup fails.
+# scripts/sgw-post-start runs setup as root with the whole environment, copies the staged skills
+# into ~/.claude/skills, then docker-init, then the project's post-create.sh — in that order, and
+# stops when setup fails.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT=$ROOT/scripts/sgw-post-start
@@ -37,7 +38,7 @@ S
 chmod +x "$TMP/chown"
 run() {
   env -i PATH="$TMP/bin:$PATH" HOME="$TMP" SGW_WORKSPACE="$TMP/ws" SGW_AGENT_BIN="$TMP/sgw-agent" SGW_DOCKER_INIT="$TMP/docker-init" \
-    SGW_OWNED_DIRS="$TMP/owned/a $TMP/owned/b $TMP/owned/absent" SGW_CHOWN="$TMP/chown" \
+    SGW_OWNED_DIRS="$TMP/owned/a $TMP/owned/b $TMP/owned/absent" SGW_CHOWN="$TMP/chown" SGW_SKEL_SKILLS="$TMP/skel" \
     SEKIMORE_PROJECT=p SEKIMORE_GUIDE_LANG=ja OTHER=1 "$@" sh "$SCRIPT"
 }
 echo "== setup runs as root with -E, then docker-init, then post-create"
@@ -63,4 +64,30 @@ other=$(( $(id -u) + 1 ))
 run SGW_UID="$other" SGW_GID=20 > /dev/null
 [ "$(wc -l < "$TMP/log/chown")" -eq 2 ] || fail "expected two chowns: $(cat "$TMP/log/chown")"
 grep -qx "chown -R $other:20 $TMP/owned/a" "$TMP/log/chown" || fail "a was not handed over: $(cat "$TMP/log/chown")"
-echo "PASS: sgw-post-start runs setup, docker-init and post-create in order"
+echo "== #407: without staged skills ~/.claude/skills is not touched"
+run
+[ ! -e "$TMP/.claude/skills" ] || fail "made ~/.claude/skills with nothing staged: $(ls -R "$TMP/.claude")"
+echo "== #407: each staged skill is copied into ~/.claude/skills, replacing that skill only"
+mkdir -p "$TMP/skel/pptx/scripts" "$TMP/skel/pdf"
+echo new > "$TMP/skel/pptx/SKILL.md"
+echo helper > "$TMP/skel/pptx/scripts/run.py"
+echo pdf > "$TMP/skel/pdf/SKILL.md"
+mkdir -p "$TMP/.claude/skills/pptx" "$TMP/.claude/skills/mine"
+echo old > "$TMP/.claude/skills/pptx/SKILL.md"
+echo stale > "$TMP/.claude/skills/pptx/stale.md"
+echo mine > "$TMP/.claude/skills/mine/SKILL.md"
+run
+[ "$(cat "$TMP/.claude/skills/pptx/SKILL.md")" = new ] || fail "pptx was not replaced"
+[ -f "$TMP/.claude/skills/pptx/scripts/run.py" ] || fail "pptx's subdirectory was not copied"
+[ ! -e "$TMP/.claude/skills/pptx/stale.md" ] || fail "a file the image no longer has stayed in pptx"
+[ "$(cat "$TMP/.claude/skills/pdf/SKILL.md")" = pdf ] || fail "pdf was not copied"
+[ "$(cat "$TMP/.claude/skills/mine/SKILL.md")" = mine ] || fail "a skill of another name was touched"
+run
+[ ! -e "$TMP/.claude/skills/pptx/pptx" ] || fail "a second start nested pptx inside itself"
+echo "== #407: a skill that cannot be copied is reported and the start goes on"
+rm -rf "$TMP/.claude/skills" "$TMP/log/order"
+touch "$TMP/.claude/skills"
+run 2> "$TMP/log/err" || fail "the start stopped when a skill could not be copied"
+grep -q 'could not copy the skill pptx' "$TMP/log/err" || fail "the failure was not reported: $(cat "$TMP/log/err")"
+[ "$(tr '\n' ' ' < "$TMP/log/order")" = "sgw-agent setup docker-init " ] || fail "steps were skipped: $(cat "$TMP/log/order")"
+echo "PASS: sgw-post-start runs setup, copies the skills, then docker-init and post-create"

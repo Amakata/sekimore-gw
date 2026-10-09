@@ -17,7 +17,8 @@
 #   codex   OpenAI Codex (npm @openai/codex) in /opt/codex, on the base's own pinned node in
 #           /opt/mise, started through /usr/local/bin/codex with that node named, so whatever node
 #           a project or a person selects, codex keeps running (#375)
-#   skills  the official Anthropic skills (pptx, docx, xlsx, pdf) in /etc/skel/.claude/skills/
+#   skills  the official Anthropic skills (pptx, docx, xlsx, pdf) in /etc/skel/.claude/skills/,
+#           which sgw-post-start copies into ~/.claude/skills/ at every start
 set -eu
 
 # The node codex runs on: the base's, written in when the base is built
@@ -62,7 +63,7 @@ install_codex() {
 }
 
 # Claude Code resolves skills only from ~/.claude/skills/ or <workspace>/.claude/skills/, so they
-# are staged here for a project's post-create to copy
+# are staged here and sgw-post-start copies them there at every start (#407)
 install_skills() {
   echo "[sgw-install-ai] the Anthropic skills in /etc/skel/.claude/skills"
   tmp=$(mktemp -d)
