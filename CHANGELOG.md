@@ -24,6 +24,12 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 - `GET /relays` lists each relay and its commands. `sgw-agent setup` saves it and adds the sidecars' guides to the skill file; `sgw-agent <sidecar> <words>` runs a command sidecar's commands (#368)
 - `docs/sidecar-protocol.md` describes the command sidecar protocol; `examples/sidecar-template` is a working sidecar in standard-library Python (#369)
 
+## 0.2.70 (2026-10-08)
+
+### Fix
+
+- `sgw open` starts VS Code with `BUILDX_BAKE_ENTITLEMENTS_FS=0`, so the dev container builds through buildx 0.37.2 (docker/compose#14285); drop it once docker/compose#14286 ships (#402)
+
 ## 0.2.69 (2026-10-07)
 
 ### Security

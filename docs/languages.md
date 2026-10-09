@@ -65,11 +65,20 @@ instead: `HOME=/root mise install --system npm:<package>@<version>` (or `pnpm@<v
 ## One person: in the container
 
 ```sh
-mise use -g node@24.21.0
+mise use node@24.21.0          # recorded in ./mise.toml, which survives a rebuild
+mise use -p mise.local.toml node@24.21.0   # the same, for you alone (keep mise.local.toml out of git)
 ```
 
-It downloads into `~/.local/share/mise/installs`, the mise-store volume, so it survives a
-rebuild. The download goes through the gateway, so its hosts have to be in `allow_domains`:
+- The version downloads into `~/.local/share/mise/installs`, the mise-store volume, so it
+  survives a rebuild.
+- `mise use -g` works too, but writes `~/.config/mise/config.toml`, which is part of the image: a
+  rebuild puts the image's choice back (the downloaded version stays in the volume). Prefer the
+  project's `mise.toml` or `mise.local.toml`.
+- An older Python release (python-build-standalone before attestations, e.g. 3.12.7) stops with
+  `No GitHub artifact attestations found`. Turn the check off for that one command, so newer
+  releases keep it: `MISE_PYTHON_GITHUB_ATTESTATIONS=false mise use python@3.12.7`.
+
+The download goes through the gateway, so its hosts have to be in `allow_domains`:
 
 | Language | Hosts |
 |---|---|
