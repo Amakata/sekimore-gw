@@ -12,7 +12,7 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
-## Unreleased
+## 0.2.71 (2026-10-09)
 
 ### Fix
 

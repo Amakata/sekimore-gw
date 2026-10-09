@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.2.70 -->
+<!-- reviewed-up-to: 0.2.71 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -42,6 +42,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.60 – 0.2.63 | [0.2.64](#0264-the-configuration-listing-moved-from-sgw-check-to-sgw-config), **only if a script reads `sgw check`'s output** |
 | 0.2.64 – 0.2.65 | [0.2.66](#0266-sgw-check-exits-1-on-a-missing-value), **only if a script runs `sgw check`** |
 | 0.2.66 – 0.2.68 | [0.2.69](#0269-the-hosts-credentials-stay-out-of-dev), **only if you edited `devcontainer.json` or `post-create.sh`** |
+| 0.2.69 – 0.2.70 | [0.2.71](#0271-claude-code-codex-and-the-skills-come-from-your-image), **everyone: check the Dockerfile has `sgw-install-ai`, then Rebuild Container** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -954,7 +955,7 @@ If your Dockerfile moved mise to `/opt/mise`, also create the user's directories
 RUN mkdir -p "$HOME/.local/share/mise/installs" "$HOME/.local/share/mise/shims"
 ```
 
-## Unreleased Claude Code, Codex and the skills come from your image
+## 0.2.71 Claude Code, Codex and the skills come from your image
 
 The base image no longer contains Claude Code, Codex or the Anthropic skills (pptx, docx, xlsx,
 pdf): Claude Code and the skills are not ours to redistribute in a public image, and Codex goes

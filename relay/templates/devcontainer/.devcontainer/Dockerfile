@@ -5,7 +5,7 @@
 # Builds on sgw-devcontainer-base. Only project-specific extras go here.
 # Base tools (zsh, mise, aws-cli, docker, sekimore agent-setup script, ...)
 # are already baked in.
-FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.70
+FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.71
 
 # Claude Code, Codex and the Anthropic skills: not in the base image, downloaded here when you
 # build this image. `sgw-install-ai claude codex skills` picks; remove the lines for none of them
