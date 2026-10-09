@@ -15,6 +15,14 @@
 # SSH_AUTH_SOCK it had "at its own start-up". Start Docker Desktop first (with SSH_AUTH_SOCK). To restart Docker Desktop
 # after (a), put launchd's value back with `vscode.sh --restore-agent-env` first.
 #
+# The dev container build (the Dev Containers extension's `docker compose build`) runs with BUILDX_BAKE_ENTITLEMENTS_FS=0.
+# buildx 0.37.2 checks fs.read entitlements on the bake call Compose makes, and Compose grants them only for
+# build.context and additional_contexts, not for build.dockerfile. The devcontainer CLI points dockerfile: at a
+# Dockerfile-with-features it writes under $TMPDIR, so every compose-based dev container fails with "additional
+# privileges requested" (docker/compose#14285, devcontainers/cli#1320, vscode-remote-release#11887). COMPOSE_BAKE=false
+# does not help. The variable goes to VS Code alone (and so to its integrated terminals on the host), not into an rc file,
+# so other builds keep the check; drop it once docker/compose#14286 ships (sekimore-gw #401).
+#
 #   vscode.sh                      launch (with the checks)
 #   vscode.sh --check              report only (launchd / shell / rc files / Docker Desktop / a running VS Code)
 #   vscode.sh --restore-agent-env  put SSH_AUTH_SOCK back into launchd (before restarting Docker Desktop)
@@ -254,17 +262,18 @@ if [ "$os" = Darwin ]; then
     say w_dd_bad >&2
   fi
 
-  # (b) start the app directly instead of through open (it inherits the shell's environment = no SSH_AUTH_SOCK; VSCODE_CLI=1 leaves shell env resolution out)
+  # (b) start the app directly instead of through open (it inherits the shell's environment = no SSH_AUTH_SOCK; VSCODE_CLI=1 leaves shell env
+  #     resolution out; BUILDX_BAKE_ENTITLEMENTS_FS=0 lets the dev container build through buildx 0.37.2, see the header)
   say launching "$ROOT"
   cd /
-  env -u SSH_AUTH_SOCK VSCODE_CLI=1 nohup "$electron" "$ROOT" >/dev/null 2>&1 &
+  env -u SSH_AUTH_SOCK VSCODE_CLI=1 BUILDX_BAKE_ENTITLEMENTS_FS=0 nohup "$electron" "$ROOT" >/dev/null 2>&1 &
   launched_pid=$!
   disown "$launched_pid" 2>/dev/null || true
   cd "$ROOT"
 else
   command -v code >/dev/null || { echo "vscode.sh: 'code' CLI not found" >&2; exit 2; }
   say launching "$ROOT"
-  env -u SSH_AUTH_SOCK VSCODE_CLI=1 code "$ROOT"
+  env -u SSH_AUTH_SOCK VSCODE_CLI=1 BUILDX_BAKE_ENTITLEMENTS_FS=0 code "$ROOT"
 fi
 
 # (c) wait for it to come up, then check the app's environment

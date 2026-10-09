@@ -102,6 +102,13 @@ mod tests {
         // three lines by default, the full report for --check; the store and the next steps are
         // this module's, so the script has no mise task and no store call left
         assert!(super::VSCODE_SH.contains("report full"));
+        // the dev container build needs this until docker/compose#14286 ships (#401); both launch lines carry it
+        assert_eq!(
+            super::VSCODE_SH
+                .matches("VSCODE_CLI=1 BUILDX_BAKE_ENTITLEMENTS_FS=0 ")
+                .count(),
+            2
+        );
         assert!(!super::VSCODE_SH.contains("mise run"));
         assert!(!super::VSCODE_SH.contains("store-status"));
     }
