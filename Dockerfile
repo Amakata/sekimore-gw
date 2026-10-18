@@ -39,7 +39,7 @@ RUN T="$(cat /tmp/t)" \
     && install -m 0755 "target/$T/release/sgw-agent" /sgw-agent
 
 # ---- gateway ----
-FROM python:3.13-slim@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 
 # No bytecode in this image, and none written at runtime. A .pyc carries its source's mtime inside
 # the header, so a layer holding one gets a new digest every build and every deployment re-pulls
