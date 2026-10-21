@@ -165,24 +165,14 @@ pub fn print_project_items(resp: &ApiResponse) {
         print_response(resp);
         return;
     };
-    for item in nodes {
-        let content = item.get("content");
-        let title = content
-            .and_then(|c| c.get("title"))
+    let heads: Vec<String> = nodes.iter().map(item_head).collect();
+    // Repository names differ in length, so the column is as wide as this listing's widest
+    let width = heads.iter().map(String::len).max().unwrap_or(0);
+    for (item, head) in nodes.iter().zip(&heads) {
+        let title = item
+            .pointer("/content/title")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let head = match content
-            .and_then(|c| c.get("number"))
-            .and_then(Value::as_u64)
-        {
-            Some(n) => format!("#{n}"),
-            // A draft item has no issue or pull request behind it, so there is no number to show
-            None => item
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("ITEM")
-                .to_string(),
-        };
         let id = item.get("id").and_then(Value::as_str).unwrap_or("?");
         let fields = field_values(item);
         let fields = if fields.is_empty() {
@@ -190,12 +180,34 @@ pub fn print_project_items(resp: &ApiResponse) {
         } else {
             format!("  {fields}")
         };
-        println!("{head:<7} {id}{fields}  {title}");
+        println!("{head:<width$} {id}{fields}  {title}");
     }
     // #344: say when there is more, and how to read it. On stderr, so the listing itself stays
     // one item per line for whatever reads it
     if let Some(more) = more_items(resp) {
         eprintln!("{more}");
+    }
+}
+
+/// What an item is: `owner/repo#12` for an issue or pull request. #427: a board spans
+/// repositories, and `#12` alone did not say which one.
+fn item_head(item: &Value) -> String {
+    let content = item.get("content");
+    let number = content
+        .and_then(|c| c.get("number"))
+        .and_then(Value::as_u64);
+    let repo = content
+        .and_then(|c| c.pointer("/repository/nameWithOwner"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    match number {
+        Some(n) => format!("{repo}#{n}"),
+        // A draft item has no issue or pull request behind it, so there is no number to show
+        None => item
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("ITEM")
+            .to_string(),
     }
 }
 
@@ -258,6 +270,21 @@ mod tests {
             "{line}"
         );
         assert_eq!(super::more_items(&resp(false)), None);
+    }
+
+    /// #427: an issue or pull request says which repository it is in; a draft says what it is.
+    #[test]
+    fn an_item_is_named_with_its_repository() {
+        let issue = json!({"type": "ISSUE", "content": {"number": 12, "title": "t",
+            "repository": {"nameWithOwner": "LibOrg/awesome-lib"}}});
+        assert_eq!(super::item_head(&issue), "LibOrg/awesome-lib#12");
+        let pr = json!({"type": "PULL_REQUEST", "content": {"number": 8,
+            "repository": {"nameWithOwner": "LibOrg/other"}}});
+        assert_eq!(super::item_head(&pr), "LibOrg/other#8");
+        let draft = json!({"type": "DRAFT_ISSUE", "content": {"title": "an idea"}});
+        assert_eq!(super::item_head(&draft), "DRAFT_ISSUE");
+        // An item the token cannot see the content of still has a line
+        assert_eq!(super::item_head(&json!({"content": null})), "ITEM");
     }
 
     fn item(values: serde_json::Value) -> serde_json::Value {
