@@ -23,6 +23,13 @@ base イメージは 0.2.45 まで独立したリポジトリで、版番号も�
 - `GET /relays` が各 relay とそのコマンドを返す。`sgw-agent setup` がそれを保存し、サイドカーのガイドをスキルファイルに足す。`sgw-agent <sidecar> <words>` でコマンドサイドカーのコマンドを実行する (#368)
 - `docs/sidecar-protocol.md` にコマンドサイドカーのプロトコルを書いた。`examples/sidecar-template` は標準ライブラリだけの Python で動くサイドカー (#369)
 
+## 0.2.74（2026-10-21）
+
+### Fix
+
+- sgw はプロジェクトを `MISE_PROJECT_ROOT` から取らなくなった。古い sgw で開いた VS Code が、その端末にこの値を渡していたため、sgw が別のプロジェクトを操作していた (#446)
+- devcontainer の雛形は、言語を `installs-default` ではなく `/opt/mise` に入れる（rust は rustup 経由で `/opt/rustup` と `/opt/cargo`）。既存のプロジェクトは何も変えなくてよい (#447)
+
 ## 0.2.73（2026-10-21）
 
 ### Fix
