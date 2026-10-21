@@ -61,6 +61,32 @@ RUN mise use -g php@8.3.26
 
 The system node is read-only, so `npm install -g` fails with EACCES. Install a CLI as a mise tool
 instead: `HOME=/root mise install --system npm:<package>@<version>` (or `pnpm@<version>`).
+The same goes for a system ruby: `gem install` fails; use bundler, or `gem install --user-install`.
+
+### Rust
+
+Not through mise: mise's rust goes through rustup and keeps the toolchain in root's `~/.rustup`,
+which the user cannot read, so the user's rustup downloads it again into its own home. Install
+it with rustup into `/opt/rustup` and `/opt/cargo` instead, as the template's Dockerfile does:
+
+```dockerfile
+USER root
+ENV RUSTUP_HOME=/opt/rustup
+RUN umask 022 \
+ && curl --proto '=https' -sSf https://sh.rustup.rs \
+    | env CARGO_HOME=/opt/cargo sh -s -- -y --no-modify-path --profile minimal \
+        --default-toolchain 1.99.1 -c rustfmt -c clippy \
+ && chmod -R a-w /opt/rustup /opt/cargo
+ENV CARGO_HOME=/home/vscode/.cargo PATH="${PATH}:/opt/cargo/bin"
+```
+
+- The toolchain is fixed in the image. A project's `rust-toolchain.toml` has to name the same
+  version, or rustup tries to install another one into the read-only directory and fails; so do
+  `rustup update`, `rustup component add` and a person's `mise use rust@…`, which runs the same
+  rustup. Change the version in the Dockerfile and rebuild.
+- cargo's registry and build cache stay in the user's `~/.cargo`.
+- Login shells need `/opt/cargo/bin` and the two variables back in `/etc/profile.d`; the
+  template writes `/etc/profile.d/10-rust.sh`.
 
 ## One person: in the container
 
@@ -100,3 +126,10 @@ Docker's apt repository.
 Installing into the user's data directory and copying it to
 `~/.local/share/mise/installs-default`, which post-create copies into an empty mise-store volume,
 still works on 0.2.x. 0.3 drops it; see UPGRADING when moving there.
+
+The template's Dockerfile used it until 0.2.73 (#444). post-create keeps the restore, skipped
+when the image stages nothing, so a project whose Dockerfile still stages the copy needs no
+change. To move, compare the Dockerfile with the template's: `sgw update` writes it beside yours
+as `Dockerfile.sgw-new` when you edited yours. A version the old way restored into the
+mise-store volume wins over the same one in `/opt/mise`; to drop it, `rm -rf` its directory under
+`~/.local/share/mise/installs` in the container.

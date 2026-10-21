@@ -55,6 +55,26 @@ RUN mise use -g php@8.3.26
 ### npm のグローバルな道具
 
 system 側の node は読み取り専用なので、`npm install -g` は EACCES で失敗します。CLI は mise の道具として入れます: `HOME=/root mise install --system npm:<パッケージ>@<版>`（または `pnpm@<版>`）。
+system 側の ruby も同じで、`gem install` は失敗します。bundler か `gem install --user-install` を使います。
+
+### Rust
+
+mise では入れません。mise の rust は rustup 経由で、ツールチェーンを root の `~/.rustup` に置きます。ユーザーはそこを読めないので、ユーザーの rustup が自分のホームにダウンロードし直します。雛形の Dockerfile と同じく、rustup で `/opt/rustup` と `/opt/cargo` に入れます。
+
+```dockerfile
+USER root
+ENV RUSTUP_HOME=/opt/rustup
+RUN umask 022 \
+ && curl --proto '=https' -sSf https://sh.rustup.rs \
+    | env CARGO_HOME=/opt/cargo sh -s -- -y --no-modify-path --profile minimal \
+        --default-toolchain 1.99.1 -c rustfmt -c clippy \
+ && chmod -R a-w /opt/rustup /opt/cargo
+ENV CARGO_HOME=/home/vscode/.cargo PATH="${PATH}:/opt/cargo/bin"
+```
+
+- ツールチェーンはイメージで固定されます。プロジェクトの `rust-toolchain.toml` は同じ版を書きます。違うと rustup が読み取り専用の場所に別の版を入れようとして失敗します。`rustup update`、`rustup component add`、各自の `mise use rust@…`（同じ rustup を動かす）も同じです。版は Dockerfile で変えてリビルドします。
+- cargo のレジストリとビルドのキャッシュは、各自の `~/.cargo` に置かれます。
+- ログインシェルでは `/opt/cargo/bin` と 2 つの変数を `/etc/profile.d` で足し戻します。雛形は `/etc/profile.d/10-rust.sh` を書きます。
 
 ## 各自: コンテナの中で入れる
 
@@ -84,3 +104,5 @@ Dockerfile のビルドはホストの docker が行い、gateway を通らな�
 ## 以前のやり方
 
 ユーザーのデータディレクトリに入れて `~/.local/share/mise/installs-default` にコピーし、post-create が空の mise-store にコピーし直すやり方は、0.2.x では今も動きます。0.3 で廃止します。移るときは UPGRADING を見てください。
+
+雛形の Dockerfile は 0.2.73 までこのやり方でした（#444）。post-create はコピーし直す処理を残していて、イメージにコピーが無ければ何もしません。Dockerfile がまだコピーを置くプロジェクトは、何も変えずに動きます。移るときは、Dockerfile を雛形のものと見比べます。自分で書き換えた Dockerfile なら、`sgw update` が雛形のものを `Dockerfile.sgw-new` として横に置きます。以前のやり方で mise-store の volume にコピーされた版は、`/opt/mise` の同じ版より優先されます。外すときは、コンテナの中で `~/.local/share/mise/installs` の下のその版のディレクトリを `rm -rf` します。

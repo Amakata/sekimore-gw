@@ -16,10 +16,10 @@ USER vscode
 # ---------------------------------------------------------------------------
 # Language build dependencies
 #
-# mise installs Ruby / PHP from source (via ruby-build / php-build), so the
-# required -dev headers are installed here.  The common block covers Ruby and
-# cargo native extensions; the PHP block is commented out and should be
-# uncommented together with the PHP install lines below.
+# mise builds PHP from source (php-build), and Ruby too where it has no
+# precompiled one, so the required -dev headers are installed here. The common
+# block also covers native gem and cargo extensions; the PHP block is commented
+# out and should be uncommented together with the PHP install lines below.
 # ---------------------------------------------------------------------------
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -37,52 +37,79 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #  libtidy-dev libxslt1-dev libsodium-dev libicu-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-USER vscode
-
 # ---------------------------------------------------------------------------
-# Install specific language versions via mise (pre-installed in base image).
+# Language versions, baked into the image root-owned and read-only (#444, docs/languages.md).
 #
-# Adjust versions to taste, or remove blocks you don't need. After adding a
-# version with `mise use -g`, run `mise reshim` to regenerate the shims.
+# Adjust versions to taste (x.y.z, not `latest`), or remove the ones you don't need.
 #
-# The base image puts ~/.local/share/mise/shims first in ENV PATH, so the
-# languages resolve from non-interactive processes too (Claude Code tool
-# calls, `docker exec`, postCreateCommand). Debian's /etc/profile resets PATH
-# for login shells, and a script in /etc/profile.d in the base image adds the
-# shims directory back.
+# mise's system directory, /opt/mise (MISE_SYSTEM_DATA_DIR in the base image): installed as
+# root, shims published with `mise reshim --system`, then closed with `chmod -R a-w`. Why not
+# the user's `mise use -g` into ~/.local/share/mise/installs: docker-compose.yml mounts the
+# mise-store volume there, which hides what the image put there, and the user could overwrite
+# it. The volume keeps only what a person adds in the container, and a version there wins over
+# the same version here.
+#
+# The base image puts the mise shims, the user's then /opt/mise/shims, first in ENV PATH, so the
+# languages resolve from non-interactive processes too (Claude Code tool calls, `docker exec`,
+# postCreateCommand), and a script in /etc/profile.d adds them back for login shells.
+#
+# Being read-only, the system node and ruby take no global packages: `npm install -g` and
+# `gem install` fail. Install a CLI as a mise tool (docs/languages.md), and gems with bundler
+# or `gem install --user-install`.
 # ---------------------------------------------------------------------------
 ARG PYTHON_VERSION=3.13.0
 ARG NODE_VERSION=22.11.0
 ARG RUBY_VERSION=3.3.6
-ARG RUST_VERSION=stable
-# Uncomment to enable PHP (also uncomment the PHP build deps above):
+# PHP builds from source for minutes; a prebuilt language image is quicker (docs/languages.md).
+# Uncomment to enable it (also uncomment the PHP build deps above):
 # ARG PHP_VERSION=8.3.12
 
-# Disable GitHub attestation verification for pre-built Python binaries.
-# python-build-standalone artifacts for some versions lack attestations,
-# causing `mise use` to fail. This is safe in a Docker build context.
-ENV MISE_PYTHON_GITHUB_ATTESTATIONS=false
-
-RUN mise use -g "python@${PYTHON_VERSION}" \
-             "node@${NODE_VERSION}" \
-             "ruby@${RUBY_VERSION}" \
-             "rust@${RUST_VERSION}" \
-    && mise reshim
-
-# Uncomment to enable PHP:
-# RUN mise use -g "php@${PHP_VERSION}" && mise reshim
+# MISE_PYTHON_GITHUB_ATTESTATIONS=false: python-build-standalone artifacts for some versions
+# (3.13.0 included) lack attestations, and mise then refuses them. For this command only, so a
+# version a person installs later is still checked.
+RUN umask 022 \
+ && HOME=/root MISE_PYTHON_GITHUB_ATTESTATIONS=false mise install --system \
+      "python@${PYTHON_VERSION}" \
+      "node@${NODE_VERSION}" \
+      "ruby@${RUBY_VERSION}" \
+ && HOME=/root mise reshim --system \
+ && chmod -R a-w /opt/mise
+# Uncomment to enable PHP (and add php@${PHP_VERSION} to `mise use -g` below):
+# RUN umask 022 \
+#  && HOME=/root mise install --system "php@${PHP_VERSION}" \
+#  && HOME=/root mise reshim --system \
+#  && chmod -R a-w /opt/mise
 
 # ---------------------------------------------------------------------------
-# Stage the populated mise installs so the sample's mise-store volume
-# can be bootstrapped on first start (see scripts/post-create.sh).
+# Rust: rustup into /opt/rustup and /opt/cargo, root-owned and read-only.
 #
-# docker-compose.yml mounts the mise-store volume over
-# ~/.local/share/mise/installs, which hides what this image installed there.
-# On the first start the volume is empty, and post-create.sh restores the
-# copy made here:
-#   rsync -a --ignore-existing ~/.local/share/mise/installs-default/ ~/.local/share/mise/installs/
-#   mise reshim
+# Why not mise: its rust goes through rustup and keeps the toolchain in root's ~/.rustup, which
+# the user cannot read, so the user's rustup downloads it again into its own home. The
+# toolchain is fixed in the image: a project's rust-toolchain.toml has to name this version, or
+# rustup tries to install another one into the read-only directory and fails; so do
+# `rustup update`, `rustup component add` and a person's `mise use rust@…`, which runs the same
+# rustup on RUSTUP_HOME. Change it here and rebuild. cargo's registry and build cache stay in
+# the user's ~/.cargo.
 # ---------------------------------------------------------------------------
-RUN cp -a ~/.local/share/mise/installs ~/.local/share/mise/installs-default
+ARG RUST_VERSION=1.99.1
+ENV RUSTUP_HOME=/opt/rustup
+RUN umask 022 \
+ && curl --proto '=https' -sSf https://sh.rustup.rs \
+    | env CARGO_HOME=/opt/cargo sh -s -- -y --no-modify-path --profile minimal \
+        --default-toolchain "${RUST_VERSION}" -c rustfmt -c clippy \
+ && chmod -R a-w /opt/rustup /opt/cargo
+ENV CARGO_HOME=/home/vscode/.cargo \
+    PATH="${PATH}:/opt/cargo/bin"
+# Login shells: Debian's /etc/profile assigns PATH and drops the ENV above, as with the base's
+# mise shims (#60)
+RUN printf '%s\n' \
+      'case ":$PATH:" in *":/opt/cargo/bin:"*) ;; *) PATH="$PATH:/opt/cargo/bin" ;; esac' \
+      'export PATH RUSTUP_HOME=/opt/rustup CARGO_HOME="$HOME/.cargo"' \
+    > /etc/profile.d/10-rust.sh \
+ && chmod 0644 /etc/profile.d/10-rust.sh
+
+USER vscode
+# Records the versions as the user's defaults; nothing is downloaded or copied
+RUN mise use -g "python@${PYTHON_VERSION}" "node@${NODE_VERSION}" "ruby@${RUBY_VERSION}"
 
 WORKDIR /workspace

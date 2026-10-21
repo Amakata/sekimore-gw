@@ -14,10 +14,10 @@ This page is what the image holds, and where to change the base itself.
 # a version, not latest: sgw update --apply raises it
 FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.73
 
-# only what this project adds, e.g. mise use -g python@3.13.0 && mise reshim
+# only what this project adds, e.g. its languages, read-only in /opt/mise
 ```
 
-The template's [Dockerfile](../relay/templates/devcontainer/.devcontainer/Dockerfile) shows how to pre-install language versions.
+The template's [Dockerfile](../relay/templates/devcontainer/.devcontainer/Dockerfile) shows how to pre-install language versions; [docs/languages.md](../docs/languages.md) explains it.
 
 ## What is in the image
 

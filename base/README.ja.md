@@ -14,10 +14,10 @@ dev コンテナの元になるイメージ。使い方は[最上位の README](
 # 版を書く。latest ではなく: sgw update --apply が上げる
 FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.73
 
-# プロジェクト固有の追加だけ。例: mise use -g python@3.13.0 && mise reshim
+# プロジェクト固有の追加だけ。例: 言語を /opt/mise に読み取り専用で入れる
 ```
 
-言語のバージョンをプリインストールする例は、雛形の [Dockerfile](../relay/templates/devcontainer/.devcontainer/Dockerfile) にある。
+言語のバージョンをプリインストールする例は、雛形の [Dockerfile](../relay/templates/devcontainer/.devcontainer/Dockerfile) にある。説明は [docs/languages.ja.md](../docs/languages.ja.md)。
 
 ## イメージの中身
 
