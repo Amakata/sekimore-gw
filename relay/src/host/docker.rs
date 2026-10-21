@@ -188,72 +188,37 @@ impl Docker {
 
     /// The one running container of `service` in this project's stack.
     ///
-    /// By the working-directory label first; when that matches nothing (path normalisation can
-    /// differ), by the service name alone when it is unique. None is an error that lists what
-    /// exists for the service, stopped ones included; several is an error that lists them with
-    /// their working directories.
+    /// Only by the working-directory label, compared as paths so that a spelling the Docker side
+    /// normalised differently still matches. Never another project's: picking the only gateway
+    /// that happened to run answered `sgw open` with another project's store, and would have
+    /// unlocked it. None is an error that lists this stack's stopped containers; several is an
+    /// error that lists them.
     pub fn find_container(&self, service: &str) -> anyhow::Result<String> {
         let svc = format!("label=com.docker.compose.service={service}");
-        let mut ids = self.out(&[
+        let rows = self.out(&[
             "ps",
-            "-q",
-            "--filter",
-            &self.working_dir_filter(),
+            "-a",
             "--filter",
             &svc,
+            "--format",
+            "{{.ID}}\t{{.State}}\t{{.Label \"com.docker.compose.project.working_dir\"}}\t{{.Names}}\t{{.Status}}",
         ])?;
-        if ids.trim().is_empty() {
-            ids = self.out(&["ps", "-q", "--filter", &svc])?;
-        }
-        let ids: Vec<&str> = ids
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .collect();
-        match ids.len() {
-            1 => Ok(ids[0].to_string()),
-            0 => {
-                let listing = self
-                    .out(&[
-                        "ps",
-                        "-a",
-                        "--format",
-                        "  {{.Names}}  {{.Status}}  ({{.Image}})",
-                        "--filter",
-                        &svc,
-                    ])
-                    .unwrap_or_default();
-                bail!(
-                    "{}{}",
-                    tf(
-                        "sgw.none",
-                        &[
-                            ("service", service),
-                            ("dir", &self.compose_dir.display().to_string())
-                        ]
-                    ),
-                    if listing.trim().is_empty() {
-                        String::new()
-                    } else {
-                        format!("\n{}", listing.trim_end())
-                    }
-                )
-            }
-            _ => {
-                let listing = self
-                    .out(&[
-                        "ps",
-                        "--format",
-                        "  {{.Names}}  {{.Label \"com.docker.compose.project.working_dir\"}}",
-                        "--filter",
-                        &svc,
-                    ])
-                    .unwrap_or_default();
-                bail!(
-                    "{}\n{}",
-                    tf("sgw.several", &[("service", service)]),
-                    listing.trim_end()
-                )
+        let ours = |wd: &str| same_dir(Path::new(wd), &self.compose_dir);
+        match pick_container(&rows, ours) {
+            Picked::One(id) => Ok(id),
+            Picked::None(listing) => bail!(
+                "{}{}",
+                tf(
+                    "sgw.none",
+                    &[
+                        ("service", service),
+                        ("dir", &self.compose_dir.display().to_string())
+                    ]
+                ),
+                listing
+            ),
+            Picked::Several(listing) => {
+                bail!("{}{}", tf("sgw.several", &[("service", service)]), listing)
             }
         }
     }
@@ -529,9 +494,86 @@ impl Docker {
     }
 }
 
+/// What `find_container` made of `docker ps -a` for one service.
+#[derive(Debug, PartialEq)]
+enum Picked {
+    One(String),
+    /// This stack's containers of the service, none running, one per line after a newline
+    None(String),
+    /// The running ones, one per line after a newline
+    Several(String),
+}
+
+/// From `docker ps -a` rows (`ID\tState\tworking_dir\tName\tStatus`), the running container
+/// whose working directory is this stack's (`ours`). Another project's is never picked, however
+/// alone it runs.
+fn pick_container(rows: &str, ours: impl Fn(&str) -> bool) -> Picked {
+    let mine: Vec<Vec<&str>> = rows
+        .lines()
+        .map(|l| l.split('\t').collect::<Vec<_>>())
+        .filter(|f| f.len() >= 5 && !f[0].trim().is_empty() && ours(f[2]))
+        .collect();
+    let running: Vec<&Vec<&str>> = mine.iter().filter(|f| f[1] == "running").collect();
+    let line = |f: &Vec<&str>| format!("\n  {}  {}", f[3], f[4]);
+    match running.len() {
+        1 => Picked::One(running[0][0].trim().to_string()),
+        0 => Picked::None(mine.iter().map(line).collect()),
+        _ => Picked::Several(running.into_iter().map(line).collect()),
+    }
+}
+
+/// The same directory, spelled alike or not (`/private/var` and `/var` on macOS, a symlink).
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if x == y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn another_projects_gateway_is_never_taken_for_this_one() {
+        // the case seen: this stack's gateway stopped, another project's the only one running
+        let rows = "aaa\trunning\t/p/nopse/.devcontainer\tnopse-gw-1\tUp 18 minutes\n\
+                    bbb\texited\t/p/sgw/.devcontainer\tsgw-gw-1\tExited (143) 1 hour ago\n";
+        let ours = |wd: &str| wd == "/p/sgw/.devcontainer";
+        assert_eq!(
+            pick_container(rows, ours),
+            Picked::None("\n  sgw-gw-1  Exited (143) 1 hour ago".into())
+        );
+        // nothing of this stack at all: nothing to list, and still not the other one
+        assert_eq!(
+            pick_container(rows, |wd| wd == "/p/other/.devcontainer"),
+            Picked::None(String::new())
+        );
+    }
+
+    #[test]
+    fn this_stacks_running_container_is_picked_among_others() {
+        let rows = "aaa\trunning\t/p/nopse/.devcontainer\tnopse-gw-1\tUp\n\
+                    bbb\trunning\t/p/sgw/.devcontainer\tsgw-gw-1\tUp\n\
+                    ccc\texited\t/p/sgw/.devcontainer\tsgw-gw-old\tExited\n";
+        assert_eq!(
+            pick_container(rows, |wd| wd == "/p/sgw/.devcontainer"),
+            Picked::One("bbb".into())
+        );
+        let two = "bbb\trunning\t/p/sgw/.devcontainer\ta\tUp\nddd\trunning\t/p/sgw/.devcontainer\tb\tUp\n";
+        assert!(matches!(
+            pick_container(two, |wd| wd == "/p/sgw/.devcontainer"),
+            Picked::Several(_)
+        ));
+    }
+
+    #[test]
+    fn a_directory_matches_however_it_is_spelled() {
+        let d = std::env::temp_dir().canonicalize().unwrap();
+        let sub = d.join(format!("sgw-same-dir-{}", std::process::id()));
+        std::fs::create_dir_all(&sub).unwrap();
+        let matched = same_dir(&d, &sub.join(".."));
+        std::fs::remove_dir(&sub).unwrap();
+        assert!(matched);
+        assert!(!same_dir(&d, &d.join("does-not-exist")));
+    }
 
     #[test]
     fn a_terminal_at_both_ends_gets_a_pty_and_a_pipe_does_not() {

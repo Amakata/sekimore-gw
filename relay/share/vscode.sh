@@ -12,8 +12,9 @@
 # SSH_AUTH_SOCK and VSCODE_CLI=1, and (c) checks the app's environment with ps -Eww once it is up.
 #
 # Order with Docker Desktop: the /run/host-services/ssh-auth.sock handed to the gateway is Docker Desktop forwarding the
-# SSH_AUTH_SOCK it had "at its own start-up". Start Docker Desktop first (with SSH_AUTH_SOCK). To restart Docker Desktop
-# after (a), put launchd's value back with `vscode.sh --restore-agent-env` first.
+# SSH_AUTH_SOCK it had "at its own start-up". Start Docker Desktop first (with SSH_AUTH_SOCK). To start Docker Desktop again
+# after (a), put launchd's value back with `vscode.sh --restore-agent-env` first, then quit Docker Desktop and start it.
+# Its Restart menu item is not enough: the app process keeps running and does not read launchd's environment again.
 #
 # The dev container build (the Dev Containers extension's `docker compose build`) runs with BUILDX_BAKE_ENTITLEMENTS_FS=0.
 # buildx 0.37.2 checks fs.read entitlements on the bake call Compose makes, and Compose grants them only for
@@ -25,12 +26,13 @@
 #
 #   vscode.sh                      launch (with the checks)
 #   vscode.sh --check              report only (launchd / shell / rc files / Docker Desktop / a running VS Code)
-#   vscode.sh --restore-agent-env  put SSH_AUTH_SOCK back into launchd (before restarting Docker Desktop)
+#   vscode.sh --restore-agent-env  put SSH_AUTH_SOCK back into launchd (before quitting and starting Docker Desktop)
 #   SEKIMORE_VSCODE_APP=/path/to/Visual Studio Code.app   name the app location (when it cannot be found automatically)
 #
 # Embedded in the sgw binary from relay/share/vscode.sh; sgw open writes it to a temporary directory
 # and runs it with SGW_CLI=1 and MISE_PROJECT_ROOT=<project>. The store check and the next steps are
-# sgw's own (host::open), after this script returns.
+# sgw's own (host::open), after this script returns. VS Code starts without those two: its terminals would
+# hand MISE_PROJECT_ROOT to sgw, which takes it before the directory it runs in (sekimore-gw #419).
 set -euo pipefail
 
 ROOT=${MISE_PROJECT_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}
@@ -64,12 +66,12 @@ msg() {
     *:n_dd_down) echo '(this is what forwards the agent to the gateway; start it first, with SSH_AUTH_SOCK)' ;;
     ja:n_dd_ok) echo '(OK: gateway に agent が渡る)' ;;
     *:n_dd_ok) echo '(OK: the agent reaches the gateway)' ;;
-    ja:n_dd_bad) echo 'gateway の agent は動かない (--restore-agent-env の後に Docker Desktop を再起動)' ;;
-    *:n_dd_bad) echo "the gateway's agent will not work (restart Docker Desktop after --restore-agent-env)" ;;
+    ja:n_dd_bad) echo 'gateway の agent は動かない (--restore-agent-env の後に Docker Desktop を終了 (Quit) して起動し直す。Restart では足りない)' ;;
+    *:n_dd_bad) echo "the gateway's agent will not work (after --restore-agent-env, quit Docker Desktop and start it; Restart is not enough)" ;;
     ja:n_exposed) echo 'このままだとあなたの SSH 鍵がコンテナ内の AI から使えてしまう' ;;
     *:n_exposed) echo 'as it stands, your SSH key is usable by the AI inside the container' ;;
-    ja:restored) echo 'vscode.sh: launchd の SSH_AUTH_SOCK を %s に戻しました (Docker Desktop を再起動するならこの後)' ;;
-    *:restored) echo 'vscode.sh: launchd SSH_AUTH_SOCK restored to %s (restart Docker Desktop after this, if you are going to)' ;;
+    ja:restored) echo 'vscode.sh: launchd の SSH_AUTH_SOCK を %s に戻しました (Docker Desktop を終了 (Quit) して起動し直すならこの後。Restart では足りない)' ;;
+    *:restored) echo 'vscode.sh: launchd SSH_AUTH_SOCK restored to %s (quit Docker Desktop and start it after this, if you are going to; Restart is not enough)' ;;
     ja:must_quit) echo '  起動中の VS Code が SSH_AUTH_SOCK を持っています。完全終了 (Cmd+Q) が必要です。' ;;
     *:must_quit) echo '  The running VS Code has SSH_AUTH_SOCK. It has to be quit completely (Cmd+Q).' ;;
     ja:quit_now) echo '  今終了しますか? (未保存があれば VS Code が確認します) [y/N] ' ;;
@@ -78,8 +80,8 @@ msg() {
     *:unset_launchd) echo "vscode.sh: unset launchd's SSH_AUTH_SOCK (saved in %s; to put it back: $H_RESTORE)" ;;
     ja:w_dd_down) echo "vscode.sh: ⚠️  Docker Desktop が起動していません。gateway に agent を渡すには、$H_RESTORE の後に Docker Desktop を起動してください" ;;
     *:w_dd_down) echo "vscode.sh: ⚠️  Docker Desktop is not running. To get the agent to the gateway, start Docker Desktop after $H_RESTORE" ;;
-    ja:w_dd_bad) echo "vscode.sh: ⚠️  Docker Desktop が SSH_AUTH_SOCK 無しで動いています。gateway の agent は使えません ($H_RESTORE → Docker Desktop 再起動)" ;;
-    *:w_dd_bad) echo "vscode.sh: ⚠️  Docker Desktop is running without SSH_AUTH_SOCK. The gateway's agent will not work ($H_RESTORE → restart Docker Desktop)" ;;
+    ja:w_dd_bad) echo "vscode.sh: ⚠️  Docker Desktop が SSH_AUTH_SOCK 無しで動いています。gateway の agent は使えません ($H_RESTORE → Docker Desktop を終了 (Quit) → 起動。Restart では足りない)" ;;
+    *:w_dd_bad) echo "vscode.sh: ⚠️  Docker Desktop is running without SSH_AUTH_SOCK. The gateway's agent will not work ($H_RESTORE → quit Docker Desktop → start it; Restart is not enough)" ;;
     ja:e_launched) echo 'vscode.sh: ❌ 直接起動した本体 (pid %s) の環境に SSH_AUTH_SOCK があります。この出力を添えて報告してください' ;;
     *:e_launched) echo 'vscode.sh: ❌ the directly launched app (pid %s) has SSH_AUTH_SOCK in its environment. Report this with the output above' ;;
     ja:e_running) echo "vscode.sh: ❌ 起動中の VS Code の環境に SSH_AUTH_SOCK があります。この出力を添えて報告してください ($H_CHECK でも再確認できます)" ;;
@@ -94,8 +96,8 @@ msg() {
     *:b_dd_ok) echo '  Docker Desktop  SSH_AUTH_SOCK set               OK (the agent reaches the gateway)' ;;
     ja:b_dd_down) echo '  Docker Desktop  起動していない                  gateway の agent はこれが転送する' ;;
     *:b_dd_down) echo '  Docker Desktop  not running                     this is what forwards the agent to the gateway' ;;
-    ja:b_dd_bad) echo '  Docker Desktop  SSH_AUTH_SOCK なし              gateway の agent は動かない（--restore-agent-env の後に再起動）' ;;
-    *:b_dd_bad) echo "  Docker Desktop  no SSH_AUTH_SOCK               the gateway's agent will not work (restart it after --restore-agent-env)" ;;
+    ja:b_dd_bad) echo '  Docker Desktop  SSH_AUTH_SOCK なし              gateway の agent は動かない（--restore-agent-env の後に Quit して起動）' ;;
+    *:b_dd_bad) echo "  Docker Desktop  no SSH_AUTH_SOCK               the gateway's agent will not work (after --restore-agent-env, quit it and start it)" ;;
     ja:b_vs_none) echo '  VS Code         起動していない                  OK' ;;
     *:b_vs_none) echo '  VS Code         not running                     OK' ;;
     ja:b_vs_ok) echo '  VS Code         起動中、SSH_AUTH_SOCK なし      OK' ;;
@@ -266,14 +268,14 @@ if [ "$os" = Darwin ]; then
   #     resolution out; BUILDX_BAKE_ENTITLEMENTS_FS=0 lets the dev container build through buildx 0.37.2, see the header)
   say launching "$ROOT"
   cd /
-  env -u SSH_AUTH_SOCK VSCODE_CLI=1 BUILDX_BAKE_ENTITLEMENTS_FS=0 nohup "$electron" "$ROOT" >/dev/null 2>&1 &
+  env -u SSH_AUTH_SOCK -u MISE_PROJECT_ROOT -u SGW_CLI VSCODE_CLI=1 BUILDX_BAKE_ENTITLEMENTS_FS=0 nohup "$electron" "$ROOT" >/dev/null 2>&1 &
   launched_pid=$!
   disown "$launched_pid" 2>/dev/null || true
   cd "$ROOT"
 else
   command -v code >/dev/null || { echo "vscode.sh: 'code' CLI not found" >&2; exit 2; }
   say launching "$ROOT"
-  env -u SSH_AUTH_SOCK VSCODE_CLI=1 BUILDX_BAKE_ENTITLEMENTS_FS=0 code "$ROOT"
+  env -u SSH_AUTH_SOCK -u MISE_PROJECT_ROOT -u SGW_CLI VSCODE_CLI=1 BUILDX_BAKE_ENTITLEMENTS_FS=0 code "$ROOT"
 fi
 
 # (c) wait for it to come up, then check the app's environment

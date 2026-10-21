@@ -715,11 +715,15 @@ fn canned(method: &str, path: &str, body: &serde_json::Value) -> (StatusCode, se
                     "nodes": nodes}}}}),
             );
         }
+        // #427: the repository comes back only when the query asks for it, as GitHub does
+        let repository = query
+            .contains("repository{ nameWithOwner }")
+            .then(|| serde_json::json!({"nameWithOwner": "LibOrg/awesome-lib"}));
         return (
             StatusCode::OK,
             serde_json::json!({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_1"}}, "node": {"title": "Board", "items": {"nodes": [
                 {"id": "PVTI_1", "type": "ISSUE",
-                 "content": {"number": 7, "title": "in project, an issue"},
+                 "content": {"number": 7, "title": "in project, an issue", "repository": repository},
                  "fieldValues": {"nodes": [
                     // The built-in Title field repeats the title, and is dropped when rendering
                     {"__typename": "ProjectV2ItemFieldTextValue", "text": "in project, an issue", "field": {"name": "Title"}},

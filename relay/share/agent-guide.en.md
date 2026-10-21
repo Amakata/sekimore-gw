@@ -106,11 +106,16 @@ sekimore release view --tag vX.Y.Z                            [release:read]
 sekimore release list                                         [release:read]
 sekimore release edit --tag vX.Y.Z --draft false              [release:publish]  publishing a draft only
                                                               #   editing a release that remains a draft requires release:create
-sekimore project list --board 2                               [project:read]  the items, with their Status and other field values
+sekimore project list --board 2                               [project:read]  the items, each as owner/repo#N, with their Status and other field values
                                                               #   oldest first, 20 a page (--first up to 100); past that
                                                               #   it prints the cursor for --after, or --all reads every page
+                                                              #   --all reads 100 a page (GitHub's most) and takes no --first;
+                                                              #   --all --after <cursor> reads every page from that cursor on
 sekimore project fields --board 2                             [project:read]  the field and option ids that update-item takes
 sekimore project add-item / update-item --board 2             [project:add_item] / [project:update_item]
+                                                              #   an item add-item just added can be missing from project list
+                                                              #   for a while (GitHub's lag; the relay caches nothing). The item
+                                                              #   id add-item prints is the one to use
 ```
 
 - Specify a board with `--board <number>`, in the same form as config.yml and the board URL (`github.com/users/<user>/projects/<n>`). If the project has only one board, that board is the default and you can omit the option. `--project-id PVT_…` is also accepted, but only the operator can run the command that prints that node ID, so you cannot look it up.
