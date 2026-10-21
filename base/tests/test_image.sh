@@ -123,6 +123,11 @@ echo "== /opt/mise is the system directory, root-owned and read-only"
 share_owner=$(in_image /usr/bin/stat -c %U /usr/local/share)
 [ "$share_owner" = root ] || fail "/usr/local/share is owned by $share_owner, not root"
 echo "== /usr/local/share stays root's"
+# #440: root's mise under sudo, which the user's `mise use -g` calls to rewrite the `global` link in
+# /opt/mise, sees the same directory, and the user's own value does not reach it.
+got=$(docker run --rm -e MISE_SYSTEM_DATA_DIR=/tmp/elsewhere --entrypoint /usr/bin/sudo "$IMAGE" -n printenv MISE_SYSTEM_DATA_DIR 2>&1) || true
+[ "$got" = /opt/mise ] || fail "under sudo MISE_SYSTEM_DATA_DIR is '$got', not /opt/mise"
+echo "== under sudo, MISE_SYSTEM_DATA_DIR is /opt/mise whatever the user sets"
 # #393: with the mise-store volume mounted on installs, as the dev container runs, the user still
 # owns its mise directory and can reshim. Docker makes a missing mount point's parents root's
 vol=sgw-test-mise-store-$$
