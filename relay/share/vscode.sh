@@ -31,7 +31,8 @@
 #
 # Embedded in the sgw binary from relay/share/vscode.sh; sgw open writes it to a temporary directory
 # and runs it with SGW_CLI=1 and MISE_PROJECT_ROOT=<project>. The store check and the next steps are
-# sgw's own (host::open), after this script returns.
+# sgw's own (host::open), after this script returns. VS Code starts without those two: its terminals would
+# hand MISE_PROJECT_ROOT to sgw, which takes it before the directory it runs in (sekimore-gw #419).
 set -euo pipefail
 
 ROOT=${MISE_PROJECT_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}
@@ -267,14 +268,14 @@ if [ "$os" = Darwin ]; then
   #     resolution out; BUILDX_BAKE_ENTITLEMENTS_FS=0 lets the dev container build through buildx 0.37.2, see the header)
   say launching "$ROOT"
   cd /
-  env -u SSH_AUTH_SOCK VSCODE_CLI=1 BUILDX_BAKE_ENTITLEMENTS_FS=0 nohup "$electron" "$ROOT" >/dev/null 2>&1 &
+  env -u SSH_AUTH_SOCK -u MISE_PROJECT_ROOT -u SGW_CLI VSCODE_CLI=1 BUILDX_BAKE_ENTITLEMENTS_FS=0 nohup "$electron" "$ROOT" >/dev/null 2>&1 &
   launched_pid=$!
   disown "$launched_pid" 2>/dev/null || true
   cd "$ROOT"
 else
   command -v code >/dev/null || { echo "vscode.sh: 'code' CLI not found" >&2; exit 2; }
   say launching "$ROOT"
-  env -u SSH_AUTH_SOCK VSCODE_CLI=1 BUILDX_BAKE_ENTITLEMENTS_FS=0 code "$ROOT"
+  env -u SSH_AUTH_SOCK -u MISE_PROJECT_ROOT -u SGW_CLI VSCODE_CLI=1 BUILDX_BAKE_ENTITLEMENTS_FS=0 code "$ROOT"
 fi
 
 # (c) wait for it to come up, then check the app's environment
