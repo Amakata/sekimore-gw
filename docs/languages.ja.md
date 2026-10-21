@@ -95,6 +95,7 @@ mise use -p mise.local.toml node@24.21.0   # 同じことを自分だけに（mi
 | python（ビルド済み）、uv | `github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com` |
 | そのほか多く（aqua、GitHub のリリース） | `github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`、`api.github.com` |
 | yarn | `repo.yarnpkg.com` |
+| ruby（ビルド済み） | `github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`、署名の確認に `tuf-repo-cdn.sigstore.dev` |
 | mise 自身（どの言語でも。版の一覧） | `mise.jdx.dev`、`mise-versions.jdx.dev` |
 
 拒否されたダウンロードは、`sgw web` や `sgw audit` にホスト名が出ます。

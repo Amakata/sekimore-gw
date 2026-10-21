@@ -112,6 +112,7 @@ The download goes through the gateway, so its hosts have to be in `allow_domains
 | python (prebuilt), uv | `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com` |
 | most others (aqua, GitHub releases) | `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `api.github.com` |
 | yarn | `repo.yarnpkg.com` |
+| ruby (precompiled) | `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, and `tuf-repo-cdn.sigstore.dev` for the signature check |
 | mise itself, for any of them (the version lists) | `mise.jdx.dev`, `mise-versions.jdx.dev` |
 
 A refused download names its host in `sgw web` / `sgw audit`.
