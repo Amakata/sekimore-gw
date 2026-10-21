@@ -382,7 +382,7 @@
   "sgw.open.next_verify": "sgw verify",
   "sgw.cmd.open": "start VS Code where the operator's SSH_AUTH_SOCK does not reach it",
   "sgw.cmd.open.check": "show the state of SSH_AUTH_SOCK in launchd, in Docker Desktop and in the running VS Code",
-  "sgw.cmd.open.restore": "put SSH_AUTH_SOCK back into launchd (before restarting Docker Desktop)",
+  "sgw.cmd.open.restore": "put SSH_AUTH_SOCK back into launchd (before quitting and starting Docker Desktop)",
   "sgw.inside": "this is the inside of the dev container; run sgw on the host where Docker runs the stack",
   "sgw.no_project": "no project here: no .devcontainer/docker-compose.yml in {dir} or above it (use --project)",
   "sgw.no_compose": "{dir} has no docker-compose.yml",
