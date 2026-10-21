@@ -4,15 +4,17 @@ set -e
 echo "=== sgw-sample devcontainer post-create ==="
 
 # ---------------------------------------------------------------------------
-# Restore mise installs from the image-staged copy.
+# Restore mise installs from an image-staged copy: only for an image that still
+# stages one. The template's Dockerfile installs its languages into /opt/mise,
+# which the mise-store volume does not hide, and stages nothing, so this is
+# skipped (#444).
 #
-# docker-compose mounts a named volume onto ~/.local/share/mise/installs,
-# which shadows whatever was baked into the image. On first run the volume
-# is empty, so we copy the staged installs-default back into place. On
-# subsequent runs the volume already has content and rsync is a no-op.
-#
-# After restoring, regenerate shims so ~/.local/share/mise/shims points to
-# the (possibly newly-restored) installs tree.
+# Why it stays: `sgw update` replaces this file, an unedited one, while a
+# Dockerfile the project edited keeps staging ~/.local/share/mise/installs-default
+# (the older way, docs/languages.md). docker-compose mounts the mise-store volume
+# onto ~/.local/share/mise/installs, which hides what such an image installed
+# there; on the first start the volume is empty, and this copies the staged copy
+# back. Later starts find it filled and rsync is a no-op. 0.3 drops it.
 # ---------------------------------------------------------------------------
 if [ -d "$HOME/.local/share/mise/installs-default" ]; then
   echo "Restoring mise installs from installs-default..."
