@@ -23,6 +23,12 @@ base イメージは 0.2.45 まで独立したリポジトリで、版番号も�
 - `GET /relays` が各 relay とそのコマンドを返す。`sgw-agent setup` がそれを保存し、サイドカーのガイドをスキルファイルに足す。`sgw-agent <sidecar> <words>` でコマンドサイドカーのコマンドを実行する (#368)
 - `docs/sidecar-protocol.md` にコマンドサイドカーのプロトコルを書いた。`examples/sidecar-template` は標準ライブラリだけの Python で動くサイドカー (#369)
 
+## 0.2.73（2026-10-21）
+
+### Fix
+
+- mise を 2026.10.17 に上げた。base イメージは sudo で動く root にも、同じ mise のシステムディレクトリ（`/opt/mise`）を sudoers の env_file で渡す。mise 2026.10.8 以降でも `mise use -g` が動く (#441)
+
 ## 0.2.72（2026-10-21）
 
 ### Security

@@ -24,6 +24,12 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 - `GET /relays` lists each relay and its commands. `sgw-agent setup` saves it and adds the sidecars' guides to the skill file; `sgw-agent <sidecar> <words>` runs a command sidecar's commands (#368)
 - `docs/sidecar-protocol.md` describes the command sidecar protocol; `examples/sidecar-template` is a working sidecar in standard-library Python (#369)
 
+## 0.2.73 (2026-10-21)
+
+### Fix
+
+- mise moves to 2026.10.17; the base image gives root under sudo the same mise system directory (`/opt/mise`) through a sudoers env_file, so `mise use -g` works with mise 2026.10.8 and later (#441)
+
 ## 0.2.72 (2026-10-21)
 
 ### Security
