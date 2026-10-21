@@ -12,7 +12,7 @@ dev コンテナの元になるイメージ。使い方は[最上位の README](
 
 ```dockerfile
 # 版を書く。latest ではなく: sgw update --apply が上げる
-FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.73
+FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.74
 
 # プロジェクト固有の追加だけ。例: 言語を /opt/mise に読み取り専用で入れる
 ```
@@ -31,7 +31,7 @@ FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.73
 | 言語 | `mise`。言語のバージョンは含まない |
 | AI | `sgw-install-ai` と、Codex が動く node だけ。Claude Code・Codex・Anthropic の skills は再配布できないので入れない。雛形の Dockerfile が `sgw-install-ai` を実行し、イメージのビルド時にダウンロードする |
 | クラウド | AWS CLI v2、Docker CE（buildx、compose） |
-| ゲートウェイ | `ghcr.io/amakata/sekimore-gw:0.2.73` から取り込む 4 つ。下の表 |
+| ゲートウェイ | `ghcr.io/amakata/sekimore-gw:0.2.74` から取り込む 4 つ。下の表 |
 | zsh の既定設定 | `/etc/skel/zsh-rc.d/`。post-create が `~/.config/zsh/rc.d/` に複製する |
 
 ゲートウェイのイメージから:

@@ -12,6 +12,13 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.74 (2026-10-21)
+
+### Fix
+
+- sgw no longer takes the project from `MISE_PROJECT_ROOT`; a VS Code started by an older sgw open handed it to its terminals, so sgw acted on another project (#446)
+- the devcontainer template installs its languages into `/opt/mise` (rust through rustup into `/opt/rustup` and `/opt/cargo`), not `installs-default`; existing projects need no change (#447)
+
 ## 0.2.73 (2026-10-21)
 
 ### Fix
