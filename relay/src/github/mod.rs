@@ -2072,6 +2072,8 @@ impl GitHub {
     /// order could not see the board.
     /// One page of a board's items, oldest first, and where the next page starts
     /// (`items.pageInfo`). #344: `after` continues from a previous page's `endCursor`.
+    /// #427: each issue and pull request comes with its repository, since a board spans several
+    /// and `#12` alone does not say which one.
     pub async fn list_project_items(
         &self,
         auth: &Grant,
@@ -2088,7 +2090,10 @@ query($project:ID!,$first:Int!,$after:String,$fields:Int!){
   node(id:$project){ ... on ProjectV2 { title
     items(first:$first,after:$after){ totalCount pageInfo{ hasNextPage endCursor } nodes{
       id type
-      content{ ... on Issue { number title } ... on PullRequest { number title } }
+      content{
+        ... on Issue       { number title repository{ nameWithOwner } }
+        ... on PullRequest { number title repository{ nameWithOwner } }
+      }
       fieldValues(first:$fields){ nodes{
         __typename
         ... on ProjectV2ItemFieldSingleSelectValue { name   field{ ... on ProjectV2FieldCommon { name } } }

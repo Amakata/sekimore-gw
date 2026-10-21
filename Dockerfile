@@ -39,7 +39,7 @@ RUN T="$(cat /tmp/t)" \
     && install -m 0755 "target/$T/release/sgw-agent" /sgw-agent
 
 # ---- gateway ----
-FROM python:3.13-slim@sha256:8d9d0b8bcf6506481eae4907c18f5e3e7902e629f5f6d684f9e7c32e85e3ddf0
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 
 # No bytecode in this image, and none written at runtime. A .pyc carries its source's mtime inside
 # the header, so a layer holding one gets a new digest every build and every deployment re-pulls
@@ -58,7 +58,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 #
 # **Bumping this is how security updates arrive.** Nothing reaches this image between bumps. Do it
 # on a schedule, not when something breaks; `test_supply_chain_pins.py` fails once it is stale.
-ARG DEBIAN_SNAPSHOT=20260920T000000Z
+ARG DEBIAN_SNAPSHOT=20261020T000000Z
 
 # System package installation
 # openssh-client: ssh / ssh-add / ssh-keyscan / ssh-keygen, used when the relay reaches out to the upstream git
@@ -90,7 +90,7 @@ RUN set -eu \
         ulogd2=2.0.8-3 \
         docker.io=26.1.5+dfsg1-9+deb13u1 \
         openssh-client=1:10.0p1-7+deb13u4 \
-        openssl=3.5.7-1~deb13u2 \
+        openssl=3.5.7-1~deb13u3 \
     && rm -rf /var/lib/apt/lists/* \
     # Everything below records *that a build happened*, not anything the gateway reads. Left in,
     # they are the whole reason an unchanged 160 MB layer gets a new digest every release and
@@ -132,7 +132,7 @@ RUN --mount=type=bind,source=pyproject.toml,target=/app/pyproject.toml \
     && uv pip install --system --no-cache -r /tmp/requirements.txt \
     && rm -f /tmp/requirements.txt \
     # uv does not compile bytecode today; this holds if that default ever changes
-    && find /usr/local/lib/python3.13/site-packages -name '__pycache__' -type d -prune -exec rm -rf {} +
+    && find /usr/local/lib/python3.14/site-packages -name '__pycache__' -type d -prune -exec rm -rf {} +
 
 # The project itself, and everything that changes with it
 COPY pyproject.toml .
@@ -150,7 +150,7 @@ COPY agent-setup.sh /usr/local/share/sekimore/agent-setup.sh
 # Two languages, as with agent-guide.{en,ja}.md: the descriptions are what `mise tasks` prints on
 # the operator's terminal. The task set is the same in both, and a test holds them to that.
 RUN uv pip install --system --no-cache --no-deps . \
-    && find /usr/local/lib/python3.13/site-packages /app/src -name '__pycache__' -type d -prune -exec rm -rf {} +
+    && find /usr/local/lib/python3.14/site-packages /app/src -name '__pycache__' -type d -prune -exec rm -rf {} +
 
 # sekimore-relay binary (starts only when config.yml has a git-relay handler)
 COPY --from=relay-builder /sekimore-relay /usr/local/bin/sekimore-relay

@@ -89,7 +89,7 @@ jobs:
           test -n "$digest"
           touch "/tmp/digests/${digest#sha256:}"
       - name: Upload digest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: digests-${{ matrix.arch }}
           path: /tmp/digests/*
@@ -113,7 +113,7 @@ jobs:
         run: echo "IMAGE_LC=${IMAGE_NAME,,}" >> "$GITHUB_ENV"
 
       - name: Download digests
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: /tmp/digests
           pattern: digests-*
@@ -221,7 +221,7 @@ jobs:
       # gateway image is already on GHCR under its version tag -- use that.
       - name: Download this arch's gateway digest
         if: ${{ !inputs.base_version }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: /tmp/gw-digest
           name: digests-${{ matrix.arch }}
@@ -273,7 +273,7 @@ jobs:
           test -n "$digest"
           touch "/tmp/digests/${digest#sha256:}"
       - name: Upload digest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: base-digests-${{ matrix.arch }}
           path: /tmp/digests/*
@@ -299,7 +299,7 @@ jobs:
           echo "VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Download digests
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: /tmp/digests
           pattern: base-digests-*
@@ -389,7 +389,7 @@ jobs:
           (cd ../dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
           cat "../dist/$name.tar.gz.sha256"
       - name: Upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sgw-${{ matrix.target }}
           path: dist/*
@@ -406,7 +406,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           pattern: sgw-*
