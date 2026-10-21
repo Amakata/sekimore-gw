@@ -24,6 +24,13 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 - `GET /relays` lists each relay and its commands. `sgw-agent setup` saves it and adds the sidecars' guides to the skill file; `sgw-agent <sidecar> <words>` runs a command sidecar's commands (#368)
 - `docs/sidecar-protocol.md` describes the command sidecar protocol; `examples/sidecar-template` is a working sidecar in standard-library Python (#369)
 
+## 0.2.74 (2026-10-21)
+
+### Fix
+
+- sgw no longer takes the project from `MISE_PROJECT_ROOT`; a VS Code started by an older sgw open handed it to its terminals, so sgw acted on another project (#446)
+- the devcontainer template installs its languages into `/opt/mise` (rust through rustup into `/opt/rustup` and `/opt/cargo`), not `installs-default`; existing projects need no change (#447)
+
 ## 0.2.73 (2026-10-21)
 
 ### Fix

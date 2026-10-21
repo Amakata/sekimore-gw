@@ -53,8 +53,12 @@ pub fn refuse_inside_devcontainer(get: impl Fn(&str) -> Option<String>) -> anyho
     Ok(())
 }
 
-/// The root, from `--project`, else `SGW_PROJECT_ROOT` / `MISE_PROJECT_ROOT`, else the first
-/// ancestor of `cwd` (itself included) that has `.devcontainer/docker-compose.yml`.
+/// The root, from `--project`, else `SGW_PROJECT_ROOT`, else the first ancestor of `cwd` (itself
+/// included) that has `.devcontainer/docker-compose.yml`.
+///
+/// Not `MISE_PROJECT_ROOT`, which the mise tasks set until 0.2.52: a VS Code that an older
+/// `sgw open` started still hands it to its terminals, and it named another project than the
+/// one the shell was in (#445).
 pub fn discover(
     explicit: Option<&Path>,
     cwd: &Path,
@@ -62,7 +66,7 @@ pub fn discover(
 ) -> anyhow::Result<Project> {
     let root = if let Some(p) = explicit {
         p.to_path_buf()
-    } else if let Some(v) = get("SGW_PROJECT_ROOT").or_else(|| get("MISE_PROJECT_ROOT")) {
+    } else if let Some(v) = get("SGW_PROJECT_ROOT") {
         PathBuf::from(v)
     } else {
         let mut dir = Some(cwd);
@@ -138,15 +142,30 @@ mod tests {
         project_at(&a);
         project_at(&b);
         let by_env = discover(None, &a, |k| {
-            (k == "MISE_PROJECT_ROOT").then(|| b.display().to_string())
+            (k == "SGW_PROJECT_ROOT").then(|| b.display().to_string())
         })
         .unwrap();
         assert_eq!(by_env.root, b.canonicalize().unwrap());
         let by_flag = discover(Some(&a), &b, |k| {
-            (k == "MISE_PROJECT_ROOT").then(|| b.display().to_string())
+            (k == "SGW_PROJECT_ROOT").then(|| b.display().to_string())
         })
         .unwrap();
         assert_eq!(by_flag.root, a.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn a_leftover_mise_project_root_does_not_take_the_shell_elsewhere() {
+        // #445: a terminal of a VS Code an older `sgw open` started, in another project
+        let tmp = tempfile::tempdir().unwrap();
+        let here = tmp.path().join("trustbank");
+        let other = tmp.path().join("banyan");
+        project_at(&here);
+        project_at(&other);
+        let p = discover(None, &here, |k| {
+            (k == "MISE_PROJECT_ROOT").then(|| other.display().to_string())
+        })
+        .unwrap();
+        assert_eq!(p.root, here.canonicalize().unwrap());
     }
 
     #[test]

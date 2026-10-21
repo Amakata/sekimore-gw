@@ -31,7 +31,7 @@ pub fn run(docker: &Docker, project_root: &Path, mode: Option<&str>) -> anyhow::
         cmd.arg(m);
     }
     // the script finds the project through this (its own location is a temporary directory)
-    cmd.env("MISE_PROJECT_ROOT", project_root);
+    cmd.env("SGW_OPEN_ROOT", project_root);
     // the script's hints then name sgw's commands, not the mise tasks
     cmd.env("SGW_CLI", "1");
     let st = cmd.status().context("run bash vscode.sh")?;
