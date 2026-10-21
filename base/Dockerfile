@@ -155,13 +155,17 @@ RUN git clone --depth 1 https://github.com/zsh-users/zsh-completions.git        
 #   mise reshim
 # ---------------------------------------------------------------------------
 USER root
+# Pinned: mise moves on its own release schedule, and an unpinned install picked up 2026.10.17
+# the day it came out, whose `mise use -g` as root refuses to publish into /opt/mise and failed
+# the build (#436). Bumped by hand after the image builds with the new version.
+ARG MISE_VERSION=2026.10.6
 RUN install -dm 0755 /etc/apt/keyrings && \
     curl -fsSL https://mise.jdx.dev/gpg-key.pub \
       -o /etc/apt/keyrings/mise-archive-keyring.asc && \
     chmod a+r /etc/apt/keyrings/mise-archive-keyring.asc && \
     echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.asc] https://mise.jdx.dev/deb stable main" \
       > /etc/apt/sources.list.d/mise.list && \
-    apt-get update && apt-get install -y --no-install-recommends mise && \
+    apt-get update && apt-get install -y --no-install-recommends "mise=${MISE_VERSION}" && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 USER ${USERNAME}
