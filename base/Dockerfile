@@ -155,14 +155,28 @@ RUN git clone --depth 1 https://github.com/zsh-users/zsh-completions.git        
 #   mise reshim
 # ---------------------------------------------------------------------------
 USER root
-RUN install -dm 0755 /etc/apt/keyrings && \
-    curl -fsSL https://mise.jdx.dev/gpg-key.pub \
-      -o /etc/apt/keyrings/mise-archive-keyring.asc && \
-    chmod a+r /etc/apt/keyrings/mise-archive-keyring.asc && \
-    echo "deb [signed-by=/etc/apt/keyrings/mise-archive-keyring.asc] https://mise.jdx.dev/deb stable main" \
-      > /etc/apt/sources.list.d/mise.list && \
-    apt-get update && apt-get install -y --no-install-recommends mise && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+# Pinned, from the GitHub release by sha256 rather than from mise's apt repository: that carries
+# only the newest version, and 2026.10.17 picked up the day it came out refuses `mise use -g` as
+# root into /opt/mise and failed the build (#436). Bumped by hand after the image builds with the
+# new version; the sums are the release's SHASUMS256.txt.
+ARG MISE_VERSION=2026.10.6
+ARG MISE_SHA256_AMD64=5135da6b71e6857efb22b2eb8d0fbc0061d061005a4994f1e7f8975d548a3e92
+ARG MISE_SHA256_ARM64=60f0e34ea2088e822797393ed3d3b50d58dd9b45687006b31ac66ef68e99a2f4
+RUN set -eux; \
+    case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
+        amd64) MISE_ARCH=x64;   MISE_SHA256="${MISE_SHA256_AMD64}" ;; \
+        arm64) MISE_ARCH=arm64; MISE_SHA256="${MISE_SHA256_ARM64}" ;; \
+        *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    cd /tmp; \
+    curl -fsSL "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-${MISE_ARCH}.tar.gz" \
+      -o mise.tar.gz; \
+    echo "${MISE_SHA256}  mise.tar.gz" | sha256sum -c -; \
+    tar xzf mise.tar.gz; \
+    install -m 0755 mise/bin/mise /usr/bin/mise; \
+    install -Dm 0644 mise/man/man1/mise.1 /usr/share/man/man1/mise.1; \
+    rm -rf mise.tar.gz mise; \
+    mise --version
 
 USER ${USERNAME}
 
