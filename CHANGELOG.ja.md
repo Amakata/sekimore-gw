@@ -11,6 +11,25 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.72（2026-10-21）
+
+### Security
+
+- rustls 0.23.45 -> 0.23.46、rustls-webpki 0.103.15 -> 0.103.16。RUSTSEC-2026-0346・-0347・-0348・-0349・-0382 への対応 (#431)
+
+### Fix
+
+- `sgw` が他のプロジェクトのコンテナを自分のものとして取らない。このプロジェクトの gateway が止まり、別プロジェクトの gateway だけが動いているとき、`sgw open` がそちらの store を報告し、`sgw unlock` / `lock` がそちらに作用していた (#430)
+- `sgw open` が VS Code を `MISE_PROJECT_ROOT` と `SGW_CLI` なしで起動する。VS Code の端末が、`sgw open` を実行したプロジェクトに対して `sgw` を動かすことがなくなる (#420)
+- `vscode.sh` が Docker Desktop の再起動ではなく、終了して起動し直すよう案内する。Restart ではアプリのプロセスが残り、launchd の `SSH_AUTH_SOCK` を読み直さない (#418)
+- mise を固定した（2026.10.6。GitHub のリリースから sha256 を確かめて入れる）。2026.10.17 でイメージのビルドが壊れた (#437)
+
+### Enhancement
+
+- `project list` が各項目を `owner/repo#N` で表示する。help とエージェント向けガイドに、`--all` は `--first` を取らないこと、`--after` は `--all` と併用できること、新しい項目は遅れて出ることがあることを書いた (#428)
+- イメージを Python 3.14 に移した。Debian の snapshot は 20261020 (#434)
+- 依存の更新: cargo グループ（tokio、hyper、serde_json、libc 0.2.191、zeroize、tokio-rustls、rustls-native-certs）、sha2、python・python-dev グループ、actions グループ (#432)
+
 ## 0.2.71（2026-10-09）
 
 ### Fix

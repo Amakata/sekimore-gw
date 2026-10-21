@@ -12,6 +12,25 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.72 (2026-10-21)
+
+### Security
+
+- rustls 0.23.45 -> 0.23.46 and rustls-webpki 0.103.15 -> 0.103.16, for RUSTSEC-2026-0346, -0347, -0348, -0349 and -0382 (#431)
+
+### Fix
+
+- `sgw` never takes another project's container: with this project's gateway stopped and another project's the only one running, `sgw open` reported that project's store and `sgw unlock` / `lock` acted on it (#430)
+- `sgw open` starts VS Code without `MISE_PROJECT_ROOT` and `SGW_CLI`, so its terminals no longer run `sgw` against the project `sgw open` was started from (#420)
+- `vscode.sh` tells the operator to quit and start Docker Desktop, not restart it: Restart keeps the app process, so it does not read launchd's `SSH_AUTH_SOCK` again (#418)
+- mise is pinned (2026.10.6, from its GitHub release by sha256); 2026.10.17 broke the image build (#437)
+
+### Enhancement
+
+- `project list` prints each item as `owner/repo#N`; its help and the agent guide say that `--all` takes no `--first`, that `--after` works with `--all`, and that a new item can show up late (#428)
+- the images move to Python 3.14, with the Debian snapshot at 20261020 (#434)
+- dependency updates: the cargo group (tokio, hyper, serde_json, libc 0.2.191, zeroize, tokio-rustls, rustls-native-certs), sha2, the python and python-dev groups, and the actions group (#432)
+
 ## 0.2.71 (2026-10-09)
 
 ### Fix
