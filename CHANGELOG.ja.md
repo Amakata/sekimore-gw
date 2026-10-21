@@ -11,6 +11,12 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.73（2026-10-21）
+
+### Fix
+
+- mise を 2026.10.17 に上げた。base イメージは sudo で動く root にも、同じ mise のシステムディレクトリ（`/opt/mise`）を sudoers の env_file で渡す。mise 2026.10.8 以降でも `mise use -g` が動く (#441)
+
 ## 0.2.72（2026-10-21）
 
 ### Security

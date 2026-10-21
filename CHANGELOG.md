@@ -12,6 +12,12 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.73 (2026-10-21)
+
+### Fix
+
+- mise moves to 2026.10.17; the base image gives root under sudo the same mise system directory (`/opt/mise`) through a sudoers env_file, so `mise use -g` works with mise 2026.10.8 and later (#441)
+
 ## 0.2.72 (2026-10-21)
 
 ### Security
