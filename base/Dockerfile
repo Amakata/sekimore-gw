@@ -156,12 +156,12 @@ RUN git clone --depth 1 https://github.com/zsh-users/zsh-completions.git        
 # ---------------------------------------------------------------------------
 USER root
 # Pinned, from the GitHub release by sha256 rather than from mise's apt repository: that carries
-# only the newest version, and 2026.10.17 picked up the day it came out refuses `mise use -g` as
-# root into /opt/mise and failed the build (#436). Bumped by hand after the image builds with the
-# new version; the sums are the release's SHASUMS256.txt.
-ARG MISE_VERSION=2026.10.6
-ARG MISE_SHA256_AMD64=5135da6b71e6857efb22b2eb8d0fbc0061d061005a4994f1e7f8975d548a3e92
-ARG MISE_SHA256_ARM64=60f0e34ea2088e822797393ed3d3b50d58dd9b45687006b31ac66ef68e99a2f4
+# only the newest version, and 2026.10.17 picked up the day it came out failed the build (#436,
+# fixed by the sudo env_file below, #440). Bumped by hand after the image builds with the new
+# version; the sums are the release's SHASUMS256.txt.
+ARG MISE_VERSION=2026.10.17
+ARG MISE_SHA256_AMD64=17565e268c5542d8ce944321e17af81e0b741b65af4aa7e8e010ee77376a4aa3
+ARG MISE_SHA256_ARM64=cac510e51793ad45e65fe92305bdbe4309c9c60b5907badbc7eba111738ab08f
 RUN set -eux; \
     case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
         amd64) MISE_ARCH=x64;   MISE_SHA256="${MISE_SHA256_AMD64}" ;; \
@@ -190,6 +190,20 @@ USER ${USERNAME}
 ENV MISE_SYSTEM_DATA_DIR=/opt/mise
 USER root
 RUN install -d -m 0755 /opt/mise /opt/mise/installs /opt/mise/shims
+# #440: and the same directory for root under sudo. Since 2026.10.8 every install directory, the
+# system one too, holds a `global` link to the version the user's global config selects, so the
+# user's `mise use -g` rewrites a link in /opt/mise, through `sudo mise __publish-system-install`.
+# sudo resets the environment and the helper reads no config file (/etc/mise included), so it fell
+# back to /usr/local/share/mise and refused /opt/mise. env_file sets the value for every sudo
+# command from this root-owned file. Why not env_keep, which the mise docs suggest: that passes
+# the user's own value through, and lets the user aim root's mise at a directory of its choosing;
+# env_file is a fixed value, and the user's is ignored. Adds nothing the user could not do:
+# vscode already has passwordless sudo, and the helper writes only inside /opt/mise.
+RUN printf 'MISE_SYSTEM_DATA_DIR=/opt/mise\n' > /etc/sudo-mise.env \
+ && chmod 0644 /etc/sudo-mise.env \
+ && printf 'Defaults env_file=/etc/sudo-mise.env\n' > /etc/sudoers.d/mise-system-dir \
+ && chmod 0440 /etc/sudoers.d/mise-system-dir \
+ && visudo -c
 USER ${USERNAME}
 
 # Put the mise shims directory on PATH for EVERY process — including non-login
