@@ -3510,6 +3510,11 @@ async fn list_carries_the_field_values() {
         .pointer("/data/node/items/nodes/0/fieldValues/nodes/1/name")
         .and_then(|v| v.as_str());
     assert_eq!(status, Some("Todo"), "field values should come back: {raw}");
+    // #427: and which repository each item is in, since a board spans several
+    let repo = raw
+        .pointer("/data/node/items/nodes/0/content/repository/nameWithOwner")
+        .and_then(|v| v.as_str());
+    assert_eq!(repo, Some("LibOrg/awesome-lib"), "{raw}");
 }
 
 // ---- 0.2.15: a number reaches either kind, and the permission follows what it is ----

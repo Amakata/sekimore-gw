@@ -38,7 +38,11 @@ case "$*" in *"sekimore-relay store-status"*) echo "${{FAKE_STORE:-unlocked}}"; 
 case "$1 $2" in
   "ps -q") echo cid123 ;;
   "ps -a")
-    if [ "$3" = "-q" ]; then [ -n "${{FAKE_EMPTY_STACK:-}}" ] || echo cid123
+    # find_container: this stack's gateway, and another project's running beside it
+    if [ "$5" = "--format" ]; then
+      printf 'other9\trunning\t/elsewhere/.devcontainer\tother-sekimore-gw-1\tUp 3 days\n'
+      printf 'cid123\trunning\t%s\tproj-sekimore-gw-1\tUp 2 hours\n' "${{FAKE_WD:-{wd}}}"
+    elif [ "$3" = "-q" ]; then [ -n "${{FAKE_EMPTY_STACK:-}}" ] || echo cid123
     else echo "  proj-sekimore-gw-1  Up 2 hours  (ghcr.io/amakata/sekimore-gw:0.2.46)"; fi ;;
   "inspect -f")
     case "$3" in
@@ -107,15 +111,13 @@ fn check_runs_the_relay_in_the_gateway_without_a_pty_when_piped() {
         String::from_utf8_lossy(&out.stderr)
     );
     let log = log(&f);
-    // found by the two labels, then exec'd with -i (stdin and stdout are pipes here)
+    // found by the service among every container, this stack's by its working directory (not
+    // the other project's that also runs), then exec'd with -i (stdin and stdout are pipes here)
     assert!(
-        log.contains("ps -q --filter label=com.docker.compose.project.working_dir="),
+        log.contains("ps -a --filter label=com.docker.compose.service=sekimore-gw --format"),
         "{log}"
     );
-    assert!(
-        log.contains("--filter label=com.docker.compose.service=sekimore-gw"),
-        "{log}"
-    );
+    assert!(!log.contains("other9"), "{log}");
     assert!(
         log.contains("exec -i cid123 sekimore-relay check\n"),
         "{log}"
@@ -604,7 +606,12 @@ fn init_writes_the_template_and_the_project_is_then_found() {
     // found from a subdirectory of it, like any project
     let sub = dir.join("src");
     std::fs::create_dir_all(&sub).unwrap();
-    let out = sgw(&f, &["check"]).current_dir(&sub).output().unwrap();
+    let out = sgw(&f, &["check"])
+        .current_dir(&sub)
+        // the fake's gateway is this project's, not the fixture's
+        .env("FAKE_WD", dir.join(".devcontainer"))
+        .output()
+        .unwrap();
     assert!(
         out.status.success(),
         "{}",
@@ -657,6 +664,7 @@ fn update_reports_and_applies_against_the_embedded_template() {
     assert!(out.status.success());
     let out = sgw(&f, &["update", "--offline"])
         .current_dir(&dir)
+        .env("FAKE_WD", dir.join(".devcontainer"))
         .output()
         .unwrap();
     assert!(
@@ -753,6 +761,7 @@ fn update_reports_and_applies_against_the_embedded_template() {
     // --apply (the gateway is "running" in the fake docker, --yes recreates it)
     let out = sgw(&f, &["update", "--apply", "--offline", "--yes"])
         .current_dir(&dir)
+        .env("FAKE_WD", dir.join(".devcontainer"))
         .output()
         .unwrap();
     assert!(
