@@ -9,6 +9,7 @@ import socket
 import subprocess
 import threading
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -288,6 +289,31 @@ def _domain_handlers_of(config: object) -> dict[str, str]:
         if isinstance(name, str):
             out[str(domain)] = name
     return out
+
+
+def _upstream_proxy_host_to_watch(upstream_proxy: str | None) -> str | None:
+    """#456: the upstream proxy's host when it is a name Squid has to resolve, else None.
+
+    Parsed the way `ProxyManager._generate_upstream_proxy_config` parses it, so a value that
+    produces no `cache_peer` produces no watcher either. An IP literal never needs resolving.
+    """
+    if not upstream_proxy:
+        return None
+    parts = upstream_proxy.split(":")
+    if len(parts) != 2 or not parts[0]:
+        return None
+    host = parts[0]
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    return None
+
+
+async def _resolve_host(host: str) -> frozenset[str]:
+    """The addresses `host` resolves to, off the event loop. Raises OSError when it does not."""
+    infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    return frozenset(str(info[4][0]) for info in infos)
 
 
 def _relay_ports_of(config: object) -> list[int]:
@@ -814,6 +840,8 @@ class SecurityGatewayOrchestrator:
         # 0.2.22 (#53), #193: watches the secret store for the whole run and puts the upstream
         # proxy credential into Squid's config whenever it changes. Kept so shutdown can cancel it.
         self._proxy_credential_task: asyncio.Task[None] | None = None
+        # #456: re-resolves the upstream proxy's name and reconfigures Squid when it recovers
+        self._upstream_dns_task: asyncio.Task[None] | None = None
         # The loop reload_config runs on. Set when start() is running; the watcher thread reads it
         self._main_loop: asyncio.AbstractEventLoop | None = None
         if self.config_path:
@@ -1026,6 +1054,66 @@ class SecurityGatewayOrchestrator:
                 raise
             except Exception as e:  # noqa: BLE001 — the watcher must outlive any single failure
                 log_error(ComponentType.PROXY, f"upstream proxy credential watcher: {e}")
+
+    async def _watch_upstream_proxy_dns(
+        self,
+        host: str,
+        poll_seconds: float = 5.0,
+        resolve: Callable[[str], Awaitable[frozenset[str]]] = _resolve_host,
+    ) -> None:
+        """#456: reconfigure Squid when the upstream proxy's name starts resolving again.
+
+        The upstream proxy can be a split-DNS name that only resolves while a VPN is up. Squid
+        resolves a `cache_peer` once, and a failed lookup leaves the peer without an address:
+        every request ends `HIER_NONE/500` while `getent hosts` in the gateway answers fine.
+
+        The first lookup is the baseline Squid started with, and only a transition reloads:
+        unresolvable -> resolvable, or a different set of addresses. A reload restarts Squid's
+        listeners and cuts in-flight CONNECTs, so it is never done on a timer.
+        """
+        # Squid 6 re-resolves cache_peer names by itself only hourly (neighbors.cc
+        # peerRefreshDNS); this brings a peer back within seconds of its name resolving.
+        addresses = await self._resolve_upstream(host, resolve)
+        if addresses is None:
+            log_warning(
+                ComponentType.PROXY,
+                f"Upstream proxy {host} does not resolve; Squid is reconfigured once it does",
+            )
+        while True:
+            await asyncio.sleep(poll_seconds)
+            try:
+                current = await self._resolve_upstream(host, resolve)
+                if current == addresses:
+                    continue
+                previous, addresses = addresses, current
+                if current is None:
+                    # Nothing to gain from a reload: Squid keeps the addresses it has
+                    log_warning(ComponentType.PROXY, f"Upstream proxy {host} stopped resolving")
+                    continue
+                log_system_event(
+                    f"Upstream proxy {host} resolves"
+                    + ("" if previous is None else " to different addresses")
+                    + "; reconfiguring Squid",
+                    addresses=",".join(sorted(current)),
+                )
+                # One attempt per transition. A failed reload is logged by reload_config and
+                # not retried on later ticks, which would make it periodic.
+                if self.proxy_manager:
+                    self.proxy_manager.reload_config()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — the watcher must outlive any single failure
+                log_error(ComponentType.PROXY, f"upstream proxy DNS watcher: {e}")
+
+    @staticmethod
+    async def _resolve_upstream(
+        host: str, resolve: Callable[[str], Awaitable[frozenset[str]]]
+    ) -> frozenset[str] | None:
+        """The addresses `host` resolves to, or None when it does not resolve."""
+        try:
+            return await resolve(host) or None
+        except OSError:
+            return None
 
     def _proxy_credential_tick(self) -> None:
         """One look at the store: classify it, and apply the credential when it changed."""
@@ -1367,6 +1455,16 @@ class SecurityGatewayOrchestrator:
         if self.proxy_manager and _relay_ports_of(self.config):
             self._proxy_credential_task = asyncio.create_task(self._watch_proxy_credential())
 
+        # 6c. #456: a split-DNS upstream proxy name that failed to resolve when Squid looked it
+        # up (a VPN not back yet after sleep) leaves Squid without a peer. Watch the name.
+        upstream_host = _upstream_proxy_host_to_watch(
+            self.config.proxy.upstream_proxy if self.config.proxy.enabled else None
+        )
+        if self.proxy_manager and upstream_host:
+            self._upstream_dns_task = asyncio.create_task(
+                self._watch_upstream_proxy_dns(upstream_host)
+            )
+
         # 7. The relay: log an ERROR when git-relay is configured but nothing is listening
         relay_ports = _relay_ports_of(self.config)
         if relay_ports:
@@ -1460,6 +1558,10 @@ class SecurityGatewayOrchestrator:
             self._proxy_credential_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._proxy_credential_task
+        if self._upstream_dns_task:
+            self._upstream_dns_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._upstream_dns_task
 
         # Stop the file watcher
         if self.config_observer:
