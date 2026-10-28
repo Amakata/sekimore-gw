@@ -16,7 +16,7 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
 ### Fix
 
-- the gateway reconfigures Squid when the upstream proxy's name resolves again, or when Squid's own lookup of it failed and the name now resolves; a split-DNS name looked up before the VPN was back (after sleep) left Squid answering 500 until a restart (#457)
+- the gateway reconfigures Squid when the upstream proxy's name resolves again, or when Squid's own lookup of it failed and the name now resolves; before, a name looked up while the VPN was down left Squid answering 500 until a restart (#457)
 - `sgw check` tells a Squid with no usable upstream proxy (500 `ERR_CANNOT_FORWARD`) from a bad credential and points to `sgw restart`; right after a restart it waits up to 10 s for Squid to listen (#457)
 
 ## 0.2.74 (2026-10-21)

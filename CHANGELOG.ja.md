@@ -15,7 +15,7 @@ base イメージは 0.2.45 まで独立したリポジトリで、版番号も�
 
 ### Fix
 
-- gateway は、上流 proxy の名前が引けるようになったとき、または Squid 自身の名前解決が失敗していて今は引けるときに、Squid を再設定する。VPN が戻る前（スリープ明け）に split DNS の名前を引くと、Squid は restart まで 500 を返し続けていた (#457)
+- gateway は、上流 proxy の名前が引けるようになったとき、または Squid 自身の名前解決が失敗していて今は引けるときに、Squid を再設定する。VPN が切れている間に名前を引くと、Squid は restart まで 500 を返し続けていた (#457)
 - `sgw check` は、使える上流 proxy が無い Squid（500 `ERR_CANNOT_FORWARD`）を資格情報の誤りと分けて `sgw restart` を案内する。restart の直後は Squid が listen するまで最大 10 秒待つ (#457)
 
 ## 0.2.74（2026-10-21）
