@@ -241,6 +241,7 @@
   "op.check.proxy_reach_squid": "{state} via Squid ({endpoint}) → {target}:443",
   "op.check.proxy_reach_squid_locked": "{state} — Squid ({endpoint}) holds every request: the upstream proxy's credential is in the secret store and the store is locked ({status}). Ask a human to run: sgw unlock",
   "op.check.proxy_reach_squid_peer": "{state} — Squid ({endpoint}) could not reach the upstream proxy: {status}. Check proxy.upstream_proxy and its credential, and Squid's cache.log",
+  "op.check.proxy_reach_squid_no_peer": "{state} — Squid ({endpoint}) could not resolve or reach the upstream proxy host ({status}), e.g. after sleep or a VPN reconnect. It recovers on its own once DNS works; if it has not within a minute, run: sgw restart",
   "op.check.proxy_reach_squid_refused": "{state} — Squid ({endpoint}) refused CONNECT {target}:443: {status}",
   "op.check.proxy_reach_squid_down": "{state} — Squid is not listening: {error}",
   "op.check.proxy_reach": "    reach:",

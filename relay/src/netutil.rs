@@ -357,23 +357,72 @@ pub fn squid_error_page(head: &str) -> Option<String> {
 /// Squid's `cache_peer … tls` to the upstream proxy, the upstream's CONNECT to the target. A
 /// rustls handshake with the upstream would tell `check` nothing here — it is exactly the
 /// handshake this route exists to avoid.
+///
+/// #456: a refused connection is retried for up to [`SQUID_START_WAIT`], since right after
+/// `sgw restart` Squid has simply not started yet. Every other outcome is reported at once.
 pub async fn probe_via_squid(port: u16, target: &str) -> Result<SquidProbe, String> {
     let endpoint = format!("127.0.0.1:{port}");
-    tokio::time::timeout(PROBE_TIMEOUT, probe_via_squid_at(&endpoint, target))
+    probe_via_squid_waiting(&endpoint, target, SQUID_START_WAIT, SQUID_START_STEP).await
+}
+
+/// How long `check` keeps knocking on a Squid that refuses the connection (#456).
+const SQUID_START_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The pause between two of those knocks.
+const SQUID_START_STEP: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// `probe_via_squid` with the endpoint and the wait for a starting Squid chosen by the caller,
+/// so a test need not wait ten seconds.
+async fn probe_via_squid_waiting(
+    endpoint: &str,
+    target: &str,
+    wait: std::time::Duration,
+    step: std::time::Duration,
+) -> Result<SquidProbe, String> {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let outcome = tokio::time::timeout(PROBE_TIMEOUT, probe_squid_once(endpoint, target))
+            .await
+            .unwrap_or_else(|_| {
+                Err(SquidProbeError::Other(format!(
+                    "no answer from Squid at {endpoint} within {}s",
+                    PROBE_TIMEOUT.as_secs_f32()
+                )))
+            });
+        match outcome {
+            Ok(p) => return Ok(p),
+            Err(SquidProbeError::Refused(_)) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(step).await;
+            }
+            Err(SquidProbeError::Refused(e) | SquidProbeError::Other(e)) => return Err(e),
+        }
+    }
+}
+
+/// `probe_via_squid` against a given endpoint, once, so a test can point it at a listener of its
+/// own.
+pub async fn probe_via_squid_at(endpoint: &str, target: &str) -> Result<SquidProbe, String> {
+    probe_squid_once(endpoint, target)
         .await
-        .unwrap_or_else(|_| {
-            Err(format!(
-                "no answer from Squid at {endpoint} within {}s",
-                PROBE_TIMEOUT.as_secs_f32()
-            ))
+        .map_err(|e| match e {
+            SquidProbeError::Refused(e) | SquidProbeError::Other(e) => e,
         })
 }
 
-/// `probe_via_squid` against a given endpoint, so a test can point it at a listener of its own.
-pub async fn probe_via_squid_at(endpoint: &str, target: &str) -> Result<SquidProbe, String> {
-    let mut s = TcpStream::connect(endpoint)
-        .await
-        .map_err(|e| e.to_string())?;
+/// Why one CONNECT to the local Squid got no status line: only a refused connection is worth
+/// another try (#456).
+enum SquidProbeError {
+    Refused(String),
+    Other(String),
+}
+
+async fn probe_squid_once(endpoint: &str, target: &str) -> Result<SquidProbe, SquidProbeError> {
+    let mut s = TcpStream::connect(endpoint).await.map_err(|e| {
+        if e.kind() == io::ErrorKind::ConnectionRefused {
+            SquidProbeError::Refused(e.to_string())
+        } else {
+            SquidProbeError::Other(e.to_string())
+        }
+    })?;
     // No Proxy-Authorization: the local Squid asks for none, and the upstream's credential is
     // Squid's to present (`cache_peer … login=`), not ours to put on this hop (#205).
     let req = format!(
@@ -381,8 +430,8 @@ pub async fn probe_via_squid_at(endpoint: &str, target: &str) -> Result<SquidPro
     );
     s.write_all(req.as_bytes())
         .await
-        .map_err(|e| e.to_string())?;
-    let head = read_head(&mut s).await?;
+        .map_err(|e| SquidProbeError::Other(e.to_string()))?;
+    let head = read_head(&mut s).await.map_err(SquidProbeError::Other)?;
     let line = head.lines().next().unwrap_or("").trim().to_string();
     let status = line.split_whitespace().nth(1).unwrap_or("").to_string();
     Ok(SquidProbe {
@@ -1218,6 +1267,56 @@ mod store_hold_tests {
             .to_string();
         assert!(!err.contains("secret store"), "{err}");
         assert!(err.contains("503"), "{err}");
+    }
+
+    /// #456: right after `sgw restart` Squid is not listening yet. A refused connection is tried
+    /// again until Squid answers, within the wait.
+    #[tokio::test]
+    async fn the_squid_probe_waits_for_a_squid_that_is_still_starting() {
+        // a port nothing listens on yet
+        let addr = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap()
+        };
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 1024];
+            let _ = s.read(&mut buf).await.unwrap();
+            let _ = s
+                .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                .await;
+        });
+        let p = probe_via_squid_waiting(
+            &addr.to_string(),
+            "api.github.com",
+            std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(20),
+        )
+        .await
+        .unwrap();
+        assert_eq!(p.status, "200");
+    }
+
+    /// Without a wait, the refusal is reported at once, as before.
+    #[tokio::test]
+    async fn a_refused_squid_is_reported_once_the_wait_is_over() {
+        let addr = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap()
+        };
+        let started = std::time::Instant::now();
+        let err = probe_via_squid_waiting(
+            &addr.to_string(),
+            "api.github.com",
+            std::time::Duration::ZERO,
+            std::time::Duration::from_millis(20),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_lowercase().contains("refused"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     /// The probe `check` uses carries the page name too.

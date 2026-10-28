@@ -9,7 +9,13 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from src.config import Config, relay_fingerprint
-from src.orchestrator import ReloadWindow, SecurityGatewayOrchestrator, _relay_settings_changed
+from src.orchestrator import (
+    ReloadWindow,
+    SecurityGatewayOrchestrator,
+    _relay_settings_changed,
+    _SquidPeerLog,
+    _upstream_proxy_host_to_watch,
+)
 
 
 def store_with(old):
@@ -2568,3 +2574,225 @@ def describe_the_store_hold():
         orch.proxy_manager.reload_config.return_value = True
         _tick(orch, NotFound())
         assert orch.proxy_manager.hold_for_store is False
+
+
+def describe_the_upstream_proxy_dns_watcher():
+    """#456: a split-DNS upstream proxy name that failed once left Squid at HIER_NONE/500.
+
+    Squid looked the name up while the VPN was still down after sleep, kept a peer with no
+    address, and only re-resolved it on its own hourly timer. The watcher reconfigures Squid
+    when the name recovers or moves — and only then, since a reconfigure cuts live CONNECTs.
+    """
+
+    addr_a = frozenset({"10.0.0.1"})
+    addr_b = frozenset({"10.0.0.2"})
+    failed = OSError("Name or service not known")
+
+    def _config(tmp_path, upstream="proxy.example.com:8080", enabled="true"):
+        config_file = tmp_path / "config.yml"
+        line = f"  upstream_proxy: {upstream}\n" if upstream else ""
+        config_file.write_text(f"""
+allow_domains: []
+proxy:
+  enabled: {enabled}
+{line}network:
+  lan_subnets: []
+database_path: /tmp/test.db
+""")
+        return config_file
+
+    def _orch(tmp_path):
+        with patch("subprocess.run") as m:
+            m.return_value = Mock(returncode=0, stdout="", stderr="")
+            orch = SecurityGatewayOrchestrator(config_path=_config(tmp_path))
+        orch.proxy_manager = Mock()
+        orch.proxy_manager.reload_config.return_value = True
+        return orch
+
+    class _Log:
+        """A cache.log stand-in: `lost` per tick, in order (the baseline does not read it)."""
+
+        def __init__(self, states=()):
+            self._states = list(states)
+
+        def read(self):
+            return self._states.pop(0) if self._states else False
+
+    async def _run(orch, answers, squid_log=None, **kwargs):
+        """Drive the watcher through `answers` (the first is the baseline), then stop it."""
+        pending = list(answers)
+        asked = []
+
+        async def resolve(host):
+            asked.append(host)
+            if not pending:
+                raise asyncio.CancelledError
+            answer = pending.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        async def no_sleep(_seconds):
+            return None
+
+        with patch("asyncio.sleep", new=no_sleep), contextlib.suppress(asyncio.CancelledError):
+            await orch._watch_upstream_proxy_dns(
+                "proxy.example.com", resolve=resolve, squid_log=squid_log or _Log(), **kwargs
+            )
+        assert set(asked) == {"proxy.example.com"}
+
+    async def squid_losing_the_peer_while_the_name_resolves_reloads(tmp_path):
+        orch = _orch(tmp_path)
+        await _run(orch, [addr_a, addr_a, addr_a], squid_log=_Log([False, True]))
+        assert orch.proxy_manager.reload_config.call_count == 1
+
+    async def squid_losing_it_again_soon_after_does_not_reload_every_tick(tmp_path):
+        orch = _orch(tmp_path)
+        await _run(orch, [addr_a] * 5, squid_log=_Log([True] * 4))
+        assert orch.proxy_manager.reload_config.call_count == 1
+
+    async def squid_losing_it_again_after_the_interval_reloads_again(tmp_path):
+        orch = _orch(tmp_path)
+        await _run(orch, [addr_a] * 3, squid_log=_Log([True, True]), log_reload_interval=0)
+        assert orch.proxy_manager.reload_config.call_count == 2
+
+    async def squid_losing_it_right_after_a_transition_reload_waits_the_interval(tmp_path):
+        orch = _orch(tmp_path)
+        await _run(orch, [failed, addr_a, addr_a, addr_a], squid_log=_Log([False, True, True]))
+        assert orch.proxy_manager.reload_config.call_count == 1
+
+    async def squid_losing_the_peer_while_the_name_does_not_resolve_waits(tmp_path):
+        orch = _orch(tmp_path)
+        await _run(orch, [failed, failed, addr_a], squid_log=_Log([True, True]))
+        assert orch.proxy_manager.reload_config.call_count == 1
+
+    async def a_name_that_starts_resolving_reloads_once(tmp_path):
+        orch = _orch(tmp_path)
+        await _run(orch, [failed, failed, addr_a, addr_a, addr_a])
+        assert orch.proxy_manager.reload_config.call_count == 1
+
+    async def a_name_that_keeps_resolving_the_same_never_reloads(tmp_path):
+        orch = _orch(tmp_path)
+        await _run(orch, [addr_a, addr_a, addr_a])
+        assert orch.proxy_manager.reload_config.call_count == 0
+
+    async def a_change_of_addresses_reloads_once(tmp_path):
+        orch = _orch(tmp_path)
+        await _run(orch, [addr_a, addr_b, addr_b])
+        assert orch.proxy_manager.reload_config.call_count == 1
+
+    async def losing_the_name_does_not_reload_but_getting_it_back_does(tmp_path):
+        orch = _orch(tmp_path)
+        await _run(orch, [addr_a, failed, failed, addr_a])
+        assert orch.proxy_manager.reload_config.call_count == 1
+
+    async def an_empty_answer_counts_as_not_resolving(tmp_path):
+        orch = _orch(tmp_path)
+        await _run(orch, [frozenset(), addr_a])
+        assert orch.proxy_manager.reload_config.call_count == 1
+
+    async def a_failed_reload_is_not_retried_on_later_ticks(tmp_path):
+        orch = _orch(tmp_path)
+        orch.proxy_manager.reload_config.return_value = False
+        await _run(orch, [failed, addr_a, addr_a, addr_a])
+        assert orch.proxy_manager.reload_config.call_count == 1
+
+    def describe_which_upstreams_are_watched():
+
+        def a_name_is_watched():
+            assert _upstream_proxy_host_to_watch("proxy.example.com:8080") == "proxy.example.com"
+
+        def an_ip_literal_is_not():
+            assert _upstream_proxy_host_to_watch("10.1.2.3:8080") is None
+
+        def no_or_malformed_upstream_is_not():
+            assert _upstream_proxy_host_to_watch(None) is None
+            assert _upstream_proxy_host_to_watch("") is None
+            assert _upstream_proxy_host_to_watch("proxy.example.com") is None
+            assert _upstream_proxy_host_to_watch(":8080") is None
+
+    def describe_initialize():
+        async def _initialize(config_file):
+            with patch("subprocess.run") as m:
+                m.return_value = Mock(returncode=0, stdout="", stderr="")
+                orch = SecurityGatewayOrchestrator(config_path=config_file)
+            orch.firewall.initialize_firewall = Mock(return_value=True)
+            orch.firewall.enable_block_logging = Mock(return_value=True)
+            orch.firewall.setup_static_ip_rules = Mock(return_value=True)
+            orch.ip_manager.setup_static_ips = Mock(return_value=True)
+            if orch.proxy_manager:
+                orch.proxy_manager = Mock()
+                orch.proxy_manager.generate_config.return_value = True
+            watcher = AsyncMock()
+            with patch.object(orch, "_watch_upstream_proxy_dns", new=watcher):
+                assert await orch.initialize() is True
+            if orch._upstream_dns_task:
+                await orch._upstream_dns_task
+            return orch, watcher
+
+        async def it_starts_for_a_name(tmp_path):
+            orch, watcher = await _initialize(_config(tmp_path))
+            assert orch._upstream_dns_task is not None
+            watcher.assert_called_once_with("proxy.example.com")
+
+        async def it_does_not_start_for_an_ip_literal(tmp_path):
+            orch, watcher = await _initialize(_config(tmp_path, "10.1.2.3:8080"))
+            assert orch._upstream_dns_task is None
+            watcher.assert_not_called()
+
+        async def it_does_not_start_without_an_upstream(tmp_path):
+            orch, watcher = await _initialize(_config(tmp_path, None))
+            assert orch._upstream_dns_task is None
+            watcher.assert_not_called()
+
+        async def it_does_not_start_with_the_proxy_disabled(tmp_path):
+            orch, watcher = await _initialize(_config(tmp_path, enabled="false"))
+            assert orch._upstream_dns_task is None
+            watcher.assert_not_called()
+
+
+def describe_squid_peer_log():
+    """#456: cache.log tells whether Squid's own lookup of the upstream proxy failed."""
+
+    failed = "2026/10/28 01:00:00 kid1| WARNING: DNS lookup for 'proxy.example.com' failed!\n"
+    started = "2026/10/28 00:59:59 kid1| Starting Squid Cache version 6.13\n"
+    reconfigured = "2026/10/28 01:00:05 kid1| Reconfiguring Squid Cache (version 6.13)...\n"
+
+    def a_failed_lookup_after_the_start_means_lost(tmp_path):
+        path = tmp_path / "cache.log"
+        path.write_text(started + failed)
+        assert _SquidPeerLog("proxy.example.com", path).read() is True
+
+    def a_reconfigure_after_it_clears_it(tmp_path):
+        path = tmp_path / "cache.log"
+        path.write_text(started + failed)
+        log = _SquidPeerLog("proxy.example.com", path)
+        assert log.read() is True
+        with path.open("a") as f:
+            f.write(reconfigured)
+        assert log.read() is False
+
+    def another_hosts_failure_does_not_count(tmp_path):
+        path = tmp_path / "cache.log"
+        path.write_text(started + failed.replace("proxy.example.com", "other.example.com"))
+        assert _SquidPeerLog("proxy.example.com", path).read() is False
+
+    def a_line_still_being_written_is_read_once_complete(tmp_path):
+        path = tmp_path / "cache.log"
+        path.write_text(started + failed[:30])
+        log = _SquidPeerLog("proxy.example.com", path)
+        assert log.read() is False
+        with path.open("a") as f:
+            f.write(failed[30:])
+        assert log.read() is True
+
+    def a_rotated_log_is_read_from_the_start(tmp_path):
+        path = tmp_path / "cache.log"
+        path.write_text(started + reconfigured + reconfigured)
+        log = _SquidPeerLog("proxy.example.com", path)
+        assert log.read() is False
+        path.write_text(failed)
+        assert log.read() is True
+
+    def a_missing_log_keeps_the_last_state(tmp_path):
+        assert _SquidPeerLog("proxy.example.com", tmp_path / "none.log").read() is False
