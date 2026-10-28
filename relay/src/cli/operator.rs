@@ -2156,6 +2156,44 @@ fn squid_probe_failed(outcome: &Result<crate::netutil::SquidProbe, String>) -> b
     !matches!(outcome, Ok(p) if p.status == "200")
 }
 
+/// Which fault a non-200 answer from the local Squid points at; each has its own remedy.
+#[derive(Debug, PartialEq, Eq)]
+enum SquidFailure {
+    /// #275: the store holds the upstream's credential and is locked.
+    StoreLocked,
+    /// #456: Squid had no upstream proxy to send the request to — typically the `cache_peer`
+    /// name did not resolve (after sleep or a VPN reconnect), so the peer counts as down.
+    NoPeer,
+    /// Squid tried the upstream proxy and failed, or the upstream turned the credential down.
+    Peer,
+    /// Squid refused the request itself.
+    Refused,
+}
+
+/// Sorts a failed via-Squid probe into a [`SquidFailure`].
+///
+/// #456: with the only `cache_peer` unresolvable, Squid 6 counts the peer as down
+/// (`neighborUp`: no addresses), peer selection finds no path under `never_direct`, and the
+/// tunnel answers `ERR_CANNOT_FORWARD` with a 500 (`TunnelStateData::noteDestinationsEnd`),
+/// logged as `TCP_TUNNEL/500 … HIER_NONE`. That is not the credential's fault, so it must not get
+/// the credential advice. Without an `X-Squid-Error` header, a bare 500 is read the same way:
+/// the upstream itself never answered. A 503 `ERR_CANNOT_FORWARD` is different: Squid did pick
+/// the peer and the connection to it failed, which the existing peer advice covers.
+fn squid_failure(p: &crate::netutil::SquidProbe) -> SquidFailure {
+    match p.error_page.as_deref() {
+        Some(crate::netutil::STORE_LOCKED_PAGE) => return SquidFailure::StoreLocked,
+        None | Some("ERR_CANNOT_FORWARD") if p.status == "500" => return SquidFailure::NoPeer,
+        _ => {}
+    }
+    // A 407 cannot be the local Squid's own (it asks for no credential): it is the upstream
+    // turning down the credential Squid presented.
+    if p.status == "407" || p.status.starts_with('5') {
+        SquidFailure::Peer
+    } else {
+        SquidFailure::Refused
+    }
+}
+
 /// The `reach:` line on the via-Squid route (#205), apart from the socket so it can be tested.
 fn squid_reach_line(outcome: &Result<crate::netutil::SquidProbe, String>) -> String {
     let label = pad_label(&t("op.check.proxy_reach"), STATE_LABEL);
@@ -2178,12 +2216,11 @@ fn squid_reach_line(outcome: &Result<crate::netutil::SquidProbe, String>) -> Str
             // sgw unlock, and the line has to say so.
             // Otherwise, 502 / 503 is Squid saying it could not reach its peer — a different
             // fault from "Squid refused this request", and a different place to look.
-            let key = if p.error_page.as_deref() == Some(crate::netutil::STORE_LOCKED_PAGE) {
-                "op.check.proxy_reach_squid_locked"
-            } else if p.status.starts_with('5') {
-                "op.check.proxy_reach_squid_peer"
-            } else {
-                "op.check.proxy_reach_squid_refused"
+            let key = match squid_failure(p) {
+                SquidFailure::StoreLocked => "op.check.proxy_reach_squid_locked",
+                SquidFailure::NoPeer => "op.check.proxy_reach_squid_no_peer",
+                SquidFailure::Peer => "op.check.proxy_reach_squid_peer",
+                SquidFailure::Refused => "op.check.proxy_reach_squid_refused",
             };
             tf(
                 key,
@@ -3165,6 +3202,82 @@ garbage line\n";
             "{line}"
         );
         assert!(!line.trim_end().ends_with("\u{1b}[0m"), "{line}");
+
+        set_for_tests(None);
+    }
+
+    /// #456: Squid's own error page decides which remedy the line names. An unresolvable
+    /// `cache_peer` is not the credential's fault and must not be told to check it.
+    #[test]
+    fn a_squid_with_no_peer_to_use_is_not_blamed_on_the_credential() {
+        use super::super::color::set_for_tests;
+        use crate::netutil::{squid_error_page, SquidProbe};
+        set_for_tests(Some(false));
+
+        // Squid's reply head as it arrives, read the way `probe_via_squid` reads it.
+        let probe = |head: &str| {
+            let line = head.lines().next().unwrap().trim().to_string();
+            SquidProbe {
+                endpoint: "127.0.0.1:3128".into(),
+                target: "api.github.com".into(),
+                status: line.split_whitespace().nth(1).unwrap().into(),
+                status_line: line,
+                error_page: squid_error_page(head),
+            }
+        };
+        // Squid 6.13 with its only cache_peer unresolved (TCP_TUNNEL/500 … HIER_NONE)
+        let no_peer = probe(
+            "HTTP/1.1 500 Internal Server Error\r\nServer: squid/6.13\r\nMime-Version: 1.0\r\n\
+             Content-Type: text/html;charset=utf-8\r\nX-Squid-Error: ERR_CANNOT_FORWARD 0\r\n\
+             Connection: close\r\n\r\n",
+        );
+        assert_eq!(squid_failure(&no_peer), SquidFailure::NoPeer);
+        assert_eq!(
+            squid_failure(&probe(
+                "HTTP/1.1 503 Service Unavailable\r\nX-Squid-Error: 503:ERR_CANNOT_FORWARD 0\r\n\r\n"
+            )),
+            SquidFailure::Peer,
+            "a 503 is Squid having tried the peer and failed to connect"
+        );
+        // no header at all: a bare 500 still means the upstream never answered
+        assert_eq!(
+            squid_failure(&probe("HTTP/1.1 500 Internal Server Error\r\n\r\n")),
+            SquidFailure::NoPeer
+        );
+        // the upstream turned the credential down: the credential advice stays
+        assert_eq!(
+            squid_failure(&probe(
+                "HTTP/1.1 407 Proxy Authentication Required\r\nServer: squid\r\n\r\n"
+            )),
+            SquidFailure::Peer
+        );
+        // an error page we do not single out keeps the old wording
+        assert_eq!(
+            squid_failure(&probe(
+                "HTTP/1.1 503 Service Unavailable\r\nX-Squid-Error: ERR_CONNECT_FAIL 111\r\n\r\n"
+            )),
+            SquidFailure::Peer
+        );
+        assert_eq!(
+            squid_failure(&probe(
+                "HTTP/1.1 403 Forbidden\r\nX-Squid-Error: ERR_ACCESS_DENIED 0\r\n\r\n"
+            )),
+            SquidFailure::Refused
+        );
+        assert_eq!(
+            squid_failure(&probe(
+                "HTTP/1.1 503 Service Unavailable\r\nX-Squid-Error: 503:ERR_SEKIMORE_STORE_LOCKED 0\r\n\r\n"
+            )),
+            SquidFailure::StoreLocked
+        );
+
+        let line = squid_reach_line(&Ok(no_peer));
+        assert!(line.contains("sgw restart"), "{line}");
+        assert!(line.contains("500 Internal Server Error"), "{line}");
+        let en = |k: &str| crate::i18n::t_in("en", k);
+        let no_peer_en = en("op.check.proxy_reach_squid_no_peer");
+        assert!(no_peer_en.contains("could not resolve or reach the upstream proxy host"));
+        assert!(!no_peer_en.contains("credential"), "{no_peer_en}");
 
         set_for_tests(None);
     }

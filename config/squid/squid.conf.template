@@ -66,6 +66,9 @@ cache_log /var/log/squid/cache.log
 
 # DNS settings
 dns_nameservers {DNS_NAMESERVERS}
+# #456: a failed lookup of the upstream proxy's name is not kept for a minute, so the
+# reconfigure the gateway runs when the name resolves again looks it up afresh
+negative_dns_ttl 5 seconds
 
 # Misc
 coredump_dir /var/spool/squid

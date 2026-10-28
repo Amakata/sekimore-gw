@@ -179,6 +179,7 @@ First `sgw verify`. It names the item that fails and what to run.
 | "network … already exists" while starting | The previous dev container and gateway are still there. `sgw down` removes the whole stack; open again |
 | HTTP 503 "the secret store is locked" right after a start | The upstream proxy's password is in the locked store. `sgw unlock` |
 | The dev container is old after an update | Rebuild Container in VS Code |
+| After sleep or a VPN reconnect, `Failed to connect to proxy URL`, or `sgw check` says `reach: UNREACHABLE … 500` | The gateway resolved the upstream proxy before the network was back. It retries on its own within seconds; if it does not recover, `sgw restart` |
 
 ## License
 
