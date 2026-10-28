@@ -316,6 +316,45 @@ async def _resolve_host(host: str) -> frozenset[str]:
     return frozenset(str(info[4][0]) for info in infos)
 
 
+class _SquidPeerLog:
+    """#456: whether Squid has lost the upstream proxy, as its cache.log tells.
+
+    Squid re-resolves the `cache_peer` name on its own (hourly, and on every reconfigure). A
+    failure there empties the peer even when the name resolved at the watcher's last look, so
+    the watcher's own lookups alone can miss it. A start or reconfigure clears the state; a
+    `DNS lookup for '<host>' failed` after it sets it. Reads only what was appended.
+    """
+
+    _CLEARS = ("Starting Squid Cache", "Reconfiguring Squid Cache")
+
+    def __init__(self, host: str, path: str | Path | None = None) -> None:
+        self._failed = f"DNS lookup for '{host}' failed"
+        self._path = Path(path or constants.SQUID_CACHE_LOG_PATH)
+        self._offset = 0
+        self.lost = False
+
+    def read(self) -> bool:
+        """Read what was appended since the last call; return whether the peer is lost."""
+        try:
+            with self._path.open("rb") as f:
+                size = f.seek(0, os.SEEK_END)
+                if size < self._offset:  # rotated or truncated
+                    self._offset = 0
+                f.seek(self._offset)
+                data = f.read()
+        except OSError:
+            return self.lost
+        # Only whole lines: a line Squid is still writing is read on the next call
+        end = data.rfind(b"\n") + 1
+        self._offset += end
+        for line in data[:end].decode("utf-8", "replace").splitlines():
+            if any(marker in line for marker in self._CLEARS):
+                self.lost = False
+            elif self._failed in line:
+                self.lost = True
+        return self.lost
+
+
 def _relay_ports_of(config: object) -> list[int]:
     """Ports to open in INPUT for the relay; empty when git-relay is not configured."""
     fn = getattr(config, "relay_input_ports", None)
@@ -1060,6 +1099,8 @@ class SecurityGatewayOrchestrator:
         host: str,
         poll_seconds: float = 5.0,
         resolve: Callable[[str], Awaitable[frozenset[str]]] = _resolve_host,
+        squid_log: _SquidPeerLog | None = None,
+        log_reload_interval: float = 60.0,
     ) -> None:
         """#456: reconfigure Squid when the upstream proxy's name starts resolving again.
 
@@ -1070,7 +1111,14 @@ class SecurityGatewayOrchestrator:
         The first lookup is the baseline Squid started with, and only a transition reloads:
         unresolvable -> resolvable, or a different set of addresses. A reload restarts Squid's
         listeners and cuts in-flight CONNECTs, so it is never done on a timer.
+
+        Squid can also lose the peer to a lookup of its own (its hourly re-resolve while the VPN
+        is down). When cache.log says so and the name resolves here, Squid is reconfigured too,
+        at most once per `log_reload_interval`, so a name Squid still cannot resolve does not
+        turn into a reconfigure every tick.
         """
+        squid_log = squid_log or _SquidPeerLog(host)
+        last_log_reload: float | None = None
         # Squid 6 re-resolves cache_peer names by itself only hourly (neighbors.cc
         # peerRefreshDNS); this brings a peer back within seconds of its name resolving.
         addresses = await self._resolve_upstream(host, resolve)
@@ -1083,21 +1131,33 @@ class SecurityGatewayOrchestrator:
             await asyncio.sleep(poll_seconds)
             try:
                 current = await self._resolve_upstream(host, resolve)
+                squid_lost = squid_log.read()
                 if current == addresses:
-                    continue
-                previous, addresses = addresses, current
-                if current is None:
-                    # Nothing to gain from a reload: Squid keeps the addresses it has
-                    log_warning(ComponentType.PROXY, f"Upstream proxy {host} stopped resolving")
-                    continue
-                log_system_event(
-                    f"Upstream proxy {host} resolves"
-                    + ("" if previous is None else " to different addresses")
-                    + "; reconfiguring Squid",
-                    addresses=",".join(sorted(current)),
-                )
-                # One attempt per transition. A failed reload is logged by reload_config and
-                # not retried on later ticks, which would make it periodic.
+                    now = time.monotonic()
+                    if current is None or not squid_lost:
+                        continue
+                    if last_log_reload is not None and now - last_log_reload < log_reload_interval:
+                        continue
+                    last_log_reload = now
+                    log_system_event(
+                        f"Squid lost upstream proxy {host}, which resolves now; reconfiguring Squid",
+                        addresses=",".join(sorted(current)),
+                    )
+                else:
+                    previous, addresses = addresses, current
+                    if current is None:
+                        # Nothing to gain from a reload while the name does not resolve
+                        log_warning(ComponentType.PROXY, f"Upstream proxy {host} stopped resolving")
+                        continue
+                    log_system_event(
+                        f"Upstream proxy {host} resolves"
+                        + ("" if previous is None else " to different addresses")
+                        + "; reconfiguring Squid",
+                        addresses=",".join(sorted(current)),
+                    )
+                # One attempt per transition (or per log_reload_interval). A failed reload is
+                # logged by reload_config and not retried on later ticks, which would make it
+                # periodic.
                 if self.proxy_manager:
                     self.proxy_manager.reload_config()
             except asyncio.CancelledError:
