@@ -21,6 +21,8 @@ SQUID_TEMPLATE_PATH = os.getenv("SEKIMORE_SQUID_TEMPLATE", "/etc/squid/squid.con
 SQUID_ERROR_TEMPLATE_DIR = os.getenv(
     "SEKIMORE_SQUID_ERROR_TEMPLATES", "/usr/share/squid/errors/templates"
 )
+# #456: read for Squid losing its upstream proxy (a failed lookup of the cache_peer name)
+SQUID_CACHE_LOG_PATH = os.getenv("SEKIMORE_SQUID_CACHE_LOG", "/var/log/squid/cache.log")
 
 # Default network settings
 DEFAULT_LAN_SUBNETS = ["172.20.0.0/16", "192.168.0.0/16", "10.0.0.0/8"]
