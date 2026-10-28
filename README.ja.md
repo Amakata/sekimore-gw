@@ -176,6 +176,7 @@ dev コンテナから外に出る道はゲートウェイだけです。
 | 起動時に「network … already exists」と出る | 前の dev コンテナとゲートウェイが残っている。`sgw down` で丸ごと消して開き直す |
 | 起動直後に HTTP 503「the secret store is locked」が返る | 上流 proxy のパスワードが locked のストアにある。`sgw unlock` |
 | 版を上げたのに dev コンテナが古い | VS Code の Rebuild Container |
+| スリープ明けや VPN のつなぎ直しの後に `Failed to connect to proxy URL`、または `sgw check` が `reach: UNREACHABLE … 500` | ネットワークが戻る前にゲートウェイが上流 proxy の名前を引いた。数秒で自動で引き直す。戻らなければ `sgw restart` |
 
 ## ライセンス
 
