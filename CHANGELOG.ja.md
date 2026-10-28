@@ -11,6 +11,12 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.76（2026-10-28）
+
+### Fix
+
+- 0.2.75 の `negative_dns_ttl`（5 秒）を、生成する上流 proxy の設定と一緒に出す。自前の Squid 雛形をマウントしているプロジェクトにも効く (#460)
+
 ## 0.2.75（2026-10-28）
 
 ### Security
