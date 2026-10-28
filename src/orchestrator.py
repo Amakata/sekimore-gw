@@ -1118,7 +1118,7 @@ class SecurityGatewayOrchestrator:
         turn into a reconfigure every tick.
         """
         squid_log = squid_log or _SquidPeerLog(host)
-        last_log_reload: float | None = None
+        last_reload: float | None = None
         # Squid 6 re-resolves cache_peer names by itself only hourly (neighbors.cc
         # peerRefreshDNS); this brings a peer back within seconds of its name resolving.
         addresses = await self._resolve_upstream(host, resolve)
@@ -1133,12 +1133,15 @@ class SecurityGatewayOrchestrator:
                 current = await self._resolve_upstream(host, resolve)
                 squid_lost = squid_log.read()
                 if current == addresses:
-                    now = time.monotonic()
                     if current is None or not squid_lost:
                         continue
-                    if last_log_reload is not None and now - last_log_reload < log_reload_interval:
+                    # Counted from any reload: Squid's lookup in the reload a transition just
+                    # ran can still fail if its DNS lags the gateway's
+                    if (
+                        last_reload is not None
+                        and time.monotonic() - last_reload < log_reload_interval
+                    ):
                         continue
-                    last_log_reload = now
                     log_system_event(
                         f"Squid lost upstream proxy {host}, which resolves now; reconfiguring Squid",
                         addresses=",".join(sorted(current)),
@@ -1158,6 +1161,7 @@ class SecurityGatewayOrchestrator:
                 # One attempt per transition (or per log_reload_interval). A failed reload is
                 # logged by reload_config and not retried on later ticks, which would make it
                 # periodic.
+                last_reload = time.monotonic()
                 if self.proxy_manager:
                     self.proxy_manager.reload_config()
             except asyncio.CancelledError:

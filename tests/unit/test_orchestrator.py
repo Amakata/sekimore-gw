@@ -2656,6 +2656,11 @@ database_path: /tmp/test.db
         await _run(orch, [addr_a] * 3, squid_log=_Log([True, True]), log_reload_interval=0)
         assert orch.proxy_manager.reload_config.call_count == 2
 
+    async def squid_losing_it_right_after_a_transition_reload_waits_the_interval(tmp_path):
+        orch = _orch(tmp_path)
+        await _run(orch, [failed, addr_a, addr_a, addr_a], squid_log=_Log([False, True, True]))
+        assert orch.proxy_manager.reload_config.call_count == 1
+
     async def squid_losing_the_peer_while_the_name_does_not_resolve_waits(tmp_path):
         orch = _orch(tmp_path)
         await _run(orch, [failed, failed, addr_a], squid_log=_Log([True, True]))
