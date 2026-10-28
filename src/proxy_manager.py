@@ -569,9 +569,13 @@ cache_mem 256 MB"""
                 tls=str(self.upstream_proxy_tls),
             )
 
+        # #456: here rather than in the template, which each deployment bind-mounts and an
+        # image upgrade does not replace. A failed lookup of the peer's name is kept 5 s, not
+        # a minute, so the reconfigure the gateway runs once the name resolves looks it up afresh.
         return f"""# Upstream proxy configuration
 cache_peer {host} parent {port} 0 no-query default{options}
-never_direct allow all"""
+never_direct allow all
+negative_dns_ttl 5 seconds"""
 
     def reload_config(self) -> bool:
         """Reload the Squid configuration.

@@ -12,6 +12,12 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.76 (2026-10-28)
+
+### Fix
+
+- the 5-second `negative_dns_ttl` from 0.2.75 comes with the generated upstream proxy block, so it reaches deployments that mount their own Squid template (#460)
+
 ## 0.2.75 (2026-10-28)
 
 ### Security
