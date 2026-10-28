@@ -23,6 +23,12 @@ base イメージは 0.2.45 まで独立したリポジトリで、版番号も�
 - `GET /relays` が各 relay とそのコマンドを返す。`sgw-agent setup` がそれを保存し、サイドカーのガイドをスキルファイルに足す。`sgw-agent <sidecar> <words>` でコマンドサイドカーのコマンドを実行する (#368)
 - `docs/sidecar-protocol.md` にコマンドサイドカーのプロトコルを書いた。`examples/sidecar-template` は標準ライブラリだけの Python で動くサイドカー (#369)
 
+## 0.2.76（2026-10-28）
+
+### Fix
+
+- 0.2.75 の `negative_dns_ttl`（5 秒）を、生成する上流 proxy の設定と一緒に出す。自前の Squid 雛形をマウントしているプロジェクトにも効く (#460)
+
 ## 0.2.75（2026-10-28）
 
 ### Security

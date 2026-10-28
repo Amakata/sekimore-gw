@@ -589,6 +589,26 @@ def describe_the_relay_reaches_the_upstream_proxy_through_squid():
         assert " tls" in content
         assert "never_direct allow all" in content
 
+    def a_failed_lookup_of_the_peer_is_kept_briefly_even_with_an_old_template(tmp_path):
+        # #456: the gateway reconfigures Squid once the peer's name resolves again; a minute
+        # of cached failure would make that reconfigure fail too. Deployments mount their own
+        # template, so the setting has to come with the generated block, not the template.
+        tpl = tmp_path / "squid.conf.template"
+        tpl.write_text(
+            Path(
+                "relay/templates/devcontainer/.devcontainer/config/squid/squid.conf.template"
+            ).read_text()
+        )
+        out = tmp_path / "squid.conf"
+        pm = ProxyManager(
+            config_template_path=str(tpl),
+            config_output_path=str(out),
+            cache_enabled=False,
+            upstream_proxy="gw.example.net:3129",
+        )
+        assert pm.generate_config(["pypi.org"], ["github.com"]) is True
+        assert out.read_text().count("\nnegative_dns_ttl 5 seconds") == 1
+
     def _from_template(tmp_path, text, denied=()):
         tpl = tmp_path / "squid.conf.template"
         tpl.write_text(text)

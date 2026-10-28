@@ -24,6 +24,12 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 - `GET /relays` lists each relay and its commands. `sgw-agent setup` saves it and adds the sidecars' guides to the skill file; `sgw-agent <sidecar> <words>` runs a command sidecar's commands (#368)
 - `docs/sidecar-protocol.md` describes the command sidecar protocol; `examples/sidecar-template` is a working sidecar in standard-library Python (#369)
 
+## 0.2.76 (2026-10-28)
+
+### Fix
+
+- the 5-second `negative_dns_ttl` from 0.2.75 comes with the generated upstream proxy block, so it reaches deployments that mount their own Squid template (#460)
+
 ## 0.2.75 (2026-10-28)
 
 ### Security
