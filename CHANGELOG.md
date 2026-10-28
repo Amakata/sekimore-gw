@@ -14,6 +14,10 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
 ## 0.2.75 (2026-10-28)
 
+### Security
+
+- crypto-bigint 0.7.5 -> 0.7.10 and ctutils 0.4.2 -> 0.4.6, for RUSTSEC-2026-0387 and -0385 (#457)
+
 ### Fix
 
 - the gateway reconfigures Squid when the upstream proxy's name resolves again, or when Squid's own lookup of it failed and the name now resolves; before, a name looked up while the VPN was down left Squid answering 500 until a restart (#457)
