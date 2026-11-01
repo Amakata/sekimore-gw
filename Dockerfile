@@ -5,7 +5,7 @@
 # TARGETARCH with cargo-zigbuild, because building arm64 under QEMU takes over 40 minutes.
 # Being static musl, it does not depend on the glibc generation and works as-is when COPY --from'd
 # into the devcontainer base image.
-FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.23.4@sha256:d8313491ec5798de0633fdc1c5753761bff79967bea69076020dc78121b2cca8 AS relay-builder
+FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.24.0@sha256:eb5578cfc06e070a09deb7b5852474bd128a4e561f9f123261b5ed2405e478b1 AS relay-builder
 ARG TARGETARCH
 WORKDIR /build
 # Install the toolchain version from rust-toolchain.toml first (a layer source changes do not invalidate)
@@ -39,7 +39,7 @@ RUN T="$(cat /tmp/t)" \
     && install -m 0755 "target/$T/release/sgw-agent" /sgw-agent
 
 # ---- gateway ----
-FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
+FROM python:3.15-slim@sha256:94d3426f1def7db4a106a232ac121bfd975393e5dfd40a619b955fae45fe7913
 
 # No bytecode in this image, and none written at runtime. A .pyc carries its source's mtime inside
 # the header, so a layer holding one gets a new digest every build and every deployment re-pulls
