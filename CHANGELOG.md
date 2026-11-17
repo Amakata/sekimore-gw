@@ -12,6 +12,13 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.77 (2026-11-17)
+
+### Security
+
+- dnspython 2.9.0 -> 2.9.2, opentelemetry-api 1.45.1 -> 1.45.2 and certifi 2026.7.22 -> 2026.10.23, for CVE-2026-128089, CVE-2026-126360 and GHSA-6q48-6c7w-9gw2 (#475)
+- quinn-proto 0.11.18 -> 0.11.19, quinn-udp 0.5.15 -> 0.5.16, russh 0.63.3 -> 0.65.2, rusqlite 0.40 -> 0.41 (libsqlite3-sys 0.39.1), rustix 1.1.5 -> 1.1.6 and pageant 0.2.3 -> 0.2.5, for RUSTSEC-2026-0523, -0524, -0538, -0495, -0459 and -0486 (#475)
+
 ## 0.2.76 (2026-10-28)
 
 ### Fix
