@@ -11,6 +11,13 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.77（2026-11-17）
+
+### Security
+
+- dnspython 2.9.0 -> 2.9.2、opentelemetry-api 1.45.1 -> 1.45.2、certifi 2026.7.22 -> 2026.10.23。CVE-2026-128089、CVE-2026-126360、GHSA-6q48-6c7w-9gw2 への対応 (#475)
+- quinn-proto 0.11.18 -> 0.11.19、quinn-udp 0.5.15 -> 0.5.16、russh 0.63.3 -> 0.65.2、rusqlite 0.40 -> 0.41（libsqlite3-sys 0.39.1）、rustix 1.1.5 -> 1.1.6、pageant 0.2.3 -> 0.2.5。RUSTSEC-2026-0523、-0524、-0538、-0495、-0459、-0486 への対応 (#475)
+
 ## 0.2.76（2026-10-28）
 
 ### Fix

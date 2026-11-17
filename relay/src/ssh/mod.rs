@@ -14,7 +14,9 @@ use anyhow::Context;
 use russh::keys::ssh_key::private::Ed25519Keypair;
 use russh::keys::ssh_key::LineEnding;
 use russh::keys::{PrivateKey, PublicKey};
-use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Session};
+use russh::server::{
+    Auth, ChannelOpenHandle, Handler, Msg, PublicKeyOffer, Session, VerifiedPublicKey,
+};
 use russh::{Channel, ChannelId, ChannelOpenFailure, MethodKind, MethodSet};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
@@ -175,8 +177,9 @@ impl Handler for ClientHandler {
     async fn auth_publickey_offered(
         &mut self,
         user: &str,
-        key: &PublicKey,
+        offer: PublicKeyOffer<'_>,
     ) -> Result<Auth, Self::Error> {
+        let key = offer.public_key;
         // Reject before the signature round trip (an unregistered key is denied outright). ssh offers keys one by one, so denials are audited too
         if self.accepts(user, key) {
             Ok(Auth::Accept)
@@ -201,7 +204,12 @@ impl Handler for ClientHandler {
         }
     }
 
-    async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
+    async fn auth_publickey(
+        &mut self,
+        user: &str,
+        verified: VerifiedPublicKey<'_>,
+    ) -> Result<Auth, Self::Error> {
+        let key = verified.public_key;
         let fp = fingerprint(key);
         if self.accepts(user, key) {
             self.server.audit.log_edge(
