@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.3.0-alpha.1 -->
+<!-- reviewed-up-to: 0.3.0-alpha.2 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -44,6 +44,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.66 – 0.2.68 | [0.2.69](#0269-the-hosts-credentials-stay-out-of-dev), **only if you edited `devcontainer.json` or `post-create.sh`** |
 | 0.2.69 – 0.2.70 | [0.2.71](#0271-claude-code-codex-and-the-skills-come-from-your-image), **everyone: check the Dockerfile has `sgw-install-ai`, then Rebuild Container** |
 | 0.2.71 | [0.3.0-alpha.1](#030-alpha1-the-github-api-can-run-in-a-sidecar-prerelease), **only if you move to the 0.3 prerelease and want the github sidecar** |
+| 0.3.0-alpha.1 | [0.3.0-alpha.2](#030-alpha2-languages-live-in-optmise-prerelease), **only if your Dockerfile installs languages or writes under `/usr/local/share`** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -993,3 +994,15 @@ sgw update --apply
 Nothing else to do: without `relay.sidecars.github` the gateway serves the API itself, as in 0.2.
 To send the agent's API calls through the sidecar, copy the `relay.sidecars.github` block from
 `config.sample.yml` into `config.yml`, then `sgw recreate`.
+
+## 0.3.0-alpha.2 Languages live in /opt/mise (prerelease)
+
+A prerelease of the 0.3 line, installed the same way as 0.3.0-alpha.1 (`--version 0.3.0-alpha.2`).
+
+The base image no longer gives `/usr/local/share` to `vscode`, and the template no longer copies
+`installs-default` into the mise-store volume. A project whose Dockerfile installs languages the
+0.2 way, or writes under `/usr/local/share`, must change it: see
+[Moving to 0.3](docs/languages.md#moving-to-03). The mise-store volume may still hold the old
+copies and they win over the image's; start it empty once.
+
+Nothing to do for a project whose Dockerfile installs nothing of its own.
