@@ -11,6 +11,18 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.3.0-alpha.2（2026-11-17）
+
+### Security
+
+- 0.2.75 〜 0.2.77 を取り込んだ: crypto-bigint と ctutils (#457)、`audit` を落としていた勧告に対する dnspython、opentelemetry-api、certifi、quinn-proto、quinn-udp、russh、rusqlite、rustix、pageant の更新 (#475)
+
+### Enhancement
+
+- base イメージは `/usr/local/share` をユーザーに渡さなくなった。雛形は言語を root で `/opt/mise` に読み取り専用で入れ、`installs-default` へのコピーはしない。rust は各人のものになる。プロジェクトの Dockerfile の移し方は `docs/languages.ja.md` (#377)
+- 0.2.73 〜 0.2.76 を取り込んだ: mise 2026.10.17 と root 用の共有 `/opt/mise` (#441)、`MISE_PROJECT_ROOT` からプロジェクトを取らない (#446)
+- 0.2.75 〜 0.2.76 を取り込んだ: 上流 proxy の名前が引けるようになったときの Squid 再設定、`sgw check` が上流の欠落と資格情報の誤りを分けること (#457)、生成する上流の設定に `negative_dns_ttl` (#460)
+
 ## 0.3.0-alpha.1（2026-10-06）
 
 ### Enhancement

@@ -12,6 +12,18 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.3.0-alpha.2 (2026-11-17)
+
+### Security
+
+- Merged 0.2.75 – 0.2.77: crypto-bigint and ctutils (#457); dnspython, opentelemetry-api, certifi, quinn-proto, quinn-udp, russh, rusqlite, rustix and pageant, for the advisories that failed `audit` (#475)
+
+### Enhancement
+
+- `/usr/local/share` stays root's, and the template installs its languages into `/opt/mise` as root, read-only, with no `installs-default` copy; rust becomes each person's. See `docs/languages.md` (#377)
+- Merged 0.2.73 – 0.2.76: mise 2026.10.17 and a shared `/opt/mise` for root (#441); sgw no longer takes the project from `MISE_PROJECT_ROOT` (#446)
+- Merged 0.2.75 – 0.2.76: Squid is reconfigured when the upstream proxy's name resolves again, and `sgw check` tells a missing upstream from a bad credential (#457); `negative_dns_ttl` comes with the generated upstream block (#460)
+
 ## 0.3.0-alpha.1 (2026-10-06)
 
 ### Enhancement
