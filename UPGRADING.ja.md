@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.3.0-alpha.1 -->
+<!-- reviewed-up-to: 0.3.0-alpha.2 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -44,6 +44,7 @@
 | 0.2.66 〜 0.2.68 | 下の 0.2.69。**`devcontainer.json` か `post-create.sh` を編集した場合だけ** |
 | 0.2.69 〜 0.2.70 | 下の 0.2.71。**すべてのプロジェクト: Dockerfile に `sgw-install-ai` の行があるか確かめ、Rebuild Container** |
 | 0.2.71 | 下の 0.3.0-alpha.1。**0.3 のプレリリースに移り、github サイドカーを使う場合だけ** |
+| 0.3.0-alpha.1 | 下の 0.3.0-alpha.2。**Dockerfile で言語を入れている、または `/usr/local/share` に書く場合だけ** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -956,3 +957,15 @@ sgw update --apply
 ほかにすることはありません。`relay.sidecars.github` が無ければ、0.2 と同じく gateway が API を受け持ちます。
 エージェントの API 呼び出しをサイドカーに通すには、`config.sample.yml` の `relay.sidecars.github` の
 ブロックを `config.yml` に写し、`sgw recreate` を実行します。
+
+## 0.3.0-alpha.2 言語は /opt/mise に入る（プレリリース）
+
+0.3 系のプレリリースです。入れ方は 0.3.0-alpha.1 と同じです（`--version 0.3.0-alpha.2`）。
+
+base イメージは `/usr/local/share` を `vscode` に渡さなくなり、雛形は `installs-default` を
+mise-store ボリュームに写さなくなりました。Dockerfile で 0.2 のやり方で言語を入れている、または
+`/usr/local/share` に書いているプロジェクトは直す必要があります。
+[0.3 に移る](docs/languages.ja.md#03-への移行)を参照してください。mise-store ボリュームに古い写しが残っていると、
+イメージのものより優先されます。一度だけ空にしてください。
+
+Dockerfile で何も入れていないプロジェクトは、することはありません。
