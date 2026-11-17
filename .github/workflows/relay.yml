@@ -76,7 +76,7 @@ jobs:
   # sgw is built on macOS for the Release (docker-publish.yml); a Linux-only libc constant in
   # any module of the crate breaks that build, and the tag is the first to know unless this runs
   macos-check:
-    runs-on: macos-14
+    runs-on: macos-15
     defaults:
       run:
         working-directory: relay
