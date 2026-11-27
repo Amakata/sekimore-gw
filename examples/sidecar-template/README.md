@@ -1,15 +1,29 @@
 # Command sidecar template
 
-A minimal command sidecar: in-memory notes with `note add` and `note list`. Python 3, standard
-library only. Copy it and replace the commands.
+A minimal command sidecar: in-memory notes with `note add` and `note list`. Go, standard library
+only, in one file (`main.go`). Copy the directory and replace the commands.
 
-The protocol: [docs/sidecar-protocol.md](../../docs/sidecar-protocol.md).
+The protocol: [docs/sidecar-protocol.md](../../docs/sidecar-protocol.md). It is HTTP over a Unix
+socket with JSON bodies, so a sidecar can be written in any language; this one is in Go.
+
+| File | What it is |
+|---|---|
+| `main.go` | The sidecar |
+| `main_test.go` | Its tests, on a real socket, with a copy of the gateway's checks of `/describe` |
+| `go.mod` | The module: no requirements, so no `go.sum` |
+| `Dockerfile` | The image the compose service builds |
 
 ## Run it
 
 ```sh
-python3 sidecar.py --socket /tmp/notes.sock
+go run . --socket /tmp/notes.sock
 curl --unix-socket /tmp/notes.sock http://sidecar/describe
+```
+
+Test it after a change:
+
+```sh
+gofmt -l . && go vet ./... && go test ./...
 ```
 
 ## config.yml
@@ -34,20 +48,20 @@ sgw var set notes/api_key --secret
 
 ## Compose
 
-Add the service to `.devcontainer/docker-compose.relay.yml`, next to `sekimore-github`. Name it
-`sekimore-<name>`, `<name>` being its key under `relay.sidecars`: that is how `sgw recreate`
-finds it. It shares the `sekimore-sidecars` volume with the gateway, and never with dev. Copy
-`sidecar.py` to `.devcontainer/sidecars/notes/` first.
+Copy this directory to `.devcontainer/sidecars/notes/`. Then add the service
+to `.devcontainer/docker-compose.relay.yml`, next to `sekimore-github`. Name it `sekimore-<name>`,
+`<name>` being its key under `relay.sidecars`: that is how `sgw recreate` finds it. It shares the
+`sekimore-sidecars` volume with the gateway, and never with dev.
 
 ```yaml
 services:
   sekimore-notes:
-    image: python:3.13-slim          # pin a digest for real use
-    command: [python3, /app/sidecar.py, --socket=/run/sekimore-sidecars/notes.sock]
+    build: ./sidecars/notes
+    pull_policy: build               # rebuilt on each `sgw recreate`, so a change to main.go is picked up
+    command: [--socket=/run/sekimore-sidecars/notes.sock]
     networks:
       internal-net: {}
     volumes:
-      - ./sidecars/notes/sidecar.py:/app/sidecar.py:ro
       - sekimore-sidecars:/run/sekimore-sidecars
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -55,12 +69,21 @@ services:
     restart: unless-stopped
 ```
 
+The image is built in two stages: the `golang` image compiles a static binary, and the image
+that runs holds that binary and the CA certificates only (`FROM scratch`). The build fetches no
+module; it pulls the `golang` image and nothing else. Its `FROM` line is pinned by digest: pin
+your own when you copy it (`docker buildx imagetools inspect golang:<version>` prints it).
+
+`pull_policy: build` matters. `sgw recreate` runs `docker compose up -d --force-recreate --no-deps`
+on the sidecar, and without it Compose builds the image only when there is none, then keeps
+running the first build. With it, every recreate rebuilds (from the cache when nothing changed).
+
 ## Start it
 
 On the host, once `config.yml`, the credential and the compose service are in place:
 
 ```sh
-sgw recreate      # the gateway reads config.yml again, and sekimore-notes is (re)created
+sgw recreate      # the gateway reads config.yml again, and sekimore-notes is built and (re)created
 sgw refresh       # only if `sgw-agent notes --help` in dev does not list the commands yet
 ```
 
@@ -77,7 +100,7 @@ Later:
 |---|---|
 | `config.yml` (permissions, credentials, a new sidecar) | `sgw recreate`, then `sgw refresh` if needed |
 | The sidecar's service in compose | `sgw recreate` |
-| `sidecar.py` itself (its commands) | `sgw recreate`, then `sgw refresh` if needed |
+| `main.go` itself (its commands) | `sgw recreate` (it rebuilds the image: `pull_policy: build`), then `sgw refresh` if needed |
 
 Each `sgw recreate` restarts the sidecar: the template's notes are lost.
 

@@ -241,6 +241,22 @@ The project template `sgw init` writes is `relay/templates/devcontainer/`, embed
 `docs/template.md` describes it. `tests/unit/test_base_versions.py`
 holds every version written under `base/` to `pyproject.toml`'s.
 
+### The sidecar template (`examples/sidecar-template/`)
+
+The command sidecar a third party copies is Go, standard library only (#499). Its Go version is
+written in `go.mod`, its `Dockerfile`, `mise.toml` and `relay.yml`, and
+`the_go_version_agrees_across_the_files` holds them together:
+
+```bash
+cd examples/sidecar-template
+gofmt -l . && go vet ./... && go test ./...
+docker build -t sekimore-notes .
+```
+
+`relay/tests/command_sidecar.rs` builds it with `go build` and runs it through the gateway; `GO`
+names a toolchain other than `go`. Without one the test is skipped, or fails under
+`SEKIMORE_E2E_REQUIRED` (CI and `mise run ci`).
+
 ### Integration tests
 
 Place integration tests in `tests/integration/`:

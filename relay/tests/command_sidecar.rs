@@ -357,26 +357,54 @@ impl Drop for Template {
     }
 }
 
-/// #331: the template a third party copies is run as it is, through the gateway. Skipped where
-/// there is no Python (`PYTHON` names one other than `python3`).
-#[tokio::test]
-async fn the_template_sidecar_works_through_the_gateway() {
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".into());
-    let has_python = std::process::Command::new(&python)
-        .arg("--version")
+/// The template's directory.
+fn template_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/sidecar-template")
+}
+
+/// Builds the Go template into `dir` with `go build` (`GO` names a toolchain other than `go` on
+/// PATH). `None` where there is no Go: skipped, or a failure when `SEKIMORE_E2E_REQUIRED` is set,
+/// as CI and `mise run ci` set it.
+fn build_template(dir: &Path) -> Option<PathBuf> {
+    let go = std::env::var("GO").unwrap_or_else(|_| "go".into());
+    let has_go = std::process::Command::new(&go)
+        .arg("version")
         .output()
         .is_ok_and(|o| o.status.success());
-    if !has_python {
-        eprintln!("skipped: no {python} to run the template with");
-        return;
+    if !has_go {
+        if std::env::var("SEKIMORE_E2E_REQUIRED").is_ok() {
+            panic!("no {go} to build the template with: install Go, or name it with GO");
+        }
+        eprintln!("skipped: no {go} to build the template with");
+        return None;
     }
+    let bin = dir.join("notes");
+    let out = std::process::Command::new(&go)
+        .args(["build", "-o"])
+        .arg(&bin)
+        .arg(".")
+        .current_dir(template_dir())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "go build: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Some(bin)
+}
+
+/// #331, #499: the template a third party copies is built and run as it is, through the gateway,
+/// which reads its describe with the real checks.
+#[tokio::test]
+async fn the_template_sidecar_works_through_the_gateway() {
     let tmp = tempfile::tempdir().unwrap();
+    let Some(bin) = build_template(tmp.path()) else {
+        return;
+    };
     let sock = tmp.path().join("notes.sock");
-    let script =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/sidecar-template/sidecar.py");
     let mut child = Template(
-        std::process::Command::new(&python)
-            .arg(&script)
+        std::process::Command::new(&bin)
             .arg("--socket")
             .arg(&sock)
             .stderr(std::process::Stdio::null())
@@ -396,6 +424,13 @@ async fn the_template_sidecar_works_through_the_gateway() {
         State::Set(SECRET.into()),
     )
     .await;
+    // the gateway connects it: its describe passes check_describe, the optional about included
+    let (_, resp) = post(f.addr, "/relays", Some(&f.token), &ApiRequest::default()).await;
+    let list: sekimore_relay::forge::command::RelayList =
+        serde_json::from_value(resp.raw.unwrap()).unwrap();
+    let notes = list.relays.iter().find(|r| r.name == "notes").unwrap();
+    assert!(notes.available, "{:?}", notes.reason);
+    assert_eq!(notes.about, "Short notes kept for this project");
 
     let (code, resp) = post(
         f.addr,
@@ -450,4 +485,38 @@ async fn the_template_sidecar_works_through_the_gateway() {
     let audit = std::fs::read_to_string(&f.audit_path).unwrap();
     assert!(!audit.contains(SECRET), "{audit}");
     drop(child);
+}
+
+/// #499: the Go version is written in four places, and they move together: the template's
+/// go.mod (the language version, `major.minor`, so a copy builds with any patch release), the
+/// golang image its Dockerfile builds in, mise.toml, and the setup-go step of relay.yml. Dependabot
+/// bumps the Dockerfile alone; this fails until the other three follow.
+#[test]
+fn the_go_version_agrees_across_the_files() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let read = |p: &str| std::fs::read_to_string(root.join(p)).unwrap();
+    // the value after `prefix` on the first line that starts with it, up to `end`
+    let find = |text: &str, prefix: &str, end: &[char]| -> String {
+        text.lines()
+            .map(str::trim)
+            .find_map(|l| l.strip_prefix(prefix))
+            .map(|v| v.split(end).next().unwrap().to_string())
+            .unwrap_or_else(|| panic!("no line starting {prefix:?}"))
+    };
+    let mise = find(&read("mise.toml"), "go = \"", &['"']);
+    let docker = find(
+        &read("examples/sidecar-template/Dockerfile"),
+        "FROM golang:",
+        &['@', ' '],
+    );
+    let ci = find(
+        &read(".github/workflows/relay.yml"),
+        "go-version: \"",
+        &['"'],
+    );
+    let go_mod = find(&read("examples/sidecar-template/go.mod"), "go ", &[' ']);
+    assert_eq!(docker, mise, "the Dockerfile's golang image and mise.toml");
+    assert_eq!(ci, mise, "relay.yml's setup-go and mise.toml");
+    let minor: Vec<&str> = mise.split('.').take(2).collect();
+    assert_eq!(go_mod, minor.join("."), "go.mod's go line and mise.toml");
 }

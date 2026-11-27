@@ -22,6 +22,12 @@
 #     on purpose rather than for want of one: `1.89.0` is written in relay/rust-toolchain.toml,
 #     as `rust-version` in relay/Cargo.toml, as `rust = "1.89.0"` in mise.toml, and as the ref of
 #     dtolnay/rust-toolchain below. It would move one of the four and desync the other three.
+#   - Go modules. The sidecar template (examples/sidecar-template) requires none, so there is no
+#     `gomod` entry: it would have nothing to read. Its Go version is in four places too — go.mod,
+#     the golang image of its Dockerfile, `go = …` in mise.toml, and setup-go's `go-version` in
+#     relay.yml. The `docker` entry below bumps the Dockerfile alone, and
+#     the_go_version_agrees_across_the_files (relay/tests/command_sidecar.rs) fails that pull
+#     request until the other three are moved with it.
 
 version: 2
 
@@ -95,7 +101,7 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
-  # ---- Docker (the `FROM` digests in Dockerfile and Dockerfile.agent) ----
+  # ---- Docker (the `FROM` digests in Dockerfile, Dockerfile.agent, base/ and the sidecar template) ----
   # No `update-types` filter: a base image bump is usually the digest moving under an unchanged
   # tag (`python:3.13-slim@sha256:…`), which has no semver shape to filter on. Both files are at
   # the repository root and the fetcher matches any name containing `dockerfile`, so one entry
@@ -104,6 +110,7 @@ updates:
     directories:
       - "/"
       - "/base"
+      - "/examples/sidecar-template"
     schedule:
       interval: "weekly"
       day: "monday"
