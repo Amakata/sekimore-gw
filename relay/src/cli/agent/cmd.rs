@@ -461,7 +461,7 @@ endpoints! {
         Update("/issue/update") = t("agent.issue.update") => {
             #[arg(long, help = t("agent.number"))]
             number: u64,
-            #[arg(long, help = t("agent.title"))]
+            #[arg(long, help = t("agent.issue.update.title"))]
             title: Option<String>,
             #[arg(long, help = t("agent.body"))]
             body: Option<String>,
