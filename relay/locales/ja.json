@@ -360,7 +360,7 @@
   "sgw.cmd.relay": "ゲートウェイの sekimore-relay の任意のサブコマンド: sgw gw relay <subcommand> [args…]",
   "sgw.cmd.unlock_auto": "このホストに保存したパスフレーズ（Keychain / Secret Service / root 所有のファイル）で秘密ストアを解錠する。無ければ何もせず 0",
   "sgw.cmd.keychain_set": "秘密ストアのパスフレーズをこのホストの keychain に一度だけ保存し、以後 recreate が自分で解錠できるようにする",
-  "sgw.cmd.recreate": "compose が宣言するイメージを pull してゲートウェイを作り直し（restart では入れ替わらない）、config.yml にあるサイドカーのサービス（sekimore-<名前>）を起動し、パスフレーズがあればストアを解錠する",
+  "sgw.cmd.recreate": "compose が宣言するイメージを pull してゲートウェイを作り直し（restart では入れ替わらない）、config.yml にあるサイドカーのサービス（sekimore-<名前>）も作り直し、パスフレーズがあればストアを解錠する",
   "sgw.cmd.recreate.no_unlock": "作り直したあとストアを施錠したままにする",
   "sgw.cmd.restart": "ゲートウェイを再起動する（config.yml の domain_handlers / relay を変えたあと。dev は動いたまま）",
   "sgw.cmd.logs": "ゲートウェイのコンテナのログを追う",

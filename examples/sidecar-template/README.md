@@ -60,12 +60,13 @@ services:
 On the host, once `config.yml`, the credential and the compose service are in place:
 
 ```sh
-sgw recreate      # the gateway reads config.yml again, and sekimore-notes is started
+sgw recreate      # the gateway reads config.yml again, and sekimore-notes is (re)created
 sgw refresh       # only if `sgw-agent notes --help` in dev does not list the commands yet
 ```
 
-`sgw recreate` brings up `sekimore-<name>` for every name under `relay.sidecars` that the
-compose declares, and nothing else of the stack (not dev). A configured sidecar with no such
+`sgw recreate` recreates `sekimore-<name>` for every name under `relay.sidecars` that the
+compose declares, running or not, and nothing else of the stack (not dev). The template keeps
+its notes in memory, so `sgw recreate` empties them. A configured sidecar with no such
 service is named in one line. It then runs the agent's setup in dev, which reads the commands;
 a sidecar still starting at that moment is listed as not available, and `sgw refresh` reads them
 again. Rebuild Container is not needed.
@@ -76,7 +77,9 @@ Later:
 |---|---|
 | `config.yml` (permissions, credentials, a new sidecar) | `sgw recreate`, then `sgw refresh` if needed |
 | The sidecar's service in compose | `sgw recreate` |
-| `sidecar.py` itself (its commands) | `docker restart <project>-sekimore-notes-1` (`docker ps` shows the name), then `sgw recreate`: the gateway keeps the describe it read |
+| `sidecar.py` itself (its commands) | `sgw recreate`, then `sgw refresh` if needed |
+
+Each `sgw recreate` restarts the sidecar: the template's notes are lost.
 
 ## Use it
 

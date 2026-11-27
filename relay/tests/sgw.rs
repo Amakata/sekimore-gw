@@ -319,12 +319,12 @@ fn recreate_brings_up_the_command_sidecars_the_config_lists() {
         .unwrap_or_else(|| panic!("the gateway and the forge relay first: {log}"));
     let side = lines
         .iter()
-        .position(|l| l.contains(" up -d --no-deps "))
+        .position(|l| l.contains(" --no-deps "))
         .unwrap_or_else(|| panic!("no sidecar up: {log}"));
     assert!(side > gw, "{log}");
     assert!(
-        lines[side].ends_with(" up -d --no-deps sekimore-notes"),
-        "only the command sidecar, never dev: {}",
+        lines[side].ends_with(" up -d --force-recreate --no-deps sekimore-notes"),
+        "only the command sidecar, recreated, never dev: {}",
         lines[side]
     );
     assert!(stdout.contains("sidecars: sekimore-notes"), "{stdout}");

@@ -59,7 +59,7 @@ pub fn configured_sidecars(config_yml: &str) -> Result<Vec<String>, String> {
 }
 
 /// #480: what `recreate` does for the configured sidecars beyond moving the forge ones with the
-/// gateway: the services to bring up (`sekimore-<name>`, declared by the compose), and the
+/// gateway: the services to recreate (`sekimore-<name>`, declared by the compose), and the
 /// configured names the compose declares no service for. The prefix keeps `dev` and every service
 /// outside the convention out; `gw` would name the gateway, which is recreated already. A name
 /// that is not a word is left alone (the gateway refuses it).
@@ -532,7 +532,7 @@ impl Docker {
         }
         let new = self.find_container(GATEWAY)?;
         println!("after:   {}", self.inspect(&new, "{{.Image}}")?);
-        self.start_command_sidecars(&new, &compose, &services);
+        self.recreate_command_sidecars(&new, &compose, &services);
         print!("{}", crate::i18n::t("sgw.waiting"));
         std::io::stdout().flush().ok();
         for _ in 0..30 {
@@ -562,12 +562,14 @@ impl Docker {
         Ok(())
     }
 
-    /// #480: bring up the command sidecars' services (`sekimore-<name>` for each name under
+    /// #480: recreate the command sidecars' services (`sekimore-<name>` for each name under
     /// `relay.sidecars`) that the compose declares. The names come from the config.yml the new
     /// gateway reads, through the gateway as every other `sgw` command learns its configuration,
-    /// so they are the ones the gateway now serves. `up -d --no-deps`: created or started, and
-    /// nothing else in the stack touched. Never fails the recreate: the gateway is already up.
-    fn start_command_sidecars(&self, gateway: &str, compose: &[String], services: &str) {
+    /// so they are the ones the gateway now serves. `up -d --force-recreate --no-deps`: a sidecar
+    /// holds no state (the protocol says so), and one left running would keep serving its old
+    /// code and describe beside a gateway that has just re-read it. Nothing else in the stack is
+    /// touched. Never fails the recreate: the gateway is already up.
+    fn recreate_command_sidecars(&self, gateway: &str, compose: &[String], services: &str) {
         let read = [
             "sh".to_string(),
             "-c".to_string(),
@@ -602,7 +604,12 @@ impl Docker {
         }
         println!("sidecars: {}", start.join(" "));
         let mut up = compose.to_vec();
-        up.extend(["up".into(), "-d".into(), "--no-deps".into()]);
+        up.extend([
+            "up".into(),
+            "-d".into(),
+            "--force-recreate".into(),
+            "--no-deps".into(),
+        ]);
         up.extend(start.iter().cloned());
         if !matches!(self.run(&up), Ok(0)) {
             eprintln!(
@@ -669,7 +676,7 @@ mod tests {
         );
     }
 
-    /// #480: a command sidecar's service is `sekimore-<name>`, brought up when the compose has it
+    /// #480: a command sidecar's service is `sekimore-<name>`, recreated when the compose has it
     /// and named when it does not; dev, the gateway and the forge relays are not its business.
     #[test]
     fn a_recreate_brings_up_the_configured_sidecars_services_and_nothing_else() {
