@@ -1,17 +1,1 @@
-# Shared fixture: the traditional configuration, no relay. Read by both the Python tests and the Rust relay tests.
-name: fixture-without-relay
-allow_domains:
-  - pypi.org
-  - .github.com
-  - api.openai.com
-block_domains:
-  - evil.example.com
-ignore_domains: []
-allow_ips: []
-block_ips: []
-proxy:
-  enabled: false
-  port: 3128
-network:
-  lan_subnets: []
-database_path: /data/security_gateway.db
+../../relay/tests/fixtures/config_without_relay.yml
