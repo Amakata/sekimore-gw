@@ -80,6 +80,15 @@ pub async fn mock_github() -> (Url, Recorder) {
                             headers,
                             body: body.clone(),
                         });
+                        if let Some(location) = log_redirect(&method, &path) {
+                            return Ok::<_, std::convert::Infallible>(
+                                Response::builder()
+                                    .status(StatusCode::FOUND)
+                                    .header("location", location)
+                                    .body(Full::new(Bytes::new()))
+                                    .unwrap(),
+                            );
+                        }
                         // #479: a token GitHub no longer accepts, answered the way GitHub
                         // answers it (pretty-printed, so the error spans lines)
                         let (status, text) = if revoked {
@@ -139,6 +148,115 @@ fn percent_decode(s: &str) -> String {
 /// the whole binary.
 static UPSTREAM_COMMITS: std::sync::LazyLock<Mutex<std::collections::HashSet<String>>> =
     std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+
+/// #485: job logs the mock upstream answers with a redirect to somewhere else, by job id — what
+/// GitHub does with `GET /repos/{repo}/actions/jobs/{id}/logs`, sending the client on to a
+/// storage host. Job ids are unique per test, so one map serves the whole binary.
+static LOG_REDIRECTS: std::sync::LazyLock<Mutex<std::collections::HashMap<u64, String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Tell the mock to answer this job's log with a 302 to `location`.
+pub fn upstream_redirects_log(job_id: u64, location: &str) {
+    LOG_REDIRECTS
+        .lock()
+        .unwrap()
+        .insert(job_id, location.to_string());
+}
+
+fn log_redirect(method: &str, path: &str) -> Option<String> {
+    if method != "GET" {
+        return None;
+    }
+    let p = path.split('?').next().unwrap_or(path);
+    let id: u64 = p
+        .strip_suffix("/logs")?
+        .rsplit_once("/actions/jobs/")?
+        .1
+        .parse()
+        .ok()?;
+    LOG_REDIRECTS.lock().unwrap().get(&id).cloned()
+}
+
+/// #485: what the mock storage host answers, by path.
+pub enum Stored {
+    /// 200 with this body
+    Body(Vec<u8>),
+    /// 302 to this location
+    Redirect(String),
+}
+
+static STORED: std::sync::LazyLock<Mutex<std::collections::HashMap<String, Arc<Stored>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Tell the mock storage host what to answer at `path`. Paths are unique per test.
+pub fn storage_holds(path: &str, what: Stored) {
+    STORED
+        .lock()
+        .unwrap()
+        .insert(path.to_string(), Arc::new(what));
+}
+
+/// The name the fixture's storage host goes by: the gateway's fetcher (and nothing else) is told
+/// where it is, the way only the gateway can reach a real one.
+pub const STORAGE_HOST: &str = "storage.test";
+
+/// #485: a storage host, where the mock upstream sends a job's log: records what it was asked
+/// (headers included) and answers from `storage_holds`, 404 otherwise.
+pub async fn mock_storage() -> (SocketAddr, Recorder) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let rec: Recorder = Arc::new(Mutex::new(Vec::new()));
+    let rec2 = rec.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let rec = rec2.clone();
+            tokio::spawn(async move {
+                let svc = service_fn(move |req: Request<Incoming>| {
+                    let rec = rec.clone();
+                    async move {
+                        let path = req.uri().path().to_string();
+                        rec.lock().unwrap().push(Recorded {
+                            method: req.method().to_string(),
+                            path: req
+                                .uri()
+                                .path_and_query()
+                                .map(|p| p.to_string())
+                                .unwrap_or_default(),
+                            headers: req
+                                .headers()
+                                .iter()
+                                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                                .collect(),
+                            body: serde_json::Value::Null,
+                        });
+                        let what = STORED.lock().unwrap().get(&path).cloned();
+                        let resp = match what.as_deref() {
+                            Some(Stored::Body(b)) => Response::builder()
+                                .status(StatusCode::OK)
+                                .header("content-type", "text/plain")
+                                .body(Full::new(Bytes::from(b.clone()))),
+                            Some(Stored::Redirect(l)) => Response::builder()
+                                .status(StatusCode::FOUND)
+                                .header("location", l.as_str())
+                                .body(Full::new(Bytes::new())),
+                            None => Response::builder()
+                                .status(StatusCode::NOT_FOUND)
+                                .body(Full::new(Bytes::new())),
+                        };
+                        Ok::<_, std::convert::Infallible>(resp.unwrap())
+                    }
+                });
+                let _ = http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), svc)
+                    .await;
+            });
+        }
+    });
+    (addr, rec)
+}
 
 /// Tell the mock that the upstream holds this commit.
 pub fn upstream_holds_commit(sha: &str) {
@@ -854,6 +972,9 @@ pub struct ApiFixture {
     /// The upstream token store, so a test can give the relay a token after start-up — which is
     /// what unlocking the secret store looks like from the relay's side (#99).
     pub tokens: Arc<UpstreamTokenStore>,
+    /// #485: the storage host's address (it goes by `STORAGE_HOST` in URLs) and what it was asked
+    pub storage: SocketAddr,
+    pub storage_recorder: Recorder,
 }
 
 /// The Projects v2 board the fixture allows by default, so tests that are not about board scoping
@@ -984,15 +1105,27 @@ pub async fn start_api_with_commands(
             .await
             .unwrap();
     }
-    let http = reqwest::Client::builder().no_proxy().build().unwrap();
+    // The client the gateway builds, so it follows redirects the way the gateway's does (#485)
+    let client = || {
+        sekimore_relay::github::http::build_client(&sekimore_relay::github::http::HttpOptions {
+            no_env_proxy: true,
+            ..Default::default()
+        })
+        .unwrap()
+    };
+    let (storage, storage_recorder) = mock_storage().await;
+    let fetcher = Arc::new(
+        sekimore_relay::github::redirect::Fetcher::for_tests(
+            audit.clone(),
+            &[(STORAGE_HOST.to_string(), storage)],
+        )
+        .unwrap(),
+    );
     let gh_api = (api_base.clone(), graphql.clone());
-    let gh = Arc::new(GitHub::new(
-        api_base,
-        graphql,
-        http,
-        store.clone(),
-        audit.clone(),
-    ));
+    let gh = Arc::new(
+        GitHub::new(api_base, graphql, client(), store.clone(), audit.clone())
+            .with_fetcher(fetcher.clone()),
+    );
     // #291: a second upstream, so a board declared on it can be seen to be asked there
     let (ghe_base, ghe_recorder) = mock_github().await;
     let ghe_graphql = Url::parse(&format!(
@@ -1001,13 +1134,16 @@ pub async fn start_api_with_commands(
     ))
     .unwrap();
     let ghe_api = (ghe_base.clone(), ghe_graphql.clone());
-    let ghe = Arc::new(GitHub::new(
-        ghe_base,
-        ghe_graphql,
-        reqwest::Client::builder().no_proxy().build().unwrap(),
-        store.clone(),
-        audit.clone(),
-    ));
+    let ghe = Arc::new(
+        GitHub::new(
+            ghe_base,
+            ghe_graphql,
+            client(),
+            store.clone(),
+            audit.clone(),
+        )
+        .with_fetcher(fetcher.clone()),
+    );
     let audit_for_commands = audit.clone();
     let tokens = TokenStore::new(&dir.path().join("tokens.json"));
     let (token, _) = tokens
@@ -1025,6 +1161,7 @@ pub async fn start_api_with_commands(
             ],
             store.clone(),
             audit.clone(),
+            fetcher,
         ),
         audit,
         keys: Arc::new(AuthorizedKeys::new(&dir.path().join("authorized_keys"), 8)),
@@ -1055,6 +1192,8 @@ pub async fn start_api_with_commands(
         token,
         audit_path,
         tokens: store,
+        storage,
+        storage_recorder,
     }
 }
 
@@ -1127,6 +1266,7 @@ pub fn relays_for(
     upstreams: Vec<(&str, Arc<GitHub>, (Url, Url))>,
     tokens: Arc<UpstreamTokenStore>,
     audit: Arc<Audit>,
+    fetcher: Arc<sekimore_relay::github::redirect::Fetcher>,
 ) -> sekimore_relay::forge::Relays {
     use sekimore_relay::forge::sidecar;
     let mut relays = sekimore_relay::forge::Relays::new();
@@ -1166,6 +1306,7 @@ pub fn relays_for(
                 tokens.clone(),
                 audit.clone(),
                 resources.clone(),
+                fetcher.clone(),
             )),
         );
     }

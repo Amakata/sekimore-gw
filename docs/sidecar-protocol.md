@@ -16,7 +16,9 @@ library only).
 | Endpoints | `GET /describe`, `POST /call`, `/query`, `/open-pr` | `GET /describe`, `POST /command` |
 | Written by | this project | anyone |
 
-This document is about command sidecars.
+This document is about command sidecars. One part of the forge relay's reply is described here
+too, because it changes what a sidecar may leave to the gateway:
+[an answer on another host](#forge-relays-an-answer-on-another-host).
 
 ## How a call travels
 
@@ -327,6 +329,37 @@ passthrough, so its traffic passes the same SNI check, upload cap and audit as d
    ```
 
    A name not under `domain_handlers` goes to the default upstream, not to your service.
+
+## Forge relays: an answer on another host
+
+Some upstream answers send the client to another host: GitHub answers a job's log
+(`GET /repos/{repo}/actions/jobs/{id}/logs`) with a redirect to a storage host. A sidecar's only
+way out is the passthrough for the API's own host, so it does not follow such a redirect. It
+answers `/call` with `fetch` in place of `response`:
+
+```json
+{
+  "fetch": {
+    "url": "https://storage.example.net/logs/1?sig=…",
+    "then": {"kind": "ci_log", "job_id": 1, "job_name": "", "conclusion": "", "window": 200, "before": null}
+  },
+  "calls": [{"method": "GET", "path": "/repos/o/r/actions/jobs/1/logs", "status": 302}]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `fetch.url` | The upstream's `Location`, resolved against the request's URL |
+| `fetch.then` | What is left of the operation once the body is in. `ci_log` is the only kind, and the gateway takes it only for `/ci/log` |
+
+The gateway fetches `url` itself and shapes the answer from `then`. The fetch carries no
+credential, goes only to `https` and to public addresses (never loopback, private, link-local
+or carrier-grade NAT ranges, nor the gateway's own addresses), follows at most 3 more redirects,
+each checked the same way, and reads at most 16 MiB. Each hop is audited as `redirect_fetch`, a
+refusal as `redirect_refused`, with the host and the path and never the query string.
+
+The built-in relay follows the same rules: its API client follows a redirect only on the API's
+own origin, and hands one that leaves it to the same fetch.
 
 ## Writing the guide
 

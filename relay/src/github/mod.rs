@@ -14,6 +14,7 @@
 
 pub mod device_flow;
 pub mod http;
+pub mod redirect;
 pub mod upstream_token;
 
 use std::collections::HashMap;
@@ -35,7 +36,7 @@ use upstream_token::{TokenError, UpstreamTokenStore};
 pub const API_VERSION: &str = "2022-11-28";
 const RESPONSE_CAP: usize = 1 << 20;
 /// CI logs are large. The relay truncates them to the tail before returning, but caps the fetch at 16 MiB.
-const CI_LOG_CAP: usize = 16 << 20;
+pub const CI_LOG_CAP: usize = 16 << 20;
 /// #173: how many files of a pull request are asked for at once. Every file's patch comes with it
 /// whether or not it is wanted, and `rest` truncates at `RESPONSE_CAP` (1 MiB) — a response cut
 /// mid-JSON does not parse — so the page is kept well inside that rather than GitHub's 100.
@@ -79,6 +80,10 @@ pub enum GhError {
     /// 0.2.34 (#172): the upstream would have allowed it and the relay would not. Its own variant
     /// so the audit can tell "we refused" apart from "GitHub refused"
     Refused(String),
+    /// #485: the upstream answered with a redirect off its API host, and this client has no
+    /// [`redirect::Fetcher`] to follow it with — a sidecar's, which has no egress. The caller
+    /// hands the URL to the gateway, which does.
+    Elsewhere(Url),
 }
 
 impl fmt::Display for GhError {
@@ -111,6 +116,12 @@ impl fmt::Display for GhError {
             GhError::Parse(m) => write!(f, "parse upstream response: {m}"),
             GhError::Graphql(m) => write!(f, "graphql: {m}"),
             GhError::Refused(m) => write!(f, "{m}"),
+            // The query is left out: on a storage host it is a signature
+            GhError::Elsewhere(u) => write!(
+                f,
+                "the upstream sent this request on to {}, and this relay has no way to follow it",
+                u.host_str().unwrap_or("another host")
+            ),
         }
     }
 }
@@ -391,6 +402,9 @@ pub struct GitHub {
     /// 0.2.34 (#172): who the token belongs to, read once. It cannot change without the token
     /// changing, and checking a comment's author on every edit would otherwise pay for it twice
     viewer: std::sync::OnceLock<String>,
+    /// #485: how an answer that leaves the API host is followed. The gateway's client has one;
+    /// a sidecar's has none, and hands the URL back as [`GhError::Elsewhere`]
+    fetcher: Option<Arc<redirect::Fetcher>>,
     /// #228: the ledger edge every `api_call` is written on — direct, via the upstream proxy,
     /// or via the local Squid — decided once from the proxy config (`paths::github_route`).
     route: &'static str,
@@ -423,8 +437,15 @@ impl GitHub {
             tokens,
             calls,
             viewer: std::sync::OnceLock::new(),
+            fetcher: None,
             route: paths::RELAY_GITHUB_API,
         }
+    }
+
+    /// #485: follow an answer that leaves the API host with `fetcher` (the gateway's client).
+    pub fn with_fetcher(mut self, fetcher: Arc<redirect::Fetcher>) -> Self {
+        self.fetcher = Some(fetcher);
+        self
     }
 
     /// Names the hop this client's calls take (see `paths::github_route`).
@@ -733,6 +754,36 @@ pub struct CiLogPage {
     pub lines: Vec<String>,
     /// Whether older lines exist before this window; if so, --before start walks further back
     pub has_more_before: bool,
+}
+
+impl CiLogPage {
+    /// The window of `text` ending just before `before` (`None`: the end), at most 2000 lines.
+    /// #485: apart from the fetch, so the gateway can page a log it fetched for a sidecar.
+    pub fn of(
+        text: &str,
+        job_id: u64,
+        job_name: &str,
+        conclusion: &str,
+        window: usize,
+        before: Option<usize>,
+    ) -> Self {
+        let all: Vec<&str> = text.lines().collect();
+        let total = all.len();
+        let window = window.clamp(1, 2000);
+        let end = before.unwrap_or(total).min(total);
+        let start = end.saturating_sub(window);
+        let lines = all[start..end].iter().map(|s| s.to_string()).collect();
+        CiLogPage {
+            job_id,
+            job_name: job_name.to_string(),
+            conclusion: conclusion.to_string(),
+            total_lines: total,
+            start,
+            end,
+            lines,
+            has_more_before: start > 0,
+        }
+    }
 }
 
 /// One file in a pull request, without its patch. What `pr files` answers with.
@@ -1261,22 +1312,9 @@ impl GitHub {
         let text = self
             .rest_text("GET", &format!("/repos/{repo}/actions/jobs/{job_id}/logs"))
             .await?;
-        let all: Vec<&str> = text.lines().collect();
-        let total = all.len();
-        let window = window.clamp(1, 2000);
-        let end = before.unwrap_or(total).min(total);
-        let start = end.saturating_sub(window);
-        let lines = all[start..end].iter().map(|s| s.to_string()).collect();
-        Ok(CiLogPage {
-            job_id,
-            job_name: job_name.to_string(),
-            conclusion: conclusion.to_string(),
-            total_lines: total,
-            start,
-            end,
-            lines,
-            has_more_before: start > 0,
-        })
+        Ok(CiLogPage::of(
+            &text, job_id, job_name, conclusion, window, before,
+        ))
     }
 
     /// #173: the files a pull request touches, without their patches.
@@ -2402,7 +2440,12 @@ query($project:ID!,$first:Int!,$after:String,$fields:Int!){
         self.send(req, method, path).await
     }
 
-    /// Endpoints that return plain text (Actions job logs and the like). reqwest follows the redirects.
+    /// Endpoints that return plain text (Actions job logs and the like).
+    ///
+    /// #485: GitHub answers a job's log with a redirect to a storage host. The client follows a
+    /// redirect only on the API's own origin (`http::build_client`), so that one arrives here as
+    /// the 3xx: the token stays behind, and the `Location` goes to the fetcher — or, with none
+    /// (a sidecar), back to the caller as [`GhError::Elsewhere`].
     async fn rest_text(&self, method: &str, path: &str) -> Result<String, GhError> {
         let token = self.tokens.token().await?;
         let m = reqwest::Method::from_bytes(method.as_bytes())
@@ -2415,8 +2458,24 @@ query($project:ID!,$first:Int!,$after:String,$fields:Int!){
             .header("X-GitHub-Api-Version", API_VERSION);
         let resp = req.send().await?;
         let status = resp.status().as_u16();
-        let body = read_limited(resp, CI_LOG_CAP).await?;
         let audit_path = path.split('?').next().unwrap_or(path);
+        if resp.status().is_redirection() {
+            self.calls.api_call(self.route, method, audit_path, status);
+            let Some(location) = redirect::location(&resp) else {
+                return Err(GhError::Status {
+                    method: method.to_string(),
+                    path: audit_path.to_string(),
+                    status,
+                    body: "a redirect without a usable Location".into(),
+                });
+            };
+            let body = match &self.fetcher {
+                Some(f) => f.fetch(&location, CI_LOG_CAP, &[]).await?,
+                None => return Err(GhError::Elsewhere(location)),
+            };
+            return Ok(String::from_utf8_lossy(&body).into_owned());
+        }
+        let body = read_limited(resp, CI_LOG_CAP).await?;
         self.calls.api_call(self.route, method, audit_path, status);
         if status >= 400 {
             return Err(GhError::Status {
@@ -2459,10 +2518,26 @@ query($project:ID!,$first:Int!,$after:String,$fields:Int!){
     ) -> Result<T, GhError> {
         let resp = req.send().await?;
         let status = resp.status().as_u16();
+        // #485: a redirect off the API's origin is not followed (`http::build_client`). No JSON
+        // endpoint the relay calls answers with one; say so rather than parse an empty body
+        let off_origin = redirect::location(&resp).map(|to| {
+            format!(
+                "a redirect to {}, which the relay does not follow",
+                to.host_str().unwrap_or("another host")
+            )
+        });
         let body = read_limited(resp, RESPONSE_CAP).await?;
         // The query string is not worth auditing (the values are long).
         let audit_path = path.split('?').next().unwrap_or(path);
         self.calls.api_call(self.route, method, audit_path, status);
+        if let Some(why) = off_origin {
+            return Err(GhError::Status {
+                method: method.to_string(),
+                path: audit_path.to_string(),
+                status,
+                body: why,
+            });
+        }
         if status >= 400 {
             return Err(GhError::Status {
                 method: method.to_string(),
@@ -3549,5 +3624,46 @@ mod tests {
             "error sending request: received fatal alert: HandshakeFailure"
         );
         assert!(!hint_for_chain(&chain).is_empty());
+    }
+
+    /// #485: a JSON call whose answer leaves the API's origin says so, naming the host, instead
+    /// of parsing the empty body of a 302 as `null`.
+    #[tokio::test]
+    async fn a_json_answer_that_leaves_the_origin_is_an_error_naming_the_host() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).await;
+            let _ = s
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: https://elsewhere.example.net/user?sig=S\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(UpstreamTokenStore::in_memory(
+            "upstream.test",
+            &dir.path().join("t"),
+        ));
+        store.save("upstream.test", "gho_x", "repo").await.unwrap();
+        let gh = GitHub::new(
+            Url::parse(&format!("http://127.0.0.1:{port}/api/v3")).unwrap(),
+            Url::parse(&format!("http://127.0.0.1:{port}/api/graphql")).unwrap(),
+            http::build_client(&http::HttpOptions {
+                no_env_proxy: true,
+                ..Default::default()
+            })
+            .unwrap(),
+            store,
+            Arc::new(Audit::disabled()),
+        );
+        let e = gh.whoami().await.unwrap_err().to_string();
+        assert!(e.contains("HTTP 302"), "{e}");
+        assert!(e.contains("elsewhere.example.net"), "{e}");
+        assert!(e.contains("does not follow"), "{e}");
+        assert!(!e.contains("sig=S"), "the query is not repeated: {e}");
     }
 }
