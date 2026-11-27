@@ -11,6 +11,26 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.3.0-alpha.3（2026-11-27）
+
+### Security
+
+- url 2.5.8 -> 2.5.9 と form_urlencoded 1.2.2 -> 1.2.3 (RUSTSEC-2026-0592)。0.2.78 から取り込んだ (#488)
+
+### Fix
+
+- gateway は allow list の名前解決を待たずに DNS を開く。名前は 8 つずつ、1 つ 15 秒までで引くので、上流の resolver に届かなくても DNS が何分も閉じたままにならない (#483)
+- 上流が relay のトークンに 401 を返したときは、そのとおりに報告して `sgw login` を案内する。board の拒否、`sgw verify`、`sgw check` が対象で、`sgw check` はトークンが受け入れられるかを上流に尋ねる (#484)
+- relay が応える名前の実アドレスは、gateway 自身からの問い合わせとキャッシュの更新でも allow ipset に入れない。ほかの経路では以前からそうだった (#486)
+- サイドカー経由でも `ci log` が動く。gateway がリダイレクト先のジョブログを、資格情報なし、https、公開アドレスだけで取る。API クライアントは API の origin の外へのリダイレクトを辿らなくなり、プライベートアドレスのストレージは拒否される (#491)
+- `issue update --help` の `--title` に固有の文言を出す。`sgw update` の表がプレリリースでも崩れない (#489)
+
+### Enhancement
+
+- `sgw recreate` が `config.yml` のサイドカーの `sekimore-<name>` サービスも作り直す。コマンドサイドカーの追加は Rebuild Container ではなく `sgw recreate`。雛形の README に、変更ごとに必要な操作を載せた (#489)
+- `/describe` に 1 行の `about` を任意で書け、`sgw-agent --help` がサイドカーの説明として表示する。サイドカーが端末に出す文字列を gateway が検査し、help に改行や `[` `]` を含む describe は拒否される (#489)
+- 0.2.78 を取り込んだ (#492)
+
 ## 0.3.0-alpha.2（2026-11-17）
 
 ### Security

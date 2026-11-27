@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.3.0-alpha.2 -->
+<!-- reviewed-up-to: 0.3.0-alpha.3 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -45,6 +45,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.69 – 0.2.70 | [0.2.71](#0271-claude-code-codex-and-the-skills-come-from-your-image), **everyone: check the Dockerfile has `sgw-install-ai`, then Rebuild Container** |
 | 0.2.71 | [0.3.0-alpha.1](#030-alpha1-the-github-api-can-run-in-a-sidecar-prerelease), **only if you move to the 0.3 prerelease and want the github sidecar** |
 | 0.3.0-alpha.1 | [0.3.0-alpha.2](#030-alpha2-languages-live-in-optmise-prerelease), **only if your Dockerfile installs languages or writes under `/usr/local/share`** |
+| 0.3.0-alpha.2 | [0.3.0-alpha.3](#030-alpha3-sidecar-text-is-checked-and-recreate-starts-sidecars-prerelease), **only if you run a command sidecar or a GitHub Enterprise Server whose Actions storage is on a private address** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -1006,3 +1007,17 @@ The base image no longer gives `/usr/local/share` to `vscode`, and the template 
 copies and they win over the image's; start it empty once.
 
 Nothing to do for a project whose Dockerfile installs nothing of its own.
+
+## 0.3.0-alpha.3 Sidecar text is checked, and recreate starts sidecars (prerelease)
+
+A prerelease of the 0.3 line, installed the same way as 0.3.0-alpha.1 (`--version 0.3.0-alpha.3`).
+
+- **Command sidecars:** adding one is now `sgw recreate`, not Rebuild Container. The service of the
+  sidecar `<name>` must be called `sekimore-<name>` in the compose file for `sgw recreate` to start it.
+- **Sidecar authors:** the gateway now refuses a `/describe` whose `about` or `help` is not one line of
+  at most 120 characters, or holds a control character, a bidi override, `[` or `]`
+  (`sidecar_refused`). Fix the text in `sidecar.py`, then `sgw recreate`.
+- **GitHub Enterprise Server:** `ci log` follows the job log's redirect only to an https address
+  that is public. Actions storage on a private address is refused.
+
+Nothing to do for a project with no command sidecar and no GHES.
