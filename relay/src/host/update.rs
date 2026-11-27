@@ -644,6 +644,32 @@ pub fn newer_lang_tag(
 pub fn lang_of(image: &str) -> &str {
     image.strip_prefix(LANG_IMAGE).unwrap_or(image)
 }
+
+/// #480: the version table, each column as wide as its widest cell. A fixed width of 10 lost its
+/// columns to a prerelease (`0.3.0-alpha.2`). Widths are display columns: the Japanese headers
+/// (`いま`, `最新`) take two each per character. The last column is not padded.
+fn columns(rows: &[[String; 4]]) -> String {
+    use crate::cli::operator::{display_width, pad_label};
+    let mut widths = [0usize; 3];
+    for row in rows {
+        for (w, cell) in widths.iter_mut().zip(row) {
+            *w = (*w).max(display_width(cell));
+        }
+    }
+    let mut out = String::new();
+    for row in rows {
+        let mut line = String::new();
+        for (w, cell) in widths.iter().zip(row) {
+            line.push_str(&pad_label(cell, *w));
+            line.push(' ');
+        }
+        line.push_str(&row[3]);
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    out
+}
+
 // ---- the run ---------------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -796,12 +822,12 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
             t("sgw.update.update")
         }
     };
-    println!(
-        "{:<12} {:<10} {:<10}",
-        "",
+    let mut table: Vec<[String; 4]> = vec![[
+        String::new(),
         t("sgw.update.col_pinned"),
-        t("sgw.update.col_newest")
-    );
+        t("sgw.update.col_newest"),
+        String::new(),
+    ]];
     // #390: a release newer than this sgw is what the project moves to, through `--apply`; showing
     // this sgw's own version as the newest read as "nothing to do"
     let row = |cur: &str, new: &str| -> (String, String) {
@@ -815,18 +841,18 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         ("base", &cur_base, &new_base),
     ] {
         let (newest, st) = row(cur, new);
-        println!("{:<12} {:<10} {:<10} {}", what, cur, newest, st);
+        table.push([what.to_string(), cur.to_string(), newest, st]);
     }
     for (pin, to) in &lang_rows {
         let to = to.as_deref().unwrap_or(&pin.tag);
-        println!(
-            "{:<12} {:<10} {:<10} {}",
-            lang_of(&pin.image),
-            pin.tag,
-            to,
-            state(&pin.tag, to)
-        );
+        table.push([
+            lang_of(&pin.image).to_string(),
+            pin.tag.clone(),
+            to.to_string(),
+            state(&pin.tag, to),
+        ]);
     }
+    print!("{}", columns(&table));
     if let Some(v) = &newer_sgw {
         println!(
             "{}",
@@ -1213,6 +1239,30 @@ mod tests {
 
     fn strings(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// #480: a prerelease is wider than the old fixed column, and the Japanese headers are double
+    /// width; every column still starts where its header does.
+    #[test]
+    fn the_version_table_is_as_wide_as_what_it_holds() {
+        let row = |a: &str, b: &str, c: &str, d: &str| -> [String; 4] {
+            [a.into(), b.into(), c.into(), d.into()]
+        };
+        let out = columns(&[
+            row("", "いま", "最新", ""),
+            row("gateway", "0.3.0-alpha.2", "0.3.0-alpha.2", "最新"),
+            row("base", "0.2.9", "0.3.0-alpha.2", "更新あり"),
+        ]);
+        assert_eq!(
+            out,
+            "        いま          最新\n\
+             gateway 0.3.0-alpha.2 0.3.0-alpha.2 最新\n\
+             base    0.2.9         0.3.0-alpha.2 更新あり\n"
+        );
+        use crate::cli::operator::display_width;
+        let lines: Vec<&str> = out.lines().collect();
+        let col = |line: &str, needle: &str| display_width(&line[..line.find(needle).unwrap()]);
+        assert_eq!(col(lines[0], "最新"), col(lines[2], "0.3.0-alpha.2"));
     }
 
     /// #378: the language images a Dockerfile copies from, with literal tags only.

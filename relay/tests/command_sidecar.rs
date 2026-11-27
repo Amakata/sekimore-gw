@@ -31,6 +31,7 @@ fn describe() -> Value {
         "name": "notes",
         "version": "1.0.0",
         "resources": ["notes"],
+        "about": "Short notes for this project",
         "guide": "## Notes\n\nsgw-agent notes note add --text …   [notes:write]\n",
         "commands": [
             {
@@ -314,6 +315,8 @@ async fn relays_lists_each_sidecar_with_what_the_project_may_run() {
     assert_eq!(names, ["github", "notes"]);
     let notes = &list.relays[1];
     assert!(notes.available && notes.guide.contains("## Notes"));
+    // #480: the sidecar's line in `sgw-agent --help`
+    assert_eq!(notes.about, "Short notes for this project");
     let granted: Vec<(&str, bool)> = notes
         .commands
         .iter()

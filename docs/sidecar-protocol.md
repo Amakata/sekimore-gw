@@ -53,6 +53,7 @@ Who the sidecar is and what it offers.
   "name": "notes",
   "version": "0.1.0",
   "resources": ["notes"],
+  "about": "Short notes kept for this project",
   "guide": "## notes\n\n- `sgw-agent notes note add --text <text>` adds a note [notes:write]\n",
   "commands": [
     {
@@ -75,10 +76,11 @@ Who the sidecar is and what it offers.
 | `name` | yes | Must equal the key under `relay.sidecars` |
 | `version` | yes | Free text, logged |
 | `resources` | yes | The resources its permissions use |
+| `about` | no | One line for the sidecar's entry in `sgw-agent --help`. Without it, the entry lists the commands |
 | `guide` | yes | How to use it, for the agent ([below](#writing-the-guide)) |
 | `commands` | no | The commands |
 | `commands[].name` | yes | 1–3 words, space-separated: `note add` |
-| `commands[].about` | yes | One line for `--help` |
+| `commands[].about` | yes | One line for `--help`. A group (`note` of `note add`) has no text of its own: its `--help` line lists the words under it |
 | `commands[].permission` | yes | `<resource>:<action>`, the resource one of its own |
 | `commands[].args` | no | The arguments |
 | `args[].name` | yes | `--<name>` on the command line, `"<name>"` on the wire |
@@ -113,6 +115,8 @@ A **word** is lower-case letters, digits, `_` and `-`, starting with a letter.
 | an argument name is a word, and not `help` | `Text`, `help` |
 | no argument is declared twice | two `text` |
 | a `bool` argument is not `required` | `{"kind": "bool", "required": true}` |
+| `about`, `commands[].about` and `args[].help` are one line of at most 120 characters, with no control character and no `[` or `]` | `"Notes\nhelp  Print this message"`, `"Notes [not available: …]"` |
+| `guide` has no control character but newline and tab | an escape sequence (`\u001b[2J`) |
 
 The configuration adds:
 
@@ -129,8 +133,9 @@ A refused describe is audited as `sidecar_refused`, and every call answers 503 w
 - On the first call or the first `GET /relays` (agent setup), then kept.
 - A failed read is not kept: the sidecar may still be starting, and the next call looks again.
 - When a call names a command the kept describe does not have, it is read once more. A sidecar
-  updated in place gets its new commands without restarting the gateway (and into
-  the agent's CLI with `sgw refresh`).
+  updated in place answers its new commands without restarting the gateway, but `GET /relays`
+  keeps listing the describe it read. `sgw recreate` recreates the gateway and the sidecar both,
+  and the agent's CLI then shows them.
 
 ## `POST /command`
 
@@ -228,12 +233,20 @@ relay:
 
   A value written in `config.yml` is refused: the file is in the worktree, readable from dev.
 - `upstreams` is for forge relays only.
-- After adding or changing a sidecar, the operator runs `sgw refresh` on the host. It re-runs the
-  agent's setup in dev, which picks up the new commands and guide.
+- After adding or changing a sidecar, the operator runs `sgw recreate` on the host: the gateway
+  reads `config.yml` again, the sidecar's compose service is recreated, and the agent's setup in
+  dev picks up the new commands and guide. `sgw refresh` re-runs only that setup, for a sidecar
+  that was still starting.
 - A sidecar's permissions (`notes:read`) go in `relay.project.permissions` **only**. Repository,
   upstream and board layers refuse them: the resource is not about a repository.
 
 The compose service runs next to the gateway, on the internal network, with the socket volume.
+It is named `sekimore-<name>`, `<name>` being the key under `relay.sidecars`. `sgw recreate`
+recreates (`docker compose up -d --force-recreate --no-deps`) every such service the compose
+declares, running or not, and no other: not dev, and not a service outside the convention. What
+a sidecar keeps in memory is lost then, which is why it keeps nothing it cannot lose. A
+configured sidecar with no `sekimore-<name>` service is named in one line, and the recreate
+goes on.
 See [the template's README](../examples/sidecar-template/README.md#compose).
 
 ## What the agent sees
@@ -286,6 +299,10 @@ A sidecar may take these as given:
 - The name and resources in the describe: held to `relay.sidecars.<name>`.
 - Each command's permission: it must use the sidecar's own resources.
 - The guide: it may not tell the agent about permissions that are not the sidecar's.
+- Its text in the agent's terminal (`about`, `commands[].about`, `args[].help`, `guide`): no
+  escape sequences, and no line that could pass for the CLI's own. The CLI marks the sidecar's
+  `about` as the sidecar's (`Short notes kept for this project (sidecar)`), and the brackets are
+  the CLI's alone (`[not available: …]`, `[not allowed: …]`).
 - The reply: its size and time are capped, and its `error.status` is checked.
 
 Naming and granting are separate. The sidecar names what it does; only `config.yml` grants it.

@@ -35,6 +35,9 @@ printf '%s\n' "$*" >> "{log}"
 printf 'HINTS=%s\n' "${{DOCKER_CLI_HINTS:-unset}}" >> "{log}"
 # #362: the store's state word, for the unlock step
 case "$*" in *"sekimore-relay store-status"*) echo "${{FAKE_STORE:-unlocked}}"; exit 0 ;; esac
+# #480: the gateway's config.yml, and the services the compose declares
+case "$*" in *SEKIMORE_CONFIG_PATH*) printf '%b' "${{FAKE_CONFIG:-}}"; exit 0 ;; esac
+case "$*" in *"config --services"*) printf '%b' "${{FAKE_SERVICES:-}}"; exit 0 ;; esac
 case "$1 $2" in
   "ps -q") echo cid123 ;;
   "ps -a")
@@ -284,6 +287,70 @@ fn port_and_id_and_project_answer_from_the_running_container() {
         String::from_utf8_lossy(&out.stdout).trim(),
         "proj_devcontainer"
     );
+}
+
+/// #480: a command sidecar's service is brought up by `sgw recreate`, after the gateway and with
+/// nothing else; a configured sidecar without a service is named, and the recreate goes on.
+#[test]
+fn recreate_brings_up_the_command_sidecars_the_config_lists() {
+    let f = fixture();
+    let out = sgw(&f, &["recreate", "--no-unlock"])
+        .env(
+            "FAKE_CONFIG",
+            "relay:\\n  sidecars:\\n    github: {}\\n    notes: {socket: /run/sekimore-sidecars/notes.sock}\\n    s3: {}\\n",
+        )
+        .env(
+            "FAKE_SERVICES",
+            "dev\\nsekimore-gw\\nsekimore-github\\nsekimore-notes\\n",
+        )
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = log(&f);
+    let lines: Vec<&str> = log.lines().collect();
+    let gw = lines
+        .iter()
+        .position(|l| l.ends_with(" up -d --force-recreate sekimore-gw sekimore-github"))
+        .unwrap_or_else(|| panic!("the gateway and the forge relay first: {log}"));
+    let side = lines
+        .iter()
+        .position(|l| l.contains(" --no-deps "))
+        .unwrap_or_else(|| panic!("no sidecar up: {log}"));
+    assert!(side > gw, "{log}");
+    assert!(
+        lines[side].ends_with(" up -d --force-recreate --no-deps sekimore-notes"),
+        "only the command sidecar, recreated, never dev: {}",
+        lines[side]
+    );
+    assert!(stdout.contains("sidecars: sekimore-notes"), "{stdout}");
+    assert!(
+        stdout.contains("relay.sidecars.s3: the compose declares no service sekimore-s3"),
+        "{stdout}"
+    );
+}
+
+/// #480: a project without command sidecars runs no second compose up.
+#[test]
+fn recreate_without_sidecars_starts_nothing_more() {
+    let f = fixture();
+    let out = sgw(&f, &["recreate", "--no-unlock"])
+        .env("FAKE_CONFIG", "relay:\\n  project: {name: p}\\n")
+        .env("FAKE_SERVICES", "dev\\nsekimore-gw\\n")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let log = log(&f);
+    assert!(!log.contains("--no-deps"), "{log}");
+    assert!(
+        log.contains(" up -d --force-recreate sekimore-gw\n"),
+        "{log}"
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("relay.sidecars"));
 }
 
 #[test]
@@ -719,7 +786,8 @@ fn update_reports_and_applies_against_the_embedded_template() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains(&format!("gateway      0.2.40     {version}")),
+        // #480: the columns are as wide as what they hold
+        stdout.contains(&format!("gateway 0.2.40 {version}")),
         "{stdout}"
     );
     let line = |path: &str| {
