@@ -1012,6 +1012,43 @@ def describe_cache_refresh_worker():
         assert "5.6.7.8" in call_args[0][1]
 
     @pytest.mark.asyncio
+    async def it_does_not_admit_a_relayed_name_on_ip_change():
+        """A cached self lookup of a relayed name must not reach the ipset through a refresh."""
+        import time
+        from unittest.mock import Mock
+
+        from src.dns_server import DNSCache, DNSCacheEntry, DNSServer
+
+        dns_server = DNSServer.__new__(DNSServer)
+        dns_server.cache_enabled = True
+        dns_server.cache = DNSCache()
+        dns_server.running = True
+        dns_server.cache_refresh_interval = 0.1
+        dns_server.allowed_domains = ["github.com", "example.com"]
+        dns_server.blocked_domains = []
+        dns_server.domain_handlers = {"github.com": "github"}
+        dns_server.firewall_manager = Mock()
+        dns_server.firewall_manager.setup_domain = Mock()
+
+        for domain in ("github.com", "example.com"):
+            dns_server.cache._cache[f"{domain}:A"] = DNSCacheEntry(
+                domain=domain, query_type="A", ips=["1.2.3.4"], ttl=1, expiry=time.time() + 1
+            )
+        dns_server._resolve_domain = AsyncMock(return_value=(["5.6.7.8"], 300))
+        dns_server._save_cache_stats_to_db = AsyncMock()
+
+        task = asyncio.create_task(dns_server._cache_refresh_worker())
+        await asyncio.sleep(0.3)
+        dns_server.running = False
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        refreshed = {c.args[0] for c in dns_server.firewall_manager.setup_domain.call_args_list}
+        # The unrelayed neighbour still has its rule updated; the relayed name never gets one.
+        assert refreshed == {"example.com"}
+
+    @pytest.mark.asyncio
     async def it_handles_refresh_errors_gracefully():
         """Test _cache_refresh_worker handles errors during refresh."""
         import time
@@ -1233,15 +1270,55 @@ def describe_domain_handler_resolution():
         await s.mapping.db.close()
 
     @pytest.mark.asyncio
-    async def it_uses_normal_path_for_self_and_loopback_queries():
-        for client in ("172.22.0.2", "127.0.0.1"):
-            s = await _server({"github.com": "git-relay"}, allowed=["github.com"])
-            s._resolve_domain = AsyncMock(return_value=(["140.82.112.3"], 300))
-            r = await _query(s, "github.com", client=client)
-            assert r.header.rcode == 0
-            assert str(r.rr[0].rdata) == "140.82.112.3", client
-            s.firewall_manager.setup_domain.assert_called_once()
-            await s.mapping.db.close()
+    async def it_answers_self_and_loopback_queries_with_the_real_address_but_no_ipset_entry():
+        # The gateway's own lookup of a relayed name gets the real address (or the relay would
+        # resolve to itself), yet that address must not enter the allow ipset dev is forwarded by.
+        for handler in ("github", "git-relay", "https-relay"):
+            for client in ("172.22.0.2", "127.0.0.1", "::1"):
+                s = await _server({"github.com": handler}, allowed=["github.com"])
+                s._resolve_domain = AsyncMock(return_value=(["140.82.112.3"], 300))
+                r = await _query(s, "github.com", client=client)
+                assert r.header.rcode == 0
+                assert str(r.rr[0].rdata) == "140.82.112.3", (handler, client)
+                s.firewall_manager.setup_domain.assert_not_called()
+                await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_still_admits_an_unrelayed_allowed_name_on_a_self_query():
+        s = await _server({"github.com": "git-relay"}, allowed=["github.com", "pypi.org"])
+        s._resolve_domain = AsyncMock(return_value=(["151.101.0.223"], 300))
+        r = await _query(s, "pypi.org", client="127.0.0.1")
+        assert str(r.rr[0].rdata) == "151.101.0.223"
+        s.firewall_manager.setup_domain.assert_called_once_with("pypi.org", ["151.101.0.223"])
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_still_admits_an_unrelayed_allowed_name_from_a_normal_client():
+        s = await _server({"github.com": "git-relay"}, allowed=["github.com", "pypi.org"])
+        s._resolve_domain = AsyncMock(return_value=(["151.101.0.223"], 300))
+        r = await _query(s, "pypi.org")
+        assert str(r.rr[0].rdata) == "151.101.0.223"
+        s.firewall_manager.setup_domain.assert_called_once_with("pypi.org", ["151.101.0.223"])
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_gives_a_normal_client_the_gateway_address_for_a_relayed_name_after_a_self_query():
+        s = await _server({"github.com": "git-relay"}, allowed=["github.com"])
+        s._resolve_domain = AsyncMock(return_value=(["140.82.112.3"], 300))
+        await _query(s, "github.com", client="127.0.0.1")
+        r = await _query(s, "github.com")
+        assert len(r.rr) == 1 and str(r.rr[0].rdata) == "172.22.0.2"
+        s.firewall_manager.setup_domain.assert_not_called()
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_does_not_admit_a_relayed_name_when_the_gateway_ip_is_unknown():
+        s = await _server({"github.com": "git-relay"}, gateway_ip=None, allowed=["github.com"])
+        s._resolve_domain = AsyncMock(return_value=(["140.82.112.3"], 300))
+        r = await _query(s, "github.com")
+        assert str(r.rr[0].rdata) == "140.82.112.3"
+        s.firewall_manager.setup_domain.assert_not_called()
+        await s.mapping.db.close()
 
     @pytest.mark.asyncio
     async def it_redirects_even_if_not_in_allowlist():
