@@ -1,0 +1,2 @@
+# json.dumps(sort_keys=True) cannot order 1 against 'b' under relay:
+relay: {1: a, b: c}

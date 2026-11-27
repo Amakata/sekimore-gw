@@ -1,0 +1,7 @@
+# int('２２２２') is 2222 in Python
+# ledger: non-ASCII digits in a listen port: Python's int() reads them, the Rust reader falls back to the default port
+allow_domains: [a.b]
+domain_handlers:
+  a.b: {handler: github}
+relay:
+  ssh_listen: '0.0.0.0:２２２２'

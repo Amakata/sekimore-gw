@@ -1,0 +1,4 @@
+# tests/unit/test_config.py a_trailing_dot_or_upper_case_still_matches
+allow_domains: [GitHub.com., pypi.org]
+domain_handlers:
+  github.com: {handler: git-relay}

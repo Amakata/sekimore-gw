@@ -1,0 +1,3 @@
+# an int beyond i128
+# ledger: integers outside i128 are refused by the Rust reader (Python's int has no bound)
+proxy: {cache_size_mb: 999999999999999999999999999999999999999999}

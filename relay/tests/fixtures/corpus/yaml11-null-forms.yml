@@ -1,0 +1,6 @@
+# null, ~, Null and an empty value
+name: ~
+description: Null
+proxy:
+  upstream_proxy:
+  upstream_proxy_username: null

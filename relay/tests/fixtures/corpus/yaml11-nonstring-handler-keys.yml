@@ -1,0 +1,5 @@
+# domain_handlers keys that are not strings become str(key)
+domain_handlers:
+  1: {}
+  2.5: {}
+  no: {handler: deny}

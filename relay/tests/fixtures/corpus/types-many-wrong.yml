@@ -1,0 +1,11 @@
+# several fields wrong at once: pydantic reports them all
+name: 123
+description: [a]
+allow_domains: a.com
+block_domains: [1, ok, true]
+proxy: {port: x, enabled: maybe, no_proxy: [1]}
+network: {lan_subnets: null, host_enforcement: 2}
+database_path: null
+reload: 30
+relay: {ssh_listen: 22, https: off}
+ui: {language: fr}

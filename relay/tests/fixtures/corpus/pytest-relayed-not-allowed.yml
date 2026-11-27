@@ -1,0 +1,5 @@
+# tests/unit/test_config.py it_refuses_a_relayed_domain_the_allow_list_does_not_cover
+allow_domains: [github.com]
+domain_handlers:
+  github.com: {handler: git-relay}
+  api.github.com: {handler: https-relay}

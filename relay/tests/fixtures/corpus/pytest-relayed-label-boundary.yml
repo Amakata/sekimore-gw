@@ -1,0 +1,5 @@
+# tests/unit/test_config.py it_matches_on_label_boundaries
+allow_domains: [.github.com]
+domain_handlers:
+  github.com: {handler: git-relay}
+  evilgithub.com: {handler: https-relay}

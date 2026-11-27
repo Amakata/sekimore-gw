@@ -1,0 +1,142 @@
+//! The equivalence harness: the Rust gateway against the Python gateway, through ends that do
+//! not depend on either language (0.3.0 plan, "挙動が変わっていないことの確かめ方").
+//!
+//! In this step it compares the two readings of `config.yml` (Issue #498). `harness.rs` says how
+//! the later steps plug in, how the Python side is reached, and when it is required.
+
+mod config;
+mod harness;
+
+use serde_json::{json, Value};
+
+use sekimore_relay::settings;
+use sekimore_relay::settings::rules::Rules;
+
+use config::ConfigReading;
+use harness::{compare, corpus, diff, recorded, report, Case, Comparison};
+
+#[test]
+fn the_config_is_read_as_python_reads_it() {
+    harness::run(&ConfigReading);
+}
+
+/// A reader that gets one case wrong, the way a port would: it lets a relayed name into the
+/// ipset.
+struct Divergent;
+
+const DIVERGENT_CASE: &str = "relay/tests/fixtures/config_with_relay.yml";
+
+impl Comparison for Divergent {
+    fn kind(&self) -> &'static str {
+        "config"
+    }
+    fn request(&self, case: &Case) -> Value {
+        ConfigReading.request(case)
+    }
+    fn rust(&self, case: &Case, request: &Value) -> Value {
+        let mut answer = ConfigReading.rust(case, request);
+        if case.id == DIVERGENT_CASE {
+            answer["accepted"]["rules"]["decide"]["github.com"][1] = json!("resolve+admit");
+        }
+        answer
+    }
+}
+
+#[test]
+fn the_harness_catches_a_divergent_reading() {
+    let cases = corpus();
+    let rust: Vec<Value> = cases
+        .iter()
+        .map(|c| Divergent.rust(c, &Divergent.request(c)))
+        .collect();
+    let outcomes = compare(&cases, &rust, &recorded("config"), "the record");
+    let failed: Vec<_> = outcomes.iter().filter(|o| o.failed()).collect();
+    assert_eq!(
+        failed.len(),
+        1,
+        "{}",
+        report("divergent", &outcomes).unwrap_or_default()
+    );
+    assert_eq!(failed[0].id, DIVERGENT_CASE);
+    assert_eq!(
+        failed[0].differences,
+        ["/accepted/rules/decide/github.com/1: \"resolve+admit\" != \"resolve\""]
+    );
+}
+
+#[test]
+fn diff_names_every_difference() {
+    let a = json!({"x": 1, "l": [1, 2], "o": {"k": "v"}, "only": true});
+    let b = json!({"x": 2, "l": [1, 2, 3], "o": {"k": "v"}});
+    assert_eq!(
+        diff(&a, &b),
+        [
+            "/l: [1,2] != [1,2,3]",
+            "/only: true != (absent)",
+            "/x: 1 != 2"
+        ]
+    );
+    assert!(diff(&a, &a).is_empty());
+}
+
+#[test]
+fn a_ledger_case_that_stops_differing_fails() {
+    let case = Case {
+        id: "x".into(),
+        path: "x".into(),
+        env: Default::default(),
+        ledger: Some("a known difference".into()),
+    };
+    let record = [("x".to_string(), json!({"a": 1}))].into_iter().collect();
+    let same = compare(
+        std::slice::from_ref(&case),
+        &[json!({"a": 1})],
+        &record,
+        "r",
+    );
+    assert!(same[0].failed());
+    let differs = compare(
+        std::slice::from_ref(&case),
+        &[json!({"a": 2})],
+        &record,
+        "r",
+    );
+    assert!(!differs[0].failed());
+}
+
+/// Rust against Rust: wherever the relay's own reading resolves, its 443 targets are exactly the
+/// names the Python reading says the relay answers for.
+#[test]
+fn rules_carry_the_relays_https_targets() {
+    let mut checked = 0;
+    for case in corpus() {
+        let Ok(text) = std::fs::read_to_string(&case.path) else {
+            continue;
+        };
+        let env = |n: &str| case.env.get(n).cloned();
+        let Ok(s) = settings::parse(&text, &env) else {
+            continue;
+        };
+        let Ok(loaded) = sekimore_relay::config::parse(&case.path, &text) else {
+            continue;
+        };
+        let Ok(resolved) = loaded.resolve() else {
+            continue;
+        };
+        let rules = Rules::build(&s, Some(&resolved));
+        let mut targets: Vec<&str> = rules
+            .https_targets()
+            .iter()
+            .map(|t| t.domain.as_str())
+            .collect();
+        let mut relayed = s.relay_domains();
+        targets.sort();
+        relayed.sort();
+        assert_eq!(targets, relayed, "{}", case.id);
+        checked += 1;
+    }
+    assert!(
+        checked >= 3,
+        "only {checked} cases resolved on the relay side"
+    );
+}

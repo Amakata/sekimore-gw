@@ -1,0 +1,2 @@
+# YAML 1.1: on / yes are booleans to PyYAML, so a list of strings refuses them
+allow_domains: [pypi.org, on, yes, Off]

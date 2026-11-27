@@ -1,0 +1,4 @@
+# 1, true and 1.0 are one dict key: the first key stays, the last value wins
+domain_handlers:
+  1: {handler: deny}
+  true: {handler: splice}

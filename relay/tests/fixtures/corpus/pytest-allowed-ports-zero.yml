@@ -1,0 +1,2 @@
+# tests/unit/test_config.py it_defaults_to_all_ports_and_validates_values: refused
+network: {allowed_ports: [0]}

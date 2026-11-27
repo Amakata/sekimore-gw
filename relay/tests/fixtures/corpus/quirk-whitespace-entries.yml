@@ -1,0 +1,5 @@
+# domain_matches strips an entry, proxy_allow_domains does not
+allow_domains: [' github.com', 'pypi.org. ', 'Docs.Example.com.']
+block_domains: [' bad.example.com ']
+domain_handlers:
+  ' GitHub.com. ': {handler: github}

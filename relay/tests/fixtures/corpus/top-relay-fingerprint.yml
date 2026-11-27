@@ -1,0 +1,3 @@
+# a relay_fingerprint in the file is dropped
+relay_fingerprint: abc
+relay: {https: reject}

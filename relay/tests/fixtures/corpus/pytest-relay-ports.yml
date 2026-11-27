@@ -1,0 +1,11 @@
+# tests/unit/test_config.py it_reads_relay_ports_and_ignores_relay_only_keys
+allow_domains: [github.com]
+domain_handlers:
+  github.com: {handler: git-relay}
+relay:
+  ssh_listen: 0.0.0.0:2222
+  api_listen: 127.0.0.1:9000
+  https: reject
+  token_ttl: 12h
+  bootstrap: auto
+  project: {name: x, repos: [], permissions: [pr:create]}

@@ -1,0 +1,3 @@
+# a byte order mark at the start of a later line: libyaml skips it, PyYAML keeps it in the key
+# ledger: a BOM at the start of a line other than the first is skipped by the Rust reader (libyaml) and becomes part of the key in PyYAML, which then ignores the key
+﻿allow_domains: [pypi.org]

@@ -1,0 +1,5 @@
+# a duplicate key: PyYAML keeps the last value
+allow_domains: [first.example.com]
+proxy: {port: 1}
+allow_domains: [second.example.com]
+proxy: {port: 2, port: 3}

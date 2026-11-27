@@ -1,0 +1,4 @@
+# non-ASCII names are lowercased as Python lowercases them
+allow_domains: [Bücher.Example, .ÄÖÜ.example]
+domain_handlers:
+  ÄBC.example: {handler: deny}

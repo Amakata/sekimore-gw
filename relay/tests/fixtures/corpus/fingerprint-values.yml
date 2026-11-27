@@ -1,0 +1,21 @@
+# dates, floats, infinities and base-60 numbers inside the relay subtrees
+allow_domains: [github.com]
+domain_handlers:
+  github.com: {handler: github, max_upload_bytes: 1_048_576, note: 2026-01-01}
+relay:
+  token_ttl: 12h
+  a: 1:30
+  b: 0x1F
+  c: 1.5
+  d: .inf
+  e: -.inf
+  f: .nan
+  g: 2001-12-14t21:59:43.10-05:00
+  h: "quote \" backslash \\ tab \t control \x01 é"
+  i: [1, two, {three: 3}]
+  j: {z: 1, a: 2, m: {y: 1, b: 2}}
+  k: 1e3
+  l: 100.0
+  m: 0.0001
+  n: 1.0e+16
+  o: 12345678901234567890

@@ -1,0 +1,9 @@
+# tests/unit/test_config.py it_splits_multiple_git_relay_domains_by_ssh_port
+allow_domains: [github.com, ghe.example.com]
+domain_handlers:
+  github.com: {handler: git-relay}
+  ghe.example.com:
+    handler: git-relay
+    ssh_port: 2222
+    upstream: ghe.example.com
+    oauth_client_id: abc

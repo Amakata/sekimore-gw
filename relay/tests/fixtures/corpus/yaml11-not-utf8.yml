@@ -1,0 +1,2 @@
+# a byte that is not UTF-8: both readers refuse the file
+name: café

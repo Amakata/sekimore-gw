@@ -1,0 +1,2 @@
+# tests/unit/test_config.py it_rejects_invalid_single_ip
+allow_ips: [not.an.ip.address]

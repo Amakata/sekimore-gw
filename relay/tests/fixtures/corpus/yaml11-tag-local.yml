@@ -1,0 +1,2 @@
+# a local tag: SafeConstructor has no constructor for it
+name: !foo x

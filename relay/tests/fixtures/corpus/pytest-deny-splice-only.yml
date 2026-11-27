@@ -1,0 +1,4 @@
+# tests/unit/test_config.py it_needs_no_ports_for_deny_or_splice_only
+domain_handlers:
+  x.example.com: {handler: deny}
+  y.example.com: {handler: splice}

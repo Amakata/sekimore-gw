@@ -1,0 +1,2 @@
+# a whole float beyond 2**63 is refused by pydantic
+proxy: {port: 1.0e+20}

@@ -1,0 +1,3 @@
+# YAML 1.1 booleans where pydantic wants a bool
+proxy: {enabled: yes, cache_enabled: off, upstream_proxy_tls: On}
+network: {host_enforcement: NO}

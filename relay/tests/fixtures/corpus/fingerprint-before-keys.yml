@@ -1,0 +1,3 @@
+# the fingerprint is computed before the keys are checked
+yes: 1
+relay: {1: a, b: c}

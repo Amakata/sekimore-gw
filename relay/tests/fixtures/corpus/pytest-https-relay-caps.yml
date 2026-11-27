@@ -1,0 +1,6 @@
+# tests/unit/test_config.py it_accepts_https_relay_next_to_git_relay_and_validates_caps
+allow_domains: [github.com, ghcr.io, registry-1.docker.io]
+domain_handlers:
+  github.com: {handler: git-relay, max_upload_bytes: 262144}
+  ghcr.io: {handler: https-relay, max_upload_bytes: -1}
+  registry-1.docker.io: {handler: https-relay}

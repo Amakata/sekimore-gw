@@ -1,0 +1,3 @@
+# the non-specific tag ! makes a string in PyYAML
+# ledger: the non-specific tag `!` is refused by the Rust reader (PyYAML: a string)
+name: ! x

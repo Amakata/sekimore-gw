@@ -1,0 +1,6 @@
+# the environment wins over config.yml
+# env: SEKIMORE_UPSTREAM_PROXY_USERNAME=fromenv
+# env: SEKIMORE_UPSTREAM_PROXY_PASSWORD=fromenv
+proxy:
+  upstream_proxy_username: fromfile
+  upstream_proxy_password: fromfile

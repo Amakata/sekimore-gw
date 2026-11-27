@@ -1,0 +1,2 @@
+# 08 is not octal: a string, which pydantic reads as 8
+proxy: {port: 08}

@@ -1,0 +1,13 @@
+# tests/unit/test_config.py it_loads_config_with_defaults: unknown keys and zeros
+allow_domains: []
+block_domains: []
+priority_ips: []
+network:
+  lan_subnets: []
+  static_allow_ips: []
+  static_block_ips: []
+proxy:
+  enabled: false
+  port: 3128
+  cache_enabled: false
+  cache_size_mb: 0

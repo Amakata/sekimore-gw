@@ -1,0 +1,8 @@
+# _port_of reads the port with int(): a sign, underscores, a missing colon
+allow_domains: [a.b]
+domain_handlers:
+  a.b: {handler: github}
+relay:
+  ssh_listen: '0.0.0.0:-5'
+  api_listen: 'x:2_2'
+  https_listen: no-colon-here

@@ -1,0 +1,3 @@
+# booleans written as strings and numbers
+proxy: {enabled: 'True', cache_enabled: 0, upstream_proxy_tls: 1.0}
+network: {host_enforcement: 'off'}

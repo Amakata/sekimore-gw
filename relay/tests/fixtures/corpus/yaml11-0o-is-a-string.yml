@@ -1,0 +1,2 @@
+# 0o17 is YAML 1.2 octal and a string to PyYAML
+proxy: {port: 0o17}
