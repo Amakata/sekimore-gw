@@ -51,6 +51,7 @@ Who the sidecar is and what it offers.
   "name": "notes",
   "version": "0.1.0",
   "resources": ["notes"],
+  "about": "Short notes kept for this project",
   "guide": "## notes\n\n- `sgw-agent notes note add --text <text>` adds a note [notes:write]\n",
   "commands": [
     {
@@ -73,10 +74,11 @@ Who the sidecar is and what it offers.
 | `name` | yes | Must equal the key under `relay.sidecars` |
 | `version` | yes | Free text, logged |
 | `resources` | yes | The resources its permissions use |
+| `about` | no | One line for the sidecar's entry in `sgw-agent --help`. Without it, the entry lists the commands |
 | `guide` | yes | How to use it, for the agent ([below](#writing-the-guide)) |
 | `commands` | no | The commands |
 | `commands[].name` | yes | 1–3 words, space-separated: `note add` |
-| `commands[].about` | yes | One line for `--help` |
+| `commands[].about` | yes | One line for `--help`. A group (`note` of `note add`) has no text of its own: its `--help` line lists the words under it |
 | `commands[].permission` | yes | `<resource>:<action>`, the resource one of its own |
 | `commands[].args` | no | The arguments |
 | `args[].name` | yes | `--<name>` on the command line, `"<name>"` on the wire |
@@ -111,6 +113,8 @@ A **word** is lower-case letters, digits, `_` and `-`, starting with a letter.
 | an argument name is a word, and not `help` | `Text`, `help` |
 | no argument is declared twice | two `text` |
 | a `bool` argument is not `required` | `{"kind": "bool", "required": true}` |
+| `about`, `commands[].about` and `args[].help` are one line of at most 120 characters, with no control character and no `[` or `]` | `"Notes\nhelp  Print this message"`, `"Notes [not available: …]"` |
+| `guide` has no control character but newline and tab | an escape sequence (`\u001b[2J`) |
 
 The configuration adds:
 
@@ -284,6 +288,10 @@ A sidecar may take these as given:
 - The name and resources in the describe: held to `relay.sidecars.<name>`.
 - Each command's permission: it must use the sidecar's own resources.
 - The guide: it may not tell the agent about permissions that are not the sidecar's.
+- Its text in the agent's terminal (`about`, `commands[].about`, `args[].help`, `guide`): no
+  escape sequences, and no line that could pass for the CLI's own. The CLI marks the sidecar's
+  `about` as the sidecar's (`Short notes kept for this project (sidecar)`), and the brackets are
+  the CLI's alone (`[not available: …]`, `[not allowed: …]`).
 - The reply: its size and time are capped, and its `error.status` is checked.
 
 Naming and granting are separate. The sidecar names what it does; only `config.yml` grants it.

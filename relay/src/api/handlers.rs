@@ -413,6 +413,7 @@ async fn relays(ctx: &ApiContext) -> Result<ApiResponse, ApiError> {
         available: !ctx.relays.is_empty(),
         reason: None,
         version: String::new(),
+        about: String::new(),
         resources: Vec::new(),
         guide: String::new(),
         commands: Vec::new(),
@@ -425,6 +426,7 @@ async fn relays(ctx: &ApiContext) -> Result<ApiResponse, ApiError> {
                 available: true,
                 reason: None,
                 version: d.version.clone(),
+                about: d.about.clone(),
                 resources: d.resources.clone(),
                 guide: d.guide.clone(),
                 commands: d
@@ -442,6 +444,7 @@ async fn relays(ctx: &ApiContext) -> Result<ApiResponse, ApiError> {
                 available: false,
                 reason: Some(e.message),
                 version: String::new(),
+                about: String::new(),
                 resources: Vec::new(),
                 guide: String::new(),
                 commands: Vec::new(),

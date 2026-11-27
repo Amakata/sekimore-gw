@@ -28,6 +28,8 @@ DESCRIBE = {
     "name": NAME,
     "version": VERSION,
     "resources": ["notes"],
+    # optional: the sidecar's line in `sgw-agent --help`; one line, no [ ], 120 characters at most
+    "about": "Short notes kept for this project",
     "guide": (
         "## notes\n\n"
         "Short notes kept by the notes sidecar for this project.\n\n"

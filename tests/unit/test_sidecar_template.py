@@ -27,6 +27,14 @@ TEMPLATE = ROOT / "examples" / "sidecar-template" / "sidecar.py"
 SECRET = "k-not-for-the-log"
 GATEWAY_RESOURCES = {"ci", "issue", "pr", "project", "release", "repo", "search", "security"}
 WORD = re.compile(r"^[a-z][a-z0-9_-]*$")
+MAX_LINE = 120
+# control characters and the bidirectional overrides (relay/src/forge/command.rs is_unsafe_char)
+UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def bad_line(text: str) -> bool:
+    """A one-line text the gateway refuses: too long, a control character, or a bracket."""
+    return len(text) > MAX_LINE or bool(UNSAFE.search(text)) or "[" in text or "]" in text
 
 
 class UnixConnection(http.client.HTTPConnection):
@@ -110,6 +118,10 @@ def refusals(d: dict, name: str, declared: list[str]) -> list[str]:
     guide = d.get("guide", "")
     if not guide.strip():
         out.append("no guide")
+    if UNSAFE.search(guide.replace("\n", "").replace("\t", "")):
+        out.append("a control character in the guide")
+    if bad_line(d.get("about", "")):
+        out.append("about")
     for r, a in re.findall(r"\[([^\[\]:]+):([^\[\]]+)\]", guide):
         if WORD.match(r) and WORD.match(a) and r not in resources:
             out.append(f"guide names [{r}:{a}]")
@@ -124,6 +136,8 @@ def refusals(d: dict, name: str, declared: list[str]) -> list[str]:
         if any(s[: len(words)] == words[: len(s)] for s in seen):
             out.append(f"{c['name']}: overlaps")
         seen.append(words)
+        if bad_line(c["about"]):
+            out.append(f"{c['name']}: about")
         r, _, a = c["permission"].partition(":")
         if r not in resources or not WORD.match(a):
             out.append(f"{c['name']}: permission {c['permission']}")
@@ -137,6 +151,8 @@ def refusals(d: dict, name: str, declared: list[str]) -> list[str]:
                 out.append(f"{c['name']}: kind {arg.get('kind')}")
             if arg.get("kind") == "bool" and arg.get("required"):
                 out.append(f"{c['name']}: a required flag")
+            if bad_line(arg.get("help", "")):
+                out.append(f"{c['name']}: help of {arg['name']}")
     return out
 
 
@@ -189,6 +205,21 @@ def describe_the_copy_of_the_gateway_rules():
         for change in (
             {"guide": " "},
             {"guide": "merge with [pr:merge]"},
+            {"guide": "[notes:write]\x1b[2J"},
+            {"about": "Notes\nhelp  Print this message"},
+            {"about": "Notes [not available: x]"},
+            {"about": "x" * 121},
+            {"commands": [{"name": "note add", "about": "x\x1b[2J", "permission": "notes:write"}]},
+            {
+                "commands": [
+                    {
+                        "name": "note add",
+                        "about": "x",
+                        "permission": "notes:write",
+                        "args": [{"name": "text", "help": "a\u202eb"}],
+                    }
+                ]
+            },
             {"resources": ["notes", "pr"]},
             {"commands": [{"name": "note", "about": "x", "permission": "notes:write"}] * 2},
             {"commands": [{"name": "Note", "about": "x", "permission": "notes:write"}]},

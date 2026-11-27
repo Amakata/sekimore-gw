@@ -194,6 +194,10 @@ pub struct Describe {
     pub name: String,
     pub version: String,
     pub resources: Vec<String>,
+    /// #480: one line for the sidecar's entry in `sgw-agent --help`. Optional; without it the CLI
+    /// lists the sidecar's commands there
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub about: String,
     /// How to use it, for the agent's guide (#330). Required: a relay that cannot say how it is
     /// used is not connected
     pub guide: String,
@@ -553,6 +557,7 @@ impl Sidecar {
             ]
             .map(String::from)
             .to_vec(),
+            about: String::new(),
             guide: "GitHub: pull requests, issues, CI, releases, Projects v2, search and Dependabot alerts; see `sgw-agent guide`.".into(),
             commands: Vec::new(),
         }
