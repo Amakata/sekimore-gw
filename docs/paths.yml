@@ -277,10 +277,10 @@ edges:
     verifies_peer: rustls — platform roots, SSL_CERT_FILE, relay.ca_file
     tls_impl: rustls
     presents: upstream_token
-    audit: audit.jsonl api_call / pr_created / pr_exists / pr_failed
+    audit: audit.jsonl api_call / pr_created / pr_exists / pr_failed / redirect_fetch / redirect_refused (an answer that leaves the API host, followed without the token, https and public addresses only)
     switches: {upstream_proxy: any, upstream_proxy_tls: any}
-    impl: [relay/src/github/http.rs, relay/src/github/mod.rs]
-    tests: [relay/src/github/http.rs, relay/tests/api_server.rs]
+    impl: [relay/src/github/http.rs, relay/src/github/mod.rs, relay/src/github/redirect.rs]
+    tests: [relay/src/github/http.rs, relay/src/github/redirect.rs, relay/tests/api_server.rs, relay/tests/ci_log_redirect.rs]
     verify: "one GitHub API call through the relay"
 
   - id: relay.github.via_proxy
@@ -291,7 +291,7 @@ edges:
     verifies_peer: rustls (TLS proxy only)
     tls_impl: rustls
     presents: upstream_proxy_password (Proxy-Authorization, from the store)
-    audit: audit.jsonl api_call (edge names the hop; the failure reason names the proxy)
+    audit: audit.jsonl api_call / redirect_fetch / redirect_refused (edge names the hop; the failure reason names the proxy)
     switches: {upstream_proxy: set, upstream_proxy_tls: false-or-squid-disabled}
     impl: [relay/src/github/http.rs, relay/src/config.rs]
     tests: [relay/src/github/http.rs]
@@ -304,7 +304,7 @@ edges:
     resolves: n/a (loopback)
     verifies_peer: none (loopback)
     presents: none (Squid presents login= to the upstream)
-    audit: audit.jsonl api_call; squid access.log
+    audit: audit.jsonl api_call / redirect_fetch / redirect_refused; squid access.log
     switches: {upstream_proxy: set, upstream_proxy_tls: true}
     impl: [relay/src/config.rs, relay/src/github/http.rs, src/proxy_manager.py]
     tests: [relay/src/config.rs, tests/unit/test_proxy_manager.py]
@@ -421,7 +421,7 @@ edges:
     audit: audit.jsonl sidecar_unavailable / sidecar_refused
     switches: {relay.sidecars: set}
     impl: [relay/src/forge/sidecar.rs, relay/src/cli/serve.rs]
-    tests: [relay/tests/sidecar.rs, relay/tests/api_server.rs]
+    tests: [relay/tests/sidecar.rs, relay/tests/api_server.rs, relay/tests/ci_log_redirect.rs]
 
   - id: sidecar.api
     from: sidecar.forge

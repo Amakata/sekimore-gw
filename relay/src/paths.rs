@@ -100,6 +100,14 @@ pub const AUDIT_EVENTS: &[(&str, &str)] = &[
     (RELAY_GITHUB_API, "api_call"),
     (RELAY_GITHUB_VIA_PROXY, "api_call"),
     (RELAY_GITHUB_VIA_SQUID, "api_call"),
+    // #485: an upstream answer that left the API host (a job's log), followed from the gateway
+    // without the token — for the built-in client or for a sidecar's reply — or refused
+    (RELAY_GITHUB_API, "redirect_fetch"),
+    (RELAY_GITHUB_API, "redirect_refused"),
+    (RELAY_GITHUB_VIA_PROXY, "redirect_fetch"),
+    (RELAY_GITHUB_VIA_PROXY, "redirect_refused"),
+    (RELAY_GITHUB_VIA_SQUID, "redirect_fetch"),
+    (RELAY_GITHUB_VIA_SQUID, "redirect_refused"),
     // #329: a forge relay sidecar — not answering, or refused for what it claims — and the
     // upstream calls it made
     (RELAY_SIDECAR, "sidecar_unavailable"),

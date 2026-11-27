@@ -38,7 +38,40 @@ impl Default for HttpOptions<'_> {
     }
 }
 
+/// The client every upstream API call goes through.
+///
+/// #485: it follows a redirect only while it stays on the origin it started at (a renamed
+/// repository's 301 on the API host, say). One that leaves it — a job log sent on to a storage
+/// host — comes back as the 3xx itself, so the caller decides: the token never travels with it,
+/// and the next hop goes through [`super::redirect::Fetcher`]'s rules instead of reqwest's.
 pub fn build_client(opts: &HttpOptions<'_>) -> anyhow::Result<reqwest::Client> {
+    builder(opts)?
+        .redirect(same_origin_only())
+        .build()
+        .context("build http client")
+}
+
+/// How the API client follows redirects: within the first request's origin (scheme, host and
+/// port), at most ten of them, and never off it.
+pub fn same_origin_only() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let leaves = attempt
+            .previous()
+            .first()
+            .is_some_and(|first| first.origin() != attempt.url().origin());
+        if leaves {
+            attempt.stop()
+        } else if attempt.previous().len() > 10 {
+            attempt.error("too many redirects")
+        } else {
+            attempt.follow()
+        }
+    })
+}
+
+/// The settings every client of the relay's shares: TLS roots, the proxy, the pinned names,
+/// timeouts. The caller adds its redirect policy (and a resolver, where it needs one) and builds.
+pub(crate) fn builder(opts: &HttpOptions<'_>) -> anyhow::Result<reqwest::ClientBuilder> {
     let mut b = reqwest::Client::builder()
         .use_rustls_tls()
         .user_agent(USER_AGENT)
@@ -90,7 +123,7 @@ pub fn build_client(opts: &HttpOptions<'_>) -> anyhow::Result<reqwest::Client> {
     if opts.no_env_proxy && opts.proxy.is_none() {
         b = b.no_proxy();
     }
-    b.build().context("build http client")
+    Ok(b)
 }
 
 /// Read a response body up to a cap, so a huge response cannot eat memory.
@@ -163,6 +196,104 @@ mod tests {
         v.push(0xE3); // first byte of a 3-byte sequence, truncated
         let out = truncate(&v);
         assert!(!out.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// A server that answers each request from `answer(path)` and reports the request line and
+    /// the Authorization it saw (or "-").
+    async fn server(
+        answer: fn(&str, u16) -> String,
+    ) -> (u16, tokio::sync::mpsc::UnboundedReceiver<(String, String)>) {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = l.accept().await else {
+                    return;
+                };
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut b = [0u8; 1];
+                    while !buf.ends_with(b"\r\n\r\n") {
+                        if s.read(&mut b).await.unwrap_or(0) == 0 {
+                            return;
+                        }
+                        buf.push(b[0]);
+                    }
+                    let head = String::from_utf8_lossy(&buf).to_string();
+                    let path = head.split(' ').nth(1).unwrap_or("").to_string();
+                    let auth = head
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(": ")?;
+                            k.eq_ignore_ascii_case("authorization")
+                                .then(|| v.to_string())
+                        })
+                        .unwrap_or_else(|| "-".into());
+                    let _ = tx.send((path.clone(), auth));
+                    let _ = s.write_all(answer(&path, port).as_bytes()).await;
+                });
+            }
+        });
+        (port, rx)
+    }
+
+    fn redirect(to: &str) -> String {
+        format!("HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    }
+
+    const OK: &str = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+
+    /// #485: the API client follows a redirect on its own origin (a renamed repository's 301),
+    /// token and all, and stops at one that leaves it: the 3xx comes back, and the other host is
+    /// never asked — so whether reqwest would have stripped the token is never the question.
+    #[tokio::test]
+    async fn the_api_client_follows_its_own_origin_and_stops_at_another() {
+        let (other, mut other_seen) = server(|_, _| OK.to_string()).await;
+        static OTHER: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+        OTHER.set(other).unwrap();
+        let (api, mut api_seen) = server(|path, port| match path {
+            "/same" => redirect(&format!("http://127.0.0.1:{port}/end")),
+            "/cross" => redirect(&format!("http://localhost:{}/log", OTHER.get().unwrap())),
+            _ => OK.to_string(),
+        })
+        .await;
+        let client = build_client(&HttpOptions {
+            no_env_proxy: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let get = |p: &str| {
+            client
+                .get(format!("http://127.0.0.1:{api}{p}"))
+                .bearer_auth("gho_secret")
+                .send()
+        };
+
+        let r = get("/same").await.unwrap();
+        assert_eq!(r.status(), 200);
+        assert_eq!(api_seen.recv().await.unwrap().0, "/same");
+        assert_eq!(
+            api_seen.recv().await.unwrap(),
+            ("/end".to_string(), "Bearer gho_secret".to_string())
+        );
+
+        let r = get("/cross").await.unwrap();
+        assert_eq!(r.status(), 302, "stopped at the redirect off the origin");
+        assert!(r.headers().get("location").is_some());
+        assert_eq!(api_seen.recv().await.unwrap().0, "/cross");
+        assert!(
+            other_seen.try_recv().is_err(),
+            "the other host was never asked"
+        );
     }
 }
 

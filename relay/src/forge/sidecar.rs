@@ -16,6 +16,13 @@
 //! The sidecar reaches the upstream API through the gateway's 443 passthrough: it dials the
 //! gateway (`--via`) for the API's host name and keeps that name for SNI and the certificate, so its
 //! egress passes the same SNI check, upload cap and audit as dev's.
+//!
+//! #485: that is its only way out, so an upstream answer that sends the client to another host
+//! (a job's log, redirected to a storage host) is not followed in the sidecar. Its reply carries
+//! `fetch` instead of `response`: the URL and what is left of the operation
+//! ([`super::github::Fetch`]). The gateway takes it only for the operation it asked for, fetches
+//! the URL under `github::redirect`'s rules (no credential, https, public addresses, few hops,
+//! capped, audited) and finishes the answer itself.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -31,13 +38,14 @@ use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::github::GitHubRelay;
+use super::github::{Deferred, Fetch, GitHubRelay};
 use super::{Answer, ForgeRelay, Grant, GrantKind, OpenPrError, OpenedPr, Query, Resolved};
 use crate::api::types::{ApiRequest, ApiResponse};
 use crate::api::ApiError;
 use crate::audit::{Actor, Audit};
+use crate::github::redirect::Fetcher;
 use crate::github::upstream_token::TokenError;
-use crate::github::{CallLog, GhError, GitHub, TokenSource};
+use crate::github::{CallLog, GhError, GitHub, TokenSource, CI_LOG_CAP};
 use crate::paths;
 
 /// The largest reply the gateway reads from a sidecar. A CI log page or a diff is the biggest
@@ -184,6 +192,10 @@ pub struct Reply {
     pub error: Option<WireError>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_pr_error: Option<WireOpenPrError>,
+    /// #485: `/call` only, in place of `response`: the upstream sent the operation on to another
+    /// host, and the gateway is to fetch it and finish the answer
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch: Option<Fetch>,
     #[serde(default)]
     pub calls: Vec<CallRecord>,
 }
@@ -265,6 +277,8 @@ pub struct SocketRelay {
     audit: Arc<Audit>,
     /// `relay.sidecars.<name>.resources`: what the sidecar may claim
     declared: Vec<String>,
+    /// #485: follows a `fetch` the sidecar hands back, from the gateway
+    fetcher: Arc<Fetcher>,
     /// Whether `/describe` has been read and matched. Not cached when it fails: the sidecar may
     /// simply not be up yet, and the next call should look again
     checked: tokio::sync::Mutex<bool>,
@@ -278,6 +292,7 @@ impl SocketRelay {
         tokens: Arc<dyn TokenSource>,
         audit: Arc<Audit>,
         declared: Vec<String>,
+        fetcher: Arc<Fetcher>,
     ) -> Self {
         SocketRelay {
             name: name.to_string(),
@@ -286,6 +301,7 @@ impl SocketRelay {
             tokens,
             audit,
             declared,
+            fetcher,
             checked: tokio::sync::Mutex::new(false),
         }
     }
@@ -413,6 +429,26 @@ impl SocketRelay {
         Ok(reply)
     }
 
+    /// #485: fetch what the sidecar could not reach, and finish the operation with it. Only for
+    /// the operation that was asked for: a sidecar cannot turn any call into a fetch.
+    async fn finish(&self, op: &str, f: Fetch) -> Result<ApiResponse, ApiError> {
+        if f.then.op() != op {
+            return Err(ApiError {
+                status: StatusCode::BAD_GATEWAY,
+                message: format!(
+                    "the {} sidecar answered {op} with a fetch for {}",
+                    self.name,
+                    f.then.op()
+                ),
+            });
+        }
+        let body = self
+            .fetcher
+            .fetch(&f.url, CI_LOG_CAP, &[("sidecar", &self.name)])
+            .await?;
+        Ok(f.then.finish(&body))
+    }
+
     fn missing(&self, what: &str) -> ApiError {
         ApiError {
             status: StatusCode::BAD_GATEWAY,
@@ -441,6 +477,9 @@ impl ForgeRelay for SocketRelay {
         let reply = self.post("/call", &body).await?;
         if let Some(e) = reply.error {
             return Err(e.into_api());
+        }
+        if let Some(f) = reply.fetch {
+            return self.finish(op, f).await;
         }
         reply.response.ok_or_else(|| self.missing("response"))
     }
@@ -636,15 +675,20 @@ impl Sidecar {
             Err(e) => return error_reply(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
         };
         let gh = Arc::new(gh);
-        let relay = GitHubRelay::new(gh.clone());
+        let deferred = Arc::new(Deferred::default());
+        let relay = GitHubRelay::deferring(gh.clone(), deferred.clone());
         let out = relay.call(&r.op, &grants, &r.req, &r.resolved).await;
         self.remember_viewer(key, &gh);
-        let mut reply = match out {
-            Ok(resp) => Reply {
+        let mut reply = match (out, deferred.take()) {
+            (_, Some(f)) => Reply {
+                fetch: Some(f),
+                ..Reply::default()
+            },
+            (Ok(resp), None) => Reply {
                 response: Some(resp),
                 ..Reply::default()
             },
-            Err(e) => Reply {
+            (Err(e), None) => Reply {
                 error: Some(WireError::of(&e)),
                 ..Reply::default()
             },

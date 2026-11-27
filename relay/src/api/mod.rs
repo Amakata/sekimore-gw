@@ -291,9 +291,12 @@ impl From<GhError> for ApiError {
             // not have, which is the same answer shape as a denial
             GhError::Refused(_) => StatusCode::FORBIDDEN,
             GhError::Token(_) => StatusCode::SERVICE_UNAVAILABLE,
-            GhError::Status { .. } | GhError::Http(_) | GhError::Parse(_) | GhError::Graphql(_) => {
-                StatusCode::BAD_GATEWAY
-            }
+            GhError::Status { .. }
+            | GhError::Http(_)
+            | GhError::Parse(_)
+            | GhError::Graphql(_)
+            | GhError::Elsewhere(_)
+            | GhError::Offsite { .. } => StatusCode::BAD_GATEWAY,
         };
         ApiError {
             status,

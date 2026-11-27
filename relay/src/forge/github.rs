@@ -5,26 +5,114 @@
 //! The same code serves both transports: built in, the gateway calls it here; as a sidecar (#329)
 //! it is reached over a socket with the same request.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hyper::StatusCode;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use url::Url;
 
 use super::{Answer, ForgeRelay, Grant, OpenPrError, OpenedPr, Query, ReleaseRef, Resolved};
 use crate::api::types::{ApiRequest, ApiResponse};
 use crate::api::ApiError;
-use crate::github::{CommentItem, GhError, GitHub, SecurityAlert};
+use crate::github::{CiLogPage, CommentItem, GhError, GitHub, SecurityAlert};
 use crate::policy::{Action, Resource};
 
 /// GitHub (github.com or a GHES), one upstream per instance.
 pub struct GitHubRelay {
     gh: Arc<GitHub>,
+    /// #485: where an operation whose upstream answer leaves the API host leaves the rest of its
+    /// work, in a sidecar. `None` built in: the gateway's client follows it itself
+    deferred: Option<Arc<Deferred>>,
 }
 
 impl GitHubRelay {
     pub fn new(gh: Arc<GitHub>) -> Self {
-        GitHubRelay { gh }
+        GitHubRelay { gh, deferred: None }
+    }
+
+    /// #485: the sidecar's. An answer that leaves the API host is not followed here (the sidecar
+    /// has no egress); the operation writes down what is left to do in `deferred` instead, for
+    /// the gateway to finish.
+    pub fn deferring(gh: Arc<GitHub>, deferred: Arc<Deferred>) -> Self {
+        GitHubRelay {
+            gh,
+            deferred: Some(deferred),
+        }
+    }
+}
+
+/// #485: what is left of an operation once the upstream sent it to another host — the URL to
+/// fetch, and what to make of the body. The gateway fetches it (`github::redirect::Fetcher`) and
+/// finishes it with [`Continuation::finish`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Fetch {
+    pub url: Url,
+    pub then: Continuation,
+}
+
+/// The operations that can be left for the gateway to finish, each with what it needs to shape
+/// the answer. Nothing here reaches the upstream: the fetch carries no credential, and the rest is
+/// paging.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Continuation {
+    /// `ci log`: page the job's log
+    CiLog {
+        job_id: u64,
+        job_name: String,
+        conclusion: String,
+        window: usize,
+        before: Option<usize>,
+    },
+}
+
+impl Continuation {
+    /// The operation this finishes. The gateway takes a continuation only for the operation it
+    /// asked for, so a sidecar cannot turn any call into a fetch.
+    pub fn op(&self) -> &'static str {
+        match self {
+            Continuation::CiLog { .. } => "/ci/log",
+        }
+    }
+
+    /// The answer, from what the fetch returned.
+    pub fn finish(&self, body: &[u8]) -> ApiResponse {
+        match self {
+            Continuation::CiLog {
+                job_id,
+                job_name,
+                conclusion,
+                window,
+                before,
+            } => {
+                let text = String::from_utf8_lossy(body);
+                ci_log_response(&CiLogPage::of(
+                    &text, *job_id, job_name, conclusion, *window, *before,
+                ))
+            }
+        }
+    }
+}
+
+/// #485: the slot a sidecar's [`GitHubRelay`] leaves a [`Fetch`] in, one per call.
+#[derive(Default)]
+pub struct Deferred(Mutex<Option<Fetch>>);
+
+impl Deferred {
+    pub fn take(&self) -> Option<Fetch> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    /// Leave `fetch` for the gateway. What the operation returns meanwhile is not the answer: the
+    /// sidecar replies with the fetch instead.
+    fn leave(&self, fetch: Fetch) -> ApiError {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(fetch);
+        ApiError {
+            status: StatusCode::BAD_GATEWAY,
+            message: "left for the gateway to fetch".into(),
+        }
     }
 }
 
@@ -88,7 +176,7 @@ impl ForgeRelay for GitHubRelay {
             "/ci/cancel" => ci_cancel(gh, g, req).await,
             "/ci/runs" => ci_runs(gh, g, req).await,
             "/ci/jobs" => ci_jobs(gh, g, req).await,
-            "/ci/log" => ci_log(gh, g, req).await,
+            "/ci/log" => ci_log(gh, g, req, self.deferred.as_deref()).await,
             "/security/alerts" => security_alerts(gh, g, req).await,
             "/security/alert" => security_alert(gh, g, req).await,
             "/security/dismiss" => security_dismiss(gh, g, req).await,
@@ -1247,7 +1335,12 @@ async fn ci_jobs(gh: &GitHub, g: &Grant, req: &ApiRequest) -> Result<ApiResponse
     })
 }
 
-async fn ci_log(gh: &GitHub, g: &Grant, req: &ApiRequest) -> Result<ApiResponse, ApiError> {
+async fn ci_log(
+    gh: &GitHub,
+    g: &Grant,
+    req: &ApiRequest,
+    deferred: Option<&Deferred>,
+) -> Result<ApiResponse, ApiError> {
     let window = if req.window == 0 {
         200
     } else {
@@ -1273,15 +1366,34 @@ async fn ci_log(gh: &GitHub, g: &Grant, req: &ApiRequest) -> Result<ApiResponse,
             .ok_or_else(|| bad("no CI jobs for this PR"))?;
         (pick.id, pick.name.clone(), pick.conclusion.clone())
     };
-    let page = gh
+    match gh
         .ci_job_log(g, job_id, &name, &concl, window, before)
-        .await?;
-    let raw = serde_json::to_value(&page).unwrap_or(Value::Null);
-    Ok(ApiResponse {
+        .await
+    {
+        Ok(page) => Ok(ci_log_response(&page)),
+        Err(GhError::Elsewhere(url)) => match deferred {
+            Some(d) => Err(d.leave(Fetch {
+                url,
+                then: Continuation::CiLog {
+                    job_id,
+                    job_name: name,
+                    conclusion: concl,
+                    window,
+                    before,
+                },
+            })),
+            None => Err(GhError::Elsewhere(url).into()),
+        },
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn ci_log_response(page: &CiLogPage) -> ApiResponse {
+    ApiResponse {
         ok: true,
-        raw: Some(raw),
+        raw: Some(serde_json::to_value(page).unwrap_or(Value::Null)),
         ..Default::default()
-    })
+    }
 }
 
 // ---- Dependabot alerts (0.2.28, #132) ----

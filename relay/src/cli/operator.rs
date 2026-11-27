@@ -108,6 +108,7 @@ pub fn build_github_for(
     up: &Upstream,
     audit: Arc<Audit>,
     secrets: SecretSource,
+    fetcher: Option<Arc<crate::github::redirect::Fetcher>>,
 ) -> anyhow::Result<(Arc<GitHub>, Arc<UpstreamTokenStore>, reqwest::Client)> {
     let http = build_client(&HttpOptions {
         ca_file: r.relay.ca_file.as_deref(),
@@ -123,17 +124,18 @@ pub fn build_github_for(
         secrets,
         r.relay.upstream_token_cache_ttl,
     ));
-    let gh = Arc::new(
-        GitHub::new(
-            up.api_base.clone(),
-            up.graphql_base.clone(),
-            http.clone(),
-            store.clone(),
-            audit,
-        )
-        .with_route(paths::github_route(r.proxy.as_ref())),
-    );
-    Ok((gh, store, http))
+    let mut gh = GitHub::new(
+        up.api_base.clone(),
+        up.graphql_base.clone(),
+        http.clone(),
+        store.clone(),
+        audit,
+    )
+    .with_route(paths::github_route(r.proxy.as_ref()));
+    if let Some(f) = fetcher {
+        gh = gh.with_fetcher(f);
+    }
+    Ok((Arc::new(gh), store, http))
 }
 
 /// Resolves `--upstream`, defaulting to the default upstream when omitted.
@@ -160,7 +162,8 @@ pub async fn login(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     // #151: the device flow goes through the proxy when one is set, so take its credential from the
     // store first
     crate::proxy_credential::prime(r.proxy.as_ref(), &secret_source_via_socket(&r)).await;
-    let (gh, store, http) = build_github_for(&r, &up, audit.clone(), secret_source_via_socket(&r))?;
+    let (gh, store, http) =
+        build_github_for(&r, &up, audit.clone(), secret_source_via_socket(&r), None)?;
     // Before the device flow, not after: it walks a person through authorising on github.com, and
     // discovering at the end that there is nowhere to put the result throws that away and leaves
     // an authorisation granted for a token nobody kept.
@@ -955,7 +958,7 @@ pub async fn whoami(path: &Path, upstream: Option<&str>) -> anyhow::Result<()> {
     let up = pick_upstream(&r, upstream)?;
     let audit = open_audit(&r)?;
     crate::proxy_credential::prime(r.proxy.as_ref(), &secret_source_via_socket(&r)).await;
-    let (gh, _, _) = build_github_for(&r, up, audit, secret_source_via_socket(&r))?;
+    let (gh, _, _) = build_github_for(&r, up, audit, secret_source_via_socket(&r), None)?;
     let login = gh.whoami().await?;
     println!(
         "{}",
@@ -1324,7 +1327,7 @@ impl TokenAcceptance {
 async fn ask_upstream_about_token(r: &Resolved, u: &Upstream) -> TokenAcceptance {
     // No unaudited call: without the audit log there is no check
     let gh = match open_audit(r)
-        .and_then(|audit| build_github_for(r, u, audit, secret_source_via_socket(r)))
+        .and_then(|audit| build_github_for(r, u, audit, secret_source_via_socket(r), None))
     {
         Ok((gh, _, _)) => gh,
         Err(e) => return TokenAcceptance::NotChecked(format!("{e:#}")),

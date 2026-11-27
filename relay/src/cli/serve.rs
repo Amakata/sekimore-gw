@@ -200,9 +200,25 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     let sessions = Arc::new(Semaphore::new(r.relay.limits.max_sessions.max(1)));
     let mut relays = crate::forge::Relays::new();
     let mut ssh_servers = Vec::new();
+    // #485: follows an upstream answer that leaves the API host (a job's log), for the built-in
+    // client and for a sidecar's reply alike, from the gateway and under its own rules
+    let fetcher = Arc::new(crate::github::redirect::Fetcher::new(
+        &crate::github::http::HttpOptions {
+            ca_file: r.relay.ca_file.as_deref(),
+            proxy: r.proxy.as_ref(),
+            ..Default::default()
+        },
+        audit.clone(),
+        crate::paths::github_route(r.proxy.as_ref()),
+    )?);
     for up in &r.upstreams {
-        let (github, upstream_tokens, _http) =
-            build_github_for(&r, up, audit.clone(), secrets.clone())?;
+        let (github, upstream_tokens, _http) = build_github_for(
+            &r,
+            up,
+            audit.clone(),
+            secrets.clone(),
+            Some(fetcher.clone()),
+        )?;
         token_caches.push(upstream_tokens.clone());
         // A locked store is not "no token" — it is a token nobody can read yet, and the answer is
         // the passphrase rather than a login. Say which, because they send the operator to
@@ -249,6 +265,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
                     upstream_tokens.clone(),
                     audit.clone(),
                     s.resources.clone(),
+                    fetcher.clone(),
                 ))
             }
             None => forge.clone(),
