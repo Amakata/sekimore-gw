@@ -6,6 +6,7 @@ import ipaddress
 import socket
 import subprocess
 import time
+from concurrent.futures import Executor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -494,13 +495,16 @@ class DNSServer:
         return domain_matches(domain, list(self.blocked_domains))
 
     async def _resolve_domain(
-        self, domain: str, query_type: str = "A"
+        self, domain: str, query_type: str = "A", *, executor: Executor | None = None
     ) -> tuple[list[str], int] | None:
         """Resolve a domain.
 
         Args:
             domain: Domain to resolve
             query_type: Query type (A, AAAA)
+            executor: Where the blocking lookup runs; the loop's default when None. The
+                start-up seeding passes its own (#481), so lookups stuck on a dead resolver
+                cannot take the threads the query path needs.
 
         Returns:
             A (list of IPs, TTL) tuple, or None if resolution fails
@@ -526,7 +530,7 @@ class DNSServer:
                 family = socket.AF_INET if query_type == "A" else socket.AF_INET6
 
                 addrinfo = await loop.run_in_executor(
-                    None, socket.getaddrinfo, domain, None, family, socket.SOCK_STREAM
+                    executor, socket.getaddrinfo, domain, None, family, socket.SOCK_STREAM
                 )
 
                 # Extract the addresses, de-duplicated
@@ -546,7 +550,7 @@ class DNSServer:
                 # For a regular DNS server (8.8.8.8 etc.), use dnspython
                 loop = asyncio.get_event_loop()
                 answers = await loop.run_in_executor(
-                    None, self.resolver.resolve, domain, query_type
+                    executor, self.resolver.resolve, domain, query_type
                 )
 
                 # Pull out the addresses and the TTL

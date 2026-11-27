@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Awaitable, Callable
+from concurrent.futures import Executor, ThreadPoolExecutor
 from pathlib import Path
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -35,6 +36,13 @@ from .secret_store import (
 # How long the watcher thread waits for a reload it handed to the main loop. Bounded so a reload
 # that never returns cannot pin a watchdog thread for the life of the process.
 RELOAD_TIMEOUT_SECONDS = 120.0
+
+# #481: the allow list is resolved after DNS is up, a few names at a time, each lookup bounded.
+# A resolver that cannot reach upstream takes about 8s a name to fail; one at a time, a long
+# list kept port 53 shut for minutes. The bound is how long a lookup is waited for, not how long
+# its thread lives: getaddrinfo cannot be interrupted.
+SEED_CONCURRENCY = 8
+SEED_LOOKUP_TIMEOUT_SECONDS = 15.0
 
 
 class ReloadWindow:
@@ -881,6 +889,8 @@ class SecurityGatewayOrchestrator:
         self._proxy_credential_task: asyncio.Task[None] | None = None
         # #456: re-resolves the upstream proxy's name and reconfigures Squid when it recovers
         self._upstream_dns_task: asyncio.Task[None] | None = None
+        # #481: resolves the allow list into the ipsets once DNS is up
+        self._seed_task: asyncio.Task[None] | None = None
         # The loop reload_config runs on. Set when start() is running; the watcher thread reads it
         self._main_loop: asyncio.AbstractEventLoop | None = None
         if self.config_path:
@@ -900,12 +910,43 @@ class SecurityGatewayOrchestrator:
         """
         return domain_matches(domain, self.config.allow_domains)
 
-    async def apply_domain_rule(self, domain: str, action: str = "allow") -> bool:
+    def _is_relayed(self, domain: str) -> bool:
+        """Whether the relay answers for `domain` (DNS hands out the gateway's address for it)."""
+        name = domain.lower().rstrip(".")
+        return name in {d.lower().rstrip(".") for d in self.config.relay_domains()}
+
+    def _admission_refused(self, domain: str) -> tuple[str, bool] | None:
+        """Why `domain`'s addresses may not enter the allow ipset now, or None if they may.
+
+        Returns (reason, in force): `in force` is True when "no entry" is the rule working, as
+        for a relayed domain or `direct_egress: deny`, and False when the rule cannot be applied.
+        Reads only the live config, so a caller that awaited in between asks again.
+        """
+        # A domain the relay answers for keeps its real address out of the allow ipset,
+        # whichever path got here. Reachable by address, it would bypass the relay entirely.
+        if self._is_relayed(domain):
+            return ("Domain rule refused: the relay answers for it", True)
+        # #212: `proxy.direct_egress: deny` keeps every allow_domains address out of the ipset,
+        # so dev's only route out is Squid and its upstream. DNS still answers, so the name
+        # resolves and a client that honours HTTP_PROXY works unchanged. Nothing to resolve or
+        # program here, and success is the honest answer: the rule is in force, as "no entry".
+        if self.config.proxy.direct_egress_denied():
+            return ("Domain rule skipped: direct egress denied", True)
+        # #481: the same list the DNS path admits by. A reload can drop the name while its
+        # start-up lookup is still out; programming the answer then would re-admit it.
+        if not self.dns_server._is_allowed(domain):
+            return ("Domain rule refused: not on the allow list", False)
+        return None
+
+    async def apply_domain_rule(
+        self, domain: str, action: str = "allow", *, executor: Executor | None = None
+    ) -> bool:
         """Apply a single domain rule across all three layers.
 
         Args:
             domain: The domain name
             action: 'allow' or 'block'
+            executor: Where the lookup runs (see DNSServer._resolve_domain)
 
         Returns:
             True on success
@@ -916,25 +957,14 @@ class SecurityGatewayOrchestrator:
             log_system_event("Domain blocked", domain=domain)
             return True
 
-        # A domain the relay answers for keeps its real address out of the allow ipset,
-        # whichever path got here. Reachable by address, it would bypass the relay entirely.
-        if domain.lower().rstrip(".") in {
-            d.lower().rstrip(".") for d in self.config.relay_domains()
-        }:
-            log_system_event("Domain rule refused: the relay answers for it", domain=domain)
-            return True
-
-        # #212: `proxy.direct_egress: deny` keeps every allow_domains address out of the ipset,
-        # so dev's only route out is Squid and its upstream. DNS still answers, so the name
-        # resolves and a client that honours HTTP_PROXY works unchanged. Nothing to resolve or
-        # program here, and success is the honest answer: the rule is in force, as "no entry".
-        if self.config.proxy.direct_egress_denied():
-            log_system_event("Domain rule skipped: direct egress denied", domain=domain)
-            return True
+        refused = self._admission_refused(domain)
+        if refused:
+            log_system_event(refused[0], domain=domain)
+            return refused[1]
 
         # Allowed domain
         # 1. Resolve the domain over DNS
-        result = await self.dns_server._resolve_domain(domain, "A")
+        result = await self.dns_server._resolve_domain(domain, "A", executor=executor)
 
         if not result:
             log_error(
@@ -942,6 +972,13 @@ class SecurityGatewayOrchestrator:
                 f"Failed to resolve domain: {domain}",
             )
             return False
+
+        # The lookup awaited, and a reload may have run meanwhile. Nothing awaits from here to
+        # setup_domain, so this check and the ipset write see the same config.
+        refused = self._admission_refused(domain)
+        if refused:
+            log_system_event(refused[0], domain=domain)
+            return refused[1]
 
         ips, ttl = result
 
@@ -1425,6 +1462,103 @@ class SecurityGatewayOrchestrator:
             upstream_proxy=str(proxy.upstream_proxy),
         )
 
+    def _domains_to_seed(self) -> list[str]:
+        """The allow_domains entries resolved at start-up: exact names the relay does not serve.
+
+        A wildcard (leading ".") names no host to resolve; it is admitted when a query arrives.
+        """
+        out: list[str] = []
+        for domain in self.config.allow_domains:
+            if domain.startswith("."):
+                continue
+            # A domain the relay answers for must not have its real address in the allow
+            # ipset. DNS hands out the gateway's address for these and deliberately skips
+            # setup_domain; seeding the upstream's address here would undo that, and the
+            # agent could reach it by address and miss the relay altogether.
+            if self._is_relayed(domain):
+                log_system_event("Domain rule skipped: the relay answers for it", domain=domain)
+                continue
+            out.append(domain)
+        return out
+
+    async def _seed_allow_list(self, timeout: float = SEED_LOOKUP_TIMEOUT_SECONDS) -> None:
+        """#481: resolve the allow list into the ipsets, in the background, after DNS is up.
+
+        Seeding only saves the first connection to a name a DNS round trip: until a name is
+        seeded, a query for it is admitted on the DNS path exactly as a seeded one is. So it
+        need not finish before port 53 opens, and a lookup that fails or times out admits
+        nothing — the name waits for its first query, as it did before.
+
+        Runs on the main loop, like reload_config and the DNS handler, so the three take turns
+        at the firewall (#54); apply_domain_rule re-reads the config after its lookup.
+        """
+        domains = self._domains_to_seed()
+        if not domains:
+            return
+        if self.config.proxy.direct_egress_denied():
+            # #212: nothing enters the ipset in this mode, so there is nothing to resolve
+            log_system_event(
+                "Allow list not seeded: direct egress denied", domains=str(len(domains))
+            )
+            return
+
+        log_system_event(
+            "Seeding the allow list in the background",
+            domains=str(len(domains)),
+            concurrency=str(SEED_CONCURRENCY),
+            lookup_timeout=f"{timeout:g}s",
+        )
+        started = time.monotonic()
+        semaphore = asyncio.Semaphore(SEED_CONCURRENCY)
+        # Its own threads, sized to the semaphore. A lookup that outlives its timeout keeps its
+        # thread until getaddrinfo returns, so the next name may queue for one and time out
+        # too; that only delays seeding, never a DNS answer on the default executor.
+        executor = ThreadPoolExecutor(max_workers=SEED_CONCURRENCY, thread_name_prefix="seed-dns")
+
+        async def seed(domain: str) -> str:
+            async with semaphore:
+                log_system_event(f"Applying domain rule for: {domain}")
+                try:
+                    applied = await asyncio.wait_for(
+                        self.apply_domain_rule(domain, action="allow", executor=executor),
+                        timeout,
+                    )
+                except TimeoutError:
+                    log_warning(
+                        ComponentType.ORCHESTRATOR,
+                        f"Resolving {domain} timed out after {timeout:g}s; "
+                        "it is admitted on its first DNS query instead",
+                    )
+                    return "timed_out"
+                except Exception as e:
+                    log_error(ComponentType.ORCHESTRATOR, f"Seeding {domain} failed: {e}")
+                    return "failed"
+                return "applied" if applied else "failed"
+
+        try:
+            outcomes = await asyncio.gather(*(seed(d) for d in domains))
+        finally:
+            # A thread still inside getaddrinfo finishes on its own; nothing waits for it.
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        counts = {k: outcomes.count(k) for k in ("applied", "failed", "timed_out")}
+        summary = {
+            "domains": str(len(domains)),
+            "applied": str(counts["applied"]),
+            "failed": str(counts["failed"]),
+            "timed_out": str(counts["timed_out"]),
+            "seconds": f"{time.monotonic() - started:.1f}",
+        }
+        if counts["failed"] or counts["timed_out"]:
+            log_warning(
+                ComponentType.ORCHESTRATOR,
+                "Allow list seeded with failures: those names are admitted on their first "
+                "DNS query; check the gateway's resolver (127.0.0.11) if many failed",
+                **summary,
+            )
+        else:
+            log_system_event("Allow list seeded", **summary)
+
     async def initialize(self) -> bool:
         """Initialize the security gateway.
 
@@ -1471,29 +1605,11 @@ class SecurityGatewayOrchestrator:
         # to say so; it took comparing egress IPs to notice.
         self._log_egress_mode()
 
-        # 4. Apply the rules for allowed domains (only those not starting with ".")
-        relayed = {d.lower().rstrip(".") for d in self.config.relay_domains()}
-        for domain in self.config.allow_domains:
-            # Wildcards starting with "." are skipped at startup and handled
-            # dynamically when a DNS query arrives
-            if domain.startswith("."):
-                continue
-            # A domain the relay answers for must not have its real address in the allow
-            # ipset. DNS hands out the gateway's address for these and deliberately skips
-            # setup_domain; seeding the upstream's address here would undo that, and the
-            # agent could reach it by address and miss the relay altogether.
-            if domain.lower().rstrip(".") in relayed:
-                log_system_event(
-                    "Domain rule skipped: the relay answers for it",
-                    domain=domain,
-                )
-                continue
-            log_system_event(f"Applying domain rule for: {domain}")
-            await self.apply_domain_rule(domain, action="allow")
-            log_system_event(f"Domain rule applied successfully: {domain}")
+        # 4. The allow list's addresses are seeded in the background once DNS is up (start(),
+        # #481). Until a name is seeded, a query for it is admitted on the DNS path the same way.
 
-        # 5. Enable block logging once every ACCEPT rule is in place, so the LOG rule
-        # lands last and only blocked packets get logged
+        # 5. Enable block logging after the static ACCEPT rules, so the LOG rule lands last and
+        # only blocked packets get logged. setup_domain keeps it last for the rules added later.
         if not self.firewall.enable_block_logging():
             log_error(ComponentType.ORCHESTRATOR, "Failed to enable block logging")
             # Carry on if logging fails; the firewall itself still works
@@ -1585,6 +1701,11 @@ class SecurityGatewayOrchestrator:
             self.config_observer.start()  # type: ignore[attr-defined]
             log_system_event("Configuration file monitoring started")
 
+        # #481: seed the allow list behind DNS, not in front of it. The firewall's default deny
+        # is in place since initialize(), and a query for a name not yet seeded is admitted on
+        # the DNS path, so port 53 has no reason to wait for a resolver that may be slow.
+        self._seed_task = asyncio.create_task(self._seed_allow_list())
+
         # Start the DNS server (the main loop)
         try:
             await self.dns_server.start()
@@ -1626,6 +1747,10 @@ class SecurityGatewayOrchestrator:
             self._upstream_dns_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._upstream_dns_task
+        if self._seed_task:
+            self._seed_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._seed_task
 
         # Stop the file watcher
         if self.config_observer:

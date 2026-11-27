@@ -627,10 +627,10 @@ def describe_security_gateway_orchestrator():
         # Mock firewall setup
         orch.firewall.setup_domain = Mock(return_value=True)
 
-        result = await orch.apply_domain_rule("example.com", action="allow")
+        result = await orch.apply_domain_rule("pypi.org", action="allow")
 
         assert result is True
-        orch.firewall.setup_domain.assert_called_once_with("example.com", ["93.184.216.34"])
+        orch.firewall.setup_domain.assert_called_once_with("pypi.org", ["93.184.216.34"])
 
     @pytest.mark.asyncio
     @patch("subprocess.run")
@@ -649,7 +649,7 @@ def describe_security_gateway_orchestrator():
         # Mock DNS resolution failure
         orch.dns_server._resolve_domain = AsyncMock(return_value=None)
 
-        result = await orch.apply_domain_rule("nonexistent.invalid", action="allow")
+        result = await orch.apply_domain_rule("pypi.org", action="allow")
 
         assert result is False
 
@@ -675,11 +675,11 @@ def describe_security_gateway_orchestrator():
         # Mock firewall setup
         orch.firewall.setup_domain = Mock(return_value=True)
 
-        result = await orch.apply_domain_rule("example.com", action="allow")
+        result = await orch.apply_domain_rule("pypi.org", action="allow")
 
         assert result is True
         # Should only pass IPv4 address to firewall
-        orch.firewall.setup_domain.assert_called_once_with("example.com", ["93.184.216.34"])
+        orch.firewall.setup_domain.assert_called_once_with("pypi.org", ["93.184.216.34"])
 
     @pytest.mark.asyncio
     @patch("subprocess.run")
@@ -701,7 +701,7 @@ def describe_security_gateway_orchestrator():
         # Mock firewall setup failure
         orch.firewall.setup_domain = Mock(return_value=False)
 
-        result = await orch.apply_domain_rule("example.com", action="allow")
+        result = await orch.apply_domain_rule("pypi.org", action="allow")
 
         assert result is False
 
@@ -2369,8 +2369,8 @@ def describe_direct_egress():
         orch.dns_server._resolve_domain = AsyncMock(return_value=(["93.184.216.34"], 300))
         orch.firewall.setup_domain = Mock(return_value=True)
 
-        assert await orch.apply_domain_rule("example.com", action="allow") is True
-        orch.firewall.setup_domain.assert_called_once_with("example.com", ["93.184.216.34"])
+        assert await orch.apply_domain_rule("pypi.org", action="allow") is True
+        orch.firewall.setup_domain.assert_called_once_with("pypi.org", ["93.184.216.34"])
 
     @patch("subprocess.run")
     def it_passes_the_mode_to_the_dns_server(mock_run, tmp_path, sample_config_data):
@@ -2796,3 +2796,190 @@ def describe_squid_peer_log():
 
     def a_missing_log_keeps_the_last_state(tmp_path):
         assert _SquidPeerLog("proxy.example.com", tmp_path / "none.log").read() is False
+
+
+def describe_dns_opens_before_the_allow_list_resolves():
+    """#481: start-up resolution of allow_domains runs behind DNS, bounded, and widens nothing."""
+
+    def _orch(tmp_path, extra=""):
+        config_file = tmp_path / "config.yml"
+        config_file.write_text(
+            """
+allow_domains:
+  - pypi.org
+  - files.example.org
+  - .pythonhosted.org
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+database_path: /tmp/test.db
+"""
+            + extra
+        )
+        with patch("subprocess.run") as m:
+            m.return_value = Mock(returncode=0, stdout="", stderr="")
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+        orch.config_observer = None
+        orch.firewall.setup_domain = Mock(return_value=True)
+        return orch
+
+    @contextlib.contextmanager
+    def _hanging_resolver():
+        """getaddrinfo that blocks the way it does against an unreachable 127.0.0.11."""
+        import threading
+
+        release = threading.Event()
+        calls = []
+
+        def hang(host, *args, **kwargs):
+            calls.append(host)
+            release.wait(10)
+            raise OSError("Temporary failure in name resolution")
+
+        try:
+            with patch("src.dns_server.socket.getaddrinfo", side_effect=hang):
+                yield calls
+        finally:
+            release.set()
+
+    async def dns_starts_while_the_lookups_still_hang(tmp_path):
+        orch = _orch(tmp_path)
+        orch.firewall.initialize_firewall = Mock(return_value=True)
+        orch.firewall.enable_block_logging = Mock(return_value=True)
+        orch.firewall.setup_static_ip_rules = Mock(return_value=True)
+        orch.firewall.cleanup = Mock()
+        orch.ip_manager.setup_static_ips = Mock(return_value=True)
+        orch.ip_manager.cleanup = Mock()
+        orch.firewall_monitor.start = AsyncMock()
+        orch.firewall_monitor.stop = AsyncMock()
+        orch.dns_server.stop = AsyncMock()
+        seen = {}
+
+        async def dns_start():
+            await asyncio.sleep(0.2)  # the seeding task gets to its lookups
+            seen["admitted"] = orch.firewall.setup_domain.call_count
+            seen["seeding_done"] = orch._seed_task is not None and orch._seed_task.done()
+
+        orch.dns_server.start = AsyncMock(side_effect=dns_start)
+        with _hanging_resolver() as calls, patch("src.orchestrator.setup_logging"):
+            await asyncio.wait_for(orch.start(), timeout=5)
+
+        orch.dns_server.start.assert_awaited_once()
+        assert seen == {"admitted": 0, "seeding_done": False}
+        # both exact names were being looked up at once, the wildcard was not
+        assert sorted(calls) == ["files.example.org", "pypi.org"]
+        # shutdown does not wait for a stuck lookup
+        assert orch._seed_task.cancelled()
+
+    @patch("src.orchestrator.log_system_event")
+    @patch("src.orchestrator.log_warning")
+    async def a_hung_lookup_times_out_admits_nothing_and_is_summarised(
+        mock_warn, mock_event, tmp_path
+    ):
+        orch = _orch(tmp_path)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with _hanging_resolver():
+            await orch._seed_allow_list(timeout=0.2)
+        assert loop.time() - started < 2
+
+        orch.firewall.setup_domain.assert_not_called()
+        messages = [c.args[1] for c in mock_warn.call_args_list]
+        assert sum("timed out after 0.2s" in m for m in messages) == 2
+        summary = mock_warn.call_args_list[-1]
+        assert "Allow list seeded with failures" in summary.args[1]
+        assert summary.kwargs["timed_out"] == "2"
+        assert summary.kwargs["applied"] == "0"
+        assert "seconds" in summary.kwargs
+
+    @patch("src.orchestrator.log_warning")
+    async def a_failed_lookup_admits_nothing(mock_warn, tmp_path):
+        import socket
+
+        orch = _orch(tmp_path)
+        with patch(
+            "src.dns_server.socket.getaddrinfo", side_effect=socket.gaierror("Name not known")
+        ):
+            await orch._seed_allow_list()
+        orch.firewall.setup_domain.assert_not_called()
+        summary = mock_warn.call_args_list[-1]
+        assert summary.kwargs["failed"] == "2"
+
+    @patch("src.orchestrator.log_system_event")
+    async def a_resolved_list_is_seeded_and_summarised(mock_event, tmp_path):
+        orch = _orch(tmp_path)
+        orch.dns_server._resolve_domain = AsyncMock(return_value=(["151.101.0.223"], 300))
+        await orch._seed_allow_list()
+        assert sorted(c.args[0] for c in orch.firewall.setup_domain.call_args_list) == [
+            "files.example.org",
+            "pypi.org",
+        ]
+        summary = mock_event.call_args_list[-1]
+        assert summary.args[0] == "Allow list seeded"
+        assert summary.kwargs["applied"] == "2"
+
+    async def a_relayed_domain_is_still_not_seeded(tmp_path):
+        orch = _orch(
+            tmp_path,
+            """
+domain_handlers:
+  pypi.org:
+    handler: github
+relay:
+  project:
+    name: t
+    repos: []
+""",
+        )
+        orch.dns_server._resolve_domain = AsyncMock(return_value=(["140.82.112.3"], 60))
+        await orch._seed_allow_list()
+        looked_up = [c.args[0] for c in orch.dns_server._resolve_domain.call_args_list]
+        assert looked_up == ["files.example.org"]
+        orch.firewall.setup_domain.assert_called_once_with("files.example.org", ["140.82.112.3"])
+
+    async def a_name_a_reload_drops_mid_lookup_is_not_admitted(tmp_path):
+        orch = _orch(tmp_path)
+        answer = asyncio.Event()
+
+        async def slow(domain, query_type="A", **kwargs):
+            await answer.wait()
+            return (["151.101.0.223"], 300)
+
+        orch.dns_server._resolve_domain = slow
+        task = asyncio.create_task(orch._seed_allow_list())
+        await asyncio.sleep(0.05)
+        # what reload_config does to the DNS server's list, on the same loop
+        orch.dns_server.allowed_domains = ["files.example.org"]
+        answer.set()
+        await task
+        orch.firewall.setup_domain.assert_called_once_with("files.example.org", ["151.101.0.223"])
+
+    async def nothing_is_seeded_under_direct_egress_deny(tmp_path):
+        orch = _orch(
+            tmp_path,
+            """
+proxy:
+  enabled: true
+  port: 3128
+  upstream_proxy: proxy.corp:8080
+  direct_egress: deny
+""",
+        )
+        orch.dns_server._resolve_domain = AsyncMock(return_value=(["151.101.0.223"], 300))
+        await orch._seed_allow_list()
+        orch.dns_server._resolve_domain.assert_not_called()
+        orch.firewall.setup_domain.assert_not_called()
+
+    async def an_exact_name_not_yet_seeded_is_admitted_on_its_first_query(tmp_path):
+        # What makes seeding safe to leave behind DNS: the query path admits an exact name
+        # the same way it admits a wildcard match.
+        from dnslib import DNSRecord
+
+        orch = _orch(tmp_path)
+        orch.dns_server._resolve_domain = AsyncMock(return_value=(["151.101.0.223"], 300))
+        orch.dns_server.mapping.record_query = AsyncMock()
+        data = await orch.dns_server.handle_query(
+            DNSRecord.question("pypi.org", "A").pack(), ("172.20.0.5", 5353)
+        )
+        assert str(DNSRecord.parse(data).rr[0].rdata) == "151.101.0.223"
+        orch.firewall.setup_domain.assert_called_once_with("pypi.org", ["151.101.0.223"])
