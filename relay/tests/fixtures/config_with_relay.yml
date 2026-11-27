@@ -1,4 +1,5 @@
-# Shared fixture: with a git-relay handler. Read by both the Python tests and the Rust relay tests.
+# Shared fixture: with a git-relay handler. Read by the Python tests, the Rust relay tests and the equivalence
+# harness (relay/tests/equivalence/). tests/fixtures/ links here while the Python tests exist.
 name: fixture-with-relay
 allow_domains:
   - pypi.org

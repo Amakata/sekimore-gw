@@ -1,4 +1,5 @@
-# Shared fixture: the traditional configuration, no relay. Read by both the Python tests and the Rust relay tests.
+# Shared fixture: the traditional configuration, no relay. Read by the Python tests, the Rust relay tests and the equivalence
+# harness (relay/tests/equivalence/). tests/fixtures/ links here while the Python tests exist.
 name: fixture-without-relay
 allow_domains:
   - pypi.org
