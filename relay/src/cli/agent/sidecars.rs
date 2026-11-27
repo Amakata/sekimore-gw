@@ -15,7 +15,7 @@ use super::client::AgentClient;
 use super::print::print_response;
 use crate::api::types::ApiRequest;
 use crate::config::AGENT_COMMANDS;
-use crate::forge::command::{ArgKind, GrantedCommand, RelayInfo, RelayList};
+use crate::forge::command::{is_unsafe_char, ArgKind, GrantedCommand, RelayInfo, RelayList};
 
 pub const DEFAULT_RELAYS_FILE: &str = "/etc/sekimore-agent/relays.json";
 pub const SHOW_UNAVAILABLE: &str = "show-unavailable";
@@ -50,31 +50,65 @@ fn sidecars(list: &RelayList, show_unavailable: bool) -> impl Iterator<Item = &R
 /// `cli` with each command sidecar added as a subcommand.
 pub fn graft(mut cli: Command, list: &RelayList, show_unavailable: bool) -> Command {
     for r in sidecars(list, show_unavailable) {
+        let shown: Vec<&GrantedCommand> = r
+            .commands
+            .iter()
+            .filter(|c| c.granted || show_unavailable)
+            .collect();
         let mut top = Command::new(r.name.clone())
-            .about(about_sidecar(r))
+            .about(about_sidecar(r, &shown))
             .subcommand_required(true)
             .arg_required_else_help(true);
-        for c in r.commands.iter().filter(|c| c.granted || show_unavailable) {
+        for c in shown {
             let words: Vec<&str> = c.spec.name.split_whitespace().collect();
             top = add(top, &words, c);
         }
-        cli = cli.subcommand(top);
+        cli = cli.subcommand(describe_groups(top));
     }
     cli
 }
 
-fn about_sidecar(r: &RelayInfo) -> String {
-    let first = r
-        .guide
-        .lines()
-        .map(|l| l.trim_start_matches('#').trim())
-        .find(|l| !l.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("{} sidecar", r.name));
+/// The sidecar's line in `sgw-agent --help`. #480: its own `about` when it gives one, marked as
+/// the sidecar's so it does not read as one of the CLI's own commands; else what it offers.
+fn about_sidecar(r: &RelayInfo, shown: &[&GrantedCommand]) -> String {
+    let first = if !r.about.is_empty() {
+        format!("{} (sidecar)", plain(&r.about))
+    } else if shown.is_empty() {
+        format!("The {} sidecar", r.name)
+    } else {
+        let names: Vec<&str> = shown.iter().map(|c| c.spec.name.as_str()).collect();
+        format!("The {} sidecar: {}", r.name, names.join(", "))
+    };
     match (&r.reason, r.available) {
-        (Some(why), false) => format!("{first} [not available: {why}]"),
+        (Some(why), false) => format!("{first} [not available: {}]", plain(why)),
         _ => first,
     }
+}
+
+/// #480: a group (`note` of `note add`) has no text of its own in the protocol; it is described
+/// by the words under it (`add, list`).
+fn describe_groups(cmd: Command) -> Command {
+    let groups: Vec<String> = cmd
+        .get_subcommands()
+        .filter(|c| c.has_subcommands())
+        .map(|c| c.get_name().to_string())
+        .collect();
+    groups.into_iter().fold(cmd, |cmd, g| {
+        cmd.mut_subcommand(g, |group| {
+            let words: Vec<&str> = group.get_subcommands().map(|c| c.get_name()).collect();
+            let about = words.join(", ");
+            describe_groups(group.about(about))
+        })
+    })
+}
+
+/// A sidecar's text as the terminal will show it. The gateway refuses a describe with a control
+/// character in it; this keeps a relays file written by an older gateway from carrying one into
+/// the agent's terminal all the same.
+fn plain(s: &str) -> String {
+    s.chars()
+        .map(|c| if is_unsafe_char(c) { ' ' } else { c })
+        .collect()
 }
 
 /// `words` under `parent`, the last one the command itself.
@@ -84,18 +118,19 @@ fn add(parent: Command, words: &[&str], c: &GrantedCommand) -> Command {
     };
     if rest.is_empty() {
         let about = if c.granted {
-            c.spec.about.clone()
+            plain(&c.spec.about)
         } else {
             format!(
                 "{} [not allowed: needs {}]",
-                c.spec.about, c.spec.permission
+                plain(&c.spec.about),
+                c.spec.permission
             )
         };
         let mut leaf = Command::new(first.to_string()).about(about);
         for a in &c.spec.args {
             let mut arg = Arg::new(a.name.clone())
                 .long(a.name.clone())
-                .help(a.help.clone());
+                .help(plain(&a.help));
             arg = match a.kind {
                 ArgKind::String => arg.value_parser(clap::value_parser!(String)),
                 ArgKind::Int => arg.value_parser(clap::value_parser!(i64)),
@@ -239,6 +274,7 @@ mod tests {
                     available: true,
                     reason: None,
                     version: String::new(),
+                    about: String::new(),
                     resources: vec![],
                     guide: String::new(),
                     commands: vec![],
@@ -249,6 +285,7 @@ mod tests {
                     available: true,
                     reason: None,
                     version: "1".into(),
+                    about: String::new(),
                     resources: vec!["notes".into()],
                     guide: "## Notes\n\nKeep notes. [notes:write]\n".into(),
                     commands: vec![
@@ -272,6 +309,7 @@ mod tests {
                     available: false,
                     reason: Some("does not answer".into()),
                     version: String::new(),
+                    about: String::new(),
                     resources: vec![],
                     guide: String::new(),
                     commands: vec![],
@@ -368,6 +406,38 @@ mod tests {
         assert!(!g.contains("note drop"), "{g}");
         assert!(!g.contains("s3"), "{g}");
         assert_eq!(guides(&RelayList::default()), "");
+    }
+
+    /// #480: the sidecar's line and its groups say something, and what a sidecar sends cannot
+    /// reach the terminal as anything but one plain line marked as its own.
+    #[test]
+    fn a_sidecar_and_its_groups_are_described() {
+        let about = |c: &Command| c.get_about().map(|a| a.to_string()).unwrap_or_default();
+        let hidden = cli(false);
+        let notes = hidden.find_subcommand("notes").unwrap();
+        assert_eq!(about(notes), "The notes sidecar: note add");
+        assert_eq!(about(notes.find_subcommand("note").unwrap()), "add");
+        let shown = cli(true);
+        let notes = shown.find_subcommand("notes").unwrap();
+        assert_eq!(about(notes), "The notes sidecar: note add, note drop");
+        assert_eq!(about(notes.find_subcommand("note").unwrap()), "add, drop");
+        assert!(about(shown.find_subcommand("s3").unwrap())
+            .starts_with("The s3 sidecar [not available: does not answer]"));
+
+        let mut l = list();
+        l.relays[1].about = "Short notes\u{1b}[2J for this project".into();
+        l.relays[1].commands[0].spec.about = "Add\na note".into();
+        l.relays[1].commands[0].spec.args[0].help = "The\u{202e} note".into();
+        let c = graft(Command::new("sgw-agent"), &l, false);
+        let notes = c.find_subcommand("notes").unwrap();
+        assert_eq!(about(notes), "Short notes [2J for this project (sidecar)");
+        let add = notes
+            .find_subcommand("note")
+            .and_then(|n| n.find_subcommand("add"))
+            .unwrap();
+        assert_eq!(about(add), "Add a note");
+        let text = add.get_arguments().find(|a| a.get_id() == "text").unwrap();
+        assert_eq!(text.get_help().unwrap().to_string(), "The  note");
     }
 
     #[test]

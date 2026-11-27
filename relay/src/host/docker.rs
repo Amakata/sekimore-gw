@@ -29,6 +29,55 @@ pub fn sidecars_in(services: &str) -> Vec<String> {
         .collect()
 }
 
+/// #480: the compose service of the sidecar `<name>` under `relay.sidecars`, by convention.
+pub fn sidecar_service(name: &str) -> String {
+    format!("sekimore-{name}")
+}
+
+/// #480: the names under `relay.sidecars` in a config.yml. Only that much is read: whether the
+/// rest is valid is the gateway's to say, and `sgw recreate` has just made it read the file.
+pub fn configured_sidecars(config_yml: &str) -> Result<Vec<String>, String> {
+    #[derive(serde::Deserialize)]
+    struct Top {
+        #[serde(default)]
+        relay: Option<Relay>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Relay {
+        #[serde(default)]
+        sidecars: Option<std::collections::BTreeMap<String, serde::de::IgnoredAny>>,
+    }
+    if config_yml.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let top: Top = serde_yaml_ng::from_str(config_yml).map_err(|e| e.to_string())?;
+    Ok(top
+        .relay
+        .and_then(|r| r.sidecars)
+        .map(|s| s.into_keys().collect())
+        .unwrap_or_default())
+}
+
+/// #480: what `recreate` does for the configured sidecars beyond moving the forge ones with the
+/// gateway: the services to recreate (`sekimore-<name>`, declared by the compose), and the
+/// configured names the compose declares no service for. The prefix keeps `dev` and every service
+/// outside the convention out; `gw` would name the gateway, which is recreated already. A name
+/// that is not a word is left alone (the gateway refuses it).
+pub fn command_sidecars(configured: &[String], services: &str) -> (Vec<String>, Vec<String>) {
+    let declared: Vec<&str> = services.lines().map(str::trim).collect();
+    let mut start = Vec::new();
+    let mut missing = Vec::new();
+    for name in configured.iter().filter(|n| crate::config::valid_word(n)) {
+        let svc = sidecar_service(name);
+        if !declared.contains(&svc.as_str()) {
+            missing.push(name.clone());
+        } else if svc != GATEWAY && !SIDECARS.contains(&svc.as_str()) {
+            start.push(svc);
+        }
+    }
+    (start, missing)
+}
+
 /// The terminal decision for a `docker exec` (#230, #50 of the base).
 ///
 /// `-t` only when both ends are the person's terminal: an interactive shell needs it, and output
@@ -483,6 +532,7 @@ impl Docker {
         }
         let new = self.find_container(GATEWAY)?;
         println!("after:   {}", self.inspect(&new, "{{.Image}}")?);
+        self.recreate_command_sidecars(&new, &compose, &services);
         print!("{}", crate::i18n::t("sgw.waiting"));
         std::io::stdout().flush().ok();
         for _ in 0..30 {
@@ -510,6 +560,66 @@ impl Docker {
         }
         println!("{}", crate::i18n::t("sgw.recreated"));
         Ok(())
+    }
+
+    /// #480: recreate the command sidecars' services (`sekimore-<name>` for each name under
+    /// `relay.sidecars`) that the compose declares. The names come from the config.yml the new
+    /// gateway reads, through the gateway as every other `sgw` command learns its configuration,
+    /// so they are the ones the gateway now serves. `up -d --force-recreate --no-deps`: a sidecar
+    /// holds no state (the protocol says so), and one left running would keep serving its old
+    /// code and describe beside a gateway that has just re-read it. Nothing else in the stack is
+    /// touched. Never fails the recreate: the gateway is already up.
+    fn recreate_command_sidecars(&self, gateway: &str, compose: &[String], services: &str) {
+        let read = [
+            "sh".to_string(),
+            "-c".to_string(),
+            // no file is an empty configuration to the gateway (config::load), and so here
+            r#"f="${SEKIMORE_CONFIG_PATH:-/etc/sekimore/config.yml}"; [ -e "$f" ] || exit 0; cat "$f""#
+                .to_string(),
+        ];
+        let configured = match self.exec_capture(gateway, None, &read) {
+            Ok(c) if c.code == 0 => configured_sidecars(&c.stdout),
+            Ok(c) => Err(c.stderr.trim().to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        };
+        let configured = match configured {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("{}", tf("sgw.recreate.sidecars_unread", &[("error", &e)]));
+                return;
+            }
+        };
+        let (start, missing) = command_sidecars(&configured, services);
+        for name in &missing {
+            println!(
+                "{}",
+                tf(
+                    "sgw.recreate.sidecar_no_service",
+                    &[("name", name), ("service", &sidecar_service(name))]
+                )
+            );
+        }
+        if start.is_empty() {
+            return;
+        }
+        println!("sidecars: {}", start.join(" "));
+        let mut up = compose.to_vec();
+        up.extend([
+            "up".into(),
+            "-d".into(),
+            "--force-recreate".into(),
+            "--no-deps".into(),
+        ]);
+        up.extend(start.iter().cloned());
+        if !matches!(self.run(&up), Ok(0)) {
+            eprintln!(
+                "{}",
+                tf(
+                    "sgw.recreate.sidecars_failed",
+                    &[("services", &start.join(" "))]
+                )
+            );
+        }
     }
 }
 
@@ -564,6 +674,46 @@ mod tests {
             sidecars_in("sekimore-github-old\n").is_empty(),
             "a name that only starts like one is not one"
         );
+    }
+
+    /// #480: a command sidecar's service is `sekimore-<name>`, recreated when the compose has it
+    /// and named when it does not; dev, the gateway and the forge relays are not its business.
+    #[test]
+    fn a_recreate_brings_up_the_configured_sidecars_services_and_nothing_else() {
+        let names = configured_sidecars(
+            "relay:\n  sidecars:\n    github: {}\n    notes:\n      socket: /run/s/notes.sock\n    s3: {socket: /x}\n    gw: {}\n",
+        )
+        .unwrap();
+        assert_eq!(names, ["github", "gw", "notes", "s3"]);
+        let services = "dev\nsekimore-gw\nsekimore-github\nsekimore-notes\nsekimore-other\nnotes\n";
+        let (start, missing) = command_sidecars(&names, services);
+        assert_eq!(
+            start,
+            ["sekimore-notes"],
+            "not dev, the gateway, github or other"
+        );
+        assert_eq!(missing, ["s3"]);
+        // no sidecars, or no relay at all: nothing to do, as before
+        for text in [
+            "",
+            "relay:\n  project: {name: p}\n",
+            "relay:\n  sidecars:\n",
+            "allow_domains: [a]\n",
+        ] {
+            assert_eq!(
+                configured_sidecars(text).unwrap(),
+                Vec::<String>::new(),
+                "{text}"
+            );
+        }
+        assert_eq!(command_sidecars(&[], services), (vec![], vec![]));
+        // a name that is not a word never becomes an argument to compose
+        let (start, missing) = command_sidecars(
+            &["--build".to_string(), "a b".to_string()],
+            "sekimore---build\n",
+        );
+        assert!(start.is_empty() && missing.is_empty());
+        assert!(configured_sidecars("relay: [").is_err());
     }
 
     #[test]

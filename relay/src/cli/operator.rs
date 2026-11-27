@@ -36,13 +36,18 @@ pub const DEVICE_FLOW_SCOPES: &[&str] = &["repo", "project", "security_events"];
 /// #371: the width of a label under `state:` (`  ssh-agent:       `), so a value starts in one column
 const STATE_LABEL: usize = 19;
 
-fn pad_label(label: &str, width: usize) -> String {
-    let shown: usize = label.chars().map(|c| if is_wide(c) { 2 } else { 1 }).sum();
+pub(crate) fn pad_label(label: &str, width: usize) -> String {
+    let shown = display_width(label);
     let mut out = label.to_string();
     for _ in shown..width {
         out.push(' ');
     }
     out
+}
+
+/// The columns `s` takes on a terminal (CJK characters count as two).
+pub(crate) fn display_width(s: &str) -> usize {
+    s.chars().map(|c| if is_wide(c) { 2 } else { 1 }).sum()
 }
 
 /// Rough East Asian Wide / Fullwidth test, enough for the labels we print.
