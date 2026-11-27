@@ -719,7 +719,8 @@ fn update_reports_and_applies_against_the_embedded_template() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains(&format!("gateway      0.2.40     {version}")),
+        // #480: the columns are as wide as what they hold
+        stdout.contains(&format!("gateway 0.2.40 {version}")),
         "{stdout}"
     );
     let line = |path: &str| {
