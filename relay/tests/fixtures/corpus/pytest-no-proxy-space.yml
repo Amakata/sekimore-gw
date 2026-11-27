@@ -1,0 +1,2 @@
+# tests/unit/test_config.py an_entry_with_a_space_is_refused
+proxy: {no_proxy: ['a.test b.test']}

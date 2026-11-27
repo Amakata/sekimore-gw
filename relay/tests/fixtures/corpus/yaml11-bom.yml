@@ -1,0 +1,2 @@
+﻿# a UTF-8 byte order mark at the start of the file: both readers skip it
+allow_domains: [pypi.org]

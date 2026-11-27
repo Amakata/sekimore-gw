@@ -1,0 +1,2 @@
+# 1e3 is a string, and pydantic does not read it as an int
+proxy: {port: 1e3}

@@ -225,6 +225,23 @@ cargo test --features host --test sgw    # end to end, against a fake docker on 
 CI runs clippy and the tests with `--features test-hooks,host`. Its help and messages are the
 `sgw.*` keys of `relay/locales/{en,ja}.json`.
 
+### The equivalence harness (`relay/tests/equivalence/`)
+
+0.3.0 moves the gateway from Python to Rust without changing what it does (#496). The harness
+asks both implementations the same questions and compares the answers; in this step, how every
+config in `relay/tests/fixtures/corpus/` is read (#498).
+
+```bash
+cd relay
+cargo test --test equivalence                              # the recorded answers, and live Python when uv is on PATH
+SEKIMORE_E2E_REQUIRED=1 cargo test --test equivalence      # live Python required, as in CI
+SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence the_config   # re-record relay/tests/fixtures/oracle/
+```
+
+Re-record after changing the corpus or the Python side, and read the diff of the record: it is
+Python's behaviour. A case that is known to differ carries a `# ledger: …` line in its header and
+is listed in the 0.3.0 plan's difference ledger.
+
 ### The base image (`base/`)
 
 The dev-container base image and the files it distributes live in `base/` and are released

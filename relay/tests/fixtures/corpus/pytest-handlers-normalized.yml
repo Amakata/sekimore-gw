@@ -1,0 +1,6 @@
+# tests/unit/test_config.py it_parses_git_relay_and_normalizes_keys
+allow_domains: [github.com]
+domain_handlers:
+  GitHub.COM.: {handler: git-relay}
+  telemetry.example.com: {handler: deny}
+  static.example.com: {}

@@ -1,0 +1,6 @@
+# an empty environment value does not override (os.getenv is falsy)
+# env: SEKIMORE_UPSTREAM_PROXY_USERNAME=
+# env: SEKIMORE_UPSTREAM_PROXY_PASSWORD=
+proxy:
+  upstream_proxy_username: fromfile
+  upstream_proxy_password: fromfile

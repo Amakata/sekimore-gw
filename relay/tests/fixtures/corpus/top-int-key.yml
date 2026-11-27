@@ -1,0 +1,3 @@
+# a top-level key that is not a string
+1: x
+name: ok

@@ -1,0 +1,16 @@
+# merge keys, the mapping's own keys win, the first merged mapping wins
+defaults: &proxy
+  enabled: true
+  port: 3129
+other: &other
+  port: 4000
+  cache_size_mb: 10
+allow_domains: [github.com]
+proxy:
+  <<: [*proxy, *other]
+  cache_enabled: false
+handler: &relay {handler: github, max_upload_bytes: 1024}
+domain_handlers:
+  github.com:
+    <<: *relay
+    max_upload_bytes: 2048

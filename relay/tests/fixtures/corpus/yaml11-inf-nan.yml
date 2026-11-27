@@ -1,0 +1,2 @@
+# .inf / .nan where an int is wanted
+proxy: {port: .inf, cache_size_mb: .NaN}

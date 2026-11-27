@@ -1,0 +1,2 @@
+# 0x_ resolves as an int and int('', 16) raises
+proxy: {port: 0x_}

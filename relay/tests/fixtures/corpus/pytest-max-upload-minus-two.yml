@@ -1,0 +1,4 @@
+# tests/unit/test_config.py it_accepts_https_relay_next_to_git_relay_and_validates_caps: refused
+domain_handlers:
+  ghcr.io: {handler: https-relay, max_upload_bytes: -2}
+  github.com: {handler: git-relay}

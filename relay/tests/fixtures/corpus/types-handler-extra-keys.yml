@@ -1,0 +1,4 @@
+# keys only the relay reads, and typos, are ignored here
+allow_domains: [github.com]
+domain_handlers:
+  github.com: {handler: github, oauth_client_id: x, max_uploads_bytes: 1, default: true}

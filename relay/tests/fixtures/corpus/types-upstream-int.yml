@@ -1,0 +1,3 @@
+# a value of the wrong type
+domain_handlers:
+  a.com: {upstream: 1}

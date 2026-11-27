@@ -1,0 +1,2 @@
+# a mask that is neither a netmask nor a hostmask
+allow_ips: [10.0.0.0/255.0.255.0]

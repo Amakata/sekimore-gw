@@ -1,0 +1,2 @@
+# tests/unit/test_config.py an_unknown_mode_is_refused
+proxy: {direct_egress: sometimes}

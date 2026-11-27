@@ -1,0 +1,9 @@
+# relayed names, deny, splice and direct egress denied together
+allow_domains: [github.com, .githubusercontent.com, ghcr.io, pypi.org]
+proxy: {enabled: true, upstream_proxy: 'proxy.corp:8080', direct_egress: deny, no_proxy: ['*.corp', .corp, 10.0.0.0/8]}
+domain_handlers:
+  github.com: {handler: github, max_upload_bytes: 262144}
+  ghcr.io: {handler: https-relay, max_upload_bytes: -1}
+  pkg-containers.githubusercontent.com: {handler: https-relay}
+  telemetry.githubusercontent.com: {handler: deny}
+  raw.githubusercontent.com: {handler: splice}

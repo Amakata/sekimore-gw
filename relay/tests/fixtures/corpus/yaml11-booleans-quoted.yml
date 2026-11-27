@@ -1,0 +1,2 @@
+# quoted, on / yes are strings
+allow_domains: ['on', "yes"]

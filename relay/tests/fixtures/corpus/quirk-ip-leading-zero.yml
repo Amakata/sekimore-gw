@@ -1,0 +1,2 @@
+# ipaddress refuses a leading zero in an octet
+allow_ips: [01.2.3.4]

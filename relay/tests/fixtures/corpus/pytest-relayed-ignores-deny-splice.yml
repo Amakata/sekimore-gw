@@ -1,0 +1,6 @@
+# tests/unit/test_config.py it_ignores_deny_and_splice
+allow_domains: [github.com]
+domain_handlers:
+  github.com: {handler: git-relay}
+  telemetry.example.com: {handler: deny}
+  static.example.com: {handler: splice}

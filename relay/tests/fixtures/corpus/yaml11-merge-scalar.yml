@@ -1,0 +1,3 @@
+# a merge of a scalar is an error
+proxy:
+  <<: 1

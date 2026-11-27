@@ -1,0 +1,2 @@
+# a float with a fraction where an int is wanted
+proxy: {cache_size_mb: 1.5}

@@ -1,0 +1,3 @@
+# handler: off is False, not a handler name
+domain_handlers:
+  x.example.com: {handler: off}

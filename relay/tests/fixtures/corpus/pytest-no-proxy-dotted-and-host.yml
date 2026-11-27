@@ -1,0 +1,2 @@
+# tests/unit/test_config.py describe_no_proxy
+proxy: {no_proxy: [.internal, mirror.example.com]}

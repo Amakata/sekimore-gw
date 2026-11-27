@@ -1,0 +1,2 @@
+# tests/unit/test_config.py describe_reload_mode
+reload: 90s

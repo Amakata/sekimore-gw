@@ -1,0 +1,5 @@
+# tests/unit/test_config.py splice_stays_because_it_is_meant_to_go_out_directly
+allow_domains: [example.com, github.com]
+domain_handlers:
+  example.com: {handler: splice}
+  github.com: {handler: git-relay}

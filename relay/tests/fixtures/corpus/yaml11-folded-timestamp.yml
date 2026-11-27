@@ -1,0 +1,4 @@
+# a plain scalar that folds into a timestamp: PyYAML resolves the folded text
+# ledger: a plain scalar spanning lines is always a string to the Rust reader; PyYAML resolves the folded text, here into a datetime
+description: 2001-12-14
+  21:59:43

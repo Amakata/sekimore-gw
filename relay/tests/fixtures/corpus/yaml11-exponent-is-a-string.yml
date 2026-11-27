@@ -1,0 +1,3 @@
+# 1e3 has no dot: a string to PyYAML, which a str field takes
+name: 1e3
+description: 1.0e3

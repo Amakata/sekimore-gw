@@ -1,0 +1,5 @@
+# the seeds: no leading dot, no relayed names, *.x is not skipped
+allow_domains: [github.com, GitHub.com., api.github.com, '*.githubusercontent.com', .pythonhosted.org, pypi.org]
+domain_handlers:
+  github.com: {handler: github}
+  api.github.com: {handler: https-relay}

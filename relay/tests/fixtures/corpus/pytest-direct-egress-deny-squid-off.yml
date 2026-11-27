@@ -1,0 +1,2 @@
+# tests/unit/test_config.py deny_needs_squid_running_too
+proxy: {enabled: false, upstream_proxy: proxy.corp:8080, direct_egress: deny}

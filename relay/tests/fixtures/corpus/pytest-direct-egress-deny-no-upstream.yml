@@ -1,0 +1,2 @@
+# tests/unit/test_config.py deny_needs_an_upstream_proxy
+proxy: {enabled: true, direct_egress: deny}

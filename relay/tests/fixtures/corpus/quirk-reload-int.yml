@@ -1,0 +1,2 @@
+# the duration is read with int(): spaces, a sign and underscores
+reload: ' +3_0 M '

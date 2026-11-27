@@ -1,0 +1,9 @@
+# a handler is stronger than allow_domains, block is stronger than both
+allow_domains: [.example.com, github.com]
+block_domains: [blocked.example.com, github.com]
+ignore_domains: [ignored.example.com]
+domain_handlers:
+  telemetry.example.com: {handler: deny}
+  blocked.example.com: {handler: deny}
+  ignored.example.com: {handler: deny}
+  splice.example.com: {handler: splice}
