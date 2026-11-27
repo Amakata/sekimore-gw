@@ -131,8 +131,8 @@ A refused describe is audited as `sidecar_refused`, and every call answers 503 w
 - On the first call or the first `GET /relays` (agent setup), then kept.
 - A failed read is not kept: the sidecar may still be starting, and the next call looks again.
 - When a call names a command the kept describe does not have, it is read once more. A sidecar
-  updated in place gets its new commands without restarting the gateway (and into
-  the agent's CLI with `sgw refresh`).
+  updated in place answers its new commands without restarting the gateway, but `GET /relays`
+  keeps listing the describe it read: for the agent's CLI to show them, `sgw recreate`.
 
 ## `POST /command`
 

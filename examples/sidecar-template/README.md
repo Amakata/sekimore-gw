@@ -34,9 +34,10 @@ sgw var set notes/api_key --secret
 
 ## Compose
 
-Add the service to `.devcontainer/docker-compose.relay.yml`, next to `sekimore-github`. It shares
-the `sekimore-sidecars` volume with the gateway, and never with dev. Copy `sidecar.py` to
-`.devcontainer/sidecars/notes/` first.
+Add the service to `.devcontainer/docker-compose.relay.yml`, next to `sekimore-github`. Name it
+`sekimore-<name>`, `<name>` being its key under `relay.sidecars`: that is how `sgw recreate`
+finds it. It shares the `sekimore-sidecars` volume with the gateway, and never with dev. Copy
+`sidecar.py` to `.devcontainer/sidecars/notes/` first.
 
 ```yaml
 services:
@@ -54,13 +55,28 @@ services:
     restart: unless-stopped
 ```
 
-Then Rebuild Container: a new service is started only by compose. Later changes to `config.yml`
-or to the sidecar's commands need, on the host:
+## Start it
+
+On the host, once `config.yml`, the credential and the compose service are in place:
 
 ```sh
-sgw recreate      # the gateway reads config.yml again
-sgw refresh       # the agent's CLI picks up the commands
+sgw recreate      # the gateway reads config.yml again, and sekimore-notes is started
+sgw refresh       # only if `sgw-agent notes --help` in dev does not list the commands yet
 ```
+
+`sgw recreate` brings up `sekimore-<name>` for every name under `relay.sidecars` that the
+compose declares, and nothing else of the stack (not dev). A configured sidecar with no such
+service is named in one line. It then runs the agent's setup in dev, which reads the commands;
+a sidecar still starting at that moment is listed as not available, and `sgw refresh` reads them
+again. Rebuild Container is not needed.
+
+Later:
+
+| Change | On the host |
+|---|---|
+| `config.yml` (permissions, credentials, a new sidecar) | `sgw recreate`, then `sgw refresh` if needed |
+| The sidecar's service in compose | `sgw recreate` |
+| `sidecar.py` itself (its commands) | `docker restart <project>-sekimore-notes-1` (`docker ps` shows the name), then `sgw recreate`: the gateway keeps the describe it read |
 
 ## Use it
 
