@@ -6,12 +6,18 @@ on:
     paths:
       - "relay/**"
       - "!relay/**.md"
+      - "examples/sidecar-template/**"
+      - "!examples/sidecar-template/**.md"
+      - "mise.toml"
       - ".github/workflows/relay.yml"
       - "tests/fixtures/**"
   pull_request:
     paths:
       - "relay/**"
       - "!relay/**.md"
+      - "examples/sidecar-template/**"
+      - "!examples/sidecar-template/**.md"
+      - "mise.toml"
       - ".github/workflows/relay.yml"
       - "tests/fixtures/**"
   schedule:
@@ -32,11 +38,23 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: relay
+      # #499: the sidecar template is Go; the relay's tests build it and run it through the gateway.
+      # The version agrees with go.mod, its Dockerfile and mise.toml (the_go_version_agrees_…)
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: "1.27.4"
+          cache: false # no go.sum to key it on: the template has no modules
+      - name: the sidecar template (gofmt, vet, test)
+        working-directory: examples/sidecar-template
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::gofmt: not formatted"; exit 1; }
+          go vet ./...
+          go test -race ./...
       - name: fmt
         run: cargo fmt --check
       - name: clippy
         run: cargo clippy --all-targets --features test-hooks,host -- -D warnings
-      - name: test (e2e requires git + ssh)
+      - name: test (e2e requires git + ssh, and go for the sidecar template)
         run: cargo test --features test-hooks,host --locked
         env:
           SEKIMORE_E2E_REQUIRED: "1"

@@ -28,6 +28,8 @@ WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
 IMAGE_FILES = [
     ROOT / "Dockerfile",
     ROOT / "Dockerfile.agent",
+    # the sidecar template's build stage (#499); its final stage is `FROM scratch`
+    ROOT / "examples" / "sidecar-template" / "Dockerfile",
     ROOT / "tests" / "docker-compose.test.yml",
     # No `image:` of its own today — both services build. Listed so that one added later is
     # covered from the start rather than whenever someone remembers this file exists.

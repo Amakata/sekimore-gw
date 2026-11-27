@@ -3,8 +3,9 @@
 For people writing a **command sidecar**: a small service that gives the agent commands of its own
 (`sgw-agent notes note add …`), checked and audited by the gateway. sekimore-gw 0.3.0 and later.
 
-A working example is [examples/sidecar-template](../examples/sidecar-template/) (Python, standard
-library only).
+A working example is [examples/sidecar-template](../examples/sidecar-template/) (Go, standard
+library only). The protocol does not depend on the language: anything that serves HTTP on a Unix
+socket and reads and writes JSON can be a sidecar.
 
 ## Two kinds of sidecar
 
@@ -337,12 +338,17 @@ passthrough, so its traffic passes the same SNI check, upload cap and audit as d
    ```
 
 2. Dial the gateway at port 443 and keep the service's name for SNI and certificate checks. In
-   Python:
+   Go:
 
-   ```python
-   import socket, ssl
-   raw = socket.create_connection(("sekimore-gw", 443))
-   tls = ssl.create_default_context().wrap_socket(raw, server_hostname="api.notes.example")
+   ```go
+   tr := &http.Transport{
+       // every connection to the gateway; the URL, the SNI and the certificate keep the service's name
+       DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+           return (&net.Dialer{}).DialContext(ctx, network, "sekimore-gw:443")
+       },
+   }
+   client := &http.Client{Transport: tr}
+   resp, err := client.Get("https://api.notes.example/v1/notes")
    ```
 
    A name not under `domain_handlers` goes to the default upstream, not to your service.
@@ -412,4 +418,4 @@ curl --unix-socket /run/sekimore-sidecars/notes.sock http://sidecar/command \
 ```
 
 The template's tests run it this way and through the gateway:
-`tests/unit/test_sidecar_template.py`, `relay/tests/command_sidecar.rs`.
+`examples/sidecar-template/main_test.go`, `relay/tests/command_sidecar.rs`.
