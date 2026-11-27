@@ -12,6 +12,26 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.3.0-alpha.3 (2026-11-27)
+
+### Security
+
+- url 2.5.8 -> 2.5.9 and form_urlencoded 1.2.2 -> 1.2.3, for RUSTSEC-2026-0592; merged from 0.2.78 (#488)
+
+### Fix
+
+- the gateway opens its DNS before the allow list resolves: names are looked up eight at a time with a 15 s bound each, so an unreachable resolver no longer keeps DNS shut for minutes (#483)
+- an upstream that answers 401 to the relay's token is reported as that, with `sgw login`: in the board denial, in `sgw verify`, and in `sgw check`, which now asks the upstream whether the token is accepted (#484)
+- a name the relay answers for keeps its real address out of the allow ipset on queries from the gateway itself and on cache refresh, as it already did elsewhere (#486)
+- `ci log` works through the sidecar: the gateway fetches the redirected job log (https, public addresses, no credential). The API client no longer follows a redirect off the API's origin, so storage on a private address is refused (#491)
+- `issue update --help` shows its own text for `--title`; `sgw update`'s table keeps its columns on a prerelease (#489)
+
+### Enhancement
+
+- `sgw recreate` recreates the `sekimore-<name>` services of the sidecars in `config.yml`; adding a command sidecar needs `sgw recreate`, not Rebuild Container. The template README says what each change needs (#489)
+- `/describe` takes an optional one-line `about`, which `sgw-agent --help` shows for a sidecar. The gateway checks the text a sidecar puts on the terminal: a describe with a newline or `[` `]` in a help text is now refused (#489)
+- Merged 0.2.78 (#492)
+
 ## 0.3.0-alpha.2 (2026-11-17)
 
 ### Security

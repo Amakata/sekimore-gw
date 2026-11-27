@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.3.0-alpha.2 -->
+<!-- reviewed-up-to: 0.3.0-alpha.3 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -45,6 +45,7 @@
 | 0.2.69 〜 0.2.70 | 下の 0.2.71。**すべてのプロジェクト: Dockerfile に `sgw-install-ai` の行があるか確かめ、Rebuild Container** |
 | 0.2.71 | 下の 0.3.0-alpha.1。**0.3 のプレリリースに移り、github サイドカーを使う場合だけ** |
 | 0.3.0-alpha.1 | 下の 0.3.0-alpha.2。**Dockerfile で言語を入れている、または `/usr/local/share` に書く場合だけ** |
+| 0.3.0-alpha.2 | 下の 0.3.0-alpha.3。**コマンドサイドカーを使う、または Actions のストレージがプライベートアドレスにある GitHub Enterprise Server を使う場合だけ** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -969,3 +970,17 @@ mise-store ボリュームに写さなくなりました。Dockerfile で 0.2 �
 イメージのものより優先されます。一度だけ空にしてください。
 
 Dockerfile で何も入れていないプロジェクトは、することはありません。
+
+## 0.3.0-alpha.3 サイドカーの文字列を検査する。recreate がサイドカーを起動する（プレリリース）
+
+0.3 系のプレリリースです。入れ方は 0.3.0-alpha.1 と同じです（`--version 0.3.0-alpha.3`）。
+
+- **コマンドサイドカー:** 追加は Rebuild Container ではなく `sgw recreate` です。`sgw recreate` が起動するのは、
+  compose のサービス名が `sekimore-<name>`（`<name>` はサイドカーの名前）のものです。
+- **サイドカーの作者:** `/describe` の `about` や `help` が 1 行 120 文字以内でない、または制御文字、
+  bidi の上書き、`[`、`]` を含むと、gateway は拒否します（`sidecar_refused`）。
+  `sidecar.py` の文字列を直して `sgw recreate` を実行してください。
+- **GitHub Enterprise Server:** `ci log` は、ジョブログのリダイレクト先が公開アドレスの https のときだけ辿ります。
+  プライベートアドレスの Actions ストレージは拒否されます。
+
+コマンドサイドカーも GHES も使わないプロジェクトは、することはありません。
