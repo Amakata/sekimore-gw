@@ -11,6 +11,12 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.2.78（2026-11-27）
+
+### Security
+
+- url 2.5.8 -> 2.5.9、form_urlencoded 1.2.2 -> 1.2.3。RUSTSEC-2026-0592 への対応 (#487)
+
 ## 0.2.77（2026-11-17）
 
 ### Security

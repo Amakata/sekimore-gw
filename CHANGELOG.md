@@ -12,6 +12,12 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.78 (2026-11-27)
+
+### Security
+
+- url 2.5.8 -> 2.5.9 and form_urlencoded 1.2.2 -> 1.2.3, for RUSTSEC-2026-0592 (#487)
+
 ## 0.2.77 (2026-11-17)
 
 ### Security
