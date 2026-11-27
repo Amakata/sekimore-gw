@@ -504,5 +504,8 @@ mod tests {
         assert!(is_token_error("token revoked"));
         assert!(!is_token_error("denied: pr:merge is not granted"));
         assert!(!is_token_error("the secret store is locked"));
+        // #479: the upstream refusing the relay's token is not the agent's token; a refresh
+        // would not help and would hide the message
+        assert!(!is_token_error(crate::github::TOKEN_REJECTED));
     }
 }

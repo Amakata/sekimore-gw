@@ -19,7 +19,7 @@ use crate::git::upstream_ssh::OpenSshUpstream;
 use crate::github::device_flow::DeviceFlow;
 use crate::github::http::{build_client, HttpOptions};
 use crate::github::upstream_token::{SecretSource, UpstreamTokenStore};
-use crate::github::GitHub;
+use crate::github::{GhError, GitHub};
 use crate::i18n::{t, tf};
 use crate::paths;
 use crate::policy::all_permission_keys;
@@ -1286,6 +1286,93 @@ fn values_line(keys: &[String], vars: &crate::vars::Vars) -> String {
         .collect();
     tf("op.check.values", &[("values", &states.join(", "))])
 }
+/// #479: what the upstream said to the stored token.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TokenAcceptance {
+    /// `GET /user` answered, as this login
+    Accepted(String),
+    /// It answered 401
+    Rejected,
+    /// No verdict: the call failed some other way (no route, a timeout, a 5xx). Never read as
+    /// rejected — a proxy that is down says nothing about the token
+    NotChecked(String),
+}
+
+/// How long `check` waits for the upstream's answer about the token. `check` is run to find out
+/// what is wrong, often when the network is; it should not hang on it.
+const TOKEN_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+impl TokenAcceptance {
+    pub fn from_whoami(r: Result<String, GhError>) -> Self {
+        match r {
+            Ok(login) => TokenAcceptance::Accepted(login),
+            Err(e) if e.rejects_token() => TokenAcceptance::Rejected,
+            Err(e) => TokenAcceptance::NotChecked(e.to_string()),
+        }
+    }
+}
+
+/// #479: ask the upstream once whether it accepts the stored token. Built as `whoami` builds its
+/// client — the upstream proxy when one is set, the configured CA — so it goes the way the
+/// relay's own calls go, and the call is audited like theirs. Only the login comes back; the
+/// token stays inside the client.
+async fn ask_upstream_about_token(r: &Resolved, u: &Upstream) -> TokenAcceptance {
+    // No unaudited call: without the audit log there is no check
+    let gh = match open_audit(r)
+        .and_then(|audit| build_github_for(r, u, audit, secret_source_via_socket(r)))
+    {
+        Ok((gh, _, _)) => gh,
+        Err(e) => return TokenAcceptance::NotChecked(format!("{e:#}")),
+    };
+    match tokio::time::timeout(TOKEN_CHECK_TIMEOUT, gh.whoami()).await {
+        Ok(answer) => TokenAcceptance::from_whoami(answer),
+        Err(_) => TokenAcceptance::NotChecked(tf(
+            "op.check.token_timeout",
+            &[("secs", &TOKEN_CHECK_TIMEOUT.as_secs().to_string())],
+        )),
+    }
+}
+
+/// #479: the `upstream token:` line for a stored token. Rejected is red and fails `check`; not
+/// checked is yellow and does not, since the `reach:` lines already judge the route.
+fn token_line(acceptance: &TokenAcceptance, scope: &str, when: &str, hint: &str) -> String {
+    match acceptance {
+        TokenAcceptance::Accepted(login) => tf(
+            "op.check.token_accepted",
+            &[
+                (
+                    "state",
+                    &paint(Tone::Good, &t("op.check.word.token_accepted")),
+                ),
+                ("login", login),
+                ("scope", scope),
+                ("when", when),
+            ],
+        ),
+        TokenAcceptance::Rejected => tf(
+            "op.check.token_rejected",
+            &[
+                ("state", &bad_word(&t("op.check.word.token_rejected"))),
+                ("scope", scope),
+                ("when", when),
+                ("hint", hint),
+            ],
+        ),
+        TokenAcceptance::NotChecked(why) => tf(
+            "op.check.token_unchecked",
+            &[
+                (
+                    "state",
+                    &paint(Tone::Warn, &t("op.check.word.token_present")),
+                ),
+                ("scope", scope),
+                ("when", when),
+                ("why", why),
+            ],
+        ),
+    }
+}
+
 /// #355: the state — what the agent, the store, known_hosts and the upstream login are right now.
 /// What the configuration says is `config`.
 pub async fn check(path: &Path) -> anyhow::Result<i32> {
@@ -1496,28 +1583,20 @@ pub async fn check(path: &Path) -> anyhow::Result<i32> {
             r.relay.upstream_token_cache_ttl,
         );
         let login_hint = if u.is_default {
-            "sekimore-relay login".to_string()
+            "sgw login".to_string()
         } else {
-            format!("sekimore-relay login --upstream {}", u.domain)
+            format!("sgw login --upstream {}", u.domain)
         };
         match store.load().await {
-            Ok(Some(tok)) => println!(
-                "{}",
-                tf(
-                    "op.check.token_present",
-                    &[
-                        (
-                            "state",
-                            &paint(Tone::Good, &t("op.check.word.token_present"))
-                        ),
-                        ("scope", &tok.scope),
-                        (
-                            "when",
-                            &humantime::format_rfc3339_seconds(tok.obtained_at).to_string()
-                        ),
-                    ]
-                )
-            ),
+            Ok(Some(tok)) => {
+                // #479: stored is not accepted. One call, the way the relay's own calls go
+                let acceptance = ask_upstream_about_token(&r, u).await;
+                let when = humantime::format_rfc3339_seconds(tok.obtained_at).to_string();
+                println!(
+                    "{}",
+                    token_line(&acceptance, &tok.scope, &when, &login_hint)
+                );
+            }
             Ok(None) => println!(
                 "{}",
                 tf(
@@ -2646,6 +2725,78 @@ mod tests {
                 "  pr        [ ]close [x]create [-]merge"
             ])
         );
+    }
+
+    /// #479: the `upstream token:` line says what the upstream answered. Rejected is red, names
+    /// the login, and fails `check`; a network failure is "not checked", never "rejected", and
+    /// does not fail it; accepted names the login and nothing of the token.
+    #[test]
+    fn the_token_line_says_what_the_upstream_answered() {
+        use super::super::color::set_for_tests;
+        let when = "2026-11-22T15:36:06Z";
+        let line = |a: &TokenAcceptance| token_line(a, "project,repo", when, "sgw login");
+        set_for_tests(Some(false));
+        let l = line(&TokenAcceptance::Accepted("octocat".into()));
+        assert!(l.contains(&t("op.check.word.token_accepted")), "{l}");
+        assert!(l.contains("octocat") && l.contains("project,repo") && l.contains(when));
+        let l = line(&TokenAcceptance::Rejected);
+        assert!(l.contains(&t("op.check.word.token_rejected")), "{l}");
+        assert!(l.contains("401") && l.contains("`sgw login`"), "{l}");
+        let l = line(&TokenAcceptance::NotChecked("no answer in 5s".into()));
+        assert!(l.ends_with("no answer in 5s"), "{l}");
+        assert!(!l.contains(&t("op.check.word.token_rejected")) && !l.contains("sgw login"));
+        // The tone is what decides `check`'s exit (red sets CHECK_BAD); read it from the colour,
+        // which is per thread, rather than from the process-wide flag other tests also move
+        set_for_tests(Some(true));
+        let painted = |tone, key: &str| paint(tone, &t(key));
+        assert!(
+            line(&TokenAcceptance::Rejected)
+                .contains(&painted(Tone::Bad, "op.check.word.token_rejected")),
+            "a rejected token fails check"
+        );
+        assert!(line(&TokenAcceptance::Accepted("octocat".into()))
+            .contains(&painted(Tone::Good, "op.check.word.token_accepted")));
+        assert!(
+            line(&TokenAcceptance::NotChecked("no route".into()))
+                .contains(&painted(Tone::Warn, "op.check.word.token_present")),
+            "a network failure is not a verdict on the token"
+        );
+        set_for_tests(None);
+
+        // The English wording, since the assertions above are locale-independent
+        let en = |k: &str| crate::i18n::t_in("en", k);
+        assert_eq!(
+            en("op.check.token_accepted"),
+            "  upstream token:  {state} as {login} (scope={scope}, obtained {when})"
+        );
+        assert!(en("op.check.token_rejected").contains("answered 401"));
+        assert!(en("op.check.token_unchecked").contains("not checked"));
+        assert_eq!(en("op.check.word.token_rejected"), "REJECTED");
+    }
+
+    /// #479: only a 401 is a rejection; any other failure leaves the question open.
+    #[test]
+    fn only_a_401_reads_as_rejected() {
+        let status = |code| GhError::Status {
+            method: "GET".into(),
+            path: "/user".into(),
+            status: code,
+            body: "{}".into(),
+        };
+        assert_eq!(
+            TokenAcceptance::from_whoami(Ok("octocat".into())),
+            TokenAcceptance::Accepted("octocat".into())
+        );
+        assert_eq!(
+            TokenAcceptance::from_whoami(Err(status(401))),
+            TokenAcceptance::Rejected
+        );
+        for code in [403, 404, 500, 502, 503] {
+            assert!(matches!(
+                TokenAcceptance::from_whoami(Err(status(code))),
+                TokenAcceptance::NotChecked(_)
+            ));
+        }
     }
 
     /// #371: a value missing or locked is red and fails `check`; one that is set is neither.

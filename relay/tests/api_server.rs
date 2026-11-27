@@ -327,7 +327,11 @@ async fn missing_upstream_token_is_503_not_a_crash() {
     };
     let (code, resp) = post(f.addr, "/pr/create", Some(&f.token), &r).await;
     assert_eq!(code, 503);
-    assert!(resp.error.unwrap().contains("sekimore-relay login"));
+    // #479: the agent cannot log in; the message says who can
+    assert!(resp
+        .error
+        .unwrap()
+        .contains("Ask a human to run: sgw login"));
 }
 
 #[tokio::test]
@@ -3777,24 +3781,16 @@ async fn a_declared_board_is_resolved_on_first_use_not_at_start_up() {
 }
 
 /// The other half of #99: a board that could not be resolved must not be remembered as refused.
-/// The usual reason is a locked store, and the operator unlocking is meant to fix it without a
-/// restart.
+/// Unlocking or logging in is meant to fix it without a restart.
 #[tokio::test]
 async fn a_board_that_could_not_be_resolved_is_tried_again() {
     let f = start_api_full(
         project_case_a(&["project:read"]),
         BootstrapMode::Auto,
-        // No upstream token: the resolve call cannot authenticate, exactly as a locked store
+        // No upstream token yet: the resolve call cannot authenticate
         false,
         vec![],
-        Some(vec![sekimore_relay::config::BoardRef {
-            org: None,
-            user: Some("Amakata".into()),
-            number: 2,
-            permissions: None,
-            upstream: None,
-            comment: None,
-        }]),
+        Some(vec![amakata_board_2()]),
     )
     .await;
     let r = ApiRequest {
@@ -3804,13 +3800,14 @@ async fn a_board_that_could_not_be_resolved_is_tried_again() {
     let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
     assert_eq!(code, 403, "{:?}", resp.error);
     let msg = resp.error.unwrap_or_default();
+    // #479: what the lookup answered — no token, so a login — not a guess at a locked store
     assert!(
-        msg.contains("sgw unlock"),
+        msg.contains("no upstream token") && msg.contains("sgw login"),
         "a declared board that would not resolve must not read as one that was never configured: {msg}"
     );
 
-    // The token arrives (the operator unlocked). The same request has to work now — the failure
-    // must not have been cached.
+    // The token arrives (the operator logged in). The same request has to work now — the
+    // failure must not have been cached.
     f.tokens
         .save("upstream.test", "gho_test", "repo")
         .await
@@ -3821,6 +3818,108 @@ async fn a_board_that_could_not_be_resolved_is_tried_again() {
         "a failed resolve was remembered: {:?}",
         resp.error
     );
+}
+
+fn amakata_board_2() -> sekimore_relay::config::BoardRef {
+    sekimore_relay::config::BoardRef {
+        org: None,
+        user: Some("Amakata".into()),
+        number: 2,
+        permissions: None,
+        upstream: None,
+        comment: None,
+    }
+}
+
+/// #479: the store was unlocked and the token in it was one GitHub no longer accepted. The denial
+/// said "a locked secret store is the usual reason … sgw unlock", which does nothing; what the
+/// lookup answered — a 401 — is what the agent has to pass on, with the command that fixes it.
+/// Runs over both transports (`SEKIMORE_TEST_FORGE=socket` for the sidecar).
+#[tokio::test]
+async fn a_board_whose_lookup_got_401_names_sgw_login_not_sgw_unlock() {
+    let f = start_api_full(
+        project_case_a(&["project:read"]),
+        BootstrapMode::Auto,
+        false,
+        vec![],
+        Some(vec![amakata_board_2()]),
+    )
+    .await;
+    f.tokens
+        .save("upstream.test", REVOKED_TOKEN, "repo")
+        .await
+        .unwrap();
+    let r = ApiRequest {
+        board: Some(2),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp.error);
+    let msg = resp.error.unwrap_or_default();
+    assert!(msg.contains("users/Amakata/projects/2"), "{msg}");
+    assert!(
+        msg.contains("HTTP 401 (Bad credentials)"),
+        "GitHub's own words: {msg}"
+    );
+    assert!(msg.ends_with("Ask a human to run: sgw login"), "{msg}");
+    assert!(!msg.contains("sgw unlock"), "{msg}");
+    assert!(
+        !msg.contains(REVOKED_TOKEN),
+        "the token never appears: {msg}"
+    );
+    let audit = std::fs::read_to_string(&f.audit_path).unwrap();
+    assert!(!audit.contains(REVOKED_TOKEN), "nor in the audit");
+}
+
+/// #479: the same denial with the store locked still says `sgw unlock` — from the store's own
+/// answer, not a guess.
+#[tokio::test]
+async fn a_board_whose_lookup_found_the_store_locked_names_sgw_unlock() {
+    let f = start_api_full(
+        project_case_a(&["project:read"]),
+        BootstrapMode::Auto,
+        true,
+        vec![],
+        Some(vec![amakata_board_2()]),
+    )
+    .await;
+    f.tokens.lock_for_test().await;
+    let r = ApiRequest {
+        board: Some(2),
+        ..req("LibOrg/awesome-lib")
+    };
+    let (code, resp) = post(f.addr, "/project/list", Some(&f.token), &r).await;
+    assert_eq!(code, 403, "{:?}", resp.error);
+    let msg = resp.error.unwrap_or_default();
+    assert!(msg.contains("the secret store is locked"), "{msg}");
+    assert!(msg.ends_with("Ask a human to run: sgw unlock"), "{msg}");
+    assert!(!msg.contains("sgw login"), "{msg}");
+}
+
+/// #479: an upstream 401 on any call — not only a board lookup — reaches the agent with GitHub's
+/// message on one line and the command a human runs.
+#[tokio::test]
+async fn an_upstream_401_on_a_call_tells_the_agent_who_can_fix_it() {
+    let f = start_api(project_case_a(&["pr:read"]), BootstrapMode::Auto, false).await;
+    f.tokens
+        .save("upstream.test", REVOKED_TOKEN, "repo")
+        .await
+        .unwrap();
+    let (code, resp) = post(
+        f.addr,
+        "/pr/list",
+        Some(&f.token),
+        &req("LibOrg/awesome-lib"),
+    )
+    .await;
+    assert_eq!(code, 502, "{:?}", resp.error);
+    let msg = resp.error.unwrap_or_default();
+    assert!(msg.contains("HTTP 401 (Bad credentials)"), "{msg}");
+    assert!(
+        msg.ends_with(sekimore_relay::github::TOKEN_REJECTED),
+        "{msg}"
+    );
+    assert!(!msg.contains('\n'), "{msg}");
 }
 
 // ---- #277: per-board permissions ----
@@ -4314,4 +4413,51 @@ async fn a_page_larger_than_github_allows_is_refused_not_shrunk() {
         recorded(&f.recorder).is_empty(),
         "refused before asking upstream"
     );
+}
+
+/// #479: `check`'s question to the upstream, over HTTP: the stored token accepted (as whom),
+/// refused (401), or no answer at all — which is "not checked", never "rejected".
+#[tokio::test]
+async fn the_token_check_tells_accepted_rejected_and_unreachable_apart() {
+    use sekimore_relay::cli::operator::TokenAcceptance;
+    use sekimore_relay::github::upstream_token::UpstreamTokenStore;
+    use sekimore_relay::github::GitHub;
+    let dir = tempfile::tempdir().unwrap();
+    let (api, _) = mock_github().await;
+    let ask = |base: url::Url, token: &'static str| {
+        let store = std::sync::Arc::new(UpstreamTokenStore::in_memory(
+            "upstream.test",
+            &dir.path().join("t"),
+        ));
+        async move {
+            store.save("upstream.test", token, "repo").await.unwrap();
+            let graphql = base.join("graphql").unwrap();
+            let gh = GitHub::new(
+                base,
+                graphql,
+                reqwest::Client::builder().no_proxy().build().unwrap(),
+                store,
+                std::sync::Arc::new(sekimore_relay::audit::Audit::disabled()),
+            );
+            TokenAcceptance::from_whoami(gh.whoami().await)
+        }
+    };
+    assert_eq!(
+        ask(api.clone(), "gho_test").await,
+        TokenAcceptance::Accepted("agent-bot".into())
+    );
+    assert_eq!(ask(api, REVOKED_TOKEN).await, TokenAcceptance::Rejected);
+    // Nothing listens there: no answer, so no verdict
+    let closed = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap()
+    };
+    let unreachable = url::Url::parse(&format!("http://{closed}/api/v3")).unwrap();
+    match ask(unreachable, "gho_test").await {
+        TokenAcceptance::NotChecked(why) => {
+            assert!(why.contains("upstream request failed"), "{why}");
+            assert!(!why.contains("gho_test"), "the token never appears: {why}");
+        }
+        other => panic!("{other:?}"),
+    }
 }

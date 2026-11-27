@@ -63,6 +63,9 @@ pub async fn mock_github() -> (Url, Recorder) {
                             .iter()
                             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
                             .collect();
+                        let revoked = headers.iter().any(|(k, v)| {
+                            k == "authorization" && v == &format!("Bearer {REVOKED_TOKEN}")
+                        });
                         let body = req
                             .into_body()
                             .collect()
@@ -77,12 +80,19 @@ pub async fn mock_github() -> (Url, Recorder) {
                             headers,
                             body: body.clone(),
                         });
-                        let (status, json) = canned(&method, &path, &body);
+                        // #479: a token GitHub no longer accepts, answered the way GitHub
+                        // answers it (pretty-printed, so the error spans lines)
+                        let (status, text) = if revoked {
+                            (StatusCode::UNAUTHORIZED, BAD_CREDENTIALS.to_string())
+                        } else {
+                            let (status, json) = canned(&method, &path, &body);
+                            (status, json.to_string())
+                        };
                         Ok::<_, std::convert::Infallible>(
                             Response::builder()
                                 .status(status)
                                 .header("content-type", "application/json")
-                                .body(Full::new(Bytes::from(json.to_string())))
+                                .body(Full::new(Bytes::from(text)))
                                 .unwrap(),
                         )
                     }
@@ -95,6 +105,11 @@ pub async fn mock_github() -> (Url, Recorder) {
     });
     (Url::parse(&format!("http://{addr}/api/v3")).unwrap(), rec)
 }
+
+/// #479: an upstream token the mock answers `401 Bad credentials` to, on every endpoint.
+pub const REVOKED_TOKEN: &str = "gho_revoked";
+/// GitHub's body for it.
+pub const BAD_CREDENTIALS: &str = "{\n  \"message\": \"Bad credentials\",\n  \"documentation_url\": \"https://docs.github.com/rest\",\n  \"status\": \"401\"\n}";
 
 /// Percent-decode a path so the mock can match on the tag or ref the caller meant. Real GitHub
 /// decodes the segment too; what matters for the traversal tests is the *raw* path recorded in the
