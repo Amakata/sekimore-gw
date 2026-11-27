@@ -36,6 +36,7 @@
 - 止められないもの: `BROWSER` と `code` コマンドは、ホストのブラウザで URL を開く。ホストのブラウザは gateway を通らない。ブラウザに表示されるので人の目には触れ、返事が dev に戻ることもない
 - 秘密ストアは作り直すたびに施錠される。施錠中は関所が GitHub API を使えない。SSH の git は動く
 - `config.yml` に上流を足したり変えたりしたら: `sgw restart`、そのあと `sgw refresh`
+- コマンドサイドカー `<name>`（`relay.sidecars.<name>`）は compose のサービス `sekimore-<name>` として動かす。`sgw recreate` がゲートウェイと一緒に起動する。詳しくは [docs/sidecar-protocol.md](sidecar-protocol.md#configuration)
 - 署名鍵の GitHub での題名は `sekimore-agent-signing: <project> / <name> <email>`。`.env` の `SEKIMORE_SIGNING_KEY_COMMENT` で変えられる
 - 案件が終わったら: `sgw revoke-project`
 - 関所の使い方はエージェントに自動で届く。`sgw-agent setup` が起動のたびに Claude Code の skill `~/.claude/skills/sgw-agent/SKILL.md` と `~/.codex/AGENTS.md` に置く。プロジェクトの `CLAUDE.md` / `AGENTS.md` に関所のことを書く必要はない。skill は毎起動で上書きされるので編集しない。他のエージェントツールには `sgw-agent guide` の出力を、そのツールが指示を読む場所に置く

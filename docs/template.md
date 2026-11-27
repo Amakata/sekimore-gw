@@ -37,6 +37,7 @@ carries the same files, byte for byte. Do not copy them by hand.
 - What it cannot turn off: `BROWSER` and the `code` command open a URL in the host's browser, which does not go through the gateway. The browser shows it; nothing reads the reply back into dev
 - The secret store is locked after every recreate. Locked, the relay cannot use the GitHub API; git over SSH still works
 - After adding or changing an upstream in `config.yml`: `sgw restart`, then `sgw refresh`
+- A command sidecar `<name>` (`relay.sidecars.<name>`) is the compose service `sekimore-<name>`; `sgw recreate` brings it up with the gateway. See [docs/sidecar-protocol.md](sidecar-protocol.md#configuration)
 - The signing key's title on GitHub is `sekimore-agent-signing: <project> / <name> <email>`; `SEKIMORE_SIGNING_KEY_COMMENT` in `.env` changes it
 - When the project ends: `sgw revoke-project`
 - The relay's usage guide reaches the agent on its own: `sgw-agent setup` installs it at every start as the Claude Code skill `~/.claude/skills/sgw-agent/SKILL.md` and into `~/.codex/AGENTS.md`. Nothing about the relay belongs in the project's `CLAUDE.md` / `AGENTS.md`; the skill is overwritten at every start, so do not edit it. For another agent tool, put the output of `sgw-agent guide` where that tool reads its instructions

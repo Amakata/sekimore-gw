@@ -230,12 +230,18 @@ relay:
 
   A value written in `config.yml` is refused: the file is in the worktree, readable from dev.
 - `upstreams` is for forge relays only.
-- After adding or changing a sidecar, the operator runs `sgw refresh` on the host. It re-runs the
-  agent's setup in dev, which picks up the new commands and guide.
+- After adding or changing a sidecar, the operator runs `sgw recreate` on the host: the gateway
+  reads `config.yml` again, the sidecar's compose service is brought up, and the agent's setup in
+  dev picks up the new commands and guide. `sgw refresh` re-runs only that setup, for a sidecar
+  that was still starting.
 - A sidecar's permissions (`notes:read`) go in `relay.project.permissions` **only**. Repository,
   upstream and board layers refuse them: the resource is not about a repository.
 
 The compose service runs next to the gateway, on the internal network, with the socket volume.
+It is named `sekimore-<name>`, `<name>` being the key under `relay.sidecars`. `sgw recreate`
+brings up (`docker compose up -d --no-deps`) every such service the compose declares, and no
+other: not dev, and not a service outside the convention. A configured sidecar with no
+`sekimore-<name>` service is named in one line, and the recreate goes on.
 See [the template's README](../examples/sidecar-template/README.md#compose).
 
 ## What the agent sees
