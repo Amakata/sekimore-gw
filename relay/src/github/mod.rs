@@ -90,6 +90,18 @@ impl fmt::Display for GhError {
             // proxy arrived as "error sending request for url (…)" and said nothing. Walk the
             // chain, and when the alert is in there say what the proxy must offer.
             GhError::Http(e) => write!(f, "upstream request failed: {e}{}", handshake_hint(e)),
+            // #479: every call carries the relay's own token, so a 401 is that token refused.
+            // GitHub's own words stay; the agent cannot log in, so say who can
+            GhError::Status {
+                method,
+                path,
+                status: 401,
+                body,
+            } => write!(
+                f,
+                "{method} {path}: HTTP 401 ({}). {TOKEN_REJECTED}",
+                upstream_message(body)
+            ),
             GhError::Status {
                 method,
                 path,
@@ -104,6 +116,30 @@ impl fmt::Display for GhError {
 }
 
 impl std::error::Error for GhError {}
+
+/// #479: what follows an upstream 401 wherever it is shown. `sgw verify` looks for it in the
+/// agent's output, so it is one string, not prose repeated at each site. It must not contain
+/// what the agent CLI takes for its own token's rejection (`is_token_error`).
+pub const TOKEN_REJECTED: &str = "The upstream rejected the relay's own API token (expired or \
+     revoked); the agent cannot renew it. Ask a human to run: sgw login";
+
+impl GhError {
+    /// #479: the upstream refused the relay's token. Every request the client makes carries it,
+    /// so a 401 is about that token and nothing else.
+    pub fn rejects_token(&self) -> bool {
+        matches!(self, GhError::Status { status: 401, .. })
+    }
+}
+
+/// The `message` of a GitHub error body (`{"message": "Bad credentials", …}`), or the body with
+/// its whitespace folded. GitHub pretty-prints some answers, and the line breaks left a reader
+/// who sees only the last line with `}`.
+fn upstream_message(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("message").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_else(|| body.split_whitespace().collect::<Vec<_>>().join(" "))
+}
 
 /// The `HandshakeFailure` hint for a reqwest error, or the empty string (#205, #206).
 ///
@@ -3216,6 +3252,52 @@ mod tests {
             store,
             Arc::new(Audit::disabled()),
         )
+    }
+
+    fn status(code: u16, body: &str) -> GhError {
+        GhError::Status {
+            method: "GET".into(),
+            path: "/repos/o/r/pulls".into(),
+            status: code,
+            body: body.into(),
+        }
+    }
+
+    /// #479: a 401 keeps GitHub's words, on one line, and says who can fix it. GitHub's error
+    /// bodies are JSON, sometimes pretty-printed; the message is what a reader needs from them.
+    #[test]
+    fn an_upstream_401_names_sgw_login_and_keeps_githubs_message() {
+        let e = status(
+            401,
+            "{\n  \"message\": \"Bad credentials\",\n  \"documentation_url\": \"https://docs.github.com/rest\",\n  \"status\": \"401\"\n}",
+        );
+        assert!(e.rejects_token());
+        let m = e.to_string();
+        assert!(
+            m.starts_with("GET /repos/o/r/pulls: HTTP 401 (Bad credentials). "),
+            "{m}"
+        );
+        assert!(m.ends_with("Ask a human to run: sgw login"), "{m}");
+        assert!(!m.contains('\n'), "{m}");
+        // Not JSON (a proxy's page, a truncated body): folded, not dropped
+        let m = status(401, "<html>\n nope\n</html>").to_string();
+        assert!(m.contains("HTTP 401 (<html> nope </html>)"), "{m}");
+    }
+
+    /// Any other status is not about the token and reads as before.
+    #[test]
+    fn other_statuses_do_not_claim_the_token_was_rejected() {
+        for code in [403, 404, 422, 500] {
+            let e = status(code, "{\"message\": \"x\"}");
+            assert!(!e.rejects_token());
+            let m = e.to_string();
+            assert!(!m.contains("sgw login"), "{m}");
+            assert_eq!(
+                m,
+                format!("GET /repos/o/r/pulls: HTTP {code} ({{\"message\": \"x\"}})")
+            );
+        }
+        assert!(!GhError::Graphql("Bad credentials".into()).rejects_token());
     }
 
     /// #173: the line numbers are the whole point of rendering a patch rather than passing it

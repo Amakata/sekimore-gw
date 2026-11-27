@@ -373,7 +373,7 @@ impl UpstreamTokenStore {
         };
         let st = self.load().await?.ok_or_else(|| {
             TokenError::Missing(format!(
-                "no upstream token for {}: run `docker compose exec sekimore-gw sekimore-relay login`",
+                "no upstream token for {}; the agent cannot log in. Ask a human to run: sgw login",
                 self.host
             ))
         })?;
@@ -393,6 +393,16 @@ impl UpstreamTokenStore {
         let mut c = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         self.generation.fetch_add(1, Ordering::SeqCst);
         *c = None;
+    }
+
+    /// Seal the in-process store and drop the cached token — what `sgw lock` does to a running
+    /// relay — for tests that need a locked store behind a fixture.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub async fn lock_for_test(&self) {
+        if let SecretSource::InProcess(store) = &self.source {
+            store.lock().await.lock();
+        }
+        self.forget();
     }
 
     pub fn host(&self) -> &str {
@@ -453,9 +463,7 @@ mod tests {
         assert_eq!(s.load().await.unwrap().unwrap().scope, "repo project");
         assert!(s.delete().await.unwrap());
         assert!(!s.delete().await.unwrap());
-        assert!(
-            matches!(s.token().await, Err(TokenError::Missing(m)) if m.contains("sekimore-relay login"))
-        );
+        assert!(matches!(s.token().await, Err(TokenError::Missing(m)) if m.contains("sgw login")));
     }
 
     #[tokio::test]

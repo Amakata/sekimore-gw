@@ -172,6 +172,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `known_hosts … has no entry for X` | ゲートウェイに上流のホスト鍵がない | **自分では解決できない。** 対処は Docker を動かしているホストでの `sgw login`。メッセージ全体を人間に伝える |
 | `no upstream token for …` | 運用者がゲートウェイにログインしていない | これも自分では解決できない。対処はホストでの `sgw login` |
 | `the secret store is locked …` | ゲートウェイはトークンを保持しているが、誰もストアを解錠していない | これも自分では解決できない。対処はホストでの `sgw unlock`。ログインでは解決しない |
+| `HTTP 401 (…). The upstream rejected the relay's own API token …` | ゲートウェイが保持しているトークンを上流 (GitHub) が受け付けない。期限切れか取り消し | これも自分では解決できない。対処はホストでの `sgw login`。メッセージ全体を人間に伝える。解錠では解決しない |
 
 最後の 3 つは、このコンテナの外に保存されているゲートウェイ自身の資格情報に関する拒否です。
 `sekimore-relay` で始まるコマンドは運用者用で、ゲートウェイの中で実行します。ここで実行すると、

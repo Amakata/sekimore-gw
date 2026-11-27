@@ -172,6 +172,7 @@ sekimore project add-item / update-item --board 2             [project:add_item]
 | `known_hosts … has no entry for X` | The gateway has no host key for the upstream. | **You cannot fix this.** The fix is `sgw login` on the host that runs Docker. Pass the whole message to a human. |
 | `no upstream token for …` | The operator has not logged the gateway in. | You cannot fix this either. The fix is `sgw login` on the host. |
 | `the secret store is locked …` | The gateway holds the token, but nobody has unlocked the store. | You cannot fix this either. The fix is `sgw unlock` on the host. A login does not help. |
+| `HTTP 401 (…). The upstream rejected the relay's own API token …` | The upstream (GitHub) no longer accepts the token the gateway holds: it expired or was revoked. | You cannot fix this either. The fix is `sgw login` on the host. Pass the whole message to a human; unlocking does not help. |
 
 The last three denials concern the gateway's own credentials, which are stored outside this container.
 Commands that begin with `sekimore-relay` are for the operator and run inside the gateway. If you

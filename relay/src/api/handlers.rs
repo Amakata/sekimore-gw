@@ -255,32 +255,48 @@ async fn resolve_board(
             "no project board is allowed; add relay.project.boards (the org / user and the number from the board's URL)",
         ));
     }
-    let boards = ctx.project_boards.get(&ctx.relays, &ctx.git_domain).await;
+    let lookup = ctx.project_boards.get(&ctx.relays, &ctx.git_domain).await;
+    let boards = lookup.resolved;
     if boards.is_empty() {
         // Declared but not resolvable. Saying "add relay.project.boards" here would send the
-        // operator to a file that already has it; the usual reason is a locked secret store,
-        // since resolving needs the upstream token (#99).
-        return Err(ApiError::forbidden(
-            "the project's boards are declared but could not be resolved; the relay needs the              upstream API token for that, so a locked secret store is the usual reason.              Ask a human to run: sgw unlock",
-        ));
+        // operator to a file that already has it. #479: what the lookup answered is the reason —
+        // a locked store says `sgw unlock`, a token the upstream refused says `sgw login` — so
+        // it is passed on rather than guessed at.
+        return Err(ApiError::forbidden(format!(
+            "the project's boards are declared but could not be resolved: {}",
+            unresolved(&lookup.failed)
+        )));
     }
     let id = req.project_id.trim();
     match (id.is_empty(), req.board) {
         (false, Some(_)) => Err(ApiError::bad_request(
             "pass --board or --project-id, not both",
         )),
-        (true, Some(n)) => boards
-            .iter()
-            .find(|b| b.number == n)
-            .cloned()
-            .ok_or_else(|| {
-                ApiError::forbidden(format!(
-                    "project board {n} is not in this project; this project has {}",
-                    board_choices(&boards)
-                ))
-            }),
+        (true, Some(n)) => {
+            boards
+                .iter()
+                .find(|b| b.number == n)
+                .cloned()
+                .ok_or_else(|| match lookup.failed.iter().find(|f| f.number == n) {
+                    Some(f) => ApiError::forbidden(format!(
+                        "project board {n} ({}) could not be resolved: {}",
+                        f.label, f.why
+                    )),
+                    None => ApiError::forbidden(format!(
+                        "project board {n} is not in this project; this project has {}",
+                        board_choices(&boards)
+                    )),
+                })
+        }
         (false, None) => boards.iter().find(|b| b.id == id).cloned().ok_or_else(|| {
-            ApiError::forbidden(format!("project board {id} is not in this project"))
+            let mut m = format!("project board {id} is not in this project");
+            if !lookup.failed.is_empty() {
+                m.push_str(&format!(
+                    "; some of its declared boards could not be resolved: {}",
+                    unresolved(&lookup.failed)
+                ));
+            }
+            ApiError::forbidden(m)
         }),
         (true, None) => match boards.as_slice() {
             [only] => Ok(only.clone()),
@@ -290,6 +306,26 @@ async fn resolve_board(
             ))),
         },
     }
+}
+
+/// #479: the boards that did not resolve and why, one reason once: boards on one upstream fail
+/// for the same reason, and a reason repeated per board buries the command at its end.
+fn unresolved(failed: &[crate::api::FailedBoard]) -> String {
+    let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
+    for f in failed {
+        match groups.iter_mut().find(|(why, _)| *why == f.why) {
+            Some((_, labels)) => labels.push(&f.label),
+            None => groups.push((&f.why, vec![&f.label])),
+        }
+    }
+    if groups.is_empty() {
+        return "sgw logs says why".to_string();
+    }
+    groups
+        .iter()
+        .map(|(why, labels)| format!("{}: {why}", labels.join(", ")))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 pub async fn dispatch(

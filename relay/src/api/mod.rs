@@ -136,26 +136,31 @@ impl ProjectBoards {
     /// `resolved`.
     /// #291: each board is resolved on its own upstream (`boards[].upstream`, the default one when
     /// unset), with that upstream's client, and remembers which it was.
-    pub async fn get(
-        &self,
-        relays: &crate::forge::Relays,
-        default_domain: &str,
-    ) -> Vec<ResolvedBoard> {
+    /// #479: the boards that did not resolve come back with what their lookup answered, so a
+    /// denial can say it — a rejected token and a locked store need different people's commands.
+    pub async fn get(&self, relays: &crate::forge::Relays, default_domain: &str) -> BoardLookup {
         let mut slot = self.resolved.lock().await;
         if let Some(found) = slot.as_ref() {
-            return found.clone();
+            return BoardLookup {
+                resolved: found.clone(),
+                failed: Vec::new(),
+            };
         }
         let mut out = Vec::new();
+        let mut failed = Vec::new();
         for b in &self.declared {
             let upstream = b
                 .upstream
                 .clone()
                 .unwrap_or_else(|| default_domain.to_string());
             let Some(relay) = relays.get(&upstream) else {
-                log::warn!(
-                    "project board {} names upstream {upstream}, which has no API client; it stays refused",
-                    b.label()
-                );
+                let why = format!("it names upstream {upstream}, which has no API client");
+                log::warn!("project board {}: {why}; it stays refused", b.label());
+                failed.push(FailedBoard {
+                    number: b.number,
+                    label: b.label(),
+                    why,
+                });
                 continue;
             };
             let q = crate::forge::Query::BoardId {
@@ -178,19 +183,45 @@ impl ProjectBoards {
                         upstream,
                     });
                 }
-                Err(e) => log::warn!(
-                    "project board {} could not be resolved ({}); it stays refused until the \
-                     next attempt",
-                    b.label(),
-                    e.message
-                ),
+                Err(e) => {
+                    log::warn!(
+                        "project board {} could not be resolved ({}); it stays refused until the \
+                         next attempt",
+                        b.label(),
+                        e.message
+                    );
+                    failed.push(FailedBoard {
+                        number: b.number,
+                        label: b.label(),
+                        why: e.message,
+                    });
+                }
             }
         }
         if out.len() == self.declared.len() {
             *slot = Some(out.clone());
         }
-        out
+        BoardLookup {
+            resolved: out,
+            failed,
+        }
     }
+}
+
+/// What one `ProjectBoards::get` found.
+#[derive(Debug, Default)]
+pub struct BoardLookup {
+    pub resolved: Vec<ResolvedBoard>,
+    /// The declared boards that did not resolve this time, and why
+    pub failed: Vec<FailedBoard>,
+}
+
+/// A declared board whose lookup failed, with the lookup's own answer.
+#[derive(Debug, Clone)]
+pub struct FailedBoard {
+    pub number: u32,
+    pub label: String,
+    pub why: String,
 }
 
 /// A configured board and the node id it resolved to.

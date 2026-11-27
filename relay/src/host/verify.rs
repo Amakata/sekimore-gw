@@ -980,19 +980,67 @@ fn api_call(ctx: &mut Ctx) -> anyhow::Result<()> {
     let shown = probe.join(" ");
     if out.code == 0 {
         ctx.ok(&format!("sekimore {shown} answered"));
-    } else {
-        let last = out
-            .stderr
-            .lines()
-            .rev()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("");
-        ctx.fail(&format!(
-            "sekimore {shown} — exit {}: {last}. {HTTPS_HINT}",
-            out.code
-        ));
+        return Ok(());
+    }
+    let code = out.code;
+    match api_verdict(&out.stderr) {
+        ApiVerdict::TokenRejected(what) => ctx.fail(&format!(
+            "sekimore {shown} — exit {code}: {what}. The upstream rejected the relay's API token \
+             (expired or revoked); run sgw login, then sgw verify again"
+        )),
+        ApiVerdict::Unreached(what) => ctx.fail(&format!(
+            "sekimore {shown} — exit {code}: {what}. {HTTPS_HINT}"
+        )),
+        ApiVerdict::Refused(what) => ctx.fail(&format!(
+            "sekimore {shown} — exit {code}: {what}. The relay answered with an error, not a cut \
+             connection — sgw logs for 'api_error'"
+        )),
     }
     Ok(())
+}
+
+/// #479: what a failed `sekimore` API call printed, sorted by whose move it is.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ApiVerdict {
+    /// The upstream answered 401 to the relay's own token: `sgw login`
+    TokenRejected(String),
+    /// Nothing answered: the relay could not reach the upstream, or dev could not reach the relay
+    Unreached(String),
+    /// The relay or the upstream answered with some other error, which says what it is
+    Refused(String),
+}
+
+/// The longest stretch of the agent's error a verdict quotes.
+const API_ERROR_SHOWN: usize = 300;
+
+/// #479: sort the agent's stderr. The relay ends an upstream 401 with `TOKEN_REJECTED`; a relay
+/// from before it said only `HTTP 401 (…)`, which the relay prints for nothing else. The whole
+/// stderr is read, folded onto one line: the last line of it was `})`, the tail of a JSON body.
+pub fn api_verdict(stderr: &str) -> ApiVerdict {
+    use crate::github::TOKEN_REJECTED;
+    let folded = stderr.split_whitespace().collect::<Vec<_>>().join(" ");
+    let rejected = folded.contains(TOKEN_REJECTED) || folded.contains("HTTP 401 (");
+    let mut what = folded.as_str();
+    // `sgw-agent: denied: …`, the CLI's own name whatever it was called as
+    for prefix in [crate::cli::agent::NAME, ":", "sekimore:", "denied:"] {
+        what = what.strip_prefix(prefix).unwrap_or(what).trim_start();
+    }
+    let what = what.replace(TOKEN_REJECTED, "");
+    let what = what.trim().trim_end_matches('.');
+    let what = match what.char_indices().nth(API_ERROR_SHOWN) {
+        Some((i, _)) => format!("{}…", &what[..i]),
+        None => what.to_string(),
+    };
+    if rejected {
+        ApiVerdict::TokenRejected(what)
+    } else if what.is_empty()
+        || what.contains("upstream request failed")
+        || what.contains("cannot reach the gateway")
+    {
+        ApiVerdict::Unreached(what)
+    } else {
+        ApiVerdict::Refused(what)
+    }
 }
 
 /// A `login=<user>:<password>` in the gateway's config text that is not redacted (#217).
@@ -1454,6 +1502,70 @@ mod tests {
 #[cfg(test)]
 mod https_verdict_tests {
     use super::*;
+
+    /// #479: a 401 from the upstream is not a cut connection, and what is shown is GitHub's
+    /// message, not the `})` on the last line of a JSON body.
+    #[test]
+    fn an_upstream_401_is_told_from_a_cut_connection() {
+        // A relay with #479: one line, ending in the hint
+        let now = format!(
+            "sgw-agent: denied: GET /repos/o/r/pulls: HTTP 401 (Bad credentials). {}\n",
+            crate::github::TOKEN_REJECTED
+        );
+        assert_eq!(
+            api_verdict(&now),
+            ApiVerdict::TokenRejected("GET /repos/o/r/pulls: HTTP 401 (Bad credentials)".into())
+        );
+        // A relay from before: GitHub's pretty-printed body across lines
+        let before = "sekimore: denied: GET /repos/o/r/pulls: HTTP 401 ({\n  \"message\": \"Bad credentials\",\n  \"status\": \"401\"\n})\n";
+        match api_verdict(before) {
+            ApiVerdict::TokenRejected(w) => {
+                assert!(w.contains("\"message\": \"Bad credentials\""), "{w}");
+                assert_ne!(w, "})");
+            }
+            other => panic!("{other:?}"),
+        }
+        // The relay could not reach the upstream: the cut-connection hint still applies
+        assert!(matches!(
+            api_verdict("sekimore: denied: upstream request failed: error sending request\n"),
+            ApiVerdict::Unreached(_)
+        ));
+        assert!(matches!(api_verdict(""), ApiVerdict::Unreached(_)));
+        // The relay's own 401 (dev's token) is not the upstream's
+        assert!(!matches!(
+            api_verdict("sekimore: gateway returned HTTP 401 Unauthorized (unparseable body)"),
+            ApiVerdict::TokenRejected(_)
+        ));
+        assert!(matches!(
+            api_verdict("sekimore: cannot reach the gateway at http://relay:8080\n"),
+            ApiVerdict::Unreached(_)
+        ));
+        // Another answer is neither, and carries its own remedy
+        assert_eq!(
+            api_verdict(
+                "sekimore: denied: the secret store is locked; ask a human to run: sgw unlock"
+            ),
+            ApiVerdict::Refused(
+                "the secret store is locked; ask a human to run: sgw unlock".into()
+            )
+        );
+        assert!(matches!(
+            api_verdict(
+                "sekimore: denied: GET /repos/o/r/pulls: HTTP 403 (Resource not accessible)"
+            ),
+            ApiVerdict::Refused(_)
+        ));
+    }
+
+    /// A long error is cut on a character boundary, not mid-character.
+    #[test]
+    fn a_long_api_error_is_cut_short() {
+        let long = format!("sekimore: denied: {}", "あ".repeat(API_ERROR_SHOWN + 50));
+        match api_verdict(&long) {
+            ApiVerdict::Refused(w) => assert_eq!(w.chars().count(), API_ERROR_SHOWN + 1),
+            other => panic!("{other:?}"),
+        }
+    }
 
     /// #275: what curl's `%{http_code} %header{x-squid-error}` means. The upstream answering
     /// with any status is a reached upstream; Squid answering for it is not.
