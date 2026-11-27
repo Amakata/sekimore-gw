@@ -13,8 +13,10 @@
 //!   does not get through. An address written in the URL is checked the same way.
 //! - **at most [`MAX_HOPS`] further redirects**, each one checked like the first.
 //! - **the existing cap** on what is read, and every hop in the audit: `redirect_fetch` with the
-//!   host, the path and the status, or `redirect_refused` with the reason. The query string is
-//!   left out: on a storage host it is a signature, good for anyone who has it until it expires.
+//!   host, the path and the status (`failed` and the cause for a transport failure), or
+//!   `redirect_refused` with the reason. The query string is left out, of the audit and of every
+//!   error returned: on a storage host it is a signature, good for anyone who has it until it
+//!   expires.
 //!
 //! What may hand a URL here: the built-in client, from the upstream's own 3xx; and the gateway's
 //! side of a forge sidecar, from the sidecar's reply (`forge::sidecar`, `fetch`). The sidecar has
@@ -198,6 +200,28 @@ impl Fetcher {
         ))
     }
 
+    /// A hop that failed in transport: audited, and returned without the URL reqwest keeps in its
+    /// error, which would carry the query (a storage host's signature) into the agent's output
+    /// and the gateway's log. Host and path say which hop it was.
+    fn failed(&self, url: &Url, e: reqwest::Error, extra: &[(&str, &str)]) -> GhError {
+        let host = host_of(url);
+        let error = e.without_url();
+        let chain = super::error_chain(&error);
+        let mut fields: Vec<(&str, &str)> = vec![
+            ("host", &host),
+            ("path", url.path()),
+            ("status", "failed"),
+            ("error", &chain),
+        ];
+        fields.extend_from_slice(extra);
+        self.audit
+            .log_edge(self.route, "redirect_fetch", Actor::System, &fields);
+        GhError::Offsite {
+            at: format!("{host}{}", url.path()),
+            error,
+        }
+    }
+
     /// GET `start` and whatever it redirects to, up to [`MAX_HOPS`] more, reading at most `cap`
     /// bytes of the answer. `extra` goes into each audit entry (the sidecar that asked, say).
     pub async fn fetch(
@@ -223,7 +247,7 @@ impl Fetcher {
                     if let Some(np) = not_public(&e) {
                         return Err(self.refuse(&url, &np, extra));
                     }
-                    return Err(GhError::Http(e));
+                    return Err(self.failed(&url, e, extra));
                 }
             };
             let status = resp.status();
@@ -248,7 +272,10 @@ impl Fetcher {
                 url = next;
                 continue;
             }
-            let body = read_limited(resp, cap).await?;
+            let body = match read_limited(resp, cap).await {
+                Ok(b) => b,
+                Err(e) => return Err(self.failed(&url, e, extra)),
+            };
             if status.as_u16() >= 400 {
                 return Err(GhError::Status {
                     method: "GET".into(),
@@ -386,5 +413,52 @@ mod tests {
             .refusal(&Url::parse("http://storage.test:9/x").unwrap())
             .await
             .is_none());
+    }
+
+    /// A hop that fails in transport says which host failed, in the error and in the audit, and
+    /// never repeats the query: on a storage host it is the signature, and reqwest's own error
+    /// text carries the whole URL.
+    #[tokio::test]
+    async fn a_transport_failure_names_the_host_and_never_the_query() {
+        // A port nothing listens on: the connection is refused
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let audit_path = dir.path().join("audit.jsonl");
+        let f = Fetcher::for_tests(
+            Arc::new(Audit::new(Some(&audit_path), false).unwrap()),
+            &[(
+                "storage.test".to_string(),
+                format!("127.0.0.1:{port}").parse().unwrap(),
+            )],
+        )
+        .unwrap();
+        let url = format!("http://storage.test:{port}/logs/1?sig=SECRET-SIG&se=2026");
+        let e = f
+            .fetch(&Url::parse(&url).unwrap(), 1024, &[("sidecar", "github")])
+            .await
+            .unwrap_err();
+        assert!(matches!(e, GhError::Offsite { .. }), "{e:?}");
+        let msg = e.to_string();
+        assert!(
+            msg.contains(&format!("storage.test:{port}/logs/1")),
+            "{msg}"
+        );
+        assert!(
+            !msg.contains("SECRET-SIG") && !msg.contains("sig="),
+            "{msg}"
+        );
+        let api = crate::api::ApiError::from(e).message;
+        assert!(!api.contains("SECRET-SIG"), "{api}");
+        let log = std::fs::read_to_string(&audit_path).unwrap();
+        assert!(log.contains("redirect_fetch"), "{log}");
+        assert!(log.contains("storage.test"), "{log}");
+        assert!(log.contains("\"failed\""), "{log}");
+        assert!(
+            !log.contains("SECRET-SIG") && !log.contains("sig="),
+            "{log}"
+        );
     }
 }

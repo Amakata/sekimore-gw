@@ -355,8 +355,10 @@ answers `/call` with `fetch` in place of `response`:
 The gateway fetches `url` itself and shapes the answer from `then`. The fetch carries no
 credential, goes only to `https` and to public addresses (never loopback, private, link-local
 or carrier-grade NAT ranges, nor the gateway's own addresses), follows at most 3 more redirects,
-each checked the same way, and reads at most 16 MiB. Each hop is audited as `redirect_fetch`, a
-refusal as `redirect_refused`, with the host and the path and never the query string.
+each checked the same way, and reads at most 16 MiB. Each hop is audited as `redirect_fetch`
+(`status: failed` with the cause when it fails in transport), a refusal as `redirect_refused`,
+with the host and the path and never the query string. Errors returned to the agent name the
+host and the path the same way, never the URL in full.
 
 The built-in relay follows the same rules: its API client follows a redirect only on the API's
 own origin, and hands one that leaves it to the same fetch.

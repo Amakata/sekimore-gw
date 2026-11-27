@@ -84,6 +84,13 @@ pub enum GhError {
     /// [`redirect::Fetcher`] to follow it with — a sidecar's, which has no egress. The caller
     /// hands the URL to the gateway, which does.
     Elsewhere(Url),
+    /// #485: the fetch of an answer on another host failed in transport. `at` is `host[:port]`
+    /// and the path; `error` has had its URL dropped, because the query on a storage host is a
+    /// signature and reqwest prints the URL in full
+    Offsite {
+        at: String,
+        error: reqwest::Error,
+    },
 }
 
 impl fmt::Display for GhError {
@@ -121,6 +128,12 @@ impl fmt::Display for GhError {
                 f,
                 "the upstream sent this request on to {}, and this relay has no way to follow it",
                 u.host_str().unwrap_or("another host")
+            ),
+            GhError::Offsite { at, error } => write!(
+                f,
+                "fetching {at} failed: {}{}",
+                error_chain(error),
+                handshake_hint(error)
             ),
         }
     }

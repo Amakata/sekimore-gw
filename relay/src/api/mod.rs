@@ -295,7 +295,8 @@ impl From<GhError> for ApiError {
             | GhError::Http(_)
             | GhError::Parse(_)
             | GhError::Graphql(_)
-            | GhError::Elsewhere(_) => StatusCode::BAD_GATEWAY,
+            | GhError::Elsewhere(_)
+            | GhError::Offsite { .. } => StatusCode::BAD_GATEWAY,
         };
         ApiError {
             status,
