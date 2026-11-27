@@ -35,6 +35,12 @@ base イメージは 0.2.45 まで独立したリポジトリで、版番号も�
 - `GET /relays` が各 relay とそのコマンドを返す。`sgw-agent setup` がそれを保存し、サイドカーのガイドをスキルファイルに足す。`sgw-agent <sidecar> <words>` でコマンドサイドカーのコマンドを実行する (#368)
 - `docs/sidecar-protocol.md` にコマンドサイドカーのプロトコルを書いた。`examples/sidecar-template` は標準ライブラリだけの Python で動くサイドカー (#369)
 
+## 0.2.78（2026-11-27）
+
+### Security
+
+- url 2.5.8 -> 2.5.9、form_urlencoded 1.2.2 -> 1.2.3。RUSTSEC-2026-0592 への対応 (#487)
+
 ## 0.2.77（2026-11-17）
 
 ### Security
