@@ -1,0 +1,2 @@
+# tests/unit/test_config.py without_handlers_the_allowlist_is_unchanged
+allow_domains: [github.com, .debian.org, pypi.org]

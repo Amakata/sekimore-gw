@@ -1,0 +1,5 @@
+# unknown top-level keys are ignored, so is dns: and its contents
+foo: 1
+priority_ips: [1.2.3.4]
+dns: {upstream: 1.1.1.1, port: 5353}
+allow_domains: [pypi.org]

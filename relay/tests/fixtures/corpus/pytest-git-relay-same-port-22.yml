@@ -1,0 +1,5 @@
+# tests/unit/test_config.py it_rejects_two_git_relay_domains_on_the_same_ssh_port
+allow_domains: [a.example.com, b.example.com]
+domain_handlers:
+  a.example.com: {handler: git-relay}
+  b.example.com: {handler: git-relay}

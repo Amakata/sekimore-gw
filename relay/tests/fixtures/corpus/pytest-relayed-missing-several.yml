@@ -1,0 +1,6 @@
+# tests/unit/test_config.py it_says_which_domains_are_missing
+allow_domains: [github.com]
+domain_handlers:
+  github.com: {handler: git-relay}
+  ghcr.io: {handler: https-relay}
+  pkg-containers.githubusercontent.com: {handler: https-relay}

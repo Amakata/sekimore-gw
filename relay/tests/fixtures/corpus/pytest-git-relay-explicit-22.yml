@@ -1,0 +1,4 @@
+# tests/unit/test_config.py it_splits_multiple_git_relay_domains_by_ssh_port: one entry on 22
+allow_domains: [github.com]
+domain_handlers:
+  github.com: {handler: git-relay, ssh_port: 22}

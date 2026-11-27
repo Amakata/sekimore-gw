@@ -1,0 +1,210 @@
+# The shape of a real project's config.yml: its keys, list lengths, handler kinds, caps, repo
+# modes, permission lists and the YAML anchor shared by three deny lists. Every identifier is made up.
+name: Example project
+description: Example project
+
+allow_domains:
+  - api.anthropic.com
+  - platform.claude.com
+  - claude.ai
+  - downloads.claude.ai
+  - storage.googleapis.com
+  - .debian.org
+  - github.com
+  - api.github.com
+  - codeload.github.com
+  - raw.githubusercontent.com
+  - objects.githubusercontent.com
+  - release-assets.githubusercontent.com
+  - awscli.amazonaws.com
+  - main.vscode-cdn.net
+  - marketplace.visualstudio.com
+  - www.vscode-unpkg.net
+  - packages.microsoft.com
+  - registry-1.docker.io
+  - auth.docker.io
+  - layers.example-registry.r2.cloudflarestorage.com
+  - .docker.com
+  - ghcr.io
+  - pkg-containers.githubusercontent.com
+  - mcr.microsoft.com
+  - eastasia.data.mcr.microsoft.com
+  - mise.jdx.dev
+  - mise-versions.jdx.dev
+  - www.python.org
+  - pypi.org
+  - .pythonhosted.org
+  - npmjs.com
+  - .npmjs.org
+  - nodejs.org
+  - www.electronjs.org
+  - cache.ruby-lang.org
+  - static.rust-lang.org
+  - sh.rustup.rs
+  - index.crates.io
+  - static.crates.io
+  - hooks.slack.com
+  - docs.example.org
+  - blog.example.org
+  - learn.microsoft.com
+  - www.atlassian.com
+  - drawio-app.com
+  - docs.docker.com
+  - www.docker.com
+  - docs.aws.amazon.com
+  - .example.net
+  - sekimore-gw
+  - dev
+
+ignore_domains:
+  - proxy.individual.githubcopilot.com
+  - mobile.events.data.microsoft.com
+  - copilot-telemetry.githubusercontent.com
+  - default.exp-tas.com
+  - api.githubcopilot.com
+  - .datadoghq.com
+
+block_domains: []
+allow_ips: []
+block_ips: []
+
+proxy:
+  enabled: true
+  port: 3128
+  cache_enabled: true
+  cache_size_mb: 1000
+  upstream_proxy_username: null
+  upstream_proxy_password: null
+
+ui:
+  language: auto
+
+network:
+  lan_subnets: []
+  allowed_ports: [80, 443]
+
+database_path: "/data/security_gateway.db"
+
+reload: 30m
+
+domain_handlers:
+  github.com:
+    handler: github
+    max_upload_bytes: 262144
+  ghcr.io:
+    handler: https-relay
+  pkg-containers.githubusercontent.com:
+    handler: https-relay
+  registry.npmjs.org:
+    handler: https-relay
+  registry-1.docker.io:
+    handler: https-relay
+  storage.googleapis.com:
+    handler: https-relay
+  api.github.com:
+    handler: https-relay
+    max_upload_bytes: 16777216
+relay:
+  https: passthrough
+  https_max_upload_bytes: 1048576
+  bootstrap: auto
+  token_ttl: 12h
+  sidecars:
+    github:
+      socket: /run/sekimore-sidecars/github.sock
+      resources: [pr, issue, project, repo, ci, release, search, security]
+  signing_key:
+    fingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  project:
+    name: example
+    signing: required
+    repos:
+      - name: ExampleOrg/app
+        mode: read-write
+        bases: [main]
+        delete_merged_branch: true
+      - name: ExampleOrg/gateway
+        mode: read-write
+        bases: [main, next]
+        delete_merged_branch: true
+        tags: ["v*"]
+      - name: ExampleOrg/base
+        mode: read-write
+        bases: [main]
+        delete_merged_branch: true
+        tags: ["v*"]
+      - name: ExampleOrg/desktop
+        mode: read-write
+        bases: [main, develop]
+        delete_merged_branch: true
+        tags: ["v*"]
+      - name: ExampleOrg/infra
+        mode: read-write
+        bases: [main, develop]
+        delete_merged_branch: true
+      - name: VendorOrg/lib
+        mode: read-only
+        permissions:
+          deny: &read_only_deny
+            - pr:create
+            - pr:merge
+            - pr:close
+            - pr:review
+            - pr:resolve
+            - pr:comment
+            - pr:request_review
+            - issue:create
+            - issue:update
+            - issue:comment
+            - issue:close
+            - issue:label
+            - ci:read
+            - ci:rerun
+            - ci:dispatch
+            - release:create
+            - release:publish
+            - release:read
+            - security:read
+            - security:dismiss
+            - project:read
+            - project:add_item
+            - project:update_item
+      - name: VendorOrg/tool
+        mode: read-only
+        permissions:
+          deny: *read_only_deny
+      - name: OtherOrg/lib
+        mode: read-only
+        permissions:
+          deny: *read_only_deny
+    permissions:
+      - pr:create
+      - pr:read
+      - pr:merge
+      - pr:close
+      - pr:review
+      - pr:resolve
+      - ci:read
+      - issue:create
+      - issue:update
+      - issue:comment
+      - issue:close
+      - issue:label
+      - pr:comment
+      - release:create
+      - release:read
+      - pr:request_review
+      - issue:read
+      - search:read
+      - repo:read
+      - release:publish
+      - ci:rerun
+      - ci:dispatch
+      - project:read
+      - project:add_item
+      - project:update_item
+      - security:read
+      - security:dismiss
+    boards:
+      - { user: example-user, number: 1, comment: "a board" }
+      - { user: example-user, number: 2, comment: "another board" }

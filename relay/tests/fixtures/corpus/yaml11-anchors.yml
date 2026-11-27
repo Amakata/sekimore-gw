@@ -1,0 +1,4 @@
+# anchors and aliases
+allow_domains: &allow [pypi.org, .debian.org]
+ignore_domains: *allow
+block_domains: [*allow]

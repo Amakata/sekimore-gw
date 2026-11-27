@@ -1,0 +1,3 @@
+# resolve_*_cidrs are not validated by config.py
+resolve_deny_cidrs: [not-a-cidr, 169.254.0.0/16]
+resolve_allow_cidrs: [10.1.0.0/16, '']

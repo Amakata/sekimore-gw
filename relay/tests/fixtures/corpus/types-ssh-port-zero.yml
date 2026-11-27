@@ -1,0 +1,4 @@
+# a value of the wrong type
+allow_domains: [a.com]
+domain_handlers:
+  a.com: {handler: github, ssh_port: 0}

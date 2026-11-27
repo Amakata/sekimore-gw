@@ -1,0 +1,4 @@
+# a recursive alias under an unknown key
+# ledger: a recursive alias is a YAML error to the Rust reader; PyYAML builds it, and the unknown key is ignored, so Python accepts the file
+extra: &a [*a]
+allow_domains: [pypi.org]

@@ -1,0 +1,2 @@
+# tests/unit/test_config.py a_comma_separated_string_is_refused
+proxy: {no_proxy: ['a.test,b.test']}

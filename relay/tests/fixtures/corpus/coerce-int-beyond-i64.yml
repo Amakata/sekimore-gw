@@ -1,0 +1,2 @@
+# an int beyond i64 is still a Python int
+proxy: {cache_size_mb: 99999999999999999999}

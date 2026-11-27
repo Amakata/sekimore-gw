@@ -1,0 +1,5 @@
+# tests/unit/test_config.py it_still_accepts_the_original_git_relay_spelling
+allow_domains: [github.com, ghe.example.com]
+domain_handlers:
+  github.com: {handler: git-relay}
+  ghe.example.com: {handler: github, ssh_port: 2222}

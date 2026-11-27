@@ -1,0 +1,3 @@
+# a handler entry with no value is splice
+domain_handlers:
+  x.example.com:

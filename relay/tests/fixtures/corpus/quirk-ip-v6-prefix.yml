@@ -1,0 +1,2 @@
+# an IPv6 prefix over 128
+block_ips: ['fc00::/129']

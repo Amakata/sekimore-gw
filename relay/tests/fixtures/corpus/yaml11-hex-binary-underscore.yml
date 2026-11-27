@@ -1,0 +1,3 @@
+# 0x / 0b / underscores
+proxy: {port: 0xC38, cache_size_mb: 1_000}
+network: {allowed_ports: [0b1010000, 4_43]}

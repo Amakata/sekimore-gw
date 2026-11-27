@@ -1,0 +1,4 @@
+# tests/unit/test_config.py a_relayed_domain_is_removed
+allow_domains: [github.com, api.github.com, deb.debian.org]
+domain_handlers:
+  github.com: {handler: git-relay}

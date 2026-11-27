@@ -1,0 +1,2 @@
+# an unquoted date is a datetime.date, which a str field refuses
+name: 2026-11-27

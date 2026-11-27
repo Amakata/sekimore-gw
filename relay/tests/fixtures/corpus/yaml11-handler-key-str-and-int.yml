@@ -1,0 +1,4 @@
+# '1' and 1 are different YAML keys and the same domain after str()
+domain_handlers:
+  '1': {}
+  1: {}

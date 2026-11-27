@@ -1,0 +1,5 @@
+# numbers written as strings, which pydantic reads
+allow_domains: [github.com]
+proxy: {port: '3128', cache_size_mb: ' 1_000 '}
+domain_handlers:
+  github.com: {handler: github, ssh_port: '22', max_upload_bytes: '262144.00'}

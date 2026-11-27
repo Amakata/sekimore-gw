@@ -432,10 +432,14 @@ def describe_domain_handlers():
         from pathlib import Path
 
         root = Path(__file__).resolve().parents[2]
-        without = Config.from_yaml(root / "tests" / "fixtures" / "config_without_relay.yml")
+        without = Config.from_yaml(
+            root / "relay" / "tests" / "fixtures" / "config_without_relay.yml"
+        )
         assert without.domain_handlers == {}
         assert without.relay_input_ports() == []
-        with_relay = Config.from_yaml(root / "tests" / "fixtures" / "config_with_relay.yml")
+        with_relay = Config.from_yaml(
+            root / "relay" / "tests" / "fixtures" / "config_with_relay.yml"
+        )
         assert with_relay.git_relay_domains() == ["github.com"]
         assert with_relay.domain_handlers["telemetry.example.com"].handler == "deny"
         assert with_relay.domain_handlers["static.example.com"].handler == "splice"

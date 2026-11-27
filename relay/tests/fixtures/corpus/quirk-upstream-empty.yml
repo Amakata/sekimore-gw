@@ -1,0 +1,2 @@
+# an empty upstream_proxy is no upstream, so direct_egress: deny is refused
+proxy: {enabled: true, upstream_proxy: '', direct_egress: deny}

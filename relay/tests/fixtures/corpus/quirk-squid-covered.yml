@@ -1,0 +1,2 @@
+# names a wildcard covers are left out of Squid's ACL, but stay in DNS and the seeds
+allow_domains: [deb.debian.org, .debian.org, security.debian.org, '*.docker.com', docs.docker.com, ..x.org, a.x.org, pypi.org, pypi.org]

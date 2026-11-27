@@ -1,0 +1,4 @@
+# tests/unit/test_config.py a_wildcard_covering_a_relayed_domain_stays
+allow_domains: ['*.github.com', api.github.com, pypi.org]
+domain_handlers:
+  github.com: {handler: git-relay}

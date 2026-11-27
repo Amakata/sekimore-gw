@@ -1,0 +1,4 @@
+# tests/unit/test_config.py it_rejects_invalid_handler_wildcard_empty_and_duplicates
+domain_handlers:
+  github.com: {handler: deny}
+  GITHUB.com: {handler: deny}

@@ -1,0 +1,2 @@
+# a DEL character (0x7f) inside a quoted string
+name: "ab"

@@ -1,0 +1,4 @@
+# a = key is a string; unknown keys are ignored
+'=': 1
+=: 2
+name: ok

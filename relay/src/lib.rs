@@ -20,6 +20,7 @@ pub mod paths;
 pub mod pktline;
 pub mod policy;
 pub mod proxy_credential;
+pub mod settings;
 pub mod ssh;
 pub mod store;
 pub mod tasks;

@@ -1,0 +1,6 @@
+# YAML 1.1 octal: 0777 is 511, 010 is 8
+allow_domains: [github.com, ghe.example.com]
+proxy: {port: 0777}
+domain_handlers:
+  github.com: {handler: github}
+  ghe.example.com: {handler: github, ssh_port: 010}

@@ -1,0 +1,2 @@
+# tests/unit/test_config.py it_validates_single_ip
+allow_ips: [192.168.1.1]

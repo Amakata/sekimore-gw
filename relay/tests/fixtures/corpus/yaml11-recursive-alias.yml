@@ -1,0 +1,3 @@
+# an alias to the node that contains it
+# ledger: a recursive alias is a YAML error to the Rust reader (serde_yaml_ng); PyYAML builds a recursive list, which pydantic then refuses here
+allow_domains: &a [x.example.com, *a]

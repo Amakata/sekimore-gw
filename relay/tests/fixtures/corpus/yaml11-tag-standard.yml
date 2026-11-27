@@ -1,0 +1,3 @@
+# !!str 123 is a string in PyYAML
+# ledger: explicit standard tags (`!!str`) are not seen by the Rust reader, which resolves the plain scalar
+name: !!str 123

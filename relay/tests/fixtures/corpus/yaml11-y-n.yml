@@ -1,0 +1,3 @@
+# y / n are strings to PyYAML; pydantic still reads 'y' as true
+allow_domains: [y, n]
+proxy: {enabled: y, cache_enabled: n}

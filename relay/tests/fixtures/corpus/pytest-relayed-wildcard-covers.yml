@@ -1,0 +1,5 @@
+# tests/unit/test_config.py it_accepts_a_wildcard_that_covers_it
+allow_domains: [.github.com]
+domain_handlers:
+  github.com: {handler: git-relay}
+  api.github.com: {handler: https-relay}

@@ -1,0 +1,5 @@
+# a duplicate domain_handlers key in the YAML: the last wins before normalization sees it
+allow_domains: [github.com]
+domain_handlers:
+  github.com: {handler: deny}
+  github.com: {handler: github}

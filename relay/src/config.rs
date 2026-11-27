@@ -2006,8 +2006,8 @@ mod tests {
     use super::*;
     use crate::policy::{Action, Resource};
 
-    const WITH: &str = include_str!("../../tests/fixtures/config_with_relay.yml");
-    const WITHOUT: &str = include_str!("../../tests/fixtures/config_without_relay.yml");
+    const WITH: &str = include_str!("../tests/fixtures/config_with_relay.yml");
+    const WITHOUT: &str = include_str!("../tests/fixtures/config_without_relay.yml");
     const SAMPLE: &str = include_str!("../../config/config.sample.yml");
 
     /// #212: the relay reads `proxy.direct_egress` so `check` can say which traffic uses the

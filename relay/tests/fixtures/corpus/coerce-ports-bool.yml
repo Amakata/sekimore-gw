@@ -1,0 +1,2 @@
+# allowed_ports: [true] is port 1; the bool check sees an int
+network: {allowed_ports: [true, '80', 80.0]}

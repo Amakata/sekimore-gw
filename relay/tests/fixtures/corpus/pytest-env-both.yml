@@ -1,0 +1,4 @@
+# tests/unit/test_config.py it_loads_auth_from_environment
+# env: SEKIMORE_UPSTREAM_PROXY_USERNAME=testuser
+# env: SEKIMORE_UPSTREAM_PROXY_PASSWORD=testpass
+proxy: {enabled: true, upstream_proxy: proxy.corp:8080}

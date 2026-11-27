@@ -1,0 +1,3 @@
+# json.dumps cannot write a date key under domain_handlers
+domain_handlers:
+  2026-01-01: {}

@@ -1,0 +1,23 @@
+# tests/conftest.py sample_config_data
+allow_domains:
+  - pypi.org
+  - .pythonhosted.org
+  - .github.com
+block_domains:
+  - .malicious.com
+ignore_domains:
+  - .telemetry.example.com
+  - healthcheck.example.com
+allow_ips: []
+block_ips: [203.0.113.0/24]
+proxy:
+  enabled: true
+  port: 3128
+  cache_enabled: true
+  cache_size_mb: 1000
+  upstream_proxy: null
+  upstream_proxy_username: null
+  upstream_proxy_password: null
+network:
+  lan_subnets: [10.100.0.0/16]
+database_path: /data/security_gateway.db

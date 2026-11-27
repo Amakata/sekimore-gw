@@ -1,0 +1,6 @@
+# tests/unit/test_config.py https_relay_and_deny_are_removed_too
+allow_domains: [github.com, ghcr.io, evil.example.com, pypi.org]
+domain_handlers:
+  github.com: {handler: git-relay}
+  ghcr.io: {handler: https-relay}
+  evil.example.com: {handler: deny}

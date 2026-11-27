@@ -1,0 +1,2 @@
+# tests/unit/test_config.py allow_is_never_in_force_whatever_the_proxy_says
+proxy: {enabled: true, upstream_proxy: proxy.corp:8080}
