@@ -36,6 +36,12 @@ are in [base/CHANGELOG.md](base/CHANGELOG.md).
 - `GET /relays` lists each relay and its commands. `sgw-agent setup` saves it and adds the sidecars' guides to the skill file; `sgw-agent <sidecar> <words>` runs a command sidecar's commands (#368)
 - `docs/sidecar-protocol.md` describes the command sidecar protocol; `examples/sidecar-template` is a working sidecar in standard-library Python (#369)
 
+## 0.2.78 (2026-11-27)
+
+### Security
+
+- url 2.5.8 -> 2.5.9 and form_urlencoded 1.2.2 -> 1.2.3, for RUSTSEC-2026-0592 (#487)
+
 ## 0.2.77 (2026-11-17)
 
 ### Security
