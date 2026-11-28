@@ -11,6 +11,16 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.3.0-alpha.4（2026-11-28）
+
+### Enhancement
+
+- `examples/` のサイドカーの雛形を Go（標準ライブラリのみ）にして Dockerfile を付けた。`sidecar.py` は無くなった。Python 版の雛形のコピーは、そのまま動く (#500)
+- Web UI を `sekimore-relay serve` が配信する。`serve` は常に起動し、git-relay がなければ Web UI だけ動く。`fastapi`、`uvicorn`、`websockets`、`python-multipart` は無くなった (#503)
+- Web UI に `/docs`、`/redoc`、`/openapi.json` は無い。リクエストのログは debug のときだけ。接続数に上限（HTTP 128、WebSocket 64）。「upstream auth」の表示は unlock から最大 1 秒遅れることがある (#503)
+- `serve` は終了すると再起動される。そのときストアは再び `sgw unlock` が要る (#503)
+- `config.yml` を Python と同じ読み方で Rust でも読み、両者を比べる試験を加えた。動いている gateway は変わらない。gateway を Python から移す最初の一歩 (#502)
+
 ## 0.3.0-alpha.3（2026-11-27）
 
 ### Security
