@@ -12,6 +12,18 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.2.79 (2026-11-28)
+
+### Security
+
+- With `allowed_ports` empty (the default), a config reload left a removed name allowed until restart. `remove_domain` now deletes the rule `setup_domain` added. Update; a restart also clears it (#512)
+- A reload now withdraws every admission DNS would no longer make: names under a dropped wildcard, names newly blocked, names the relay took over, and all names after a switch to `direct_egress: deny` (#512)
+- The gateway refuses to start (exit 1) when it cannot flush the filter table or set the INPUT/FORWARD DROP policy, or cannot insert the `block_ips` rule, instead of carrying on without them (#515)
+
+### Fix
+
+- The proxy log follower skips and counts a line that is not UTF-8 instead of stopping for good, so proxy requests keep reaching the log database and the Web UI (#515)
+
 ## 0.2.78 (2026-11-27)
 
 ### Security
