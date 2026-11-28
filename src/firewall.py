@@ -27,6 +27,15 @@ def _ipset_name(domain: str) -> str:
     return f"allow_h{digest}"
 
 
+def _is_lan_only(domain: str) -> bool:
+    """A LAN-only name (ends in .lan, or is a bare container name): its rule matches -i only.
+
+    One function for setup_domain and remove_domain: iptables -D matches the whole rule spec,
+    so a delete built differently from the add fails and leaves the rule in place.
+    """
+    return domain.endswith(".lan") or "." not in domain
+
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 
@@ -486,8 +495,7 @@ class FirewallManager:
         """
         ipset_name = _ipset_name(domain)
 
-        # LAN-only domain? (ends in .lan, or is a bare container name)
-        is_lan_only = domain.endswith(".lan") or "." not in domain
+        is_lan_only = _is_lan_only(domain)
 
         # Keep only IPv4 addresses
         ipv4_ips = [ip for ip in ips if ":" not in ip]
@@ -597,6 +605,11 @@ class FirewallManager:
         return True
 
     @_serialized
+    def tracked_domains(self) -> list[str]:
+        """The domains whose addresses are admitted, as a snapshot taken under the lock."""
+        return list(self.domain_ipsets)
+
+    @_serialized
     def remove_domain(self, domain: str) -> bool:
         """Remove a domain's rules.
 
@@ -604,36 +617,32 @@ class FirewallManager:
             domain: Domain name
 
         Returns:
-            True on success
+            True on success. False when a rule could not be deleted or the set could not be
+            destroyed; the domain then stays tracked, since its addresses may still be admitted.
         """
         if domain not in self.domain_ipsets:
             return True
 
         ipset_name = self.domain_ipsets[domain]
 
-        # Remove the iptables rules
-        if self.allowed_ports:
-            is_lan_only = domain.endswith(".lan") or "." not in domain
-            for rule in self._forward_accept_rules(ipset_name, is_lan_only, action="-D"):
-                self._run_command(rule)
-        else:
-            self._run_command(
-                [
-                    self.iptables_cmd,
-                    "-D",
-                    "FORWARD",
-                    "-m",
-                    "set",
-                    "--match-set",
-                    ipset_name,
-                    "dst",
-                    "-j",
-                    "ACCEPT",
-                ]
-            )
+        # Delete exactly what setup_domain added: iptables -D matches the whole rule spec, so
+        # a spec without its interfaces fails, and the set stays referenced and admitted.
+        is_lan_only = _is_lan_only(domain)
+        rules_deleted = True
+        for rule in self._forward_accept_rules(ipset_name, is_lan_only, action="-D"):
+            rules_deleted &= self._run_command(rule)
 
-        # Destroy the ipset
-        self._run_command([self.ipset_cmd, "destroy", ipset_name])
+        # Destroy the ipset (refused while a rule still references it)
+        set_destroyed = self._run_command([self.ipset_cmd, "destroy", ipset_name])
+
+        if not (rules_deleted and set_destroyed):
+            log_error(
+                ComponentType.FIREWALL,
+                f"Failed to remove the firewall rules for {domain} (ipset {ipset_name}): "
+                f"rules deleted={rules_deleted}, set destroyed={set_destroyed}; "
+                "its addresses may still be allowed",
+            )
+            return False
 
         del self.domain_ipsets[domain]
 

@@ -1758,6 +1758,19 @@ class SecurityGatewayOrchestrator:
     def has_unapplied_changes(self) -> bool:
         return self._unapplied_changes > 0
 
+    def _withdraw_refused_admissions(self) -> None:
+        """Remove every admitted domain that a query would no longer admit.
+
+        Asks the DNS server's own question rather than diffing allow_domains: a diff misses the
+        subdomains admitted under a dropped wildcard and a name a new block entry covers, and it
+        would remove an exact name that a remaining wildcard still allows. A removal that fails
+        keeps the domain tracked (remove_domain logs it), so the next reload tries it again.
+        """
+        for domain in self.firewall.tracked_domains():
+            refused = self.dns_server._not_admitted_because(domain)
+            if refused and self.firewall.remove_domain(domain):
+                log_system_event("Domain admission withdrawn", domain=domain, reason=refused)
+
     async def reload_config(self) -> bool:
         """Reload the configuration file and apply the differences, without downtime.
 
@@ -1820,10 +1833,8 @@ class SecurityGatewayOrchestrator:
             self.dns_server.blocked_domains = set(new_config.block_domains)
             self.dns_server.ignored_domains = new_config.ignore_domains
 
-            # Remove the iptables rules for domains that went away
-            for domain in removed_allow_domains:
-                if not domain.startswith("."):  # skip wildcards
-                    self.firewall.remove_domain(domain)
+            # Withdraw what DNS would no longer admit, now that it has the new lists
+            self._withdraw_refused_admissions()
 
             # Apply the rules for newly added domains
             for domain in added_allow_domains:
@@ -1901,6 +1912,7 @@ class SecurityGatewayOrchestrator:
             self.dns_server.allowed_domains = self.config.allow_domains
             self.dns_server.blocked_domains = set(self.config.block_domains)
             self.dns_server.ignored_domains = self.config.ignore_domains
+            self._withdraw_refused_admissions()
 
             # 5. Restart the DNS server
             await self.dns_server.start()
