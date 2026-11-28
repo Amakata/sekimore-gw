@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -780,6 +781,52 @@ def describe_security_gateway_orchestrator():
         orch.dns_server.stop.assert_called_once()
         orch.firewall.cleanup.assert_called_once()
         orch.ip_manager.cleanup.assert_called_once()
+
+
+def describe_a_firewall_that_cannot_close_stops_the_start():
+    """A command the isolation rests on fails: the process exits non-zero and DNS never opens."""
+
+    def _refusing(failing):
+        def run(cmd, **_kw):
+            if failing(cmd):
+                raise subprocess.CalledProcessError(
+                    1, cmd, stderr="iptables: Permission denied (you must be root)."
+                )
+            return Mock(returncode=0, stdout="", stderr="")
+
+        return run
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "failing",
+        [
+            pytest.param(lambda cmd: cmd[1:] == ["-P", "INPUT", "DROP"], id="input-drop"),
+            pytest.param(lambda cmd: cmd[1:] == ["-P", "FORWARD", "DROP"], id="forward-drop"),
+            pytest.param(
+                lambda cmd: cmd[1:3] == ["-I", "FORWARD"] and cmd[-1] == "DROP",
+                id="block-rule",
+            ),
+        ],
+    )
+    async def it_exits_without_opening_dns(failing, tmp_path, sample_config_data):
+        import yaml
+
+        config_file = tmp_path / "config.yml"
+        config_file.write_text(yaml.dump(sample_config_data), encoding="utf-8")
+
+        with patch("subprocess.run", side_effect=_refusing(failing)):
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+            orch.dns_server.start = AsyncMock()
+            if orch.proxy_manager:
+                orch.proxy_manager.start = Mock(return_value=True)
+
+            with pytest.raises(SystemExit) as exited:
+                await orch.start()
+
+        assert exited.value.code == 1
+        orch.dns_server.start.assert_not_awaited()
+        if orch.proxy_manager:
+            orch.proxy_manager.start.assert_not_called()
 
 
 def describe_config_reload():

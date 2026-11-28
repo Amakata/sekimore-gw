@@ -1666,7 +1666,9 @@ class SecurityGatewayOrchestrator:
         # Initialize
         if not await self.initialize():
             log_error(ComponentType.ORCHESTRATOR, "Initialization failed, exiting")
-            return
+            # Exit non-zero before DNS or anything else opens, so the container stops as failed
+            # rather than as finished.
+            raise SystemExit(1)
 
         # Start the Squid proxy, when enabled
         if self.proxy_manager and not self.proxy_manager.start():

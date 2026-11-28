@@ -1,6 +1,9 @@
 """Unit tests for firewall module."""
 
+import subprocess
 from unittest.mock import Mock, patch
+
+import pytest
 
 from src.firewall import FirewallManager
 
@@ -716,3 +719,92 @@ def describe_remove_domain_deletes_what_setup_domain_added():
         assert fw.domain_ipsets["api.example.com"] == ipset_name
         messages = [c.args[1] for c in log_error.call_args_list]
         assert any("api.example.com" in m and ipset_name in m for m in messages), messages
+
+
+def _run_failing(failing):
+    """A subprocess.run fake that fails the commands `failing` picks, as a refused iptables does."""
+    calls: list[list[str]] = []
+
+    def run(cmd, **_kw):
+        calls.append(cmd)
+        if failing(cmd):
+            raise subprocess.CalledProcessError(
+                1, cmd, stderr="iptables: Permission denied (you must be root)."
+            )
+        return Mock(returncode=0, stdout="", stderr="")
+
+    return run, calls
+
+
+def describe_initialize_firewall_fails_closed():
+    @pytest.mark.parametrize(
+        "required",
+        [["-F"], ["-P", "INPUT", "DROP"], ["-P", "FORWARD", "DROP"]],
+        ids=["flush", "input-drop", "forward-drop"],
+    )
+    def it_fails_when_a_command_the_isolation_rests_on_fails(required):
+        run, calls = _run_failing(lambda cmd: cmd[1:] == required)
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        with (
+            patch("subprocess.run", side_effect=run),
+            patch("src.firewall.log_error") as log_error,
+        ):
+            assert fw.initialize_firewall() is False
+
+        assert any(" ".join(required) in c.args[1] for c in log_error.call_args_list)
+        # Nothing is opened after the failure
+        assert calls[-1][1:] == required
+
+    @pytest.mark.parametrize(
+        "optional",
+        [
+            ["-X"],
+            ["-P", "OUTPUT", "ACCEPT"],
+            ["-A", "INPUT", "-i", "lo", "-j", "ACCEPT"],
+            ["-A", "INPUT", "-i", "eth1", "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
+        ],
+        ids=["delete-chains", "output-accept", "loopback-accept", "dns-accept"],
+    )
+    def it_goes_on_when_a_failure_leaves_less_allowed(optional):
+        run, _ = _run_failing(lambda cmd: cmd[1:] == optional)
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        with patch("subprocess.run", side_effect=run):
+            assert fw.initialize_firewall() is True
+
+
+def describe_setup_static_ip_rules_fails_closed():
+    def it_fails_when_the_block_rule_is_not_installed():
+        run, _ = _run_failing(lambda cmd: "DROP" in cmd and "block_static_ips" in cmd)
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        with (
+            patch("subprocess.run", side_effect=run),
+            patch("src.firewall.log_error") as log_error,
+        ):
+            assert fw.setup_static_ip_rules("allow_static_ips", "block_static_ips") is False
+
+        messages = [c.args[1] for c in log_error.call_args_list]
+        assert any("block_static_ips" in m and "DROP" in m for m in messages), messages
+
+    def it_fails_when_the_block_set_is_missing():
+        """iptables says the set "doesn't exist", which _run_command does not log by itself."""
+
+        def run(cmd, **_kw):
+            if "block_static_ips" in cmd:
+                raise subprocess.CalledProcessError(
+                    2, cmd, stderr="iptables v1.8.9 (legacy): Set block_static_ips doesn't exist."
+                )
+            return Mock(returncode=0, stdout="", stderr="")
+
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        with (
+            patch("subprocess.run", side_effect=run),
+            patch("src.firewall.log_error") as log_error,
+        ):
+            assert fw.setup_static_ip_rules("allow_static_ips", "block_static_ips") is False
+        assert any("block_static_ips" in c.args[1] for c in log_error.call_args_list)
+
+    def it_goes_on_when_an_allow_rule_is_not_installed():
+        run, _ = _run_failing(lambda cmd: "ACCEPT" in cmd)
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        with patch("subprocess.run", side_effect=run):
+            assert fw.setup_static_ip_rules("allow_static_ips", "block_static_ips") is True

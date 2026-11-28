@@ -3,9 +3,13 @@
 //!
 //! Python opened the file once, went to its end, and read on from there every half second, the way
 //! `tail -f` does without `-F`: a rotated file is not followed (the open file keeps being read), and
-//! a read that fails ends the follower for good. The ways it fails are kept: a byte that is not
-//! UTF-8, or a character cut in half by the writer when the reader reaches the end, stops it
-//! (`UnicodeDecodeError`), as does a status code too long for Python's `int()`.
+//! a read that fails ends the follower for good. A status code too long for Python's `int()` still
+//! stops it.
+//!
+//! A byte that is not UTF-8, or a character cut in half by the writer when the reader reaches the
+//! end, stopped Python's follower too (`UnicodeDecodeError`), and with it every proxy request's way
+//! to the log database until the gateway restarted. Here the line holding it is skipped and
+//! counted, and the follower goes on (difference ledger).
 //!
 //! One difference comes from the move to a process of its own. Python started the follower after
 //! Squid, so the file was there; a file missing at that point ended the follower at once. This
@@ -20,7 +24,7 @@ use std::time::Duration;
 use rusqlite::Connection;
 
 use super::logdb::{self, Access};
-use super::pytext::{self, TextReader};
+use super::pytext::{self, TextReader, Undecodable};
 use crate::settings::py::{is_space, strip};
 
 /// `ProxyMonitor`'s default `log_path`.
@@ -188,6 +192,14 @@ pub fn follow(conn: &mut Connection, path: &Path, stop: &dyn Fn() -> bool) {
     log::info!("Proxy monitor stopped");
 }
 
+/// 1, 10, 100, ...: when a skipped line is worth a warning, so the log stays bounded.
+fn is_power_of_ten(mut n: u64) -> bool {
+    while n >= 10 && n % 10 == 0 {
+        n /= 10;
+    }
+    n == 1
+}
+
 /// `_follow_log` once the file is open.
 pub fn follow_open(conn: &mut Connection, mut file: File, stop: &dyn Fn() -> bool) {
     if let Err(e) = file.seek(SeekFrom::End(0)) {
@@ -195,6 +207,7 @@ pub fn follow_open(conn: &mut Connection, mut file: File, stop: &dyn Fn() -> boo
         return;
     }
     let mut reader = TextReader::new(file);
+    let mut undecodable: u64 = 0;
     while !stop() {
         match reader.readline() {
             Ok(Ok(line)) if line.is_empty() => std::thread::sleep(Duration::from_millis(500)),
@@ -203,9 +216,11 @@ pub fn follow_open(conn: &mut Connection, mut file: File, stop: &dyn Fn() -> boo
                     return;
                 }
             }
-            Ok(Err(pytext::DecodeError)) => {
-                log::error!("Error following Squid log: 'utf-8' codec can't decode the log");
-                return;
+            Ok(Err(Undecodable)) => {
+                undecodable = undecodable.saturating_add(1);
+                if is_power_of_ten(undecodable) {
+                    log::warn!("Skipped Squid log lines that are not UTF-8 count={undecodable}");
+                }
             }
             Err(e) => {
                 log::error!("Error following Squid log: {e}");
@@ -304,6 +319,62 @@ mod tests {
         assert_eq!(handle(&mut conn, &line(&"4".repeat(4301))), Outcome::Stop);
         conn.execute_batch("DROP TABLE proxy_logs").unwrap();
         assert_eq!(handle(&mut conn, &line("403")), Outcome::Failed);
+    }
+
+    #[test]
+    fn it_warns_at_powers_of_ten() {
+        let warned: Vec<u64> = (1..=1000).filter(|&n| is_power_of_ten(n)).collect();
+        assert_eq!(warned, [1, 10, 100, 1000]);
+        assert!(!is_power_of_ten(0));
+    }
+
+    /// A line that is not UTF-8 is skipped: the rows before and after it are recorded, and the
+    /// follower is still running
+    #[test]
+    fn it_skips_a_line_that_is_not_utf8_and_goes_on() {
+        let (dir, conn) = db();
+        let log = dir.path().join("access.log");
+        std::fs::write(&log, "").unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s2 = stop.clone();
+        let file = File::open(&log).unwrap();
+        let t = std::thread::spawn(move || {
+            let mut conn = conn;
+            follow_open(&mut conn, file, &|| {
+                s2.load(std::sync::atomic::Ordering::SeqCst)
+            });
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+            f.write_all(
+                b"1.0 0 before TCP_MISS/200 0 GET http://example.com/\n\
+                  2.0 0 bad TCP_MISS/200 0 GET http://example.com/\xff\n\
+                  3.0 0 after TCP_DENIED/403 0 GET http://example.org/\n",
+            )
+            .unwrap();
+        }
+        let check = logdb::open(&dir.path().join("gw.db")).unwrap();
+        let ips = || -> Vec<String> {
+            check
+                .prepare("SELECT client_ip FROM proxy_logs ORDER BY rowid")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while ips().len() < 2 {
+            assert!(!t.is_finished(), "the follower ended: {:?}", ips());
+            assert!(std::time::Instant::now() < deadline, "rows: {:?}", ips());
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert_eq!(ips(), ["before", "after"]);
+        assert!(!t.is_finished());
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        t.join().unwrap();
     }
 
     /// test_proxy_monitor.py `it_stops_monitoring`; and following from the end of the file
