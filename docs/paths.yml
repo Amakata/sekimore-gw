@@ -88,13 +88,13 @@ secrets:
     held_by: gateway.store
     used_by: [squid.upstream_proxy, relay.github.via_proxy, passthrough.via_proxy]
     exposed_via: []          # was dev.webui until #217 (squid.config_text carried login=)
-    tests: [tests/unit/test_web_ui.py]
+    tests: [relay/tests/webui.rs, relay/src/webui/config_api.rs]
     verify: "the gateway's API must not hand out the upstream proxy password"
   upstream_token:
     held_by: gateway.store
     used_by: [relay.github.api, sidecar.api]
     exposed_via: [relay.sidecar]   # handed to a forge relay sidecar per call (#329); /api/relay/tokens lists metadata only
-    tests: [tests/unit/test_web_ui_relay.py]
+    tests: [relay/tests/webui.rs]
   per_person_values:
     held_by: gateway.store
     used_by: [relay.ssh.bastion, relay.ssh.upstream]   # filled into ssh_options `{name}` at spawn (#334)
@@ -184,8 +184,8 @@ edges:
     presents: none
     audit: squid access.log → sqlite proxy log
     switches: {upstream_proxy: set, direct_egress: deny}
-    impl: [src/proxy_manager.py, src/web_ui/app.py, relay/src/agent_setup/proxy_env.rs]
-    tests: [tests/unit/test_proxy_manager.py, tests/unit/test_web_ui.py]
+    impl: [src/proxy_manager.py, relay/src/webui/config_api.rs, relay/src/agent_setup/proxy_env.rs]
+    tests: [tests/unit/test_proxy_manager.py, relay/tests/equivalence/webui.rs]
     verify: "the upstream proxy is used for ordinary traffic"
 
   - id: squid.upstream_proxy
@@ -370,9 +370,9 @@ edges:
     resolves: gateway.dns
     verifies_peer: none
     presents: none (GET is open by design; no write endpoints since #217)
-    audit: uvicorn access log
-    impl: [src/web_ui/app.py]
-    tests: [tests/unit/test_web_ui.py]
+    audit: none (uvicorn's access log until 0.3.0-alpha.4; serve logs each request at debug)
+    impl: [relay/src/webui/mod.rs]
+    tests: [relay/tests/webui.rs, relay/tests/equivalence/webui.rs]
     verify: "the gateway's API must not hand out the upstream proxy password"
 
   - id: operator.webui
@@ -382,9 +382,9 @@ edges:
     resolves: n/a
     verifies_peer: none
     presents: none
-    audit: uvicorn access log
-    impl: [src/web_ui/app.py]
-    tests: [tests/unit/test_web_ui.py]
+    audit: none (uvicorn's access log until 0.3.0-alpha.4; serve logs each request at debug)
+    impl: [relay/src/webui/mod.rs]
+    tests: [relay/tests/webui.rs]
 
   - id: dev.signing
     from: dev

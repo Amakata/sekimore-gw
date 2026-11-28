@@ -10,8 +10,9 @@ that machines read stays in English.
 
 ## Web UI
 
-The dashboard text comes from `src/locales/<lang>.json` (`en`, `ja`). `/api/i18n` resolves the
-language and returns the dictionary, and the page applies it through `data-i18n` attributes. The
+The dashboard text comes from `relay/src/webui/locales/<lang>.json` (`en`, `ja`), built into
+`sekimore-relay`, which serves the Web UI. `/api/i18n` resolves the language and returns the
+dictionary, and the page applies it through `data-i18n` attributes. The
 language selector in the header sets a `sekimore_lang` cookie (one year, `SameSite=Lax`) and
 reloads the page.
 

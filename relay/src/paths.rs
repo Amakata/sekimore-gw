@@ -37,6 +37,11 @@ pub const RELAY_SIDECAR: &str = "relay.sidecar";
 /// gateway writes these from the records the sidecar hands back.
 pub const SIDECAR_API: &str = "sidecar.api";
 
+/// dev → the Web UI on :8080 (0.3.0-alpha.4: served by `serve`, `crate::webui`).
+pub const DEV_WEBUI: &str = "dev.webui";
+/// The operator's browser → the Web UI, at the port the host publishes.
+pub const OPERATOR_WEBUI: &str = "operator.webui";
+
 /// Every edge the relay implements. The test compares this with the ledger.
 pub const EDGES: &[&str] = &[
     DEV_RELAY_SSH,
@@ -54,6 +59,8 @@ pub const EDGES: &[&str] = &[
     OPERATOR_STORE,
     RELAY_SIDECAR,
     SIDECAR_API,
+    DEV_WEBUI,
+    OPERATOR_WEBUI,
 ];
 
 /// The audit field that carries the edge id.

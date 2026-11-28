@@ -126,10 +126,15 @@ impl UiView {
 
 /// Where the UI listens: `SEKIMORE_WEB_HOST` (0.0.0.0) and `SEKIMORE_WEB_PORT` (8080).
 pub fn listen_addr() -> Result<(String, u16), String> {
-    let host = std::env::var("SEKIMORE_WEB_HOST").unwrap_or_else(|_| "0.0.0.0".into());
-    let port = match std::env::var("SEKIMORE_WEB_PORT") {
-        Err(_) => 8080,
-        Ok(p) => crate::settings::py::int(&p)
+    listen_addr_from(|k| std::env::var(k).ok())
+}
+
+/// [`listen_addr`] over a given environment.
+pub fn listen_addr_from(env: impl Fn(&str) -> Option<String>) -> Result<(String, u16), String> {
+    let host = env("SEKIMORE_WEB_HOST").unwrap_or_else(|| "0.0.0.0".into());
+    let port = match env("SEKIMORE_WEB_PORT") {
+        None => 8080,
+        Some(p) => crate::settings::py::int(&p)
             .and_then(|n| u16::try_from(n).ok())
             .ok_or_else(|| format!("SEKIMORE_WEB_PORT={p} is not a port"))?,
     };
@@ -365,6 +370,7 @@ async fn handle(
     sockets: Arc<Semaphore>,
     req: Request<Incoming>,
     local: SocketAddr,
+    peer: SocketAddr,
 ) -> Response<Full<Bytes>> {
     let path = req.uri().path().to_string();
     if is_upgrade(&req) {
@@ -383,9 +389,16 @@ async fn handle(
     );
     let method = req.method().as_str().to_string();
     let local = local.to_string();
-    let resp = tokio::task::spawn_blocking(move || dispatch(&view, &method, &r, now(), &local))
+    let m = method.clone();
+    let resp = tokio::task::spawn_blocking(move || dispatch(&view, &m, &r, now(), &local))
         .await
         .unwrap_or_else(|_| Resp::internal_error());
+    // what uvicorn's access log said, at debug (`-vv`)
+    log::debug!(
+        "{} {peer} \"{method} {path}\" {}",
+        crate::paths::DEV_WEBUI,
+        resp.status
+    );
     to_hyper(resp)
 }
 
@@ -416,7 +429,9 @@ pub async fn serve(view: UiView, listener: TcpListener) {
             let _permit = permit;
             let svc = service_fn(move |req| {
                 let (view, streamer, sockets) = (view.clone(), streamer.clone(), sockets.clone());
-                async move { Ok::<_, Infallible>(handle(view, streamer, sockets, req, local).await) }
+                async move {
+                    Ok::<_, Infallible>(handle(view, streamer, sockets, req, local, peer).await)
+                }
             });
             let conn = http1::Builder::new()
                 .timer(TokioTimer::new())

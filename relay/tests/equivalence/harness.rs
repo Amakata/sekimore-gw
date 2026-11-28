@@ -9,7 +9,7 @@
 //! | step | kind | request | answer |
 //! |---|---|---|---|
 //! | α4 | `config` | a config file, its environment, names to decide | accepted / refused, the settings, the derived lists, `Rules` |
-//! | α4 | `webui` | a config, a database, an HTTP request | the response JSON |
+//! | α4 | `webui` | a config, a database, the relay's state, HTTP requests, `/ws` steps | the responses (the record only: the Python UI is gone) |
 //! | α6 | `dns` | a config, a list of queries | the response bytes (ID aside) |
 //! | α6 | `firewall` | a config, a list of queries | the `iptables-legacy` / `ipset` command lines, recorded by fakes on PATH |
 //! | α6 | `squid` | a config, the credential state | `squid.conf` |

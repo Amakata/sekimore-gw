@@ -147,3 +147,17 @@ fn rules_carry_the_relays_https_targets() {
         "only {checked} cases resolved on the relay side"
     );
 }
+
+/// The Web UI's record can only be made at the commit that still had the Python UI; that commit is
+/// named where someone will look for it.
+#[test]
+fn the_web_ui_record_names_where_it_was_made() {
+    let contributing =
+        std::fs::read_to_string(harness::repo_root().join("CONTRIBUTING.md")).unwrap();
+    assert!(contributing.contains(&format!(
+        "git worktree add ../webui-oracle {}",
+        webui::RECORDED_AT
+    )));
+    let why = harness::Comparison::live_gone(&webui::WebUi::new()).unwrap();
+    assert!(why.contains(webui::RECORDED_AT), "{why}");
+}

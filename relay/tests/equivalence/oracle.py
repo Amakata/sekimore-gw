@@ -18,7 +18,6 @@ Lives with the tests and goes with the rest of the Python in 0.3.0-alpha.7. Not 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 import sys
@@ -351,195 +350,15 @@ def config_case(case: dict[str, Any]) -> dict[str, Any]:
     return answer
 
 
-# ---- webui: the Python Web UI (src/web_ui/), driven over ASGI ------------------------------------
-#
-# The app is called the way uvicorn calls it, with nothing between: a request is one ASGI `http`
-# scope, a `/ws` session one `websocket` scope fed from a queue. No HTTP client library is needed
-# (the harness runs `uv run --no-dev`).
-
-
-def _body_of(content_type: str | None, body: bytes) -> Any:
-    import hashlib
-
-    if content_type and content_type.startswith("application/json"):
-        try:
-            return json.loads(body)
-        except ValueError:
-            return {"unparsable": body.decode("utf-8", "replace")}
-    if content_type and content_type.startswith("text/html"):
-        return {"sha256": hashlib.sha256(body).hexdigest()}
-    return body.decode("utf-8", "replace")
-
-
-async def _http(app: Any, req: dict[str, Any]) -> dict[str, Any]:
-    import urllib.parse
-
-    headers = {k.lower(): v for k, v in req["headers"].items()}
-    headers.setdefault("host", "testserver")
-    raw_path = req["path"]
-    scope = {
-        "type": "http",
-        "asgi": {"version": "3.0", "spec_version": "2.3"},
-        "http_version": "1.1",
-        "method": req["method"],
-        "scheme": "http",
-        "path": urllib.parse.unquote(raw_path),
-        "raw_path": raw_path.encode("latin-1"),
-        "query_string": req["query"].encode("latin-1"),
-        "root_path": "",
-        "headers": [(k.encode("latin-1"), v.encode("latin-1")) for k, v in headers.items()],
-        "client": ("127.0.0.1", 40000),
-        "server": ("127.0.0.1", 8080),
-        "state": {},
-    }
-    sent: list[dict[str, Any]] = []
-
-    async def receive() -> dict[str, Any]:
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    async def send(message: dict[str, Any]) -> None:
-        sent.append(message)
-
-    # Starlette has already sent its 500 when the handler raised
-    with contextlib.suppress(Exception):
-        await app(scope, receive, send)
-    start = next(m for m in sent if m["type"] == "http.response.start")
-    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
-    if req["method"] == "HEAD":
-        body = b""  # uvicorn sends no body for HEAD, whatever the app wrote
-    h = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in start["headers"]}
-    ct = h.get("content-type")
-    return {
-        "status": start["status"],
-        "content_type": ct,
-        "location": h.get("location"),
-        "allow": h.get("allow"),
-        "body": _body_of(ct, body),
-    }
-
-
-async def _ws(app: Any, steps: list[dict[str, Any]], db_path: str) -> Any:
-    import sqlite3
-
-    if not steps:
-        return None
-    inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-    outbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-    scope = {
-        "type": "websocket",
-        "asgi": {"version": "3.0", "spec_version": "2.3"},
-        "http_version": "1.1",
-        "scheme": "ws",
-        "path": "/ws",
-        "raw_path": b"/ws",
-        "query_string": b"",
-        "root_path": "",
-        "headers": [(b"host", b"testserver")],
-        "client": ("127.0.0.1", 40001),
-        "server": ("127.0.0.1", 8080),
-        "subprotocols": [],
-        "state": {},
-    }
-    await inbox.put({"type": "websocket.connect"})
-    task = asyncio.create_task(app(scope, inbox.get, outbox.put))
-
-    async def nxt(wait: float) -> Any:
-        getter = asyncio.ensure_future(outbox.get())
-        done, _ = await asyncio.wait(
-            {getter, task}, timeout=wait, return_when=asyncio.FIRST_COMPLETED
-        )
-        if getter in done:
-            m = getter.result()
-            if m["type"] == "websocket.send":
-                return json.loads(m["text"]) if m.get("text") is not None else "binary"
-            if m["type"] == "websocket.close":
-                return "closed"
-            return f"unexpected {m['type']}"
-        getter.cancel()
-        if task in done:
-            return "closed"
-        return "nothing"
-
-    accept = await outbox.get()
-    assert accept["type"] == "websocket.accept", accept
-    out = [await nxt(5.0)]
-    for step in steps:
-        if "send" in step:
-            await inbox.put({"type": "websocket.receive", "text": step["send"]})
-            out.append(await nxt(step.get("wait", 5.0)))
-        elif "binary" in step:
-            await inbox.put({"type": "websocket.receive", "bytes": b"\x01\x02\x03"})
-            out.append(await nxt(5.0))
-        elif "sql" in step:
-            con = sqlite3.connect(db_path)
-            for q in step["sql"]:
-                con.executescript(q)
-            con.commit()
-            con.close()
-        elif "expect" in step:
-            out.append(await nxt(step["expect"]))
-    await inbox.put({"type": "websocket.disconnect", "code": 1000})
-    try:
-        await asyncio.wait_for(task, 5)
-    except Exception:  # noqa: BLE001
-        task.cancel()
-    return out
-
-
-def webui_case(case: dict[str, Any]) -> dict[str, Any]:
-    import src.web_ui.app as app_module
-    from src import constants
-    from src.secret_store import SecretStoreError
-
-    app_module.CONFIG_PATH = case["config_path"]
-    app_module.DB_PATH = case["db_path"]
-    constants.SQUID_CONFIG_PATH = case["squid_path"]
-    os.environ["PATH"] = case["bin"]
-    if case["env_username"]:
-        os.environ["SEKIMORE_UPSTREAM_PROXY_USERNAME"] = "someone"
-    else:
-        os.environ.pop("SEKIMORE_UPSTREAM_PROXY_USERNAME", None)
-
-    state = case["credential"]
-
-    def read_proxy_credential(*_a: Any, **_k: Any) -> tuple[str, None]:
-        if state == "unreachable":
-            raise SecretStoreError("no relay")
-        return state, None
-
-    app_module.read_proxy_credential = read_proxy_credential  # type: ignore[assignment]
-    app_module.log_error = _quiet  # type: ignore[assignment]
-    app_module.log_system_event = _quiet  # type: ignore[assignment]
-    app_module._streamer = None
-    app_module.manager.active_connections.clear()
-
-    async def run() -> dict[str, Any]:
-        responses = [await _http(app_module.app, r) for r in case["requests"]]
-        ws = await _ws(app_module.app, case["ws"], case["db_path"])
-        return {"id": case["id"], "dir": case["dir"], "responses": responses, "ws": ws}
-
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(run())
-    finally:
-        loop.close()
-
-
 # One entry per kind of comparison. Later steps add theirs here ("dns", "firewall", "squid"),
 # each answering in the shape its relay/tests/equivalence/<kind>.rs builds.
+#
+# "webui" was here until the Python Web UI was removed (0.3.0-alpha.4): its record,
+# relay/tests/fixtures/oracle/webui.json, was made at the commit named in CONTRIBUTING.md and is
+# the only oracle of that comparison now.
 KINDS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "config": config_case,
-    "webui": webui_case,
 }
-
-
-def _webui_versions(kind: str) -> dict[str, str]:
-    if kind != "webui":
-        return {}
-    import fastapi
-    import starlette
-
-    return {"fastapi": fastapi.__version__, "starlette": starlette.__version__}
 
 
 def main() -> None:
@@ -552,7 +371,6 @@ def main() -> None:
             "version": sys.version.split()[0],
             "pydantic": pydantic.VERSION,
             "pyyaml": yaml.__version__,
-            **_webui_versions(request["kind"]),
         },
         "answers": [handler(case) for case in request["cases"]],
     }

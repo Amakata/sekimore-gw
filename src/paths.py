@@ -14,9 +14,7 @@ DEV_HOST_INPUT = "dev.host_input"
 DEV_SQUID = "dev.squid"
 SQUID_UPSTREAM_PROXY = "squid.upstream_proxy"
 SQUID_INTERNET = "squid.internet"
-# the gateway's own services
-DEV_WEBUI = "dev.webui"
-OPERATOR_WEBUI = "operator.webui"
+# the Web UI (dev.webui, operator.webui) moved into the relay in 0.3.0-alpha.4: relay/src/paths.rs
 
 # The edges this side implements or governs. The relay's own are in relay/src/paths.rs; the
 # two lists together must equal the ledger.
@@ -29,8 +27,6 @@ EDGES: frozenset[str] = frozenset(
         DEV_SQUID,
         SQUID_UPSTREAM_PROXY,
         SQUID_INTERNET,
-        DEV_WEBUI,
-        OPERATOR_WEBUI,
         # shared with the relay: Squid's side of the relay's detour (#205)
         "relay.github.via_squid",
         "passthrough.via_squid",

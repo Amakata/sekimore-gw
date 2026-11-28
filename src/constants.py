@@ -31,9 +31,8 @@ DEFAULT_LAN_SUBNETS = ["172.20.0.0/16", "192.168.0.0/16", "10.0.0.0/8"]
 DEFAULT_DNS_PORT = int(os.getenv("SEKIMORE_DNS_PORT", "53"))
 DEFAULT_UPSTREAM_DNS = os.getenv("SEKIMORE_UPSTREAM_DNS", "127.0.0.11")
 
-# Web UI settings
-WEB_UI_HOST = os.getenv("SEKIMORE_WEB_HOST", "0.0.0.0")
-WEB_UI_PORT = int(os.getenv("SEKIMORE_WEB_PORT", "8080"))
+# The Web UI's SEKIMORE_WEB_HOST / SEKIMORE_WEB_PORT are read by sekimore-relay serve
+# (relay/src/webui/) since 0.3.0-alpha.4.
 
 # Cache settings
 DNS_CACHE_ENABLED = os.getenv("SEKIMORE_DNS_CACHE_ENABLED", "true").lower() == "true"

@@ -11,6 +11,11 @@
 //! and `{now±N}` (epoch seconds), `{ts:now±N}` (RFC 3339 with `Z`), `{tsx:now±N}` (the same
 //! without the `Z`, for a case that writes its own fraction). `now` is one whole second per run.
 //!
+//! **The Python side is gone.** The Python UI was removed in the same change that brought the Rust
+//! one (0.3.0-alpha.4; the plan switches the Web UI without a fallback), so the record is the only
+//! oracle: `relay/tests/fixtures/oracle/webui.json`, made at commit [`RECORDED_AT`] with the
+//! Python UI still in the tree. CONTRIBUTING.md says how to make it again from there.
+//!
 //! Before comparing (and recording), both answers lose what changes from run to run: the case
 //! directory becomes `{dir}`, a number within thirty days of `now` becomes `now±N`, the
 //! dashboard's HTML its SHA-256, and `version_package` `{version}` (the record outlives
@@ -262,9 +267,20 @@ fn requests(sc: &Value) -> Vec<Value> {
         .collect()
 }
 
+/// The commit the record was made at: the last one with the Python Web UI in the tree.
+pub const RECORDED_AT: &str = "37335fc";
+
 impl Comparison for WebUi {
     fn kind(&self) -> &'static str {
         "webui"
+    }
+
+    fn live_gone(&self) -> Option<&'static str> {
+        Some(
+            "the Python Web UI was removed in 0.3.0-alpha.4 (it switched without a fallback); \
+             relay/tests/fixtures/oracle/webui.json was recorded at commit 37335fc, where it still \
+             was, and is the reference (CONTRIBUTING.md says how to record it again)",
+        )
     }
 
     fn record_test(&self) -> &'static str {

@@ -120,10 +120,10 @@ src/
 ├── dns_server.py       # DNS server implementation
 ├── firewall.py         # Firewall management
 ├── orchestrator.py     # Main orchestrator
-├── logger.py           # Logging utilities
-└── web_ui/
-    └── app.py          # Web UI application
+└── logger.py           # Logging utilities
 ```
+
+The Web UI is `relay/src/webui/`, served by `sekimore-relay serve` (0.3.0-alpha.4).
 
 ### Testing
 
@@ -228,19 +228,36 @@ CI runs clippy and the tests with `--features test-hooks,host`. Its help and mes
 ### The equivalence harness (`relay/tests/equivalence/`)
 
 0.3.0 moves the gateway from Python to Rust without changing what it does (#496). The harness
-asks both implementations the same questions and compares the answers; in this step, how every
-config in `relay/tests/fixtures/corpus/` is read (#498).
+asks both implementations the same questions and compares the answers: how every config in
+`relay/tests/fixtures/corpus/` is read (#498), and what the Web UI answers (#493).
 
 ```bash
 cd relay
 cargo test --test equivalence                              # the recorded answers, and live Python when uv is on PATH
 SEKIMORE_E2E_REQUIRED=1 cargo test --test equivalence      # live Python required, as in CI
-SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence the_config   # re-record relay/tests/fixtures/oracle/
+SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence the_config   # re-record relay/tests/fixtures/oracle/config.json
 ```
 
 Re-record after changing the corpus or the Python side, and read the diff of the record: it is
 Python's behaviour. A case that is known to differ carries a `# ledger: …` line in its header and
 is listed in the 0.3.0 plan's difference ledger.
+
+**The Web UI's record is fixed.** The Python UI was removed in the change that brought the Rust
+one (0.3.0-alpha.4), so `relay/tests/fixtures/oracle/webui.json` is the only oracle of the `webui`
+comparison and nothing re-records it from the current tree. It was recorded at commit `37335fc`,
+the last with `src/web_ui/` in it. To record it again — after adding a case to
+`relay/tests/fixtures/webui/cases.json`, say — record from that commit and bring the record back:
+
+```bash
+git worktree add ../webui-oracle 37335fc
+cp relay/tests/fixtures/webui/cases.json ../webui-oracle/relay/tests/fixtures/webui/
+(cd ../webui-oracle && uv sync --frozen && cd relay && \
+  SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence the_web_ui_answers_as_python_did)
+cp ../webui-oracle/relay/tests/fixtures/oracle/webui.json relay/tests/fixtures/oracle/
+git worktree remove ../webui-oracle
+```
+
+A case whose files or requests that commit's harness cannot express needs a Rust test instead.
 
 ### The base image (`base/`)
 

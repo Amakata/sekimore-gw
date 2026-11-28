@@ -50,6 +50,8 @@ const ALLOWED: &[&str] = &[
     // two plain functions and a list of three names from the Python reading of the config
     "settings::merge_no_proxy",
     "settings::NO_PROXY_ALWAYS",
+    // the ledger's name for the UI's edge, a string constant
+    "paths::DEV_WEBUI",
 ];
 
 /// What no file of the Web UI may name, whatever the list above says.
@@ -409,4 +411,128 @@ fn every_credential_state_has_a_name_in_both_locales() {
             assert!(strings.iter().any(|(k, _)| *k == key), "{lang}: {key}");
         }
     }
+}
+
+/// The `maint.*` strings the Python CLI still reads from `src/locales/` are the ones this copy
+/// serves in `/api/i18n`, until `maint` moves (0.3.0-alpha.5).
+#[test]
+fn the_cli_strings_are_the_same_in_both_dictionaries() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    for lang in ["en", "ja"] {
+        let py: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(root.join(format!("src/locales/{lang}.json"))).unwrap(),
+        )
+        .unwrap();
+        assert!(py.len() > 30, "{lang}: {}", py.len());
+        let ours = super::i18n::strings(lang);
+        for (k, v) in &py {
+            assert!(
+                k.starts_with("maint."),
+                "{lang}: {k} belongs in relay/src/webui/locales"
+            );
+            let mine = ours.iter().find(|(x, _)| x == k).map(|(_, v)| v.as_str());
+            assert_eq!(mine, v.as_str(), "{lang}: {k}");
+        }
+    }
+}
+
+/// `SEKIMORE_WEB_HOST` / `SEKIMORE_WEB_PORT` choose the listener, as they chose uvicorn's.
+#[test]
+fn the_listener_follows_the_environment() {
+    let env = |pairs: &'static [(&'static str, &'static str)]| {
+        move |k: &str| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string())
+        }
+    };
+    assert_eq!(listen_addr_from(env(&[])), Ok(("0.0.0.0".into(), 8080)));
+    assert_eq!(
+        listen_addr_from(env(&[
+            ("SEKIMORE_WEB_HOST", "127.0.0.1"),
+            ("SEKIMORE_WEB_PORT", "9999")
+        ])),
+        Ok(("127.0.0.1".into(), 9999))
+    );
+    assert!(listen_addr_from(env(&[("SEKIMORE_WEB_PORT", "http")])).is_err());
+    assert!(listen_addr_from(env(&[("SEKIMORE_WEB_PORT", "70000")])).is_err());
+}
+
+/// `from_accept_language` and `resolve_lang`, with the cases the Python tests had.
+#[test]
+fn the_language_resolves_as_it_did() {
+    use super::i18n::{from_accept_language, resolve_lang};
+    assert_eq!(
+        from_accept_language(Some("fr-FR,fr;q=0.9,ja;q=0.8,en;q=0.7")),
+        Some("ja")
+    );
+    assert_eq!(
+        from_accept_language(Some("en-US,en;q=0.9,ja;q=0.8")),
+        Some("en")
+    );
+    assert_eq!(from_accept_language(Some("de")), None);
+    assert_eq!(from_accept_language(None), None);
+    assert_eq!(resolve_lang(None, None, None, "auto"), "en");
+    assert_eq!(resolve_lang(None, None, Some("ja,en;q=0.5"), "auto"), "ja");
+    assert_eq!(resolve_lang(None, None, Some("ja"), "en"), "en");
+    assert_eq!(resolve_lang(None, Some("en"), None, "ja"), "en");
+    assert_eq!(resolve_lang(Some("ja"), Some("en"), None, "auto"), "ja");
+    assert_eq!(
+        resolve_lang(Some("xx"), Some("yy"), Some("zz"), "auto"),
+        "en"
+    );
+}
+
+/// Every key the dashboard uses is in the English dictionary, and the dashboard has no Japanese
+/// written into it outside comments and the language switcher.
+#[test]
+fn the_dashboard_uses_only_keys_the_dictionary_has() {
+    let en = super::i18n::strings("en");
+    let mut used = Vec::new();
+    for marker in ["data-i18n=\"", "data-i18n-html=\"", "tr('"] {
+        let close = if marker.ends_with('\'') { '\'' } else { '"' };
+        let mut rest = DASHBOARD;
+        while let Some(i) = rest.find(marker) {
+            let after = &rest[i + marker.len()..];
+            let end = after.find(close).unwrap();
+            used.push(after[..end].to_string());
+            rest = &after[end..];
+        }
+    }
+    assert!(used.len() > 50, "{}", used.len());
+    let missing: Vec<&String> = used
+        .iter()
+        .filter(|k| !en.iter().any(|(x, _)| x == *k))
+        .collect();
+    assert!(missing.is_empty(), "{missing:?}");
+
+    let japanese =
+        |c: char| ('\u{3040}'..='\u{30ff}').contains(&c) || ('\u{4e00}'..='\u{9fff}').contains(&c);
+    let offenders: Vec<&str> = DASHBOARD
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            !(l.starts_with("//")
+                || l.starts_with("/*")
+                || l.starts_with('*')
+                || l.starts_with("<!--")
+                || l.contains("日本語"))
+        })
+        .filter(|l| {
+            let code = l.split(" //").next().unwrap_or(l);
+            code.chars().any(japanese)
+        })
+        .collect();
+    assert!(offenders.is_empty(), "{offenders:?}");
+}
+
+/// The home page is the dashboard in English until the page asks for another language.
+#[test]
+fn the_dashboard_is_english_by_default() {
+    assert!(DASHBOARD.contains("<html lang=\"en\">"));
+    assert!(
+        DASHBOARD.contains("data-i18n=\"tab.dashboard\"")
+            && DASHBOARD.contains("id=\"lang-select\"")
+    );
 }
