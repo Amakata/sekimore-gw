@@ -90,11 +90,13 @@
   {
    "name": "proxy/undecodable_byte",
    "follower": "proxy",
+   "ledger": "Python stopped at a byte that is not UTF-8 (UnicodeDecodeError), losing the lines before it in the same chunk; Rust skips that line, keeps the others and goes on",
    "hex": "312e352030206331205443505f4d4953532f3230302030204745542075310a312e352030206332205443505f4d4953532f32303020302047455420ff0a"
   },
   {
    "name": "proxy/undecodable_byte_in_a_later_chunk",
    "follower": "proxy",
+   "ledger": "Python stopped at a byte that is not UTF-8 (UnicodeDecodeError), losing the lines before it in the same chunk; Rust skips that line, keeps the others and goes on",
    "text": "1.5 0 cX TCP_MISS/200 0 GET http://example.com/a-path-that-makes-the-line-long\n",
    "repeat": 120,
    "then_hex": "ff0a"
