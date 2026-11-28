@@ -640,3 +640,79 @@ def describe_concurrent_rule_changes():
 
         fw.cleanup()
         assert fw.domain_ipsets == {}
+
+
+def describe_remove_domain_deletes_what_setup_domain_added():
+    """iptables -D deletes only an exact match. With allowed_ports empty, remove_domain used to
+    delete without the interfaces setup_domain adds the rule with, so the delete failed, the set
+    stayed referenced and could not be destroyed, and the domain was dropped from tracking anyway:
+    its addresses stayed admitted until the gateway restarted."""
+
+    import subprocess
+
+    import pytest
+
+    def _recording_run(fail=lambda cmd: False):
+        """A subprocess.run fake that records every command.
+
+        Deleting the NFLOG rule reports "not found", so the loop in _remove_block_log_rule ends;
+        `fail` picks further commands to fail the way the real tools do.
+        """
+        calls: list[list[str]] = []
+
+        def run(cmd, **_kw):
+            calls.append(cmd)
+            if cmd[1] == "-D" and "--nflog-prefix" in cmd:
+                raise subprocess.CalledProcessError(1, cmd, stderr="No such rule")
+            if fail(cmd):
+                raise subprocess.CalledProcessError(1, cmd, stderr="Operation refused")
+            return Mock(returncode=0, stdout="", stderr="")
+
+        return run, calls
+
+    def _forward_accepts(calls, action):
+        return [c for c in calls if c[1:3] == [action, "FORWARD"] and "ACCEPT" in c]
+
+    @pytest.mark.parametrize("allowed_ports", [[], [443, 80]])
+    @pytest.mark.parametrize("domain", ["api.example.com", "sekimore.lan", "dev"])
+    def it_deletes_with_the_spec_it_added(domain, allowed_ports):
+        run, calls = _recording_run()
+        fw = FirewallManager(
+            wan_interface="eth0", lan_interface="eth1", allowed_ports=allowed_ports
+        )
+        with patch("subprocess.run", side_effect=run):
+            assert fw.setup_domain(domain, ["192.0.2.10"]) is True
+            added = _forward_accepts(calls, "-A")
+            calls.clear()
+            assert fw.remove_domain(domain) is True
+
+        deleted = _forward_accepts(calls, "-D")
+        assert added, "setup_domain added no ACCEPT rule"
+        assert [["-A" if a == "-D" else a for a in rule] for rule in deleted] == added
+        assert domain not in fw.domain_ipsets
+
+    @pytest.mark.parametrize(
+        "failing",
+        [
+            pytest.param(lambda cmd: cmd[1] == "-D" and "--match-set" in cmd, id="rule-delete"),
+            pytest.param(lambda cmd: cmd[1] == "destroy", id="set-destroy"),
+        ],
+    )
+    def it_reports_a_removal_that_did_not_happen(failing):
+        run, _ = _recording_run()
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        with patch("subprocess.run", side_effect=run):
+            fw.setup_domain("api.example.com", ["192.0.2.10"])
+        ipset_name = fw.domain_ipsets["api.example.com"]
+
+        run, _ = _recording_run(fail=failing)
+        with (
+            patch("subprocess.run", side_effect=run),
+            patch("src.firewall.log_error") as log_error,
+        ):
+            assert fw.remove_domain("api.example.com") is False
+
+        # Still tracked, so a later attempt (cleanup) tries again
+        assert fw.domain_ipsets["api.example.com"] == ipset_name
+        messages = [c.args[1] for c in log_error.call_args_list]
+        assert any("api.example.com" in m and ipset_name in m for m in messages), messages
