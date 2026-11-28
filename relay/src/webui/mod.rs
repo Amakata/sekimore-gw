@@ -189,7 +189,8 @@ pub fn route(view: &UiView, req: &Req, now: f64) -> Resp {
     let answer = |r: cfg::Py<json::Json>| match r {
         Ok(j) => Resp::json(&j),
         Err(e) => {
-            log::debug!("webui: {} answered 500 ({})", req.path, e.0);
+            // uvicorn logged a handler that raised at ERROR, with its traceback
+            log::warn!("webui: {} answered 500 ({})", req.path, e.0);
             Resp::internal_error()
         }
     };

@@ -54,7 +54,7 @@ nodes:
     note: "a forge relay run as a sidecar (#329); holds nothing, is handed each call's upstream token, reaches the upstream only through the passthrough"
   gateway.webui:
     kind: service
-    note: "FastAPI on 8080; read from dev by design, writes refused"
+    note: "8080, served by sekimore-relay serve (FastAPI until 0.3.0-alpha.4); read from dev by design, writes refused"
   gateway.store:
     kind: store
     note: "the secret store; keys live only in the relay's memory while unlocked"

@@ -232,14 +232,19 @@ fn run_with_deadline(program: &Path, args: &[&str], deadline: Duration) -> Ran {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ran::NotFound,
         Err(e) => return Ran::Failed(e.to_string()),
     };
+    // Both pipes are read while the command runs, as `subprocess.run` did: a listing longer than
+    // the pipe buffer would otherwise stall it until the deadline
     let drain = |r: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut r) = r {
-                let _ = r.read_to_end(&mut buf);
-            }
-            String::from_utf8_lossy(&buf).into_owned()
-        })
+        std::thread::Builder::new()
+            .name("webui-iptables".into())
+            .spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut r) = r {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                String::from_utf8_lossy(&buf).into_owned()
+            })
+            .ok()
     };
     let out = drain(
         child
@@ -253,6 +258,11 @@ fn run_with_deadline(program: &Path, args: &[&str], deadline: Duration) -> Ran {
             .take()
             .map(|s| Box::new(s) as Box<dyn Read + Send>),
     );
+    let (Some(out), Some(err)) = (out, err) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ran::Failed("cannot start a thread to read the command's output".into());
+    };
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -293,7 +303,13 @@ fn iptables_json(
 }
 
 /// `_run_iptables`: the filter and nat tables, five seconds each.
+/// One listing at a time. The Python UI ran `subprocess.run` on its event loop, so its listings
+/// never overlapped; here every request has a thread, and `iptables-legacy` takes the xtables
+/// lock that the firewall's own commands need.
+static IPTABLES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn iptables(cmd: &Path) -> Json {
+    let _one_at_a_time = IPTABLES.lock().unwrap_or_else(|p| p.into_inner());
     const DEADLINE: Duration = Duration::from_secs(5);
     // the message names the command, not where it was looked for
     let name = cmd.file_name().map_or_else(

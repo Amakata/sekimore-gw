@@ -267,9 +267,15 @@ impl Streamer {
         let mut st = self.lock();
         st.clients += 1;
         if !st.running {
-            st.running = true;
             let me = self.clone();
-            std::thread::spawn(move || me.run());
+            let started = std::thread::Builder::new()
+                .name("webui-poller".into())
+                .spawn(move || me.run());
+            match started {
+                Ok(_) => st.running = true,
+                // the next client tries again; this one gets its snapshots, not the live tail
+                Err(e) => log::warn!("webui: cannot start the log poller: {e}"),
+            }
         }
         rx
     }

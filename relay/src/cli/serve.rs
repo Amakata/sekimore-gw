@@ -195,7 +195,7 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
 /// The relay's thread and the way to stop it.
 struct RelayThread {
     stop: tokio::sync::oneshot::Sender<()>,
-    thread: std::thread::JoinHandle<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl RelayThread {
@@ -227,10 +227,10 @@ impl RelayThread {
                 let _ = credential.send(CredentialState::Unreachable);
             });
         let thread = match thread {
-            Ok(t) => t,
+            Ok(t) => Some(t),
             Err(e) => {
                 log::error!("relay: cannot start its thread: {e}; serving the Web UI only");
-                std::thread::spawn(|| {})
+                None
             }
         };
         RelayThread { stop, thread }
@@ -238,8 +238,9 @@ impl RelayThread {
 
     async fn stop(self) {
         let _ = self.stop.send(());
-        let thread = self.thread;
-        let _ = tokio::task::spawn_blocking(move || thread.join()).await;
+        if let Some(thread) = self.thread {
+            let _ = tokio::task::spawn_blocking(move || thread.join()).await;
+        }
     }
 }
 
