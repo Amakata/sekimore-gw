@@ -64,16 +64,45 @@ pub fn gateway(docker: &Docker, argv: &[String], tty: Tty) -> anyhow::Result<i32
     docker.exec(&cid, None, tty, &colours(), argv)
 }
 
-/// `python -m src.maint <name> <args…>` in the gateway: the log DB and the reload window.
+/// `maint <name> <args…>` in the gateway: the log DB and the reload window.
+///
+/// A gateway from 0.3.0-alpha.5 on has it in its relay (`sekimore-relay maint`); an older one only
+/// as `python -m src.maint`. Which one is asked first, without side effects
+/// ([`gateway_has_rust_maint`]), so a command is never run twice. A new gateway also keeps
+/// `python -m src.maint` (it runs the relay's), for the `sgw` people already have.
 pub fn maint(docker: &Docker, name: &str, args: &[String], no_tty: bool) -> anyhow::Result<i32> {
-    let mut argv: Vec<String> = vec![
-        "python".into(),
-        "-m".into(),
-        "src.maint".into(),
-        name.into(),
+    let cid = docker.find_container(GATEWAY)?;
+    let argv = maint_argv(gateway_has_rust_maint(docker, &cid), name, args);
+    docker.exec(
+        &cid,
+        None,
+        if no_tty { Tty::Never } else { Tty::Auto },
+        &colours(),
+        &argv,
+    )
+}
+
+/// `sekimore-relay maint --help` answers 0 in a gateway whose relay has `maint`; an older relay
+/// refuses the word (clap's 2), and anything else — no relay, no container — is not a yes either.
+pub fn gateway_has_rust_maint(docker: &Docker, cid: &str) -> bool {
+    let probe = [
+        "sekimore-relay".to_string(),
+        "maint".to_string(),
+        "--help".to_string(),
     ];
+    matches!(docker.exec_capture(cid, None, &probe), Ok(c) if c.code == 0)
+}
+
+/// The argv of `maint <name> <args…>`: the relay's when the gateway has it, Python's otherwise.
+pub fn maint_argv(rust: bool, name: &str, args: &[String]) -> Vec<String> {
+    let mut argv: Vec<String> = if rust {
+        vec!["sekimore-relay".into(), "maint".into()]
+    } else {
+        vec!["python".into(), "-m".into(), "src.maint".into()]
+    };
+    argv.push(name.into());
     argv.extend(args.iter().cloned());
-    gateway(docker, &argv, if no_tty { Tty::Never } else { Tty::Auto })
+    argv
 }
 
 /// A command in the dev container as the vscode user; empty is a zsh.
@@ -287,6 +316,19 @@ grep -E "^export (HTTP_PROXY|NO_PROXY)=" /etc/profile.d/sekimore-proxy.sh || tru
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maint_runs_in_the_relay_when_the_gateway_has_it_and_in_python_otherwise() {
+        let args = vec!["--json".to_string()];
+        assert_eq!(
+            maint_argv(true, "db-stats", &args),
+            ["sekimore-relay", "maint", "db-stats", "--json"]
+        );
+        assert_eq!(
+            maint_argv(false, "db-stats", &args),
+            ["python", "-m", "src.maint", "db-stats", "--json"]
+        );
+    }
 
     fn v(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()

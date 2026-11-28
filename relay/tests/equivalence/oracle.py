@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 import types
 from collections.abc import Callable
 from pathlib import Path
@@ -350,14 +351,53 @@ def config_case(case: dict[str, Any]) -> dict[str, Any]:
     return answer
 
 
+def reload_state_case(case: dict[str, Any]) -> dict[str, Any]:
+    """The orchestrator's ReloadWindow reading a state file: what the running gateway would do."""
+    import base64
+    import tempfile
+
+    logged: list[str] = []
+
+    def capture(_component: Any, msg: str, **_kw: Any) -> None:
+        logged.append(msg)
+
+    saved = orchestrator.log_error
+    orchestrator.log_error = capture  # type: ignore[assignment]
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "reload-window.json"
+            if case.get("state_b64") is not None:
+                path.write_bytes(base64.b64decode(case["state_b64"]))
+            try:
+                w = orchestrator.ReloadWindow(case["mode"], case["window"], path)
+                answer: dict[str, Any] = {
+                    "is_open": w.is_open(),
+                    "describe": w.describe(),
+                    "seconds_left": None if w.seconds_left() is None else str(w.seconds_left()),
+                }
+            except Exception:  # noqa: BLE001
+                answer = {"raised": True}
+    finally:
+        orchestrator.log_error = saved  # type: ignore[assignment]
+    return {
+        "id": case["id"],
+        **answer,
+        "logged": [m.split(": ")[0] for m in logged],
+        "now": time.time(),
+    }
+
+
 # One entry per kind of comparison. Later steps add theirs here ("dns", "firewall", "squid"),
 # each answering in the shape its relay/tests/equivalence/<kind>.rs builds.
 #
-# "webui" was here until the Python Web UI was removed (0.3.0-alpha.4): its record,
-# relay/tests/fixtures/oracle/webui.json, was made at the commit named in CONTRIBUTING.md and is
-# the only oracle of that comparison now.
+# "webui" was here until the Python Web UI was removed (0.3.0-alpha.4), "followers" and "maint"
+# until the Python log followers and maint were (0.3.0-alpha.5): their records,
+# relay/tests/fixtures/oracle/{webui,followers,maint}.json, were made at the commits named in
+# CONTRIBUTING.md and are the only oracles of those comparisons now. "reload_state" stays: the
+# orchestrator that reads the reload window's state file is still Python.
 KINDS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "config": config_case,
+    "reload_state": reload_state_case,
 }
 
 

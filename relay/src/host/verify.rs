@@ -4,7 +4,7 @@
 //! at who resolves, who verifies the peer, what is presented and where it is audited. Every item
 //! says which targets it applies to: a Docker Sandbox is not on the gateway's bridge, so the
 //! items about DNS, the firewall and the host-side rules have nothing to check there.
-//! `tests/unit/test_paths.py` holds the edges named here to the ledger's `verify` attributes.
+//! `tools/tests/paths_ledger.rs` holds the edges named here to the ledger's `verify` attributes.
 //!
 //! The text is the English of the shell version, deliberately: it is read next to the relay's
 //! own diagnostics and copied into bug reports.

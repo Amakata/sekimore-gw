@@ -33,6 +33,11 @@ fi
 # stops the gateway.
 /app/scripts/start-relay.sh &
 
+# Start sekimore-relay gateway: the gateway's own process (0.3.0-alpha.5), apart from serve. It
+# follows ulogd's log and Squid's access log into the log database, which the Python orchestrator
+# did before, and is started again if it exits (see scripts/start-gateway.sh).
+/app/scripts/start-gateway.sh &
+
 # Start the main application
 echo "Starting applications..."
 python -m src.main

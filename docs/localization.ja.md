@@ -34,10 +34,10 @@ ui:
 ## CLI
 
 コマンドラインツールは、設定ファイルではなく環境変数に従います。`SEKIMORE_LANG`、`LC_ALL`、`LC_MESSAGES`、`LANG` の順に参照し、
-どれもなければ英語を使います。対象は、ゲートウェイのコンテナ内の `python -m src.maint` と、Rust 製の `sekimore-relay` バイナリです。
+どれもなければ英語を使います。対象は、ゲートウェイのコンテナ内の Rust 製の `sekimore-relay` バイナリです（`sekimore-relay maint` を含む。0.3.0-alpha.5 から `python -m src.maint` はこれを実行します）。
 
 ```bash
-SEKIMORE_LANG=ja python -m src.maint db-stats
+SEKIMORE_LANG=ja sekimore-relay maint db-stats
 ```
 
 関所の辞書と `sekimore guide --lang` については、[relay/README.ja.md の表示言語](../relay/README.ja.md#表示言語024)を参照してください。

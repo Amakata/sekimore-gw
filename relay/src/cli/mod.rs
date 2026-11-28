@@ -33,6 +33,16 @@ pub enum Command {
     NeedsRelay,
     #[command(about = t("cli.serve"))]
     Serve,
+    #[command(about = t("cli.gateway"))]
+    Gateway,
+    /// `maint`'s own command line, read the way `python -m src.maint` read it
+    #[command(about = t("cli.maint"), disable_help_flag = true)]
+    Maint {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0.., help = t("cli.maint.args"))]
+        args: Vec<String>,
+    },
+    #[command(about = t("cli.ready"))]
+    Ready,
     #[command(about = t("cli.sidecar"))]
     Sidecar {
         #[arg(help = t("cli.sidecar.name"))]
@@ -188,6 +198,17 @@ pub async fn run(cli: Cli) -> i32 {
     let result: anyhow::Result<i32> = match cli.cmd {
         Command::NeedsRelay => operator::needs_relay(&cli.config),
         Command::Serve => serve::serve(&cli.config).await.map(|_| 0),
+        Command::Gateway => crate::gateway::run(&cli.config).await,
+        Command::Maint { args } => {
+            let raw: Vec<String> = std::env::args().collect();
+            let args = crate::gateway::maint::raw_args(&raw).unwrap_or(args);
+            Ok(crate::gateway::maint::main(
+                &args,
+                &cli.config,
+                crate::i18n::lang(),
+            ))
+        }
+        Command::Ready => crate::gateway::ready::run().await,
         Command::Sidecar { name, socket, via } => sidecar(&name, &socket, via).await,
         Command::Login { upstream } => operator::login(&cli.config, upstream.as_deref())
             .await

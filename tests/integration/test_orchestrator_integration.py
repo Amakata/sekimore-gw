@@ -41,12 +41,9 @@ def describe_orchestrator_integration():
             result = await orchestrator.initialize()
             assert result is True
 
-            # Mock monitors
-            orchestrator.firewall_monitor.start = AsyncMock()
-            orchestrator.firewall_monitor.stop = AsyncMock()
-
             # Mock DNS server to stop immediately (simulate shutdown)
             orchestrator.dns_server.start = AsyncMock(side_effect=KeyboardInterrupt())
+            orchestrator.dns_server.stop = AsyncMock()
 
             # Start (will stop due to mocked KeyboardInterrupt)
             await orchestrator.start()
@@ -56,7 +53,7 @@ def describe_orchestrator_integration():
             assert orchestrator.firewall is not None
 
             # Verify cleanup was performed
-            orchestrator.firewall_monitor.stop.assert_awaited_once()
+            orchestrator.dns_server.stop.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def it_handles_initialization_failure(tmp_path):
@@ -109,16 +106,13 @@ def describe_orchestrator_integration():
 
             # Mock DNS server to raise exception
             orchestrator.dns_server.start = AsyncMock(side_effect=RuntimeError("DNS failed"))
-
-            # Mock monitors
-            orchestrator.firewall_monitor.start = AsyncMock()
-            orchestrator.firewall_monitor.stop = AsyncMock()
+            orchestrator.dns_server.stop = AsyncMock()
 
             # Start orchestrator (should handle exception and cleanup)
             await orchestrator.start()
 
             # Verify cleanup was performed despite exception
-            orchestrator.firewall_monitor.stop.assert_awaited_once()
+            orchestrator.dns_server.stop.assert_awaited_once()
 
 
 def describe_domain_rule_application():

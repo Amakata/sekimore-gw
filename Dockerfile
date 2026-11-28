@@ -141,6 +141,7 @@ COPY src/ ./src/
 COPY config/ulogd.conf /etc/ulogd.conf
 COPY entrypoint.sh /app/entrypoint.sh
 COPY scripts/start-relay.sh /app/scripts/start-relay.sh
+COPY scripts/start-gateway.sh /app/scripts/start-gateway.sh
 # agent-setup.sh is shipped in the image so that sgw-devcontainer-base can COPY --from it
 # (same tag as the relay binary => the two always match)
 COPY agent-setup.sh /usr/local/share/sekimore/agent-setup.sh
@@ -162,7 +163,7 @@ RUN mkdir -p /data /data/relay /etc/sekimore /var/spool/squid /var/log/squid /va
     && chmod 700 /data/relay
 
 # Grant execution permission to entrypoint.sh
-RUN chmod +x /app/entrypoint.sh /app/scripts/start-relay.sh /usr/local/share/sekimore/agent-setup.sh
+RUN chmod +x /app/entrypoint.sh /app/scripts/start-relay.sh /app/scripts/start-gateway.sh /usr/local/share/sekimore/agent-setup.sh
 
 # Initialize Squid cache directories
 RUN squid -z || true

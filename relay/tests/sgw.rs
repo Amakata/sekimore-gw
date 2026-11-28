@@ -33,6 +33,9 @@ fn fixture() -> Fixture {
 # every call: argv on one line, then stdin (if any) marked
 printf '%s\n' "$*" >> "{log}"
 printf 'HINTS=%s\n' "${{DOCKER_CLI_HINTS:-unset}}" >> "{log}"
+# 0.3.0-alpha.5: the relay's maint and ready; a gateway from before has neither (clap's 2)
+case "$*" in *"sekimore-relay maint --help"*|*"sekimore-relay ready"*)
+  [ -n "${{FAKE_OLD_GATEWAY:-}}" ] && exit 2; exit 0 ;; esac
 # #362: the store's state word, for the unlock step
 case "$*" in *"sekimore-relay store-status"*) echo "${{FAKE_STORE:-unlocked}}"; exit 0 ;; esac
 # #480: the gateway's config.yml, and the services the compose declares
@@ -332,6 +335,81 @@ fn recreate_brings_up_the_command_sidecars_the_config_lists() {
         stdout.contains("relay.sidecars.s3: the compose declares no service sekimore-s3"),
         "{stdout}"
     );
+}
+
+/// 0.3.0-alpha.5: the wait after a recreate asks the relay (`ready`); Python, which the gateway is
+/// losing, only when the relay has no `ready`.
+#[test]
+fn recreate_waits_on_the_relay_and_on_python_only_in_an_older_gateway() {
+    let f = fixture();
+    let out = sgw(&f, &["recreate", "--no-unlock"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let first = log(&f);
+    assert!(
+        first.contains("exec cid123 sekimore-relay ready\n"),
+        "{first}"
+    );
+    assert!(!first.contains("python"), "{first}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains(" ok"));
+
+    let f = fixture();
+    let out = sgw(&f, &["recreate", "--no-unlock"])
+        .env("FAKE_OLD_GATEWAY", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = log(&f);
+    let ready = position(&log, "exec cid123 sekimore-relay ready\n");
+    let python = position(&log, "exec cid123 python -c import urllib.request");
+    assert!(ready < python, "{log}");
+    // asked once: an old gateway is not asked again on the next try
+    assert_eq!(log.matches("sekimore-relay ready").count(), 1, "{log}");
+}
+
+/// 0.3.0-alpha.5: `maint` runs in the relay where the gateway has it, through Python where it
+/// does not; which one is asked without running the command.
+#[test]
+fn maint_commands_run_in_the_relay_and_in_python_only_in_an_older_gateway() {
+    let f = fixture();
+    let out = sgw(&f, &["gw", "db-stats", "--json"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let first = log(&f);
+    let probe = position(&first, "exec -i cid123 sekimore-relay maint --help\n");
+    let run = position(
+        &first,
+        "exec -i cid123 sekimore-relay maint db-stats --json\n",
+    );
+    assert!(probe < run, "{first}");
+    assert!(!first.contains("src.maint"), "{first}");
+
+    let f = fixture();
+    let out = sgw(&f, &["gw", "reload-freeze"])
+        .env("FAKE_OLD_GATEWAY", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = log(&f);
+    assert!(
+        log.contains("exec -i cid123 python -m src.maint reload-freeze\n"),
+        "{log}"
+    );
+    assert!(!log.contains("sekimore-relay maint reload-freeze"), "{log}");
 }
 
 /// #480: a project without command sidecars runs no second compose up.
