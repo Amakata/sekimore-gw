@@ -51,6 +51,7 @@ USER vscode
 RUN mise use -g php@8.3.26
 ```
 
+- Debian 12 only (#507): the suffix names the Debian they were built on. Use them with the base's plain tag or `-bookworm`, not with `-trixie`: their binaries link against Debian 12's libraries, and the runtime packages they list carry Debian 12's names (`libssl3`, where Debian 13 has `libssl3t64`). On a `-trixie` base, install the language with `mise install --system` as above.
 - Tags: `<version>-<revision>-bookworm` (`8.3.33-1-bookworm`) never changes; a rebuild of the same version is a new revision. `<version>-bookworm` follows the newest revision. Name the revision to pin the exact image.
 - Followed lines: for a line in `lang/versions.yml`'s `track` (PHP 8.3), each new patch is published the day it appears. Other versions are built once, as pinned there. `sgw update` reports a newer patch of a followed line in a project's Dockerfile, and `--apply` writes it (a literal tag only, not one written through an ARG); it never moves to another line, and leaves other versions alone.
 - Copy the whole `/opt/mise/installs/<lang>/`: beside the version it holds mise's backend note and the version's aliases (`8.3`, `latest`).

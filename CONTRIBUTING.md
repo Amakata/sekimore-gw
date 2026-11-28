@@ -286,6 +286,7 @@ from the same tag as the gateway (#235). Their tests are shell scripts, run dire
 ```bash
 base/tests/test_sgw_post_start.sh  # the dev container's start: setup, docker-init, post-create
 base/tests/test_image.sh           # builds the image; needs docker
+SGW_DEBIAN=trixie base/tests/test_image.sh   # the Debian 13 image (#507); CI runs both
 ```
 
 That `UPGRADING.md` has been reviewed up to the gateway `base/Dockerfile` takes is a check in

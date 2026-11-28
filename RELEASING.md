@@ -16,12 +16,13 @@ of the same tag) and, later, the `sgw` binaries. One version number, `pyproject.
    deciding whether the release asks anything of a project.
    `tests/unit/test_base_versions.py` fails until every one of them says the new version
 4. Open the release pull request. Its CI builds what the tag will build: `base.yml` builds the gateway
-   image of that commit and the base image against it and runs `base/tests/test_image.sh`, and
+   image of that commit and the base image against it, on each Debian (bookworm, trixie), and runs
+   `base/tests/test_image.sh` on each, and
    `preview.yml` builds the arm64 gateway image — so a COPY that names a path that moved fails
    here, not after the tag. No local image build is needed; to look at one anyway:
    `docker build -t sekimore-gw:X.Y.Z-local .`
 5. Merge it, tag the merge commit (signed) and push the tag.
-   `docker-publish.yml` builds the gateway image, then the base image, then the `sgw` binaries
+   `docker-publish.yml` builds the gateway image, then the base image on both Debians, then the `sgw` binaries
    (macOS arm64, Linux x86_64 / arm64), and creates a **draft** Release with the binaries,
    their sha256 files and `install.sh` attached
 6. Publish the Release with the changelog's bullets as its notes:
@@ -50,8 +51,12 @@ of the same tag) and, later, the `sgw` binaries. One version number, `pyproject.
 
 | Trigger | Gateway image | Base image |
 | --- | --- | --- |
-| Push of a `vX.Y.Z` tag | `X.Y.Z`, `X.Y`, `X`, `latest` | the same |
-| Push of a `vX.Y.Z-pre` tag (0.3 line) | `X.Y.Z-pre` only | the same |
+| Push of a `vX.Y.Z` tag | `X.Y.Z`, `X.Y`, `X`, `latest` | the same, and `X.Y.Z-bookworm`, `X.Y.Z-trixie` |
+| Push of a `vX.Y.Z-pre` tag (0.3 line) | `X.Y.Z-pre` only | `X.Y.Z-pre`, `X.Y.Z-pre-bookworm`, `X.Y.Z-pre-trixie` |
+
+The base's plain tags (`X.Y.Z`, `X.Y`, `X`, `latest`) are Debian 12 (#507), one manifest list with
+`X.Y.Z-bookworm`; `X.Y.Z-trixie` is Debian 13 and has no floating tag. The release's smoke test
+fails when the plain tag and `-bookworm` differ, or a tag is on the wrong Debian.
 
 ## Release assets
 
@@ -70,6 +75,9 @@ curl -fsSL https://github.com/Amakata/sekimore-gw/releases/latest/download/insta
 docker build -t sgw-devcontainer-base:dev base
 docker build -t sgw-devcontainer-base:dev --build-arg SEKIMORE_GW_IMAGE=sekimore-gw:X.Y.Z-local base
 base/tests/test_image.sh sgw-devcontainer-base:dev
+# Debian 13 (#507)
+docker build -t sgw-devcontainer-base:dev-trixie --build-arg DEBIAN=trixie base
+SGW_DEBIAN=trixie base/tests/test_image.sh sgw-devcontainer-base:dev-trixie
 ```
 
 The build needs `ghcr.io` and `pkg-containers.githubusercontent.com`.

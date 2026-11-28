@@ -7,6 +7,16 @@ dev コンテナの元になるイメージ。使い方は[最上位の README](
 
 - `ghcr.io/amakata/sgw-devcontainer-base`。ゲートウェイと同じ版番号、同じタグ
 - `linux/amd64`, `linux/arm64`
+- Debian 12 と Debian 13（#507）。タグで選ぶ:
+
+| タグ | Debian |
+|---|---|
+| `<version>` | 12（bookworm）。0.3 系でも 0.2 系と同じ |
+| `<version>-bookworm` | 12。`<version>` と同じイメージ |
+| `<version>-trixie` | 13 |
+
+プロジェクトは `FROM` のタグが示す Debian の上にあり、`sgw update` はそれを保つ。二つの違いは
+[UPGRADING.ja.md](../UPGRADING.ja.md) の 0.3.0-alpha.5 にある。
 
 ## プロジェクトの Dockerfile
 
@@ -23,9 +33,9 @@ FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.4
 
 | | |
 |---|---|
-| ベース | `mcr.microsoft.com/devcontainers/base:bookworm`（`vscode`、uid 1000） |
+| ベース | `mcr.microsoft.com/devcontainers/base:bookworm`。`-trixie` は `:trixie`（`vscode`、uid 1000） |
 | シェル | zsh、oh-my-zsh、`fzf`, `jq`, `vim`, `nano`, `curl`, `wget`, `unzip`, `rsync`, `pv`, `gnupg`, `sudo` |
-| ネットワーク | `iptables`, `iproute2`, `iputils-ping`, `dnsutils` |
+| ネットワーク | `iptables`, `iproute2`, `iputils-ping`, `dnsutils`（Debian 13 では `bind9-dnsutils`。`dig`、`nslookup` は同じ） |
 | Git | `git-delta` |
 | DB ヘッダ | `libpq-dev`, `default-libmysqlclient-dev` |
 | 言語 | `mise`。言語のバージョンは含まない |
@@ -60,12 +70,16 @@ FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.4
 | Claude Code の managed settings | [managed-settings.json](managed-settings.json) |
 | `sekimore` ラッパー、`docker-init.sh`、Docker のインストール | [scripts/](scripts/) |
 | 関所のツールをどのゲートウェイから取るか | `ARG SEKIMORE_GW_IMAGE`。リリースが合わせる |
+| どの Debian か | `ARG DEBIAN`（`bookworm`、`trixie`）。リリースは両方を作る。二つで違う行にはそう書いてある |
 
 手元でビルドして確かめる:
 
 ```sh
 docker build -t sgw-devcontainer-base:dev base
 base/tests/test_image.sh sgw-devcontainer-base:dev
+# Debian 13
+docker build -t sgw-devcontainer-base:dev-trixie --build-arg DEBIAN=trixie base
+SGW_DEBIAN=trixie base/tests/test_image.sh sgw-devcontainer-base:dev-trixie
 ```
 
 ## リンク

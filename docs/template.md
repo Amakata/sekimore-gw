@@ -40,12 +40,14 @@ carries the same files, byte for byte. Do not copy them by hand.
 - A command sidecar `<name>` (`relay.sidecars.<name>`) is the compose service `sekimore-<name>`; `sgw recreate` recreates it with the gateway (what it keeps in memory is lost). See [docs/sidecar-protocol.md](sidecar-protocol.md#configuration)
 - The signing key's title on GitHub is `sekimore-agent-signing: <project> / <name> <email>`; `SEKIMORE_SIGNING_KEY_COMMENT` in `.env` changes it
 - When the project ends: `sgw revoke-project`
+- The base's Debian is the tag on the `FROM` line (#507): the plain `<version>` and `<version>-bookworm` are Debian 12, `<version>-trixie` is Debian 13. `sgw init --debian trixie` writes `-trixie`; to move a project, add the suffix by hand and Rebuild Container. What differs between the two: [UPGRADING.md](../UPGRADING.md#030-alpha5-the-base-image-is-also-on-debian-13-prerelease)
 - The relay's usage guide reaches the agent on its own: `sgw-agent setup` installs it at every start as the Claude Code skill `~/.claude/skills/sgw-agent/SKILL.md` and into `~/.codex/AGENTS.md`. Nothing about the relay belongs in the project's `CLAUDE.md` / `AGENTS.md`; the skill is overwritten at every start, so do not edit it. For another agent tool, put the output of `sgw-agent guide` where that tool reads its instructions
 
 ## Keeping up to date
 
 Everything `sgw init` wrote is yours to edit. `sgw.toml` is sgw's record of what it wrote (the
-sha of each file), so `sgw update` can tell a file you edited from one a new version changes.
+sha of each file), so `sgw update` can tell a file you edited from one a new version changes. The
+sha is of the file without the base tag's Debian suffix, so choosing a Debian is not an edit.
 
 ```bash
 sgw update            # what is newer, which files change, what UPGRADING asks. Changes nothing
@@ -54,7 +56,8 @@ sgw update --apply    # move to it
 
 `sgw update --apply`:
 
-1. raises the gateway's `image:` tag and the `FROM` tag to `sgw`'s own version
+1. raises the gateway's `image:` tag and the `FROM` tag to `sgw`'s own version, the `FROM` tag on
+   the Debian it names: `-trixie` stays `-trixie`, the plain tag stays plain
 2. overwrites a template file that is still as sgw wrote it when this version changes it; leaves
    one you edited alone; when both happened, writes this version's file beside yours as
    `<file>.sgw-new` for you to merge (`--force` overwrites)
