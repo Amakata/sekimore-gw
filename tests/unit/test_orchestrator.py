@@ -814,6 +814,11 @@ database_path: /tmp/test.db
         orch.dns_server.allowed_domains = ["example.com", "test.com"]
         orch.dns_server.blocked_domains = []
         orch.firewall.remove_domain = Mock()
+        # The reload withdraws what the firewall tracks and DNS would no longer admit
+        orch.firewall.domain_ipsets = {
+            "example.com": "allow_example_com",
+            "test.com": "allow_test_com",
+        }
         orch.proxy_manager = None  # No proxy for this test
 
         # Update config file with new domain
@@ -868,6 +873,11 @@ database_path: /tmp/test.db
         orch.dns_server.allowed_domains = ["domain1.com", "domain2.com"]
         orch.dns_server.blocked_domains = {"blocked1.com"}
         orch.firewall.remove_domain = Mock()
+        # The reload withdraws what the firewall tracks and DNS would no longer admit
+        orch.firewall.domain_ipsets = {
+            "domain1.com": "allow_domain1_com",
+            "domain2.com": "allow_domain2_com",
+        }
         orch.proxy_manager = None
 
         # Update config: remove domain1, add domain3, add blocked2
@@ -1003,6 +1013,183 @@ database_path: /tmp/test.db
         result = await orch.reload_config()
 
         assert result is False  # Should return False on failure
+
+    @pytest.mark.asyncio
+    async def it_deletes_the_rule_of_a_dropped_domain(tmp_path):
+        """The reload deletes a dropped name's ACCEPT rule with the spec it was added with.
+
+        iptables -D matches the whole spec; a delete without the interfaces left the rule and its
+        set in FORWARD, admitting the name's addresses until the gateway restarted.
+        """
+        import subprocess
+
+        calls: list[list[str]] = []
+
+        def run(cmd, **_kw):
+            calls.append(cmd)
+            # Deleting the NFLOG rule reports "not found", so _remove_block_log_rule's loop ends
+            if len(cmd) > 1 and cmd[1] == "-D" and "--nflog-prefix" in cmd:
+                raise subprocess.CalledProcessError(1, cmd, stderr="No such rule")
+            return Mock(returncode=0, stdout="", stderr="")
+
+        body = """
+block_domains: []
+allow_ips: []
+block_ips: []
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+proxy:
+  enabled: false
+database_path: /tmp/test.db
+"""
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("allow_domains:\n  - example.com\n  - dropped.example.com\n" + body)
+
+        with patch("subprocess.run", side_effect=run):
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+            orch.proxy_manager = None
+            orch.firewall.setup_domain("dropped.example.com", ["192.0.2.20"])
+            added = [c for c in calls if c[1:3] == ["-A", "FORWARD"] and "ACCEPT" in c]
+            calls.clear()
+
+            config_file.write_text("allow_domains:\n  - example.com\n" + body)
+            assert await orch.reload_config() is True
+
+        deleted = [c for c in calls if c[1:3] == ["-D", "FORWARD"] and "ACCEPT" in c]
+        assert added
+        assert [["-A" if a == "-D" else a for a in rule] for rule in deleted] == added
+        assert "dropped.example.com" not in orch.firewall.domain_ipsets
+
+
+def describe_reload_withdraws_refused_admissions():
+    """After a reload, nothing stays admitted that a DNS query would not admit under the new lists.
+
+    Diffing allow_domains missed the subdomains admitted under a dropped wildcard and names a new
+    block entry covers, and removed an exact name that a remaining wildcard still allows.
+    """
+
+    import subprocess
+
+    body = """
+allow_ips: []
+block_ips: []
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+proxy:
+  enabled: false
+database_path: /tmp/test.db
+"""
+
+    def _yaml(allow, block=()):
+        lines = ["allow_domains:"] + [f'  - "{d}"' for d in allow]
+        lines += ["block_domains:"] + ([f'  - "{d}"' for d in block] if block else [])
+        if not block:
+            lines[-1] += " []"
+        return "\n".join(lines) + "\n" + body
+
+    class _Tools:
+        """Records iptables / ipset; deleting the NFLOG rule reports "not found" (ends the loop)."""
+
+        def __init__(self):
+            self.fail_destroy = False
+
+        def __call__(self, cmd, **_kw):
+            if len(cmd) > 1 and cmd[1] == "-D" and "--nflog-prefix" in cmd:
+                raise subprocess.CalledProcessError(1, cmd, stderr="No such rule")
+            if self.fail_destroy and cmd[:2] == ["ipset", "destroy"]:
+                raise subprocess.CalledProcessError(1, cmd, stderr="Set cannot be destroyed")
+            return Mock(returncode=0, stdout="", stderr="")
+
+    async def _reload(tmp_path, before, after, admitted, tools=None):
+        tools = tools or _Tools()
+        config_file = tmp_path / "config.yml"
+        config_file.write_text(before)
+        with patch("subprocess.run", side_effect=tools):
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+            orch.proxy_manager = None
+            for name in admitted:
+                assert orch.firewall.setup_domain(name, ["192.0.2.40"])
+            config_file.write_text(after)
+            assert await orch.reload_config() is True
+        return orch, tools
+
+    @pytest.mark.asyncio
+    async def it_withdraws_the_subdomains_of_a_dropped_wildcard(tmp_path):
+        orch, _ = await _reload(
+            tmp_path,
+            _yaml([".example.com", "keep.example.org"]),
+            _yaml(["keep.example.org"]),
+            ["a.example.com", "b.example.com", "keep.example.org"],
+        )
+        assert sorted(orch.firewall.domain_ipsets) == ["keep.example.org"]
+
+    @pytest.mark.asyncio
+    async def it_withdraws_a_name_a_new_block_entry_covers(tmp_path):
+        orch, _ = await _reload(
+            tmp_path,
+            _yaml([".example.com"]),
+            _yaml([".example.com"], block=["bad.example.com"]),
+            ["bad.example.com", "good.example.com"],
+        )
+        assert sorted(orch.firewall.domain_ipsets) == ["good.example.com"]
+
+    @pytest.mark.asyncio
+    async def it_withdraws_a_name_the_relay_answers_for(tmp_path):
+        # domain_handlers is fixed until a restart, so a reload cannot add a relayed name; what
+        # it can find is a relayed name's real address admitted earlier (the gateway's own query).
+        handlers = "domain_handlers:\n  github.com:\n    handler: git-relay\n"
+        orch, _ = await _reload(
+            tmp_path,
+            _yaml(["github.com", "pypi.org"]) + handlers,
+            _yaml(["github.com", "pypi.org"]) + handlers,
+            ["github.com", "pypi.org"],
+        )
+        assert sorted(orch.firewall.domain_ipsets) == ["pypi.org"]
+
+    @pytest.mark.asyncio
+    async def it_withdraws_everything_while_direct_egress_is_denied(tmp_path):
+        tools = _Tools()
+        config_file = tmp_path / "config.yml"
+        config_file.write_text(_yaml(["example.com", "example.org"]))
+        with patch("subprocess.run", side_effect=tools):
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+            orch.proxy_manager = None
+            for name in ("example.com", "example.org"):
+                orch.firewall.setup_domain(name, ["192.0.2.40"])
+            # What the DNS server enforces when `proxy.direct_egress: deny` is in force
+            orch.dns_server.direct_egress_denied = True
+            assert await orch.reload_config() is True
+        assert sorted(orch.firewall.domain_ipsets) == []
+
+    @pytest.mark.asyncio
+    async def it_keeps_an_exact_name_a_remaining_wildcard_still_allows(tmp_path):
+        orch, _ = await _reload(
+            tmp_path,
+            _yaml(["a.example.com", ".example.com"]),
+            _yaml([".example.com"]),
+            ["a.example.com"],
+        )
+        assert sorted(orch.firewall.domain_ipsets) == ["a.example.com"]
+
+    @pytest.mark.asyncio
+    async def it_retries_a_removal_that_failed_on_an_earlier_reload(tmp_path):
+        tools = _Tools()
+        tools.fail_destroy = True
+        orch, _ = await _reload(
+            tmp_path,
+            _yaml(["example.com", "gone.example.org"]),
+            _yaml(["example.com"]),
+            ["example.com", "gone.example.org"],
+            tools=tools,
+        )
+        assert "gone.example.org" in sorted(orch.firewall.domain_ipsets)
+
+        tools.fail_destroy = False
+        with patch("subprocess.run", side_effect=tools):
+            assert await orch.reload_config() is True
+        assert sorted(orch.firewall.domain_ipsets) == ["example.com"]
 
 
 def describe_service_restart():
