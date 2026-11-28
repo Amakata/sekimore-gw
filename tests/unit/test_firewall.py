@@ -770,3 +770,41 @@ def describe_initialize_firewall_fails_closed():
         fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
         with patch("subprocess.run", side_effect=run):
             assert fw.initialize_firewall() is True
+
+
+def describe_setup_static_ip_rules_fails_closed():
+    def it_fails_when_the_block_rule_is_not_installed():
+        run, _ = _run_failing(lambda cmd: "DROP" in cmd and "block_static_ips" in cmd)
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        with (
+            patch("subprocess.run", side_effect=run),
+            patch("src.firewall.log_error") as log_error,
+        ):
+            assert fw.setup_static_ip_rules("allow_static_ips", "block_static_ips") is False
+
+        messages = [c.args[1] for c in log_error.call_args_list]
+        assert any("block_static_ips" in m and "DROP" in m for m in messages), messages
+
+    def it_fails_when_the_block_set_is_missing():
+        """iptables says the set "doesn't exist", which _run_command does not log by itself."""
+
+        def run(cmd, **_kw):
+            if "block_static_ips" in cmd:
+                raise subprocess.CalledProcessError(
+                    2, cmd, stderr="iptables v1.8.9 (legacy): Set block_static_ips doesn't exist."
+                )
+            return Mock(returncode=0, stdout="", stderr="")
+
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        with (
+            patch("subprocess.run", side_effect=run),
+            patch("src.firewall.log_error") as log_error,
+        ):
+            assert fw.setup_static_ip_rules("allow_static_ips", "block_static_ips") is False
+        assert any("block_static_ips" in c.args[1] for c in log_error.call_args_list)
+
+    def it_goes_on_when_an_allow_rule_is_not_installed():
+        run, _ = _run_failing(lambda cmd: "ACCEPT" in cmd)
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        with patch("subprocess.run", side_effect=run):
+            assert fw.setup_static_ip_rules("allow_static_ips", "block_static_ips") is True

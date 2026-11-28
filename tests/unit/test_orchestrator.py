@@ -802,6 +802,10 @@ def describe_a_firewall_that_cannot_close_stops_the_start():
         [
             pytest.param(lambda cmd: cmd[1:] == ["-P", "INPUT", "DROP"], id="input-drop"),
             pytest.param(lambda cmd: cmd[1:] == ["-P", "FORWARD", "DROP"], id="forward-drop"),
+            pytest.param(
+                lambda cmd: cmd[1:3] == ["-I", "FORWARD"] and cmd[-1] == "DROP",
+                id="block-rule",
+            ),
         ],
     )
     async def it_exits_without_opening_dns(failing, tmp_path, sample_config_data):

@@ -119,3 +119,14 @@ def describe_reload_withdrawal_with_the_real_tools():
             assert ipset_name not in forward
             assert ipset_name not in listed
         assert firewall.domain_ipsets == {}
+
+
+def describe_setup_static_ip_rules_with_the_real_tools():
+    def it_fails_when_the_block_rule_cannot_be_inserted(firewall):
+        """iptables refuses a rule on a set that does not exist, so block_ips would not apply."""
+        missing = "sgwtest-no-such-set"
+        assert missing not in _sets()
+
+        assert firewall.setup_static_ip_rules(missing, missing) is False
+
+        assert missing not in _forward()
