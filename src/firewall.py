@@ -689,10 +689,11 @@ class FirewallManager:
             block_ipset_name: ipset name for denied IPs
 
         Returns:
-            True on success
+            True on success. False when the block rule could not be inserted: block_ips would
+            not apply. A failed allow rule leaves less allowed, so it does not count.
         """
         # Block rule first, so it takes precedence
-        self._run_command(
+        if not self._run_required(
             [
                 self.iptables_cmd,
                 "-I",
@@ -705,8 +706,10 @@ class FirewallManager:
                 "dst",
                 "-j",
                 "DROP",
-            ]
-        )
+            ],
+            "block_ips would not be blocked",
+        ):
+            return False
 
         # Allow rule (one per port when allowed_ports is set)
         for rule in self._forward_accept_rules(allow_ipset_name, None, action="-A"):
