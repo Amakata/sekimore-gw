@@ -4,7 +4,7 @@ name: Language images
 # per image, ghcr.io/amakata/sgw-lang-<lang>:<version>-<revision>-bookworm, with
 # <version>-bookworm following the newest revision.
 #
-# lang/plan.py decides what runs, so nothing already published is built again:
+# lang-plan (tools/src/plan.rs, #506) decides what runs, so nothing already published is built again:
 # - a pull request checks the versions it adds or re-revisions, and the newest version of each
 #   language whose recipe it changes (amd64; the `test` target, with no network)
 # - dispatching, and the daily run, publish what the registry lacks — the pins, and the newest
@@ -43,10 +43,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # 1.89.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          python-version: "3.11"
-      - run: pip install pyyaml
+          workspaces: tools
+      - name: Build lang-plan
+        run: cargo build --manifest-path tools/Cargo.toml --locked --bin lang-plan
       - id: m
         env:
           EVENT: ${{ github.event_name }}
@@ -58,9 +60,9 @@ jobs:
           if [ "$EVENT" = pull_request ]; then
             git show "origin/${BASE_REF}:lang/versions.yml" > /tmp/base.yml 2>/dev/null || : > /tmp/base.yml
             git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/changed
-            out=$(python lang/plan.py pr --base /tmp/base.yml --changed /tmp/changed)
+            out=$(tools/target/debug/lang-plan pr --base /tmp/base.yml --changed /tmp/changed)
           else
-            out=$(python lang/plan.py publish --lang "${LANG_IN}" --version "${VERSION_IN}")
+            out=$(tools/target/debug/lang-plan publish --lang "${LANG_IN}" --version "${VERSION_IN}")
           fi
           echo "$out"
           echo "build=$(jq -c .build <<<"$out")" >> "$GITHUB_OUTPUT"

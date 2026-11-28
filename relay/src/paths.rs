@@ -1,7 +1,7 @@
 //! The edge ids of the path ledger (docs/paths.yml), as the relay names them (#223).
 //!
 //! Every place in the relay that opens a connection names its edge with one of these, and
-//! the Python test `tests/unit/test_paths.py` refuses an id that is here and not in the
+//! `tools/tests/paths_ledger.rs` refuses an id that is here and not in the
 //! ledger, or in the ledger and not here or in `src/paths.py`. Audit entries carry the id as
 //! `edge`, so a record can be traced to the row that describes the connection it came from.
 
@@ -70,7 +70,7 @@ pub const EDGE_FIELD: &str = "edge";
 ///
 /// `Audit::log_edge` and `Audit::deny_edge` refuse, in a debug build, a pair that is not here,
 /// so a new event cannot be written on an edge without a row in this table; and
-/// `tests/unit/test_paths.py` checks that the ledger's `audit` attribute names exactly these
+/// `tools/tests/paths_ledger.rs` checks that the ledger's `audit` attribute names exactly these
 /// events for each edge. Events that describe no connection (tokens issued, the store,
 /// `serve_started`) go through `Audit::log` and carry no edge.
 pub const AUDIT_EVENTS: &[(&str, &str)] = &[

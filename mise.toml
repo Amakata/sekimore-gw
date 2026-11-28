@@ -1,12 +1,12 @@
 # Development tasks. Before pushing, run `mise run ci` to do the same checks as CI
-# (relay.yml / test.yml / lint.yml) all together.
+# (relay.yml / tools.yml / test.yml / lint.yml) all together.
 # ci runs the independent checks in parallel (mise's depends are executed concurrently). Only pytest (~35s)
 # and cargo test (~10s) are slow, so they get their own lanes and the whole run takes as long as the
 # slowest task (~35s).
 #
 #   mise run ci        # every check in parallel. Always run before pushing
 #   mise run fmt       # rustfmt + ruff format, "applying" the changes (rewrites files, not --check)
-#   Individually: mise run ci:rust-lint / ci:rust-test / ci:go / ci:py-lint / ci:py-test / audit
+#   Individually: mise run ci:rust-lint / ci:rust-test / ci:go / ci:tools / ci:py-lint / ci:py-test / audit
 
 [tools]
 rust = "1.89.0"
@@ -42,6 +42,17 @@ go vet ./...
 go test ./...
 """
 
+# ---- tools/: the repository's own tools and checks (tools.yml) ----
+[tasks."ci:tools"]
+description = "tools fmt --check + clippy + test: changelog, path ledger, pins, UPGRADING, agent-setup.sh (fast)"
+dir = "{{config_root}}/tools"
+run = """
+set -e
+cargo fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+"""
+
 # ---- Python (lint.yml + test.yml) ----
 [tasks."ci:py-lint"]
 description = "ruff check / ruff format --check / mypy (fast)"
@@ -72,18 +83,23 @@ run = 'uv run pytest -m "not e2e"'
 
 # ---- Combined ----
 [tasks.ci]
-description = "all pre-push checks (runs 5 tasks in parallel)"
-depends = ["ci:rust-lint", "ci:rust-test", "ci:go", "ci:py-lint", "ci:py-test"]
+description = "all pre-push checks (runs 6 tasks in parallel)"
+depends = ["ci:rust-lint", "ci:rust-test", "ci:go", "ci:tools", "ci:py-lint", "ci:py-test"]
 
 [tasks.fmt]
 description = "apply formatting (rustfmt + ruff format; rewrites files)"
 run = """
 set -e
 (cd "{{config_root}}/relay" && cargo fmt)
+(cd "{{config_root}}/tools" && cargo fmt)
 uv run ruff format src/ tests/
 """
 
 [tasks.audit]
-description = "cargo audit (RUSTSEC)"
+description = "cargo audit (RUSTSEC) of relay/ and tools/"
 dir = "{{config_root}}/relay"
-run = "cargo audit"
+run = """
+set -e
+cargo audit
+cd ../tools && cargo audit
+"""

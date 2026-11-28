@@ -57,7 +57,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # the archive within weeks of being superseded. The snapshot is what makes both hold.
 #
 # **Bumping this is how security updates arrive.** Nothing reaches this image between bumps. Do it
-# on a schedule, not when something breaks; `test_supply_chain_pins.py` fails once it is stale.
+# on a schedule, not when something breaks; `tools/tests/supply_chain_pins.rs` fails once it is stale.
 ARG DEBIAN_SNAPSHOT=20261020T000000Z
 
 # System package installation

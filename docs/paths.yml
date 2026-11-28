@@ -1,8 +1,8 @@
 # The path ledger (#223): every way traffic moves through the gateway, as data.
 #
-# tests/unit/test_paths.py loads this into a graph and checks the rules that the bugs of
-# 2026-09-25 broke (#186, #190, #205, #212, #217, #220). scripts/paths.py answers questions
-# about it and draws it. src/paths.py and relay/src/paths.rs carry the same edge ids, and the
+# tools/tests/paths_ledger.rs loads this into a graph and checks the rules that the bugs of
+# 2026-09-25 broke (#186, #190, #205, #212, #217, #220). The `paths` tool (tools/) answers
+# questions about it and draws it. src/paths.py and relay/src/paths.rs carry the same edge ids, and the
 # test refuses an id that is in one place and not the others.
 #
 # An edge is one connection one component opens. Every edge says:

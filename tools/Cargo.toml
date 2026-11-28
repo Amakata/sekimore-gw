@@ -1,0 +1,22 @@
+[package]
+name = "sekimore-tools"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.89"
+# Pick dependency versions that build with rust-version (the toolchain CI and mise use)
+resolver = "3"
+license = "Apache-2.0"
+publish = false
+description = "The repository's own tools and checks: the language-image plan, the path ledger, and the checks cargo test runs over the repository"
+
+# A crate of its own, not a member of relay/: it never enters the gateway image (the Dockerfile
+# copies relay/ only) or the `sgw` binary, and building or testing it does not touch the relay's
+# build.
+
+[dependencies]
+# both already in relay/'s tree; the checks are ports of regular expressions and YAML reads
+regex = "1.11"
+serde_yaml_ng = "0.10"
+
+[dev-dependencies]
+tempfile = "3.20"

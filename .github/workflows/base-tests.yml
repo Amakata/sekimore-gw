@@ -1,38 +1,24 @@
 name: Base files
 
-# The shell test of sgw-post-start and the check that UPGRADING covers the gateway version.
-# Neither needs Docker; the image build is base.yml.
+# The shell test of sgw-post-start. It needs no Docker; the image build is base.yml. That UPGRADING
+# covers the gateway version is checked by tools.yml (tools/tests/upgrading.rs, #506).
 on:
   push:
     branches: [main, next]
     paths:
       - "base/**"
       - "!base/**.md"
-      - "UPGRADING.md"
-      - "UPGRADING.ja.md"
       - "pyproject.toml"
       - ".github/workflows/base-tests.yml"
   pull_request:
     paths:
       - "base/**"
       - "!base/**.md"
-      - "UPGRADING.md"
-      - "UPGRADING.ja.md"
       - "pyproject.toml"
       - ".github/workflows/base-tests.yml"
   workflow_dispatch:
 
 jobs:
-  docs:
-    name: UPGRADING is current
-    runs-on: ubuntu-26.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: UPGRADING covers the gateway this image takes
-        run: python3 base/scripts/check-upgrading.py
-
   post-start:
     name: sgw-post-start runs setup, docker-init and post-create in order
     runs-on: ubuntu-26.04

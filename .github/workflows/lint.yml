@@ -32,13 +32,4 @@ jobs:
       - name: Run mypy type check
         run: uv run mypy src/
 
-      # Documentation the release process writes by hand, so it drifts silently. Runs here as well
-      # as in the test suite, because a changelog problem is a lint problem: nothing is broken.
-      - name: Check the changelog style
-        run: uv run pytest tests/unit/test_changelog_style.py -q --no-cov
-
-      # Same shape as the changelog: a step that slipped back to a floating tag breaks nothing, so
-      # it needs somewhere to be noticed. Cheap, so it sits in the fast lane rather than waiting
-      # for the test job.
-      - name: Check the action and image pins
-        run: uv run pytest tests/unit/test_supply_chain_pins.py -q --no-cov
+      # The changelog's shape and the action and image pins are checked by tools.yml (#506).

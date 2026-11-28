@@ -76,7 +76,7 @@ def describe_the_base_image_carries_the_gateways_version():
 
     def it_has_had_upgrading_reviewed_for_this_version():
         # Most releases ask nothing of a user; what has to happen every time is the decision. The
-        # marker records that it was made (base/scripts/check-upgrading.py fails when it was not).
+        # marker records that it was made (tools/tests/upgrading.rs fails when it was not).
         for name in ("UPGRADING.md", "UPGRADING.ja.md"):
             first = _text(ROOT / name).splitlines()[0]
             m = re.match(r"^<!-- reviewed-up-to: (\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?) -->", first)

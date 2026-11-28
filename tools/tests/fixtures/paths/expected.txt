@@ -1,0 +1,960 @@
+#=# 0 | edges
+dev.dns                            dev → gateway.dns
+dev.egress.direct                  dev → internet via gateway.firewall,host.forward
+dev.egress.route_past_gateway      dev → internet via host [blocked by host.forward]
+dev.host_input                     dev → host [blocked by host.input]
+dev.squid                          dev → gateway.squid
+squid.upstream_proxy               gateway.squid → upstream_proxy
+squid.internet                     gateway.squid → internet
+dev.relay.ssh                      dev → gateway.relay.ssh
+relay.ssh.bastion                  gateway.relay.ssh → bastion
+relay.ssh.upstream                 gateway.relay.ssh → upstream.git via bastion
+dev.relay.api                      dev → gateway.relay.api
+relay.github.api                   gateway.relay.github → upstream.api
+relay.github.via_proxy             gateway.relay.github → upstream_proxy
+relay.github.via_squid             gateway.relay.github → gateway.squid
+dev.passthrough                    dev → gateway.relay.passthrough
+passthrough.upstream               gateway.relay.passthrough → upstream.api
+passthrough.via_proxy              gateway.relay.passthrough → upstream_proxy
+passthrough.via_squid              gateway.relay.passthrough → gateway.squid
+dev.webui                          dev → gateway.webui
+operator.webui                     host → gateway.webui
+dev.signing                        dev → gateway.signing
+operator.store                     operator → gateway.store
+relay.sidecar                      gateway.relay.api → sidecar.forge
+sidecar.api                        sidecar.forge → gateway.relay.passthrough
+#=# 0 | edges -v
+dev.dns                            dev → gateway.dns
+    proto          dns/53
+    resolves       gateway.dns
+    verifies_peer  none (the answer comes from the default route set by sgw-agent setup)
+    presents       none
+    audit          sqlite dns log
+    verify         /etc/resolv.conf names the gateway
+dev.egress.direct                  dev → internet via gateway.firewall,host.forward
+    proto          tcp (allowed_ports)
+    resolves       gateway.dns
+    verifies_peer  dev's own TLS, end to end
+    presents       none
+    audit          NFLOG for drops; nothing for accepts (the point of
+    switches       {'direct_egress': 'allow'}
+    verify         the upstream proxy is used for ordinary traffic
+dev.egress.route_past_gateway      dev → internet via host [blocked by host.forward]
+    proto          tcp (default route moved to the bridge's .1)
+    resolves       any
+    verifies_peer  n/a
+    presents       none
+    audit          none — the gateway never sees it
+    verify         a root process must not route past the gateway
+dev.host_input                     dev → host [blocked by host.input]
+    proto          any (the bridge's .1: ping, published ports, the VM's services)
+    resolves       n/a
+    verifies_peer  n/a
+    presents       none
+    audit          none
+    verify         the host itself must not answer dev
+dev.squid                          dev → gateway.squid
+    proto          http proxy/3128 (HTTP_PROXY from /api/proxy-env)
+    resolves       gateway.squid (allow_domains; relayed domains refused)
+    verifies_peer  none (plain, inside the gateway's network)
+    presents       none
+    audit          squid access.log → sqlite proxy log
+    switches       {'upstream_proxy': 'set', 'direct_egress': 'deny'}
+    verify         the upstream proxy is used for ordinary traffic
+squid.upstream_proxy               gateway.squid → upstream_proxy
+    proto          http CONNECT, or TLS then CONNECT (cache_peer … tls)
+    resolves       squid
+    verifies_peer  OpenSSL, the system CA store
+    presents       upstream_proxy_password (login=, from the store via the watcher)
+    audit          squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'any'}
+squid.internet                     gateway.squid → internet
+    proto          tcp/80,443
+    resolves       squid
+    verifies_peer  dev's own TLS, end to end (CONNECT)
+    presents       none
+    audit          squid access.log
+    switches       {'upstream_proxy': 'unset'}
+dev.relay.ssh                      dev → gateway.relay.ssh
+    proto          ssh/22
+    resolves       gateway.dns (the relayed domain resolves to the gateway)
+    verifies_peer  dev's ~/.ssh/known_hosts, written by sgw-agent setup with the relay's host key
+    presents       disposable_ssh_key
+    audit          audit.jsonl ssh_rejected / ssh_auth_ok / ssh_auth_denied / ssh_channel_rejected / ssh_exec_rejected / ssh_request_rejected / cmd_rejected / repo_denied / push_rejected / refs_for_rewritten
+    verify         git ls-remote through the relay
+relay.ssh.bastion                  gateway.relay.ssh → bastion
+    proto          ssh (ProxyJump hop, run by OpenSSH as ssh -W)
+    resolves       the gateway's resolver
+    verifies_peer  the upstream's known_hosts, through the -F ssh_config the relay writes (#220)
+    presents       operator_ssh_agent
+    audit          audit.jsonl known_hosts_added (the operator taking its key); the git session is on relay.ssh.upstream
+    switches       {'ProxyJump': 'set'}
+    check          bastion:
+relay.ssh.upstream                 gateway.relay.ssh → upstream.git via bastion
+    proto          ssh (git-upload-pack / git-receive-pack)
+    resolves       the gateway's resolver, or the last bastion
+    verifies_peer  the upstream's known_hosts (/data/relay/…/known_hosts), -o and -F
+    presents       operator_ssh_agent
+    audit          audit.jsonl relay_ok / relay_failed / upstream_preflight_failed / upstream_spawn_failed / known_hosts_added
+    switches       {'ProxyJump': 'any'}
+    verify         git ls-remote through the relay
+    check          known_hosts:
+dev.relay.api                      dev → gateway.relay.api
+    proto          http/8420
+    resolves       gateway.dns
+    verifies_peer  none (plain, inside the gateway's network)
+    presents       project_token
+    audit          audit.jsonl api_ok / api_error / token_denied / token_wrong_project / repo_denied / security_alert_dismissed / security_alert_reopened / task_checked / bootstrap_ok / bootstrap_denied
+    verify         one GitHub API call through the relay
+relay.github.api                   gateway.relay.github → upstream.api
+    proto          https (end to end; the hop to a proxy is relay.github.via_proxy or relay.github.via_squid)
+    resolves       reqwest, or the proxy
+    verifies_peer  rustls — platform roots, SSL_CERT_FILE, relay.ca_file
+    presents       upstream_token
+    audit          audit.jsonl api_call / pr_created / pr_exists / pr_failed / redirect_fetch / redirect_refused (an answer that leaves the API host, followed without the token, https and public addresses only)
+    switches       {'upstream_proxy': 'any', 'upstream_proxy_tls': 'any'}
+    verify         one GitHub API call through the relay
+relay.github.via_proxy             gateway.relay.github → upstream_proxy
+    proto          http CONNECT (plain proxy), or TLS then CONNECT (Squid disabled)
+    resolves       reqwest
+    verifies_peer  rustls (TLS proxy only)
+    presents       upstream_proxy_password (Proxy-Authorization, from the store)
+    audit          audit.jsonl api_call / redirect_fetch / redirect_refused (edge names the hop; the failure reason names the proxy)
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'false-or-squid-disabled'}
+relay.github.via_squid             gateway.relay.github → gateway.squid
+    proto          http CONNECT to 127.0.0.1:<proxy.port>
+    resolves       n/a (loopback)
+    verifies_peer  none (loopback)
+    presents       none (Squid presents login= to the upstream)
+    audit          audit.jsonl api_call / redirect_fetch / redirect_refused; squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': True}
+dev.passthrough                    dev → gateway.relay.passthrough
+    proto          tcp/443 (SNI picks the target; upload cap)
+    resolves       gateway.dns (the relayed domain resolves to the gateway)
+    verifies_peer  dev's own TLS, end to end
+    presents       none
+    audit          audit.jsonl https_rejected / https_upload_capped (what dev asked for; the hop taken is on passthrough.*)
+    verify         HTTPS to a relayed domain must reach the upstream
+passthrough.upstream               gateway.relay.passthrough → upstream.api
+    proto          tcp/443 (direct)
+    resolves       the relay, with the
+    verifies_peer  dev's own TLS, end to end
+    presents       none
+    audit          audit.jsonl https_passthrough / https_failed / resolved_address_refused
+    switches       {'upstream_proxy': 'unset'}
+    verify         HTTPS to a relayed domain must reach the upstream
+passthrough.via_proxy              gateway.relay.passthrough → upstream_proxy
+    proto          http CONNECT (plain proxy), or TLS then CONNECT (Squid disabled)
+    resolves       the proxy
+    verifies_peer  rustls (TLS proxy only)
+    presents       upstream_proxy_password (Proxy-Authorization, from the store)
+    audit          audit.jsonl https_passthrough / https_failed (the failure reason names the proxy)
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'false-or-squid-disabled'}
+passthrough.via_squid              gateway.relay.passthrough → gateway.squid
+    proto          http CONNECT to 127.0.0.1:<proxy.port>
+    resolves       n/a (loopback)
+    verifies_peer  none (loopback)
+    presents       none (Squid presents login= to the upstream)
+    audit          audit.jsonl https_passthrough / https_failed; squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': True}
+    check          reach:
+dev.webui                          dev → gateway.webui
+    proto          http/8080
+    resolves       gateway.dns
+    verifies_peer  none
+    presents       none (GET is open by design; no write endpoints since
+    audit          none (uvicorn's access log until 0.3.0-alpha.4; serve logs each request at debug)
+    verify         the gateway's API must not hand out the upstream proxy password
+operator.webui                     host → gateway.webui
+    proto          http (the published port)
+    resolves       n/a
+    verifies_peer  none
+    presents       none
+    audit          none (uvicorn's access log until 0.3.0-alpha.4; serve logs each request at debug)
+dev.signing                        dev → gateway.signing
+    proto          ssh-agent protocol over a shared unix socket
+    resolves       n/a
+    verifies_peer  n/a (socket permissions, uid)
+    presents       none (sign requests only)
+    audit          audit.jsonl signing_agent_started / signing_agent_signed / signing_agent_refused
+    verify         only the gateway's filtered signing key may be reachable
+operator.store                     operator → gateway.store
+    proto          the control socket, through docker exec (gw:unlock, gw:proxy-credential)
+    resolves       n/a
+    verifies_peer  n/a
+    presents       the passphrase, typed or from the host's keychain
+    audit          relay log
+    verify         the secret store
+relay.sidecar                      gateway.relay.api → sidecar.forge
+    proto          HTTP/1.1 over a Unix socket, on a volume only the gateway and the sidecar mount
+    resolves       n/a (a path, relay.sidecars.<name>.socket)
+    verifies_peer  the socket's path and mode (0660); GET /describe checked against relay.sidecars (name, resources, a guide) before the first call
+    presents       upstream_token, for the one call's upstream
+    audit          audit.jsonl sidecar_unavailable / sidecar_refused
+    switches       {'relay.sidecars': 'set'}
+sidecar.api                        sidecar.forge → gateway.relay.passthrough
+    proto          TLS to the upstream API end to end, dialed at the gateway's 443 for the API's name (SNI picks the target; upload cap)
+    resolves       the sidecar resolves the gateway (--via); the API's own name is kept for SNI and the certificate
+    verifies_peer  rustls — platform roots, SSL_CERT_FILE
+    presents       upstream_token
+    audit          audit.jsonl api_call (written by the gateway from the calls the sidecar reports; the passthrough logs the connection itself)
+    switches       {'relay.sidecars': 'set'}
+#=# 0 | dot
+digraph paths {
+  rankdir=LR;
+  node [shape=box, style="rounded,filled", fontname="sans-serif", fontsize=10];
+  edge [fontname="sans-serif", fontsize=8];
+  "dev" [fillcolor="#f2c9c9"];
+  "gateway.dns" [fillcolor="#c9e2f2"];
+  "gateway.firewall" [fillcolor="#c9e2f2"];
+  "host.forward" [fillcolor="#c9e2f2"];
+  "host.input" [fillcolor="#c9e2f2"];
+  "gateway.squid" [fillcolor="#f2e6c9"];
+  "gateway.relay.ssh" [fillcolor="#d5f2c9"];
+  "gateway.relay.api" [fillcolor="#d5f2c9"];
+  "gateway.relay.github" [fillcolor="#d5f2c9"];
+  "gateway.relay.passthrough" [fillcolor="#d5f2c9"];
+  "sidecar.forge" [fillcolor="#ffffff"];
+  "gateway.webui" [fillcolor="#e6d5f2"];
+  "gateway.store" [fillcolor="#e6d5f2"];
+  "gateway.signing" [fillcolor="#e6d5f2"];
+  "host" [fillcolor="#dddddd"];
+  "operator" [fillcolor="#ffffff"];
+  "upstream_proxy" [fillcolor="#f2f2f2"];
+  "bastion" [fillcolor="#f2f2f2"];
+  "upstream.git" [fillcolor="#f2f2f2"];
+  "upstream.api" [fillcolor="#f2f2f2"];
+  "internet" [fillcolor="#f2f2f2"];
+  "dev" -> "gateway.dns" [label="dev.dns"];
+  "dev" -> "gateway.firewall" [label="dev.egress.direct"];
+  "gateway.firewall" -> "host.forward" [label=""];
+  "host.forward" -> "internet" [label=""];
+  "dev" -> "host" [label="dev.egress.route_past_gateway\n(blocked by host.forward)" style=dashed color=red];
+  "host" -> "internet" [label="" style=dashed color=red];
+  "dev" -> "host" [label="dev.host_input\n(blocked by host.input)" style=dashed color=red];
+  "dev" -> "gateway.squid" [label="dev.squid"];
+  "gateway.squid" -> "upstream_proxy" [label="squid.upstream_proxy"];
+  "gateway.squid" -> "internet" [label="squid.internet"];
+  "dev" -> "gateway.relay.ssh" [label="dev.relay.ssh"];
+  "gateway.relay.ssh" -> "bastion" [label="relay.ssh.bastion"];
+  "gateway.relay.ssh" -> "bastion" [label="relay.ssh.upstream"];
+  "bastion" -> "upstream.git" [label=""];
+  "dev" -> "gateway.relay.api" [label="dev.relay.api"];
+  "gateway.relay.github" -> "upstream.api" [label="relay.github.api"];
+  "gateway.relay.github" -> "upstream_proxy" [label="relay.github.via_proxy"];
+  "gateway.relay.github" -> "gateway.squid" [label="relay.github.via_squid"];
+  "dev" -> "gateway.relay.passthrough" [label="dev.passthrough"];
+  "gateway.relay.passthrough" -> "upstream.api" [label="passthrough.upstream"];
+  "gateway.relay.passthrough" -> "upstream_proxy" [label="passthrough.via_proxy"];
+  "gateway.relay.passthrough" -> "gateway.squid" [label="passthrough.via_squid"];
+  "dev" -> "gateway.webui" [label="dev.webui"];
+  "host" -> "gateway.webui" [label="operator.webui"];
+  "dev" -> "gateway.signing" [label="dev.signing"];
+  "operator" -> "gateway.store" [label="operator.store"];
+  "gateway.relay.api" -> "sidecar.forge" [label="relay.sidecar"];
+  "sidecar.forge" -> "gateway.relay.passthrough" [label="sidecar.api"];
+}
+#=# 0 | edges --switch ProxyJump
+relay.ssh.bastion                  gateway.relay.ssh → bastion
+relay.ssh.upstream                 gateway.relay.ssh → upstream.git via bastion
+#=# 0 | edges -v --switch ProxyJump
+relay.ssh.bastion                  gateway.relay.ssh → bastion
+    proto          ssh (ProxyJump hop, run by OpenSSH as ssh -W)
+    resolves       the gateway's resolver
+    verifies_peer  the upstream's known_hosts, through the -F ssh_config the relay writes (#220)
+    presents       operator_ssh_agent
+    audit          audit.jsonl known_hosts_added (the operator taking its key); the git session is on relay.ssh.upstream
+    switches       {'ProxyJump': 'set'}
+    check          bastion:
+relay.ssh.upstream                 gateway.relay.ssh → upstream.git via bastion
+    proto          ssh (git-upload-pack / git-receive-pack)
+    resolves       the gateway's resolver, or the last bastion
+    verifies_peer  the upstream's known_hosts (/data/relay/…/known_hosts), -o and -F
+    presents       operator_ssh_agent
+    audit          audit.jsonl relay_ok / relay_failed / upstream_preflight_failed / upstream_spawn_failed / known_hosts_added
+    switches       {'ProxyJump': 'any'}
+    verify         git ls-remote through the relay
+    check          known_hosts:
+#=# 0 | edges --switch direct_egress
+dev.egress.direct                  dev → internet via gateway.firewall,host.forward
+dev.squid                          dev → gateway.squid
+#=# 0 | edges -v --switch direct_egress
+dev.egress.direct                  dev → internet via gateway.firewall,host.forward
+    proto          tcp (allowed_ports)
+    resolves       gateway.dns
+    verifies_peer  dev's own TLS, end to end
+    presents       none
+    audit          NFLOG for drops; nothing for accepts (the point of
+    switches       {'direct_egress': 'allow'}
+    verify         the upstream proxy is used for ordinary traffic
+dev.squid                          dev → gateway.squid
+    proto          http proxy/3128 (HTTP_PROXY from /api/proxy-env)
+    resolves       gateway.squid (allow_domains; relayed domains refused)
+    verifies_peer  none (plain, inside the gateway's network)
+    presents       none
+    audit          squid access.log → sqlite proxy log
+    switches       {'upstream_proxy': 'set', 'direct_egress': 'deny'}
+    verify         the upstream proxy is used for ordinary traffic
+#=# 0 | edges --switch relay.sidecars
+relay.sidecar                      gateway.relay.api → sidecar.forge
+sidecar.api                        sidecar.forge → gateway.relay.passthrough
+#=# 0 | edges -v --switch relay.sidecars
+relay.sidecar                      gateway.relay.api → sidecar.forge
+    proto          HTTP/1.1 over a Unix socket, on a volume only the gateway and the sidecar mount
+    resolves       n/a (a path, relay.sidecars.<name>.socket)
+    verifies_peer  the socket's path and mode (0660); GET /describe checked against relay.sidecars (name, resources, a guide) before the first call
+    presents       upstream_token, for the one call's upstream
+    audit          audit.jsonl sidecar_unavailable / sidecar_refused
+    switches       {'relay.sidecars': 'set'}
+sidecar.api                        sidecar.forge → gateway.relay.passthrough
+    proto          TLS to the upstream API end to end, dialed at the gateway's 443 for the API's name (SNI picks the target; upload cap)
+    resolves       the sidecar resolves the gateway (--via); the API's own name is kept for SNI and the certificate
+    verifies_peer  rustls — platform roots, SSL_CERT_FILE
+    presents       upstream_token
+    audit          audit.jsonl api_call (written by the gateway from the calls the sidecar reports; the passthrough logs the connection itself)
+    switches       {'relay.sidecars': 'set'}
+#=# 0 | edges --switch upstream_proxy
+dev.squid                          dev → gateway.squid
+squid.upstream_proxy               gateway.squid → upstream_proxy
+squid.internet                     gateway.squid → internet
+relay.github.api                   gateway.relay.github → upstream.api
+relay.github.via_proxy             gateway.relay.github → upstream_proxy
+relay.github.via_squid             gateway.relay.github → gateway.squid
+passthrough.upstream               gateway.relay.passthrough → upstream.api
+passthrough.via_proxy              gateway.relay.passthrough → upstream_proxy
+passthrough.via_squid              gateway.relay.passthrough → gateway.squid
+#=# 0 | edges -v --switch upstream_proxy
+dev.squid                          dev → gateway.squid
+    proto          http proxy/3128 (HTTP_PROXY from /api/proxy-env)
+    resolves       gateway.squid (allow_domains; relayed domains refused)
+    verifies_peer  none (plain, inside the gateway's network)
+    presents       none
+    audit          squid access.log → sqlite proxy log
+    switches       {'upstream_proxy': 'set', 'direct_egress': 'deny'}
+    verify         the upstream proxy is used for ordinary traffic
+squid.upstream_proxy               gateway.squid → upstream_proxy
+    proto          http CONNECT, or TLS then CONNECT (cache_peer … tls)
+    resolves       squid
+    verifies_peer  OpenSSL, the system CA store
+    presents       upstream_proxy_password (login=, from the store via the watcher)
+    audit          squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'any'}
+squid.internet                     gateway.squid → internet
+    proto          tcp/80,443
+    resolves       squid
+    verifies_peer  dev's own TLS, end to end (CONNECT)
+    presents       none
+    audit          squid access.log
+    switches       {'upstream_proxy': 'unset'}
+relay.github.api                   gateway.relay.github → upstream.api
+    proto          https (end to end; the hop to a proxy is relay.github.via_proxy or relay.github.via_squid)
+    resolves       reqwest, or the proxy
+    verifies_peer  rustls — platform roots, SSL_CERT_FILE, relay.ca_file
+    presents       upstream_token
+    audit          audit.jsonl api_call / pr_created / pr_exists / pr_failed / redirect_fetch / redirect_refused (an answer that leaves the API host, followed without the token, https and public addresses only)
+    switches       {'upstream_proxy': 'any', 'upstream_proxy_tls': 'any'}
+    verify         one GitHub API call through the relay
+relay.github.via_proxy             gateway.relay.github → upstream_proxy
+    proto          http CONNECT (plain proxy), or TLS then CONNECT (Squid disabled)
+    resolves       reqwest
+    verifies_peer  rustls (TLS proxy only)
+    presents       upstream_proxy_password (Proxy-Authorization, from the store)
+    audit          audit.jsonl api_call / redirect_fetch / redirect_refused (edge names the hop; the failure reason names the proxy)
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'false-or-squid-disabled'}
+relay.github.via_squid             gateway.relay.github → gateway.squid
+    proto          http CONNECT to 127.0.0.1:<proxy.port>
+    resolves       n/a (loopback)
+    verifies_peer  none (loopback)
+    presents       none (Squid presents login= to the upstream)
+    audit          audit.jsonl api_call / redirect_fetch / redirect_refused; squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': True}
+passthrough.upstream               gateway.relay.passthrough → upstream.api
+    proto          tcp/443 (direct)
+    resolves       the relay, with the
+    verifies_peer  dev's own TLS, end to end
+    presents       none
+    audit          audit.jsonl https_passthrough / https_failed / resolved_address_refused
+    switches       {'upstream_proxy': 'unset'}
+    verify         HTTPS to a relayed domain must reach the upstream
+passthrough.via_proxy              gateway.relay.passthrough → upstream_proxy
+    proto          http CONNECT (plain proxy), or TLS then CONNECT (Squid disabled)
+    resolves       the proxy
+    verifies_peer  rustls (TLS proxy only)
+    presents       upstream_proxy_password (Proxy-Authorization, from the store)
+    audit          audit.jsonl https_passthrough / https_failed (the failure reason names the proxy)
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'false-or-squid-disabled'}
+passthrough.via_squid              gateway.relay.passthrough → gateway.squid
+    proto          http CONNECT to 127.0.0.1:<proxy.port>
+    resolves       n/a (loopback)
+    verifies_peer  none (loopback)
+    presents       none (Squid presents login= to the upstream)
+    audit          audit.jsonl https_passthrough / https_failed; squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': True}
+    check          reach:
+#=# 0 | edges --switch upstream_proxy_tls
+squid.upstream_proxy               gateway.squid → upstream_proxy
+relay.github.api                   gateway.relay.github → upstream.api
+relay.github.via_proxy             gateway.relay.github → upstream_proxy
+relay.github.via_squid             gateway.relay.github → gateway.squid
+passthrough.via_proxy              gateway.relay.passthrough → upstream_proxy
+passthrough.via_squid              gateway.relay.passthrough → gateway.squid
+#=# 0 | edges -v --switch upstream_proxy_tls
+squid.upstream_proxy               gateway.squid → upstream_proxy
+    proto          http CONNECT, or TLS then CONNECT (cache_peer … tls)
+    resolves       squid
+    verifies_peer  OpenSSL, the system CA store
+    presents       upstream_proxy_password (login=, from the store via the watcher)
+    audit          squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'any'}
+relay.github.api                   gateway.relay.github → upstream.api
+    proto          https (end to end; the hop to a proxy is relay.github.via_proxy or relay.github.via_squid)
+    resolves       reqwest, or the proxy
+    verifies_peer  rustls — platform roots, SSL_CERT_FILE, relay.ca_file
+    presents       upstream_token
+    audit          audit.jsonl api_call / pr_created / pr_exists / pr_failed / redirect_fetch / redirect_refused (an answer that leaves the API host, followed without the token, https and public addresses only)
+    switches       {'upstream_proxy': 'any', 'upstream_proxy_tls': 'any'}
+    verify         one GitHub API call through the relay
+relay.github.via_proxy             gateway.relay.github → upstream_proxy
+    proto          http CONNECT (plain proxy), or TLS then CONNECT (Squid disabled)
+    resolves       reqwest
+    verifies_peer  rustls (TLS proxy only)
+    presents       upstream_proxy_password (Proxy-Authorization, from the store)
+    audit          audit.jsonl api_call / redirect_fetch / redirect_refused (edge names the hop; the failure reason names the proxy)
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'false-or-squid-disabled'}
+relay.github.via_squid             gateway.relay.github → gateway.squid
+    proto          http CONNECT to 127.0.0.1:<proxy.port>
+    resolves       n/a (loopback)
+    verifies_peer  none (loopback)
+    presents       none (Squid presents login= to the upstream)
+    audit          audit.jsonl api_call / redirect_fetch / redirect_refused; squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': True}
+passthrough.via_proxy              gateway.relay.passthrough → upstream_proxy
+    proto          http CONNECT (plain proxy), or TLS then CONNECT (Squid disabled)
+    resolves       the proxy
+    verifies_peer  rustls (TLS proxy only)
+    presents       upstream_proxy_password (Proxy-Authorization, from the store)
+    audit          audit.jsonl https_passthrough / https_failed (the failure reason names the proxy)
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'false-or-squid-disabled'}
+passthrough.via_squid              gateway.relay.passthrough → gateway.squid
+    proto          http CONNECT to 127.0.0.1:<proxy.port>
+    resolves       n/a (loopback)
+    verifies_peer  none (loopback)
+    presents       none (Squid presents login= to the upstream)
+    audit          audit.jsonl https_passthrough / https_failed; squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': True}
+    check          reach:
+#=# 0 | edges --switch nope
+#=# 0 | edges -v --switch nope
+#=# 0 | edges --switch proxy
+#=# 0 | edges -v --switch proxy
+#=# 0 | edges --without verify
+squid.upstream_proxy               gateway.squid → upstream_proxy
+squid.internet                     gateway.squid → internet
+relay.ssh.bastion                  gateway.relay.ssh → bastion
+relay.github.via_proxy             gateway.relay.github → upstream_proxy
+relay.github.via_squid             gateway.relay.github → gateway.squid
+passthrough.via_proxy              gateway.relay.passthrough → upstream_proxy
+passthrough.via_squid              gateway.relay.passthrough → gateway.squid
+operator.webui                     host → gateway.webui
+relay.sidecar                      gateway.relay.api → sidecar.forge
+sidecar.api                        sidecar.forge → gateway.relay.passthrough
+#=# 0 | edges --without check
+dev.dns                            dev → gateway.dns
+dev.egress.direct                  dev → internet via gateway.firewall,host.forward
+dev.egress.route_past_gateway      dev → internet via host [blocked by host.forward]
+dev.host_input                     dev → host [blocked by host.input]
+dev.squid                          dev → gateway.squid
+squid.upstream_proxy               gateway.squid → upstream_proxy
+squid.internet                     gateway.squid → internet
+dev.relay.ssh                      dev → gateway.relay.ssh
+dev.relay.api                      dev → gateway.relay.api
+relay.github.api                   gateway.relay.github → upstream.api
+relay.github.via_proxy             gateway.relay.github → upstream_proxy
+relay.github.via_squid             gateway.relay.github → gateway.squid
+dev.passthrough                    dev → gateway.relay.passthrough
+passthrough.upstream               gateway.relay.passthrough → upstream.api
+passthrough.via_proxy              gateway.relay.passthrough → upstream_proxy
+dev.webui                          dev → gateway.webui
+operator.webui                     host → gateway.webui
+dev.signing                        dev → gateway.signing
+operator.store                     operator → gateway.store
+relay.sidecar                      gateway.relay.api → sidecar.forge
+sidecar.api                        sidecar.forge → gateway.relay.passthrough
+#=# 0 | edges --without tests
+#=# 0 | edges --without audit
+#=# 0 | edges --switch upstream_proxy --without verify -v
+squid.upstream_proxy               gateway.squid → upstream_proxy
+    proto          http CONNECT, or TLS then CONNECT (cache_peer … tls)
+    resolves       squid
+    verifies_peer  OpenSSL, the system CA store
+    presents       upstream_proxy_password (login=, from the store via the watcher)
+    audit          squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'any'}
+squid.internet                     gateway.squid → internet
+    proto          tcp/80,443
+    resolves       squid
+    verifies_peer  dev's own TLS, end to end (CONNECT)
+    presents       none
+    audit          squid access.log
+    switches       {'upstream_proxy': 'unset'}
+relay.github.via_proxy             gateway.relay.github → upstream_proxy
+    proto          http CONNECT (plain proxy), or TLS then CONNECT (Squid disabled)
+    resolves       reqwest
+    verifies_peer  rustls (TLS proxy only)
+    presents       upstream_proxy_password (Proxy-Authorization, from the store)
+    audit          audit.jsonl api_call / redirect_fetch / redirect_refused (edge names the hop; the failure reason names the proxy)
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'false-or-squid-disabled'}
+relay.github.via_squid             gateway.relay.github → gateway.squid
+    proto          http CONNECT to 127.0.0.1:<proxy.port>
+    resolves       n/a (loopback)
+    verifies_peer  none (loopback)
+    presents       none (Squid presents login= to the upstream)
+    audit          audit.jsonl api_call / redirect_fetch / redirect_refused; squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': True}
+passthrough.via_proxy              gateway.relay.passthrough → upstream_proxy
+    proto          http CONNECT (plain proxy), or TLS then CONNECT (Squid disabled)
+    resolves       the proxy
+    verifies_peer  rustls (TLS proxy only)
+    presents       upstream_proxy_password (Proxy-Authorization, from the store)
+    audit          audit.jsonl https_passthrough / https_failed (the failure reason names the proxy)
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': 'false-or-squid-disabled'}
+passthrough.via_squid              gateway.relay.passthrough → gateway.squid
+    proto          http CONNECT to 127.0.0.1:<proxy.port>
+    resolves       n/a (loopback)
+    verifies_peer  none (loopback)
+    presents       none (Squid presents login= to the upstream)
+    audit          audit.jsonl https_passthrough / https_failed; squid access.log
+    switches       {'upstream_proxy': 'set', 'upstream_proxy_tls': True}
+    check          reach:
+#=# 0 | paths dev internet
+dev → gateway.firewall → host.forward → internet    (mediated by: gateway.firewall, host.forward)
+dev → gateway.squid → internet    (mediated by: gateway.squid)
+dev → gateway.relay.api → sidecar.forge → gateway.relay.passthrough → gateway.squid → internet    (mediated by: gateway.relay.api, gateway.relay.passthrough, gateway.squid)
+dev → gateway.relay.passthrough → gateway.squid → internet    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths dev internet --blocked
+dev → gateway.firewall → host.forward → internet    (mediated by: gateway.firewall, host.forward)
+dev → host → internet    (mediated by: NOTHING)
+dev → host → internet    (mediated by: NOTHING)
+dev → gateway.squid → internet    (mediated by: gateway.squid)
+dev → gateway.relay.api → sidecar.forge → gateway.relay.passthrough → gateway.squid → internet    (mediated by: gateway.relay.api, gateway.relay.passthrough, gateway.squid)
+dev → gateway.relay.passthrough → gateway.squid → internet    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths dev host
+#=# 0 | paths dev host --blocked
+dev → host    (mediated by: NOTHING)
+dev → host    (mediated by: NOTHING)
+#=# 0 | paths dev upstream.api
+dev → gateway.relay.api → sidecar.forge → gateway.relay.passthrough → upstream.api    (mediated by: gateway.relay.api, gateway.relay.passthrough)
+dev → gateway.relay.passthrough → upstream.api    (mediated by: gateway.relay.passthrough)
+#=# 0 | paths dev upstream.api --blocked
+dev → gateway.relay.api → sidecar.forge → gateway.relay.passthrough → upstream.api    (mediated by: gateway.relay.api, gateway.relay.passthrough)
+dev → gateway.relay.passthrough → upstream.api    (mediated by: gateway.relay.passthrough)
+#=# 0 | paths dev upstream.git
+dev → gateway.relay.ssh → bastion → upstream.git    (mediated by: gateway.relay.ssh)
+dev → gateway.relay.ssh → bastion → upstream.git    (mediated by: gateway.relay.ssh)
+#=# 0 | paths dev upstream.git --blocked
+dev → gateway.relay.ssh → bastion → upstream.git    (mediated by: gateway.relay.ssh)
+dev → gateway.relay.ssh → bastion → upstream.git    (mediated by: gateway.relay.ssh)
+#=# 0 | paths dev upstream_proxy
+dev → gateway.squid → upstream_proxy    (mediated by: gateway.squid)
+dev → gateway.relay.api → sidecar.forge → gateway.relay.passthrough → upstream_proxy    (mediated by: gateway.relay.api, gateway.relay.passthrough)
+dev → gateway.relay.api → sidecar.forge → gateway.relay.passthrough → gateway.squid → upstream_proxy    (mediated by: gateway.relay.api, gateway.relay.passthrough, gateway.squid)
+dev → gateway.relay.passthrough → upstream_proxy    (mediated by: gateway.relay.passthrough)
+dev → gateway.relay.passthrough → gateway.squid → upstream_proxy    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths dev upstream_proxy --blocked
+dev → gateway.squid → upstream_proxy    (mediated by: gateway.squid)
+dev → gateway.relay.api → sidecar.forge → gateway.relay.passthrough → upstream_proxy    (mediated by: gateway.relay.api, gateway.relay.passthrough)
+dev → gateway.relay.api → sidecar.forge → gateway.relay.passthrough → gateway.squid → upstream_proxy    (mediated by: gateway.relay.api, gateway.relay.passthrough, gateway.squid)
+dev → gateway.relay.passthrough → upstream_proxy    (mediated by: gateway.relay.passthrough)
+dev → gateway.relay.passthrough → gateway.squid → upstream_proxy    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths dev gateway.store
+#=# 0 | paths dev gateway.store --blocked
+#=# 0 | paths dev bastion
+dev → gateway.relay.ssh → bastion    (mediated by: gateway.relay.ssh)
+dev → gateway.relay.ssh → bastion    (mediated by: gateway.relay.ssh)
+#=# 0 | paths dev bastion --blocked
+dev → gateway.relay.ssh → bastion    (mediated by: gateway.relay.ssh)
+dev → gateway.relay.ssh → bastion    (mediated by: gateway.relay.ssh)
+#=# 0 | paths gateway.dns internet
+#=# 0 | paths gateway.dns internet --blocked
+#=# 0 | paths gateway.dns host
+#=# 0 | paths gateway.dns host --blocked
+#=# 0 | paths gateway.dns upstream.api
+#=# 0 | paths gateway.dns upstream.api --blocked
+#=# 0 | paths gateway.dns upstream.git
+#=# 0 | paths gateway.dns upstream.git --blocked
+#=# 0 | paths gateway.dns upstream_proxy
+#=# 0 | paths gateway.dns upstream_proxy --blocked
+#=# 0 | paths gateway.dns gateway.store
+#=# 0 | paths gateway.dns gateway.store --blocked
+#=# 0 | paths gateway.dns bastion
+#=# 0 | paths gateway.dns bastion --blocked
+#=# 0 | paths gateway.firewall internet
+gateway.firewall → host.forward → internet    (mediated by: host.forward)
+#=# 0 | paths gateway.firewall internet --blocked
+gateway.firewall → host.forward → internet    (mediated by: host.forward)
+#=# 0 | paths gateway.firewall host
+#=# 0 | paths gateway.firewall host --blocked
+#=# 0 | paths gateway.firewall upstream.api
+#=# 0 | paths gateway.firewall upstream.api --blocked
+#=# 0 | paths gateway.firewall upstream.git
+#=# 0 | paths gateway.firewall upstream.git --blocked
+#=# 0 | paths gateway.firewall upstream_proxy
+#=# 0 | paths gateway.firewall upstream_proxy --blocked
+#=# 0 | paths gateway.firewall gateway.store
+#=# 0 | paths gateway.firewall gateway.store --blocked
+#=# 0 | paths gateway.firewall bastion
+#=# 0 | paths gateway.firewall bastion --blocked
+#=# 0 | paths host.forward internet
+host.forward → internet    (mediated by: NOTHING)
+#=# 0 | paths host.forward internet --blocked
+host.forward → internet    (mediated by: NOTHING)
+#=# 0 | paths host.forward host
+#=# 0 | paths host.forward host --blocked
+#=# 0 | paths host.forward upstream.api
+#=# 0 | paths host.forward upstream.api --blocked
+#=# 0 | paths host.forward upstream.git
+#=# 0 | paths host.forward upstream.git --blocked
+#=# 0 | paths host.forward upstream_proxy
+#=# 0 | paths host.forward upstream_proxy --blocked
+#=# 0 | paths host.forward gateway.store
+#=# 0 | paths host.forward gateway.store --blocked
+#=# 0 | paths host.forward bastion
+#=# 0 | paths host.forward bastion --blocked
+#=# 0 | paths host.input internet
+#=# 0 | paths host.input internet --blocked
+#=# 0 | paths host.input host
+#=# 0 | paths host.input host --blocked
+#=# 0 | paths host.input upstream.api
+#=# 0 | paths host.input upstream.api --blocked
+#=# 0 | paths host.input upstream.git
+#=# 0 | paths host.input upstream.git --blocked
+#=# 0 | paths host.input upstream_proxy
+#=# 0 | paths host.input upstream_proxy --blocked
+#=# 0 | paths host.input gateway.store
+#=# 0 | paths host.input gateway.store --blocked
+#=# 0 | paths host.input bastion
+#=# 0 | paths host.input bastion --blocked
+#=# 0 | paths gateway.squid internet
+gateway.squid → internet    (mediated by: NOTHING)
+#=# 0 | paths gateway.squid internet --blocked
+gateway.squid → internet    (mediated by: NOTHING)
+#=# 0 | paths gateway.squid host
+#=# 0 | paths gateway.squid host --blocked
+#=# 0 | paths gateway.squid upstream.api
+#=# 0 | paths gateway.squid upstream.api --blocked
+#=# 0 | paths gateway.squid upstream.git
+#=# 0 | paths gateway.squid upstream.git --blocked
+#=# 0 | paths gateway.squid upstream_proxy
+gateway.squid → upstream_proxy    (mediated by: NOTHING)
+#=# 0 | paths gateway.squid upstream_proxy --blocked
+gateway.squid → upstream_proxy    (mediated by: NOTHING)
+#=# 0 | paths gateway.squid gateway.store
+#=# 0 | paths gateway.squid gateway.store --blocked
+#=# 0 | paths gateway.squid bastion
+#=# 0 | paths gateway.squid bastion --blocked
+#=# 0 | paths gateway.relay.ssh internet
+#=# 0 | paths gateway.relay.ssh internet --blocked
+#=# 0 | paths gateway.relay.ssh host
+#=# 0 | paths gateway.relay.ssh host --blocked
+#=# 0 | paths gateway.relay.ssh upstream.api
+#=# 0 | paths gateway.relay.ssh upstream.api --blocked
+#=# 0 | paths gateway.relay.ssh upstream.git
+gateway.relay.ssh → bastion → upstream.git    (mediated by: NOTHING)
+gateway.relay.ssh → bastion → upstream.git    (mediated by: NOTHING)
+#=# 0 | paths gateway.relay.ssh upstream.git --blocked
+gateway.relay.ssh → bastion → upstream.git    (mediated by: NOTHING)
+gateway.relay.ssh → bastion → upstream.git    (mediated by: NOTHING)
+#=# 0 | paths gateway.relay.ssh upstream_proxy
+#=# 0 | paths gateway.relay.ssh upstream_proxy --blocked
+#=# 0 | paths gateway.relay.ssh gateway.store
+#=# 0 | paths gateway.relay.ssh gateway.store --blocked
+#=# 0 | paths gateway.relay.ssh bastion
+gateway.relay.ssh → bastion    (mediated by: NOTHING)
+gateway.relay.ssh → bastion    (mediated by: NOTHING)
+#=# 0 | paths gateway.relay.ssh bastion --blocked
+gateway.relay.ssh → bastion    (mediated by: NOTHING)
+gateway.relay.ssh → bastion    (mediated by: NOTHING)
+#=# 0 | paths gateway.relay.api internet
+gateway.relay.api → sidecar.forge → gateway.relay.passthrough → gateway.squid → internet    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths gateway.relay.api internet --blocked
+gateway.relay.api → sidecar.forge → gateway.relay.passthrough → gateway.squid → internet    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths gateway.relay.api host
+#=# 0 | paths gateway.relay.api host --blocked
+#=# 0 | paths gateway.relay.api upstream.api
+gateway.relay.api → sidecar.forge → gateway.relay.passthrough → upstream.api    (mediated by: gateway.relay.passthrough)
+#=# 0 | paths gateway.relay.api upstream.api --blocked
+gateway.relay.api → sidecar.forge → gateway.relay.passthrough → upstream.api    (mediated by: gateway.relay.passthrough)
+#=# 0 | paths gateway.relay.api upstream.git
+#=# 0 | paths gateway.relay.api upstream.git --blocked
+#=# 0 | paths gateway.relay.api upstream_proxy
+gateway.relay.api → sidecar.forge → gateway.relay.passthrough → upstream_proxy    (mediated by: gateway.relay.passthrough)
+gateway.relay.api → sidecar.forge → gateway.relay.passthrough → gateway.squid → upstream_proxy    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths gateway.relay.api upstream_proxy --blocked
+gateway.relay.api → sidecar.forge → gateway.relay.passthrough → upstream_proxy    (mediated by: gateway.relay.passthrough)
+gateway.relay.api → sidecar.forge → gateway.relay.passthrough → gateway.squid → upstream_proxy    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths gateway.relay.api gateway.store
+#=# 0 | paths gateway.relay.api gateway.store --blocked
+#=# 0 | paths gateway.relay.api bastion
+#=# 0 | paths gateway.relay.api bastion --blocked
+#=# 0 | paths gateway.relay.github internet
+gateway.relay.github → gateway.squid → internet    (mediated by: gateway.squid)
+#=# 0 | paths gateway.relay.github internet --blocked
+gateway.relay.github → gateway.squid → internet    (mediated by: gateway.squid)
+#=# 0 | paths gateway.relay.github host
+#=# 0 | paths gateway.relay.github host --blocked
+#=# 0 | paths gateway.relay.github upstream.api
+gateway.relay.github → upstream.api    (mediated by: NOTHING)
+#=# 0 | paths gateway.relay.github upstream.api --blocked
+gateway.relay.github → upstream.api    (mediated by: NOTHING)
+#=# 0 | paths gateway.relay.github upstream.git
+#=# 0 | paths gateway.relay.github upstream.git --blocked
+#=# 0 | paths gateway.relay.github upstream_proxy
+gateway.relay.github → upstream_proxy    (mediated by: NOTHING)
+gateway.relay.github → gateway.squid → upstream_proxy    (mediated by: gateway.squid)
+#=# 0 | paths gateway.relay.github upstream_proxy --blocked
+gateway.relay.github → upstream_proxy    (mediated by: NOTHING)
+gateway.relay.github → gateway.squid → upstream_proxy    (mediated by: gateway.squid)
+#=# 0 | paths gateway.relay.github gateway.store
+#=# 0 | paths gateway.relay.github gateway.store --blocked
+#=# 0 | paths gateway.relay.github bastion
+#=# 0 | paths gateway.relay.github bastion --blocked
+#=# 0 | paths gateway.relay.passthrough internet
+gateway.relay.passthrough → gateway.squid → internet    (mediated by: gateway.squid)
+#=# 0 | paths gateway.relay.passthrough internet --blocked
+gateway.relay.passthrough → gateway.squid → internet    (mediated by: gateway.squid)
+#=# 0 | paths gateway.relay.passthrough host
+#=# 0 | paths gateway.relay.passthrough host --blocked
+#=# 0 | paths gateway.relay.passthrough upstream.api
+gateway.relay.passthrough → upstream.api    (mediated by: NOTHING)
+#=# 0 | paths gateway.relay.passthrough upstream.api --blocked
+gateway.relay.passthrough → upstream.api    (mediated by: NOTHING)
+#=# 0 | paths gateway.relay.passthrough upstream.git
+#=# 0 | paths gateway.relay.passthrough upstream.git --blocked
+#=# 0 | paths gateway.relay.passthrough upstream_proxy
+gateway.relay.passthrough → upstream_proxy    (mediated by: NOTHING)
+gateway.relay.passthrough → gateway.squid → upstream_proxy    (mediated by: gateway.squid)
+#=# 0 | paths gateway.relay.passthrough upstream_proxy --blocked
+gateway.relay.passthrough → upstream_proxy    (mediated by: NOTHING)
+gateway.relay.passthrough → gateway.squid → upstream_proxy    (mediated by: gateway.squid)
+#=# 0 | paths gateway.relay.passthrough gateway.store
+#=# 0 | paths gateway.relay.passthrough gateway.store --blocked
+#=# 0 | paths gateway.relay.passthrough bastion
+#=# 0 | paths gateway.relay.passthrough bastion --blocked
+#=# 0 | paths sidecar.forge internet
+sidecar.forge → gateway.relay.passthrough → gateway.squid → internet    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths sidecar.forge internet --blocked
+sidecar.forge → gateway.relay.passthrough → gateway.squid → internet    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths sidecar.forge host
+#=# 0 | paths sidecar.forge host --blocked
+#=# 0 | paths sidecar.forge upstream.api
+sidecar.forge → gateway.relay.passthrough → upstream.api    (mediated by: gateway.relay.passthrough)
+#=# 0 | paths sidecar.forge upstream.api --blocked
+sidecar.forge → gateway.relay.passthrough → upstream.api    (mediated by: gateway.relay.passthrough)
+#=# 0 | paths sidecar.forge upstream.git
+#=# 0 | paths sidecar.forge upstream.git --blocked
+#=# 0 | paths sidecar.forge upstream_proxy
+sidecar.forge → gateway.relay.passthrough → upstream_proxy    (mediated by: gateway.relay.passthrough)
+sidecar.forge → gateway.relay.passthrough → gateway.squid → upstream_proxy    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths sidecar.forge upstream_proxy --blocked
+sidecar.forge → gateway.relay.passthrough → upstream_proxy    (mediated by: gateway.relay.passthrough)
+sidecar.forge → gateway.relay.passthrough → gateway.squid → upstream_proxy    (mediated by: gateway.relay.passthrough, gateway.squid)
+#=# 0 | paths sidecar.forge gateway.store
+#=# 0 | paths sidecar.forge gateway.store --blocked
+#=# 0 | paths sidecar.forge bastion
+#=# 0 | paths sidecar.forge bastion --blocked
+#=# 0 | paths gateway.webui internet
+#=# 0 | paths gateway.webui internet --blocked
+#=# 0 | paths gateway.webui host
+#=# 0 | paths gateway.webui host --blocked
+#=# 0 | paths gateway.webui upstream.api
+#=# 0 | paths gateway.webui upstream.api --blocked
+#=# 0 | paths gateway.webui upstream.git
+#=# 0 | paths gateway.webui upstream.git --blocked
+#=# 0 | paths gateway.webui upstream_proxy
+#=# 0 | paths gateway.webui upstream_proxy --blocked
+#=# 0 | paths gateway.webui gateway.store
+#=# 0 | paths gateway.webui gateway.store --blocked
+#=# 0 | paths gateway.webui bastion
+#=# 0 | paths gateway.webui bastion --blocked
+#=# 0 | paths gateway.store internet
+#=# 0 | paths gateway.store internet --blocked
+#=# 0 | paths gateway.store host
+#=# 0 | paths gateway.store host --blocked
+#=# 0 | paths gateway.store upstream.api
+#=# 0 | paths gateway.store upstream.api --blocked
+#=# 0 | paths gateway.store upstream.git
+#=# 0 | paths gateway.store upstream.git --blocked
+#=# 0 | paths gateway.store upstream_proxy
+#=# 0 | paths gateway.store upstream_proxy --blocked
+#=# 0 | paths gateway.store gateway.store
+gateway.store    (mediated by: NOTHING)
+#=# 0 | paths gateway.store gateway.store --blocked
+gateway.store    (mediated by: NOTHING)
+#=# 0 | paths gateway.store bastion
+#=# 0 | paths gateway.store bastion --blocked
+#=# 0 | paths gateway.signing internet
+#=# 0 | paths gateway.signing internet --blocked
+#=# 0 | paths gateway.signing host
+#=# 0 | paths gateway.signing host --blocked
+#=# 0 | paths gateway.signing upstream.api
+#=# 0 | paths gateway.signing upstream.api --blocked
+#=# 0 | paths gateway.signing upstream.git
+#=# 0 | paths gateway.signing upstream.git --blocked
+#=# 0 | paths gateway.signing upstream_proxy
+#=# 0 | paths gateway.signing upstream_proxy --blocked
+#=# 0 | paths gateway.signing gateway.store
+#=# 0 | paths gateway.signing gateway.store --blocked
+#=# 0 | paths gateway.signing bastion
+#=# 0 | paths gateway.signing bastion --blocked
+#=# 0 | paths host internet
+#=# 0 | paths host internet --blocked
+host → internet    (mediated by: NOTHING)
+#=# 0 | paths host host
+host    (mediated by: NOTHING)
+#=# 0 | paths host host --blocked
+host    (mediated by: NOTHING)
+#=# 0 | paths host upstream.api
+#=# 0 | paths host upstream.api --blocked
+#=# 0 | paths host upstream.git
+#=# 0 | paths host upstream.git --blocked
+#=# 0 | paths host upstream_proxy
+#=# 0 | paths host upstream_proxy --blocked
+#=# 0 | paths host gateway.store
+#=# 0 | paths host gateway.store --blocked
+#=# 0 | paths host bastion
+#=# 0 | paths host bastion --blocked
+#=# 0 | paths operator internet
+#=# 0 | paths operator internet --blocked
+#=# 0 | paths operator host
+#=# 0 | paths operator host --blocked
+#=# 0 | paths operator upstream.api
+#=# 0 | paths operator upstream.api --blocked
+#=# 0 | paths operator upstream.git
+#=# 0 | paths operator upstream.git --blocked
+#=# 0 | paths operator upstream_proxy
+#=# 0 | paths operator upstream_proxy --blocked
+#=# 0 | paths operator gateway.store
+operator → gateway.store    (mediated by: NOTHING)
+#=# 0 | paths operator gateway.store --blocked
+operator → gateway.store    (mediated by: NOTHING)
+#=# 0 | paths operator bastion
+#=# 0 | paths operator bastion --blocked
+#=# 0 | paths upstream_proxy internet
+#=# 0 | paths upstream_proxy internet --blocked
+#=# 0 | paths upstream_proxy host
+#=# 0 | paths upstream_proxy host --blocked
+#=# 0 | paths upstream_proxy upstream.api
+#=# 0 | paths upstream_proxy upstream.api --blocked
+#=# 0 | paths upstream_proxy upstream.git
+#=# 0 | paths upstream_proxy upstream.git --blocked
+#=# 0 | paths upstream_proxy upstream_proxy
+upstream_proxy    (mediated by: NOTHING)
+#=# 0 | paths upstream_proxy upstream_proxy --blocked
+upstream_proxy    (mediated by: NOTHING)
+#=# 0 | paths upstream_proxy gateway.store
+#=# 0 | paths upstream_proxy gateway.store --blocked
+#=# 0 | paths upstream_proxy bastion
+#=# 0 | paths upstream_proxy bastion --blocked
+#=# 0 | paths bastion internet
+#=# 0 | paths bastion internet --blocked
+#=# 0 | paths bastion host
+#=# 0 | paths bastion host --blocked
+#=# 0 | paths bastion upstream.api
+#=# 0 | paths bastion upstream.api --blocked
+#=# 0 | paths bastion upstream.git
+bastion → upstream.git    (mediated by: NOTHING)
+#=# 0 | paths bastion upstream.git --blocked
+bastion → upstream.git    (mediated by: NOTHING)
+#=# 0 | paths bastion upstream_proxy
+#=# 0 | paths bastion upstream_proxy --blocked
+#=# 0 | paths bastion gateway.store
+#=# 0 | paths bastion gateway.store --blocked
+#=# 0 | paths bastion bastion
+bastion    (mediated by: NOTHING)
+#=# 0 | paths bastion bastion --blocked
+bastion    (mediated by: NOTHING)
+#=# 0 | paths upstream.git internet
+#=# 0 | paths upstream.git internet --blocked
+#=# 0 | paths upstream.git host
+#=# 0 | paths upstream.git host --blocked
+#=# 0 | paths upstream.git upstream.api
+#=# 0 | paths upstream.git upstream.api --blocked
+#=# 0 | paths upstream.git upstream.git
+upstream.git    (mediated by: NOTHING)
+#=# 0 | paths upstream.git upstream.git --blocked
+upstream.git    (mediated by: NOTHING)
+#=# 0 | paths upstream.git upstream_proxy
+#=# 0 | paths upstream.git upstream_proxy --blocked
+#=# 0 | paths upstream.git gateway.store
+#=# 0 | paths upstream.git gateway.store --blocked
+#=# 0 | paths upstream.git bastion
+#=# 0 | paths upstream.git bastion --blocked
+#=# 0 | paths upstream.api internet
+#=# 0 | paths upstream.api internet --blocked
+#=# 0 | paths upstream.api host
+#=# 0 | paths upstream.api host --blocked
+#=# 0 | paths upstream.api upstream.api
+upstream.api    (mediated by: NOTHING)
+#=# 0 | paths upstream.api upstream.api --blocked
+upstream.api    (mediated by: NOTHING)
+#=# 0 | paths upstream.api upstream.git
+#=# 0 | paths upstream.api upstream.git --blocked
+#=# 0 | paths upstream.api upstream_proxy
+#=# 0 | paths upstream.api upstream_proxy --blocked
+#=# 0 | paths upstream.api gateway.store
+#=# 0 | paths upstream.api gateway.store --blocked
+#=# 0 | paths upstream.api bastion
+#=# 0 | paths upstream.api bastion --blocked
+#=# 0 | paths internet internet
+internet    (mediated by: NOTHING)
+#=# 0 | paths internet internet --blocked
+internet    (mediated by: NOTHING)
+#=# 0 | paths internet host
+#=# 0 | paths internet host --blocked
+#=# 0 | paths internet upstream.api
+#=# 0 | paths internet upstream.api --blocked
+#=# 0 | paths internet upstream.git
+#=# 0 | paths internet upstream.git --blocked
+#=# 0 | paths internet upstream_proxy
+#=# 0 | paths internet upstream_proxy --blocked
+#=# 0 | paths internet gateway.store
+#=# 0 | paths internet gateway.store --blocked
+#=# 0 | paths internet bastion
+#=# 0 | paths internet bastion --blocked
+#=# 0 | paths dev dev
+dev    (mediated by: NOTHING)
+#=# 0 | paths dev not-a-node
+#=# 0 | paths dev ''
+#=# 1 | paths nope internet
+#=# 1 | secret nope
+#=# 0 | secret upstream_proxy_password
+upstream_proxy_password: held by gateway.store
+  used on   squid.upstream_proxy, relay.github.via_proxy, passthrough.via_proxy
+  readable  nowhere
+  verify    the gateway's API must not hand out the upstream proxy password
+#=# 0 | secret upstream_token
+upstream_token: held by gateway.store
+  used on   relay.github.api, sidecar.api
+  readable  relay.sidecar
+#=# 0 | secret per_person_values
+per_person_values: held by gateway.store
+  used on   relay.ssh.bastion, relay.ssh.upstream
+  readable  nowhere
+#=# 0 | secret operator_ssh_agent
+operator_ssh_agent: held by operator
+  used on   relay.ssh.bastion, relay.ssh.upstream
+  readable  nowhere
+  verify    only the gateway's filtered signing key may be reachable
+#=# 0 | secret signing_key
+signing_key: held by gateway.signing
+  used on   dev.signing
+  readable  nowhere
+  verify    git signs with the key it is meant to
+#=# 0 | secret project_token
+project_token: held by dev
+  used on   dev.relay.api
+  readable  dev.relay.api
+#=# 0 | secret disposable_ssh_key
+disposable_ssh_key: held by dev
+  used on   dev.relay.ssh
+  readable  dev.relay.ssh

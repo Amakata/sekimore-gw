@@ -1,0 +1,1 @@
+docker run --rm registry.example/base:1 mise latest php@8.3

@@ -1,0 +1,10 @@
+#!/bin/bash
+# docker, as far as lang-plan uses it: `run --rm <base> mise latest <lang>@<line>` answers from
+# ./latest ("<lang>@<line> <lines to print>"), `buildx imagetools inspect <ref>` succeeds for the
+# refs in ./registry. Every call is appended to $DOCKER_LOG.
+echo "docker $*" >> "$DOCKER_LOG"
+case "$1 $2 $3" in
+  "run --rm "*) [ -f latest ] && awk -v k="$6" '$1==k { for (i = 2; i <= NF; i++) print $i }' latest; exit 0 ;;
+  "buildx imagetools inspect") [ -f registry ] && grep -qxF "$4" registry ;;
+  *) exit 99 ;;
+esac
