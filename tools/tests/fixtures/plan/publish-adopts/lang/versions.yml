@@ -1,0 +1,17 @@
+# The language images built (#376), each version with a revision, the way a Debian package has one:
+# `"8.3.33": 1` is published as sgw-lang-php:8.3.33-1-bookworm, and 8.3.33-bookworm follows the
+# newest revision. A published revision never changes: to rebuild a version, raise its revision.
+# lang/plan.py builds only what the registry does not have yet.
+
+# Minor lines whose newest patch is published every day it changes (#378), as revision 1. Moving
+# to another line (8.4) is a person's decision: add it here.
+track:
+  php: ["8.3"]
+
+# Single versions: legacy ones, and any a project pins. A pin may raise a tracked patch's revision.
+pin:
+  php:
+    "8.3.26": 1
+    "8.3.33": 1
+  python:
+    "2.7.18": 1

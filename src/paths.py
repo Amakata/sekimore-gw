@@ -1,7 +1,7 @@
 """The edge ids of the path ledger (docs/paths.yml), as the Python side names them (#223).
 
 Every place in this package that opens or governs a connection names its edge with one of
-these, and tests/unit/test_paths.py refuses an id that is here and not in the ledger, or in
+these, and tools/tests/paths_ledger.rs refuses an id that is here and not in the ledger, or in
 the ledger and not here or in relay/src/paths.rs. That is what keeps the ledger honest: a
 new kind of connection cannot be added without a row, and a row cannot go stale unnoticed.
 """

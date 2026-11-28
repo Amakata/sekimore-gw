@@ -8,3 +8,4 @@ coverage.json
 .coverage
 relay/target
 **/__pycache__
+tools/target

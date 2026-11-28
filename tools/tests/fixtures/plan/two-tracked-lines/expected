@@ -1,0 +1,2 @@
+exit 0
+{"build": [{"lang": "php", "version": "8.4.2", "revision": 2}, {"lang": "php", "version": "8.3.35", "revision": 1}, {"lang": "python", "version": "3.13.9", "revision": 1}], "adopt": []}
