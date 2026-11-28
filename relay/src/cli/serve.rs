@@ -1,4 +1,5 @@
-//! `serve`: starts SSH (git), HTTP (the API) and the 443 passthrough.
+//! `serve`: starts the Web UI, and SSH (git), HTTP (the API) and the 443 passthrough when the
+//! configuration declares a relay.
 //!
 //! 0.2.0: one SSH listener per git-relay domain (i.e. per upstream). An SSH exec carries no hostname,
 //! so the upstream is determined by the port the connection arrived on, and the session is handled with that
@@ -7,10 +8,11 @@
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Context;
 use tokio::net::TcpListener;
-use tokio::sync::Semaphore;
+use tokio::sync::{watch, Semaphore};
 use tokio::task::JoinSet;
 
 use super::operator::{build_github_for, open_audit, resolve};
@@ -29,6 +31,7 @@ use crate::ssh::authorized_keys::AuthorizedKeys;
 use crate::ssh::{load_or_create_host_key, server_config, SshServer};
 use crate::store;
 use crate::tokens::TokenStore;
+use crate::webui::CredentialState;
 
 pub const MAX_AUTHORIZED_KEYS: usize = 64;
 
@@ -117,7 +120,215 @@ fn open_secret_store(
     (SecretSource::InProcess(store.clone()), Some(store))
 }
 
+/// What the configuration asks of `serve`, decided as `needs-relay` decides it.
+enum RelayWanted {
+    Yes,
+    /// No git-relay handler: the Web UI alone
+    No,
+    /// The relay's part of the configuration is invalid: the Web UI alone, and the error logged
+    Invalid(String),
+}
+
+fn relay_wanted(path: &Path) -> RelayWanted {
+    let loaded = match crate::config::load(path) {
+        Ok(l) => l,
+        Err(e) => return RelayWanted::Invalid(e.to_string()),
+    };
+    match loaded.needs_relay() {
+        Ok(true) => RelayWanted::Yes,
+        Ok(false) => RelayWanted::No,
+        Err(e) => RelayWanted::Invalid(e.to_string()),
+    }
+}
+
+/// `serve`: the Web UI, always, and the relay when the configuration declares one (0.3.0-alpha.4).
+///
+/// **The Web UI comes first and stays.** Its listener opens before anything of the relay, and
+/// nothing the relay does takes it down (property S9 of the 0.3.0 plan): with no relay configured,
+/// or an invalid one, or a relay that fails to start, `serve` keeps serving the UI alone and
+/// opens, creates and writes nothing else — no SSH, API or 443 listener, no control socket, no
+/// store, no host key, nothing under the relay's state directory.
+///
+/// The relay runs on a runtime of its own, on its own thread. When it fails, that runtime is
+/// dropped with every task it spawned (the control socket, the signing agent, the refreshers),
+/// so what is left is exactly the UI-only shape — not a half-started relay.
 pub async fn serve(path: &Path) -> anyhow::Result<()> {
+    let (credential_tx, credential_rx) = watch::channel(CredentialState::Unreachable);
+    match crate::webui::bind().await {
+        Ok(listener) => {
+            if let Ok(a) = listener.local_addr() {
+                log::info!("web ui listening on {a}");
+            }
+            let view = crate::webui::UiView::from_env(path.to_path_buf(), credential_rx);
+            tokio::spawn(crate::webui::serve(view, listener));
+        }
+        Err(e) => log::error!("web ui: cannot listen: {e:#}"),
+    }
+
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let relay = match relay_wanted(path) {
+        RelayWanted::Yes => Some(RelayThread::start(path, credential_tx)),
+        RelayWanted::No => {
+            // at warn, the level `serve` logs at by default: the line start-relay.sh used to print
+            log::warn!(
+                "no git-relay handler in {}: serving the Web UI only",
+                path.display()
+            );
+            None
+        }
+        RelayWanted::Invalid(e) => {
+            log::error!("sekimore-relay: {e}");
+            log::error!("the relay's configuration is invalid: serving the Web UI only");
+            None
+        }
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => log::info!("SIGINT: shutting down"),
+        _ = sigterm.recv() => log::info!("SIGTERM: shutting down"),
+    }
+    if let Some(r) = relay {
+        r.stop().await;
+    }
+    Ok(())
+}
+
+/// The relay's thread and the way to stop it.
+struct RelayThread {
+    stop: tokio::sync::oneshot::Sender<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl RelayThread {
+    fn start(path: &Path, credential: watch::Sender<CredentialState>) -> RelayThread {
+        let (stop, stop_rx) = tokio::sync::oneshot::channel();
+        let path = path.to_path_buf();
+        let thread = std::thread::Builder::new()
+            .name("relay".into())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .thread_name("relay-worker")
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        log::error!(
+                            "relay: cannot start its runtime: {e}; serving the Web UI only"
+                        );
+                        return;
+                    }
+                };
+                if let Err(e) = rt.block_on(relay(&path, credential.clone(), stop_rx)) {
+                    log::error!("relay: {e:#}");
+                    log::error!("the relay stopped: serving the Web UI only");
+                }
+                // every task the relay spawned goes with its runtime
+                rt.shutdown_timeout(Duration::from_secs(2));
+                let _ = credential.send(CredentialState::Unreachable);
+            });
+        let thread = match thread {
+            Ok(t) => Some(t),
+            Err(e) => {
+                log::error!("relay: cannot start its thread: {e}; serving the Web UI only");
+                None
+            }
+        };
+        RelayThread { stop, thread }
+    }
+
+    async fn stop(self) {
+        let _ = self.stop.send(());
+        if let Some(thread) = self.thread {
+            let _ = tokio::task::spawn_blocking(move || thread.join()).await;
+        }
+    }
+}
+
+/// #194: the upstream proxy credential's state for the Web UI, as the Python UI read it over the
+/// control socket (`read_proxy_credential`): the per-person value first, then the record from
+/// before them. Only the state leaves here; the value is dropped where it is read.
+fn credential_state(store: &store::SecretStore, user_key: &str) -> CredentialState {
+    match store.get(crate::vars::NAMESPACE, user_key) {
+        Err(store::StoreError::Locked) => return CredentialState::Locked,
+        Err(_) => return CredentialState::Unreachable,
+        Ok(Some(user)) if !user.as_bytes().is_empty() => {
+            let Ok(user) = std::str::from_utf8(user.as_bytes()) else {
+                return CredentialState::Unreachable;
+            };
+            // Squid writes it into `login=<user>:<pass>`, where a space ends the option (#271)
+            return if user.chars().all(|c| ('!'..='~').contains(&c)) {
+                CredentialState::Set
+            } else {
+                CredentialState::Unusable
+            };
+        }
+        Ok(_) => {}
+    }
+    match store.get(
+        crate::proxy_credential::NAMESPACE,
+        crate::proxy_credential::NAME,
+    ) {
+        Err(store::StoreError::Locked) => CredentialState::Locked,
+        Err(_) => CredentialState::Unreachable,
+        Ok(None) => CredentialState::NotSet,
+        Ok(Some(old)) => {
+            let parsed: Option<serde_json::Value> = std::str::from_utf8(old.as_bytes())
+                .ok()
+                .and_then(|t| serde_json::from_str(t).ok());
+            let Some(serde_json::Value::Object(o)) = parsed else {
+                return CredentialState::Unusable;
+            };
+            let (Some(user), Some(_)) = (o.get("username"), o.get("password")) else {
+                return CredentialState::Unusable;
+            };
+            let empty = match user {
+                serde_json::Value::Null => true,
+                serde_json::Value::Bool(b) => !b,
+                serde_json::Value::Number(n) => n.as_f64() == Some(0.0),
+                serde_json::Value::String(s) => s.is_empty(),
+                serde_json::Value::Array(a) => a.is_empty(),
+                serde_json::Value::Object(m) => m.is_empty(),
+            };
+            if empty {
+                CredentialState::NotSet
+            } else {
+                CredentialState::Set
+            }
+        }
+    }
+}
+
+/// Keeps the Web UI's [`CredentialState`] current: once a second, for the key `config.yml` names
+/// now (the Python UI asked per request, reading the file each time).
+fn spawn_credential_state(
+    store: Arc<tokio::sync::Mutex<store::SecretStore>>,
+    config: std::path::PathBuf,
+    tx: watch::Sender<CredentialState>,
+) {
+    tokio::spawn(async move {
+        loop {
+            let c = config.clone();
+            let key =
+                tokio::task::spawn_blocking(move || crate::webui::config_api::proxy_user_key(&c))
+                    .await
+                    .unwrap_or_else(|_| crate::proxy_credential::VAR_USER.to_string());
+            let state = credential_state(&*store.lock().await, &key);
+            tx.send_if_modified(|v| {
+                let changed = *v != state;
+                *v = state;
+                changed
+            });
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+}
+
+/// The relay: SSH, the API and the 443 passthrough, as `serve` was before the Web UI joined it.
+async fn relay(
+    path: &Path,
+    credential: watch::Sender<CredentialState>,
+    mut stop: tokio::sync::oneshot::Receiver<()>,
+) -> anyhow::Result<()> {
     let r = resolve(path)?;
     let audit = open_audit(&r)?;
     let upstreams_summary = r
@@ -368,6 +579,8 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     // dropped from the store while a decrypted token sits in a cache is a lock that leaves that
     // token usable for the rest of the cache TTL — two hours by default.
     if let Some(store) = secret_store {
+        // the Web UI's view of the proxy credential, from the moment the store can be asked
+        spawn_credential_state(store.clone(), path.to_path_buf(), credential);
         let sock = r.paths.control_sock.clone();
         let caches = token_caches;
         let lock_vars = vars.clone();
@@ -458,13 +671,11 @@ pub async fn serve(path: &Path) -> anyhow::Result<()> {
     for (ssh, listener) in ssh_servers {
         ssh_tasks.spawn(ssh.run(listener));
     }
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
         Some(r) = ssh_tasks.join_next() => r.context("ssh task")?.context("ssh server")?,
         r = api::serve(api_ctx, api_listener) => r.context("api server")?,
         r = pt.run(https_listener) => r.context("https passthrough")?,
-        _ = tokio::signal::ctrl_c() => log::info!("SIGINT: shutting down"),
-        _ = sigterm.recv() => log::info!("SIGTERM: shutting down"),
+        _ = &mut stop => {}
     }
     audit.log("serve_stopped", Actor::System, &[]);
     Ok(())

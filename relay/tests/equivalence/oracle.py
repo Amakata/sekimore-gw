@@ -350,8 +350,12 @@ def config_case(case: dict[str, Any]) -> dict[str, Any]:
     return answer
 
 
-# One entry per kind of comparison. Later steps add theirs here ("dns", "firewall", "squid",
-# "webui"), each answering in the shape its relay/tests/equivalence/<kind>.rs builds.
+# One entry per kind of comparison. Later steps add theirs here ("dns", "firewall", "squid"),
+# each answering in the shape its relay/tests/equivalence/<kind>.rs builds.
+#
+# "webui" was here until the Python Web UI was removed (0.3.0-alpha.4): its record,
+# relay/tests/fixtures/oracle/webui.json, was made at the commit named in CONTRIBUTING.md and is
+# the only oracle of that comparison now.
 KINDS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "config": config_case,
 }

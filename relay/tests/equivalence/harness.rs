@@ -9,7 +9,7 @@
 //! | step | kind | request | answer |
 //! |---|---|---|---|
 //! | α4 | `config` | a config file, its environment, names to decide | accepted / refused, the settings, the derived lists, `Rules` |
-//! | α4 | `webui` | a config, a database, an HTTP request | the response JSON |
+//! | α4 | `webui` | a config, a database, the relay's state, HTTP requests, `/ws` steps | the responses (the record only: the Python UI is gone) |
 //! | α6 | `dns` | a config, a list of queries | the response bytes (ID aside) |
 //! | α6 | `firewall` | a config, a list of queries | the `iptables-legacy` / `ipset` command lines, recorded by fakes on PATH |
 //! | α6 | `squid` | a config, the credential state | `squid.conf` |
@@ -119,6 +119,22 @@ pub trait Comparison {
     fn request(&self, case: &Case) -> Value;
     /// The Rust side's answer to `request`, in the oracle's shape (with `id`)
     fn rust(&self, case: &Case, request: &Value) -> Value;
+    /// What the oracle's answer is compared and recorded as: the place for taking out what
+    /// differs from run to run (a temporary directory, the time). The Rust side's answer goes
+    /// through it too.
+    fn normalize(&self, answer: Value) -> Value {
+        answer
+    }
+    /// The test that records this kind (`SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence
+    /// <this>`)
+    fn record_test(&self) -> &'static str {
+        "the_config"
+    }
+    /// Why there is no live Python side any more, when there is none: the record is then the only
+    /// oracle, and `SEKIMORE_E2E_REQUIRED` does not ask for Python
+    fn live_gone(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// The differences between two JSON values, as `path: left != right` lines.
@@ -195,7 +211,7 @@ pub fn recorded(kind: &str) -> BTreeMap<String, Value> {
         .unwrap_or_default()
 }
 
-fn write_record(kind: &str, python: &Value, answers: &[Value]) {
+fn write_record(kind: &str, test: &str, python: &Value, answers: &[Value]) {
     let mut by_id = Map::new();
     for a in answers {
         by_id.insert(
@@ -204,7 +220,7 @@ fn write_record(kind: &str, python: &Value, answers: &[Value]) {
         );
     }
     let doc = json!({
-        "comment": "Python's answers, recorded by SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence the_config. Do not edit by hand.",
+        "comment": format!("Python's answers, recorded by SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence {test}. Do not edit by hand."),
         "kind": kind,
         "python": python,
         "answers": by_id,
@@ -283,6 +299,16 @@ pub fn compare(
     oracle: &BTreeMap<String, Value>,
     oracle_name: &str,
 ) -> Vec<Outcome> {
+    compare_as(cases, rust, oracle, oracle_name, "the_config")
+}
+
+fn compare_as(
+    cases: &[Case],
+    rust: &[Value],
+    oracle: &BTreeMap<String, Value>,
+    oracle_name: &str,
+    test: &str,
+) -> Vec<Outcome> {
     cases
         .iter()
         .zip(rust)
@@ -290,7 +316,7 @@ pub fn compare(
             let differences = match oracle.get(&case.id) {
                 Some(o) => diff(r, o),
                 None => vec![format!(
-                    "{oracle_name} has no answer (SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence the_config)"
+                    "{oracle_name} has no answer (SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence {test})"
                 )],
             };
             Outcome {
@@ -339,38 +365,61 @@ fn by_id(answers: &[Value]) -> BTreeMap<String, Value> {
 /// Runs a comparison over the whole corpus against both oracles; panics with the report on any
 /// failure. With `SEKIMORE_ORACLE_RECORD` set, writes the record from the live answers first.
 pub fn run(cmp: &dyn Comparison) {
-    let cases = corpus();
+    run_cases(cmp, &corpus());
+}
+
+/// [`run`] over cases of the comparison's own.
+pub fn run_cases(cmp: &dyn Comparison, cases: &[Case]) {
+    let test = cmp.record_test();
     let requests: Vec<Value> = cases.iter().map(|c| cmp.request(c)).collect();
     let rust: Vec<Value> = cases
         .iter()
         .zip(&requests)
-        .map(|(c, r)| cmp.rust(c, r))
+        .map(|(c, r)| cmp.normalize(cmp.rust(c, r)))
         .collect();
 
-    let live = match live(cmp.kind(), &requests) {
-        Ok(l) => Some(l),
-        Err(why) if required() || recording() => panic!("the Python oracle is required: {why}"),
-        Err(why) => {
-            eprintln!("skipping the live Python comparison: {why}");
+    let live = match cmp.live_gone() {
+        Some(why) if recording() => panic!(
+            "the {} record cannot be written from this commit: {why}",
+            cmp.kind()
+        ),
+        Some(why) => {
+            eprintln!("no live Python comparison for {}: {why}", cmp.kind());
             None
         }
+        None => match live(cmp.kind(), &requests) {
+            Ok((python, answers)) => Some((
+                python,
+                answers
+                    .into_iter()
+                    .map(|a| cmp.normalize(a))
+                    .collect::<Vec<_>>(),
+            )),
+            Err(why) if required() || recording() => {
+                panic!("the Python oracle is required: {why}")
+            }
+            Err(why) => {
+                eprintln!("skipping the live Python comparison: {why}");
+                None
+            }
+        },
     };
     if recording() {
         let (python, answers) = live.as_ref().expect("checked above");
-        write_record(cmp.kind(), python, answers);
+        write_record(cmp.kind(), test, python, answers);
     }
 
     let mut failures = Vec::new();
     let record = recorded(cmp.kind());
     failures.extend(report(
         "Rust vs the record",
-        &compare(&cases, &rust, &record, "the record"),
+        &compare_as(cases, &rust, &record, "the record", test),
     ));
     if let Some((_, answers)) = &live {
         let live = by_id(answers);
         failures.extend(report(
             "Rust vs live Python",
-            &compare(&cases, &rust, &live, "Python"),
+            &compare_as(cases, &rust, &live, "Python", test),
         ));
         // the record has to be what Python says today
         let live_values: Vec<Value> = cases
@@ -385,11 +434,13 @@ pub fn run(cmp: &dyn Comparison) {
             })
             .collect();
         failures.extend(report(
-            "live Python vs the record (re-record with SEKIMORE_ORACLE_RECORD=1 … the_config)",
-            &compare(&plain, &live_values, &record, "the record"),
+            &format!(
+                "live Python vs the record (re-record with SEKIMORE_ORACLE_RECORD=1 … {test})"
+            ),
+            &compare_as(&plain, &live_values, &record, "the record", test),
         ));
     }
-    for o in compare(&cases, &rust, &record, "the record") {
+    for o in compare_as(cases, &rust, &record, "the record", test) {
         if let (Some(why), false) = (&o.ledger, o.differences.is_empty()) {
             eprintln!("known difference, {}: {why}", o.id);
             for d in o.differences.iter().take(5) {

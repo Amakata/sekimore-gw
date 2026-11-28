@@ -1,0 +1,1577 @@
+{
+ "comment": "The webui equivalence cases (relay/tests/equivalence/webui.rs says how they are read). Python's answers are in relay/tests/fixtures/oracle/webui.json.",
+ "cases": [
+  {
+   "name": "routing",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "requests": [
+    "/nope",
+    {
+     "method": "POST",
+     "path": "/api/stats"
+    },
+    {
+     "method": "HEAD",
+     "path": "/api/gateway-info"
+    },
+    {
+     "method": "OPTIONS",
+     "path": "/api/stats"
+    },
+    {
+     "method": "PUT",
+     "path": "/"
+    },
+    "/api/stats/",
+    "/api/logs/?limit=3",
+    {
+     "path": "/api/logs/",
+     "headers": {
+      "host": "evil.example:9"
+     }
+    },
+    {
+     "method": "POST",
+     "path": "/api/stats/"
+    },
+    "//api/stats",
+    "/api/%6cogs?limit=1",
+    "/ws",
+    "/ws/",
+    "/api",
+    "/api/",
+    "/api/relay",
+    "/api/relay/audit/",
+    "/API/STATS",
+    "/index.html",
+    {
+     "method": "POST",
+     "path": "/api/domains/allow"
+    },
+    {
+     "method": "DELETE",
+     "path": "/api/domains/allow/x.example"
+    },
+    {
+     "method": "POST",
+     "path": "/api/domains/block"
+    },
+    {
+     "method": "POST",
+     "path": "/bootstrap"
+    },
+    {
+     "method": "GET",
+     "path": "/healthz"
+    },
+    {
+     "method": "POST",
+     "path": "/whoami"
+    },
+    {
+     "method": "POST",
+     "path": "/pr/create"
+    }
+   ],
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7200}.25, '10.100.0.5', 'example.com', '93.184.216.34,93.184.216.35', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7000}, '10.100.0.5', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6900}, '10.100.0.5', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6800}, '10.100.0.6', 'unknown.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6700}, '10.100.0.6', 'nostatus.test', NULL, 300, 'A', NULL)",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6600}, '10.100.0.6', 'odd.test', '1.2.3.4', 300, 'A', 'weird')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-200000}, '10.100.0.5', 'old.example.com', '9.9.9.9', 300, 'A', 'allowed')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6500}, '10.100.0.5', '8.8.8.8', 53, 'UDP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6400}, 'blocked', 'blocked', NULL, 'IP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6300}, '10.100.0.5', '1.1.1.1', 443, NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6200}, '10.100.0.5', '1.1.1.1', 80, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6100}, NULL, 'unknown', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-200000}, '10.100.0.5', '1.1.1.1', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-6000}, '10.100.0.5', 'CONNECT', 'registry.npmjs.org:443', 200, 'TCP_TUNNEL', 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5900}, '10.100.0.5', 'GET', 'http://denied.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5800}, '10.100.0.5', NULL, NULL, NULL, NULL, 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-200000}, '10.100.0.5', 'GET', 'http://old.test/', 403, 'TCP_DENIED', 'blocked')"
+   ]
+  },
+  {
+   "name": "fastapi-docs",
+   "ledger": "FastAPI's generated pages (/docs, /redoc, /openapi.json) are not served by the Rust UI: they were framework artifacts, not part of the dashboard",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "requests": [
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/docs/oauth2-redirect"
+   ]
+  },
+  {
+   "name": "dashboard",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "requests": [
+    "/",
+    {
+     "path": "/",
+     "headers": {
+      "accept-language": "ja"
+     }
+    },
+    "/?lang=ja"
+   ]
+  },
+  {
+   "name": "gateway-info",
+   "config": "name: \"My Gateway\"\ndescription: \"Test description\"\nallow_domains: []\nblock_domains: []\n",
+   "requests": [
+    "/api/gateway-info"
+   ]
+  },
+  {
+   "name": "gateway-info-none",
+   "config": "allow_domains: []\nblock_domains: []\n",
+   "requests": [
+    "/api/gateway-info"
+   ]
+  },
+  {
+   "name": "gateway-info-odd-types",
+   "config": "name: 2026-11-27\ndescription: .inf\n",
+   "requests": [
+    "/api/gateway-info"
+   ]
+  },
+  {
+   "name": "gateway-info-structures",
+   "config": "name: [a, 1, null, true, 1.5]\ndescription: {k: v, 1: two, true: yes}\n",
+   "requests": [
+    "/api/gateway-info"
+   ]
+  },
+  {
+   "name": "gateway-info-datetime",
+   "config": "name: 2026-11-27 10:20:30\ndescription: 2026-11-27T10:20:30.5+09:00\n",
+   "requests": [
+    "/api/gateway-info"
+   ]
+  },
+  {
+   "name": "config-missing",
+   "requests": [
+    "/api/gateway-info",
+    "/api/proxy-env",
+    "/api/config",
+    "/api/i18n",
+    "/api/stats",
+    "/api/cache-stats",
+    "/api/logs",
+    "/api/firewall-blocks",
+    "/api/proxy-logs",
+    "/api/proxy-blocks",
+    "/api/blocked-ips",
+    "/api/domains/allowed",
+    "/api/domains/blocked",
+    "/api/domains/blocked-actual",
+    "/api/domains/unique",
+    "/api/domains/ignored-config",
+    "/api/domains/ignored",
+    "/api/relay/config",
+    "/api/relay/stats",
+    "/api/relay/tokens",
+    "/api/relay/audit"
+   ],
+   "db": "none"
+  },
+  {
+   "name": "config-empty",
+   "config": "",
+   "requests": [
+    "/api/gateway-info",
+    "/api/proxy-env",
+    "/api/config",
+    "/api/i18n",
+    "/api/stats",
+    "/api/cache-stats",
+    "/api/logs",
+    "/api/firewall-blocks",
+    "/api/proxy-logs",
+    "/api/proxy-blocks",
+    "/api/blocked-ips",
+    "/api/domains/allowed",
+    "/api/domains/blocked",
+    "/api/domains/blocked-actual",
+    "/api/domains/unique",
+    "/api/domains/ignored-config",
+    "/api/domains/ignored",
+    "/api/relay/config",
+    "/api/relay/stats",
+    "/api/relay/tokens",
+    "/api/relay/audit"
+   ],
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7200}.25, '10.100.0.5', 'example.com', '93.184.216.34,93.184.216.35', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7000}, '10.100.0.5', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6900}, '10.100.0.5', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6800}, '10.100.0.6', 'unknown.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6700}, '10.100.0.6', 'nostatus.test', NULL, 300, 'A', NULL)",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6600}, '10.100.0.6', 'odd.test', '1.2.3.4', 300, 'A', 'weird')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-200000}, '10.100.0.5', 'old.example.com', '9.9.9.9', 300, 'A', 'allowed')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6500}, '10.100.0.5', '8.8.8.8', 53, 'UDP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6400}, 'blocked', 'blocked', NULL, 'IP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6300}, '10.100.0.5', '1.1.1.1', 443, NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6200}, '10.100.0.5', '1.1.1.1', 80, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6100}, NULL, 'unknown', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-200000}, '10.100.0.5', '1.1.1.1', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-6000}, '10.100.0.5', 'CONNECT', 'registry.npmjs.org:443', 200, 'TCP_TUNNEL', 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5900}, '10.100.0.5', 'GET', 'http://denied.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5800}, '10.100.0.5', NULL, NULL, NULL, NULL, 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-200000}, '10.100.0.5', 'GET', 'http://old.test/', 403, 'TCP_DENIED', 'blocked')"
+   ]
+  },
+  {
+   "name": "config-comments-only",
+   "config": "# nothing here\n",
+   "requests": [
+    "/api/gateway-info",
+    "/api/i18n",
+    "/api/domains/allowed"
+   ]
+  },
+  {
+   "name": "config-a-list",
+   "config": "- a\n- b\n",
+   "requests": [
+    "/api/gateway-info",
+    "/api/proxy-env",
+    "/api/config",
+    "/api/i18n",
+    "/api/stats",
+    "/api/cache-stats",
+    "/api/logs",
+    "/api/firewall-blocks",
+    "/api/proxy-logs",
+    "/api/proxy-blocks",
+    "/api/blocked-ips",
+    "/api/domains/allowed",
+    "/api/domains/blocked",
+    "/api/domains/blocked-actual",
+    "/api/domains/unique",
+    "/api/domains/ignored-config",
+    "/api/domains/ignored",
+    "/api/relay/config",
+    "/api/relay/stats",
+    "/api/relay/tokens",
+    "/api/relay/audit"
+   ],
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7200}.25, '10.100.0.5', 'example.com', '93.184.216.34,93.184.216.35', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7000}, '10.100.0.5', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6900}, '10.100.0.5', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6800}, '10.100.0.6', 'unknown.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6700}, '10.100.0.6', 'nostatus.test', NULL, 300, 'A', NULL)",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6600}, '10.100.0.6', 'odd.test', '1.2.3.4', 300, 'A', 'weird')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-200000}, '10.100.0.5', 'old.example.com', '9.9.9.9', 300, 'A', 'allowed')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6500}, '10.100.0.5', '8.8.8.8', 53, 'UDP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6400}, 'blocked', 'blocked', NULL, 'IP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6300}, '10.100.0.5', '1.1.1.1', 443, NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6200}, '10.100.0.5', '1.1.1.1', 80, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6100}, NULL, 'unknown', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-200000}, '10.100.0.5', '1.1.1.1', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-6000}, '10.100.0.5', 'CONNECT', 'registry.npmjs.org:443', 200, 'TCP_TUNNEL', 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5900}, '10.100.0.5', 'GET', 'http://denied.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5800}, '10.100.0.5', NULL, NULL, NULL, NULL, 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-200000}, '10.100.0.5', 'GET', 'http://old.test/', 403, 'TCP_DENIED', 'blocked')"
+   ]
+  },
+  {
+   "name": "config-a-scalar",
+   "config": "just text\n",
+   "requests": [
+    "/api/gateway-info",
+    "/api/i18n",
+    "/api/proxy-env",
+    "/api/domains/unique"
+   ],
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7200}.25, '10.100.0.5', 'example.com', '93.184.216.34,93.184.216.35', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7000}, '10.100.0.5', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6900}, '10.100.0.5', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6800}, '10.100.0.6', 'unknown.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6700}, '10.100.0.6', 'nostatus.test', NULL, 300, 'A', NULL)",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6600}, '10.100.0.6', 'odd.test', '1.2.3.4', 300, 'A', 'weird')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-200000}, '10.100.0.5', 'old.example.com', '9.9.9.9', 300, 'A', 'allowed')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6500}, '10.100.0.5', '8.8.8.8', 53, 'UDP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6400}, 'blocked', 'blocked', NULL, 'IP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6300}, '10.100.0.5', '1.1.1.1', 443, NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6200}, '10.100.0.5', '1.1.1.1', 80, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6100}, NULL, 'unknown', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-200000}, '10.100.0.5', '1.1.1.1', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-6000}, '10.100.0.5', 'CONNECT', 'registry.npmjs.org:443', 200, 'TCP_TUNNEL', 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5900}, '10.100.0.5', 'GET', 'http://denied.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5800}, '10.100.0.5', NULL, NULL, NULL, NULL, 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-200000}, '10.100.0.5', 'GET', 'http://old.test/', 403, 'TCP_DENIED', 'blocked')"
+   ]
+  },
+  {
+   "name": "config-invalid-yaml",
+   "config": "allow_domains: [a\nname: : :\n",
+   "requests": [
+    "/api/gateway-info",
+    "/api/proxy-env",
+    "/api/config",
+    "/api/i18n",
+    "/api/stats",
+    "/api/cache-stats",
+    "/api/logs",
+    "/api/firewall-blocks",
+    "/api/proxy-logs",
+    "/api/proxy-blocks",
+    "/api/blocked-ips",
+    "/api/domains/allowed",
+    "/api/domains/blocked",
+    "/api/domains/blocked-actual",
+    "/api/domains/unique",
+    "/api/domains/ignored-config",
+    "/api/domains/ignored",
+    "/api/relay/config",
+    "/api/relay/stats",
+    "/api/relay/tokens",
+    "/api/relay/audit"
+   ],
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7200}.25, '10.100.0.5', 'example.com', '93.184.216.34,93.184.216.35', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7000}, '10.100.0.5', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6900}, '10.100.0.5', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6800}, '10.100.0.6', 'unknown.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6700}, '10.100.0.6', 'nostatus.test', NULL, 300, 'A', NULL)",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6600}, '10.100.0.6', 'odd.test', '1.2.3.4', 300, 'A', 'weird')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-200000}, '10.100.0.5', 'old.example.com', '9.9.9.9', 300, 'A', 'allowed')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6500}, '10.100.0.5', '8.8.8.8', 53, 'UDP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6400}, 'blocked', 'blocked', NULL, 'IP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6300}, '10.100.0.5', '1.1.1.1', 443, NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6200}, '10.100.0.5', '1.1.1.1', 80, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6100}, NULL, 'unknown', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-200000}, '10.100.0.5', '1.1.1.1', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-6000}, '10.100.0.5', 'CONNECT', 'registry.npmjs.org:443', 200, 'TCP_TUNNEL', 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5900}, '10.100.0.5', 'GET', 'http://denied.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5800}, '10.100.0.5', NULL, NULL, NULL, NULL, 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-200000}, '10.100.0.5', 'GET', 'http://old.test/', 403, 'TCP_DENIED', 'blocked')"
+   ]
+  },
+  {
+   "name": "config-proxy",
+   "config": "allow_domains: []\nblock_domains: []\nproxy:\n  enabled: true\n  port: 3128\n  cache_enabled: true\n  cache_size_mb: 500\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_tls: true\n",
+   "squid": "http_port 3128\ncache_peer proxy.example.net parent 3129 0 no-query default tls login=alice:s3cret-pw\ncache_peer other.example.net parent 3128 0 login=PASSTHRU\nnever_direct allow all\n",
+   "iptables": "ok",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-defaults",
+   "config": "allow_domains: []\nblock_domains: []\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-literal",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_username: user1\n  upstream_proxy_password: hunter2\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-store-set",
+   "credential": "set",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_username: '{proxy_user}'\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-store-set-with-config",
+   "credential": "set",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_username: alice\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-store-locked",
+   "credential": "locked",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_username: '{proxy_user}'\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-store-locked-with-config",
+   "credential": "locked",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_username: alice\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-store-none",
+   "credential": "none",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_username: '{proxy_user}'\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-store-none-with-config",
+   "credential": "none",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_username: alice\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-store-unusable",
+   "credential": "unusable",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_username: '{proxy_user}'\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-store-unusable-with-config",
+   "credential": "unusable",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_username: alice\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-store-unreachable",
+   "credential": "unreachable",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_username: '{proxy_user}'\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-store-unreachable-with-config",
+   "credential": "unreachable",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  upstream_proxy_username: alice\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-auth-env",
+   "env_username": true,
+   "credential": "none",
+   "config": "proxy:\n  enabled: true\n",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-iptables-fails",
+   "config": "proxy: {}\n",
+   "iptables": "fails",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-iptables-nat-fails",
+   "config": "proxy: {}\n",
+   "iptables": "nat-fails",
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-squid-unreadable",
+   "config": "proxy: {}\n",
+   "files": {
+    "squid.conf/x": "a directory, not a file"
+   },
+   "requests": [
+    "/api/config"
+   ]
+  },
+  {
+   "name": "config-proxy-null",
+   "config": "proxy: null\n",
+   "requests": [
+    "/api/config",
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "config-proxy-lax-types",
+   "config": "proxy:\n  enabled: 'yes'\n  port: '3_128'\n  cache_enabled: 0\n  cache_size_mb: 250.0\n  upstream_proxy_tls: 'off'\n  upstream_proxy: null\n",
+   "requests": [
+    "/api/config",
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "config-proxy-bad-port",
+   "config": "proxy:\n  port: abc\n",
+   "requests": [
+    "/api/config",
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "config-proxy-bad-upstream",
+   "config": "proxy:\n  upstream_proxy: 8080\n  enabled: true\n",
+   "requests": [
+    "/api/config",
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "config-proxy-bad-bool",
+   "config": "proxy:\n  enabled: maybe\n",
+   "requests": [
+    "/api/config",
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "proxy-env-full",
+   "config": "allow_domains: []\nblock_domains: []\nproxy:\n  enabled: true\n  port: 3128\n  upstream_proxy: proxy.corp:8080\n  direct_egress: deny\n  no_proxy:\n    - '*.test'\n    - mirror.example.com\n    - 10.20.0.0/16\ndomain_handlers:\n  github.com:\n    handler: github\n  api.github.com:\n    handler: https-relay\n  telemetry.example.com:\n    handler: deny\n  cdn.example.com:\n    handler: splice\n  Upper.Example.COM.:\n    handler: deny\n  nohandler.example.com: {}\n  notadict.example.com: deny\n",
+   "requests": [
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "proxy-env-dedupe",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  no_proxy: ['.test', '*.test', 'localhost', ' spaced.example ', '']\ndomain_handlers:\n  api.github.com:\n    handler: github\n",
+   "requests": [
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "proxy-env-no-upstream",
+   "config": "proxy:\n  enabled: true\n  port: 3128\n",
+   "requests": [
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "proxy-env-squid-off",
+   "config": "proxy:\n  enabled: false\n  upstream_proxy: proxy.corp:8080\n",
+   "requests": [
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "proxy-env-no-section",
+   "config": "allow_domains: []\nblock_domains: []\n",
+   "requests": [
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "proxy-env-string",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\n  no_proxy: '.test,*.local, ,x'\n",
+   "requests": [
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "proxy-env-git-relay-spelling",
+   "config": "proxy:\n  enabled: true\n  upstream_proxy: proxy.corp:8080\ndomain_handlers:\n  github.com:\n    handler: git-relay\n",
+   "requests": [
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "proxy-env-odd",
+   "config": "proxy:\n  enabled: 1\n  upstream_proxy: x\n  port: 3129.9\n  direct_egress: [a]\n  no_proxy: [1, null, true]\ndomain_handlers: [a, b]\n",
+   "requests": [
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "proxy-env-noproxy-number",
+   "config": "proxy:\n  no_proxy: 5\ndomain_handlers:\n  7: {handler: deny}\n",
+   "requests": [
+    "/api/proxy-env"
+   ]
+  },
+  {
+   "name": "proxy-env-proxy-a-list",
+   "config": "proxy: [1]\n",
+   "requests": [
+    "/api/proxy-env",
+    "/api/config"
+   ]
+  },
+  {
+   "name": "i18n",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "requests": [
+    "/api/i18n",
+    "/api/i18n?lang=ja",
+    "/api/i18n?lang=JA-jp",
+    "/api/i18n?lang=xx",
+    {
+     "path": "/api/i18n",
+     "query": "lang=xx",
+     "headers": {
+      "cookie": "a=b; sekimore_lang=ja"
+     }
+    },
+    {
+     "path": "/api/i18n",
+     "headers": {
+      "cookie": "sekimore_lang=\"ja\""
+     }
+    },
+    {
+     "path": "/api/i18n",
+     "headers": {
+      "accept-language": "fr;q=1, ja;q=0.9, en;q=0.8"
+     }
+    },
+    {
+     "path": "/api/i18n",
+     "headers": {
+      "accept-language": "en;q=0.1, ja"
+     }
+    },
+    {
+     "path": "/api/i18n",
+     "headers": {
+      "accept-language": "ja;q=abc, en;q=0.5"
+     }
+    },
+    {
+     "path": "/api/i18n",
+     "headers": {
+      "accept-language": "jap, ja_JP.UTF-8"
+     }
+    },
+    "/api/i18n?lang=",
+    "/api/i18n?lang=ja&lang=en"
+   ]
+  },
+  {
+   "name": "i18n-pinned",
+   "config": "ui:\n  language: ja\n",
+   "requests": [
+    "/api/i18n",
+    {
+     "path": "/api/i18n",
+     "headers": {
+      "accept-language": "en"
+     }
+    },
+    "/api/i18n?lang=en"
+   ]
+  },
+  {
+   "name": "i18n-odd-ui",
+   "config": "ui: [ja]\n",
+   "requests": [
+    "/api/i18n",
+    {
+     "path": "/api/i18n",
+     "headers": {
+      "accept-language": "ja"
+     }
+    }
+   ]
+  },
+  {
+   "name": "i18n-language-null",
+   "config": "ui:\n  language: null\n",
+   "requests": [
+    {
+     "path": "/api/i18n",
+     "headers": {
+      "accept-language": "ja"
+     }
+    }
+   ]
+  },
+  {
+   "name": "stats",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7200}.25, '10.100.0.5', 'example.com', '93.184.216.34,93.184.216.35', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7000}, '10.100.0.5', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6900}, '10.100.0.5', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6800}, '10.100.0.6', 'unknown.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6700}, '10.100.0.6', 'nostatus.test', NULL, 300, 'A', NULL)",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6600}, '10.100.0.6', 'odd.test', '1.2.3.4', 300, 'A', 'weird')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-200000}, '10.100.0.5', 'old.example.com', '9.9.9.9', 300, 'A', 'allowed')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6500}, '10.100.0.5', '8.8.8.8', 53, 'UDP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6400}, 'blocked', 'blocked', NULL, 'IP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6300}, '10.100.0.5', '1.1.1.1', 443, NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6200}, '10.100.0.5', '1.1.1.1', 80, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6100}, NULL, 'unknown', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-200000}, '10.100.0.5', '1.1.1.1', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-6000}, '10.100.0.5', 'CONNECT', 'registry.npmjs.org:443', 200, 'TCP_TUNNEL', 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5900}, '10.100.0.5', 'GET', 'http://denied.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5800}, '10.100.0.5', NULL, NULL, NULL, NULL, 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-200000}, '10.100.0.5', 'GET', 'http://old.test/', 403, 'TCP_DENIED', 'blocked')"
+   ],
+   "requests": [
+    "/api/stats"
+   ]
+  },
+  {
+   "name": "stats-no-proxy-table",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7200}.25, '10.100.0.5', 'example.com', '93.184.216.34,93.184.216.35', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7000}, '10.100.0.5', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6900}, '10.100.0.5', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6800}, '10.100.0.6', 'unknown.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6700}, '10.100.0.6', 'nostatus.test', NULL, 300, 'A', NULL)",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6600}, '10.100.0.6', 'odd.test', '1.2.3.4', 300, 'A', 'weird')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-200000}, '10.100.0.5', 'old.example.com', '9.9.9.9', 300, 'A', 'allowed')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6500}, '10.100.0.5', '8.8.8.8', 53, 'UDP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6400}, 'blocked', 'blocked', NULL, 'IP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6300}, '10.100.0.5', '1.1.1.1', 443, NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6200}, '10.100.0.5', '1.1.1.1', 80, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6100}, NULL, 'unknown', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-200000}, '10.100.0.5', '1.1.1.1', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-6000}, '10.100.0.5', 'CONNECT', 'registry.npmjs.org:443', 200, 'TCP_TUNNEL', 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5900}, '10.100.0.5', 'GET', 'http://denied.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5800}, '10.100.0.5', NULL, NULL, NULL, NULL, 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-200000}, '10.100.0.5', 'GET', 'http://old.test/', 403, 'TCP_DENIED', 'blocked')",
+    "DROP TABLE proxy_logs"
+   ],
+   "requests": [
+    "/api/stats",
+    "/api/proxy-logs",
+    "/api/proxy-blocks"
+   ]
+  },
+  {
+   "name": "stats-no-db-file",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "db": "none",
+   "requests": [
+    "/api/stats",
+    "/api/cache-stats",
+    "/api/logs",
+    "/api/domains/unique"
+   ]
+  },
+  {
+   "name": "stats-no-db-dir",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "db": "nodir",
+   "requests": [
+    "/api/stats",
+    "/api/cache-stats",
+    "/api/logs"
+   ]
+  },
+  {
+   "name": "stats-empty-db",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "db": "empty-file",
+   "requests": [
+    "/api/stats",
+    "/api/cache-stats",
+    "/api/firewall-blocks",
+    "/api/blocked-ips",
+    "/api/domains/blocked-actual"
+   ]
+  },
+  {
+   "name": "cache-enabled",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO cache_stats VALUES (1, {now-5}, 42, 100, 25, 0.8)"
+   ],
+   "requests": [
+    "/api/cache-stats"
+   ]
+  },
+  {
+   "name": "cache-disabled",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "requests": [
+    "/api/cache-stats"
+   ]
+  },
+  {
+   "name": "cache-null-field",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO cache_stats VALUES (1, {now-5}, NULL, 100, 25, 0.8)"
+   ],
+   "requests": [
+    "/api/cache-stats"
+   ]
+  },
+  {
+   "name": "cache-wrong-id",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO cache_stats VALUES (2, {now-5}, 1, 1, 1, 1)"
+   ],
+   "requests": [
+    "/api/cache-stats"
+   ]
+  },
+  {
+   "name": "cache-int-rate",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO cache_stats VALUES (1, {now-5}, 1, 1, 0, 1)"
+   ],
+   "requests": [
+    "/api/cache-stats"
+   ]
+  },
+  {
+   "name": "logs",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7200}.25, '10.100.0.5', 'example.com', '93.184.216.34,93.184.216.35', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7000}, '10.100.0.5', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6900}, '10.100.0.5', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6800}, '10.100.0.6', 'unknown.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6700}, '10.100.0.6', 'nostatus.test', NULL, 300, 'A', NULL)",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6600}, '10.100.0.6', 'odd.test', '1.2.3.4', 300, 'A', 'weird')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-200000}, '10.100.0.5', 'old.example.com', '9.9.9.9', 300, 'A', 'allowed')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6500}, '10.100.0.5', '8.8.8.8', 53, 'UDP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6400}, 'blocked', 'blocked', NULL, 'IP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6300}, '10.100.0.5', '1.1.1.1', 443, NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6200}, '10.100.0.5', '1.1.1.1', 80, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6100}, NULL, 'unknown', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-200000}, '10.100.0.5', '1.1.1.1', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-6000}, '10.100.0.5', 'CONNECT', 'registry.npmjs.org:443', 200, 'TCP_TUNNEL', 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5900}, '10.100.0.5', 'GET', 'http://denied.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5800}, '10.100.0.5', NULL, NULL, NULL, NULL, 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-200000}, '10.100.0.5', 'GET', 'http://old.test/', 403, 'TCP_DENIED', 'blocked')"
+   ],
+   "requests": [
+    "/api/logs",
+    "/api/logs?limit=2",
+    "/api/logs?limit=0",
+    "/api/logs?limit=-1",
+    "/api/logs?limit=abc",
+    "/api/logs?limit=",
+    "/api/logs?limit=5.0",
+    "/api/logs?limit=+1",
+    "/api/logs?limit=%201%20",
+    "/api/logs?limit=1_0",
+    "/api/logs?limit=1e2",
+    "/api/logs?limit=99999999999999999999",
+    "/api/logs?limit=9223372036854775807",
+    "/api/logs?limit=1&limit=0",
+    "/api/logs?limit=0&limit=1",
+    "/api/logs?other=1",
+    "/api/logs?limit=1.5",
+    "/api/logs?limit=%E3%81%82"
+   ]
+  },
+  {
+   "name": "logs-odd-rows",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-10}, 12345, 'x.test', NULL, 300, 'A', 'allowed')"
+   ],
+   "requests": [
+    "/api/logs"
+   ]
+  },
+  {
+   "name": "logs-text-timestamp",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ('{now-10}', '10.0.0.1', 'x.test', NULL, 300, 'A', 'allowed')"
+   ],
+   "requests": [
+    "/api/logs"
+   ]
+  },
+  {
+   "name": "logs-bad-timestamp",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ('yesterday', '10.0.0.1', 'x.test', NULL, 300, 'A', 'allowed')"
+   ],
+   "requests": [
+    "/api/logs"
+   ]
+  },
+  {
+   "name": "logs-integer-ips",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-10}, '10.0.0.1', 'x.test', 5, 300, 'A', 'allowed')"
+   ],
+   "requests": [
+    "/api/logs"
+   ]
+  },
+  {
+   "name": "firewall-blocks",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7200}.25, '10.100.0.5', 'example.com', '93.184.216.34,93.184.216.35', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7000}, '10.100.0.5', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6900}, '10.100.0.5', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6800}, '10.100.0.6', 'unknown.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6700}, '10.100.0.6', 'nostatus.test', NULL, 300, 'A', NULL)",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6600}, '10.100.0.6', 'odd.test', '1.2.3.4', 300, 'A', 'weird')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-200000}, '10.100.0.5', 'old.example.com', '9.9.9.9', 300, 'A', 'allowed')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6500}, '10.100.0.5', '8.8.8.8', 53, 'UDP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6400}, 'blocked', 'blocked', NULL, 'IP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6300}, '10.100.0.5', '1.1.1.1', 443, NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6200}, '10.100.0.5', '1.1.1.1', 80, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6100}, NULL, 'unknown', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-200000}, '10.100.0.5', '1.1.1.1', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-6000}, '10.100.0.5', 'CONNECT', 'registry.npmjs.org:443', 200, 'TCP_TUNNEL', 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5900}, '10.100.0.5', 'GET', 'http://denied.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5800}, '10.100.0.5', NULL, NULL, NULL, NULL, 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-200000}, '10.100.0.5', 'GET', 'http://old.test/', 403, 'TCP_DENIED', 'blocked')"
+   ],
+   "requests": [
+    "/api/firewall-blocks",
+    "/api/firewall-blocks?limit=2"
+   ]
+  },
+  {
+   "name": "firewall-odd",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-10}, '10.0.0.1', '1.1.1.1', '443', 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-9}, '10.0.0.1', '1.1.1.1', 443.0, 6)"
+   ],
+   "requests": [
+    "/api/firewall-blocks",
+    "/api/blocked-ips"
+   ]
+  },
+  {
+   "name": "firewall-fractional-port",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-10}, '10.0.0.1', '1.1.1.1', 443.5, 'TCP')"
+   ],
+   "requests": [
+    "/api/firewall-blocks",
+    "/api/blocked-ips"
+   ]
+  },
+  {
+   "name": "proxy-logs",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7200}.25, '10.100.0.5', 'example.com', '93.184.216.34,93.184.216.35', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7000}, '10.100.0.5', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6900}, '10.100.0.5', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6800}, '10.100.0.6', 'unknown.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6700}, '10.100.0.6', 'nostatus.test', NULL, 300, 'A', NULL)",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6600}, '10.100.0.6', 'odd.test', '1.2.3.4', 300, 'A', 'weird')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-200000}, '10.100.0.5', 'old.example.com', '9.9.9.9', 300, 'A', 'allowed')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6500}, '10.100.0.5', '8.8.8.8', 53, 'UDP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6400}, 'blocked', 'blocked', NULL, 'IP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6300}, '10.100.0.5', '1.1.1.1', 443, NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6200}, '10.100.0.5', '1.1.1.1', 80, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6100}, NULL, 'unknown', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-200000}, '10.100.0.5', '1.1.1.1', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-6000}, '10.100.0.5', 'CONNECT', 'registry.npmjs.org:443', 200, 'TCP_TUNNEL', 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5900}, '10.100.0.5', 'GET', 'http://denied.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5800}, '10.100.0.5', NULL, NULL, NULL, NULL, 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-200000}, '10.100.0.5', 'GET', 'http://old.test/', 403, 'TCP_DENIED', 'blocked')"
+   ],
+   "requests": [
+    "/api/proxy-logs",
+    "/api/proxy-blocks",
+    "/api/proxy-logs?limit=1",
+    "/api/proxy-blocks?limit=x"
+   ]
+  },
+  {
+   "name": "blocked-ips",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7200}.25, '10.100.0.5', 'example.com', '93.184.216.34,93.184.216.35', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-7000}, '10.100.0.5', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6900}, '10.100.0.5', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6800}, '10.100.0.6', 'unknown.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6700}, '10.100.0.6', 'nostatus.test', NULL, 300, 'A', NULL)",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-6600}, '10.100.0.6', 'odd.test', '1.2.3.4', 300, 'A', 'weird')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-200000}, '10.100.0.5', 'old.example.com', '9.9.9.9', 300, 'A', 'allowed')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6500}, '10.100.0.5', '8.8.8.8', 53, 'UDP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6400}, 'blocked', 'blocked', NULL, 'IP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6300}, '10.100.0.5', '1.1.1.1', 443, NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6200}, '10.100.0.5', '1.1.1.1', 80, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-6100}, NULL, 'unknown', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-200000}, '10.100.0.5', '1.1.1.1', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-6000}, '10.100.0.5', 'CONNECT', 'registry.npmjs.org:443', 200, 'TCP_TUNNEL', 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5900}, '10.100.0.5', 'GET', 'http://denied.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-5800}, '10.100.0.5', NULL, NULL, NULL, NULL, 'allowed')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-200000}, '10.100.0.5', 'GET', 'http://old.test/', 403, 'TCP_DENIED', 'blocked')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-50}, '10.100.0.7', '8.8.8.8', 53, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-40}, '10.100.0.7', '8.8.8.8', 853, 'TCP')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-30}, '10.100.0.7', '8.8.8.8', NULL, 'unknown')",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-20}, '10.100.0.7', '', 1, 'TCP')"
+   ],
+   "requests": [
+    "/api/blocked-ips",
+    "/api/blocked-ips?limit=1"
+   ]
+  },
+  {
+   "name": "blocked-ips-null-time",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES (NULL, '10.0.0.1', '4.4.4.4', 1, 'TCP')"
+   ],
+   "requests": [
+    "/api/blocked-ips"
+   ]
+  },
+  {
+   "name": "domains-lists",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "requests": [
+    "/api/domains/allowed",
+    "/api/domains/blocked",
+    "/api/domains/ignored-config"
+   ]
+  },
+  {
+   "name": "domains-lists-absent",
+   "config": "name: x\n",
+   "requests": [
+    "/api/domains/allowed",
+    "/api/domains/blocked",
+    "/api/domains/ignored-config"
+   ]
+  },
+  {
+   "name": "domains-lists-odd",
+   "config": "allow_domains: [a.com, 1]\nblock_domains: null\nignore_domains: just-a-string\n",
+   "requests": [
+    "/api/domains/allowed",
+    "/api/domains/blocked",
+    "/api/domains/ignored-config"
+   ]
+  },
+  {
+   "name": "domains-stats",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-900}, '10.0.0.1', 'example.com', '1.1.1.1,2.2.2.2', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-890}, '10.0.0.1', 'example.com', '2.2.2.2, 3.3.3.3', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-880}, '10.0.0.1', 'example.com', '1.1.1.1', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-870}, '10.0.0.1', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-860}, '10.0.0.1', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-850}, '10.0.0.1', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-840}, '10.0.0.1', 'bad.example.com', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-830}, '10.0.0.1', 'flip.allowed.test', '4.4.4.4', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-820}, '10.0.0.1', 'flip.allowed.test', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-810}, '10.0.0.1', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-800}, '10.0.0.1', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-799}, '10.0.0.1', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-798}, '10.0.0.1', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-797}, '10.0.0.1', 'noise.example.com', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-790}, '10.0.0.1', 'x.ignored.test', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-789}, '10.0.0.1', 'x.ignored.test', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-788}, '10.0.0.1', 'x.ignored.test', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-787}, '10.0.0.1', 'x.ignored.test', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-786}, '10.0.0.1', 'x.ignored.test', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-785}, '10.0.0.1', 'x.ignored.test', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-780}, '10.0.0.1', 'nowhere.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-779}, '10.0.0.1', 'nowhere.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-778}, '10.0.0.1', 'nowhere.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-777}, '10.0.0.1', 'nowhere.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-776}, '10.0.0.1', 'nowhere.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-775}, '10.0.0.1', 'nowhere.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-774}, '10.0.0.1', 'nowhere.test', '', 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-770}, '10.0.0.1', 'MIXED.example.ORG.', '5.5.5.5', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-769}, '10.0.0.1', 'MIXED.example.ORG.', '5.5.5.5', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-768}, '10.0.0.1', 'MIXED.example.ORG.', '5.5.5.5', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-767}, '10.0.0.1', 'MIXED.example.ORG.', '5.5.5.5', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-766}, '10.0.0.1', 'MIXED.example.ORG.', '5.5.5.5', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-765}, '10.0.0.1', 'MIXED.example.ORG.', '5.5.5.5', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-764}, '10.0.0.1', 'MIXED.example.ORG.', '5.5.5.5', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-763}, '10.0.0.1', 'MIXED.example.ORG.', '5.5.5.5', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-760}, '10.0.0.1', 'notblocked.test', '6.6.6.6', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-759}, '10.0.0.1', 'notblocked.test', '6.6.6.6', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-758}, '10.0.0.1', 'notblocked.test', '6.6.6.6', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-757}, '10.0.0.1', 'notblocked.test', '6.6.6.6', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-756}, '10.0.0.1', 'notblocked.test', '6.6.6.6', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-755}, '10.0.0.1', 'notblocked.test', '6.6.6.6', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-754}, '10.0.0.1', 'notblocked.test', '6.6.6.6', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-753}, '10.0.0.1', 'notblocked.test', '6.6.6.6', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-752}, '10.0.0.1', 'notblocked.test', '6.6.6.6', 300, 'A', 'allowed')"
+   ],
+   "requests": [
+    "/api/domains/unique",
+    "/api/domains/blocked-actual",
+    "/api/domains/ignored"
+   ]
+  },
+  {
+   "name": "domains-suffix-without-boundary",
+   "config": "block_domains: [.blocked.test]\nallow_domains: [.example.com]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-10}, '10.0.0.1', 'notblocked.test', NULL, 300, 'A', 'blocked')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-9}, '10.0.0.1', 'myexample.com', '1.1.1.1', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-8}, '10.0.0.1', 'myexample.com', '1.1.1.1', 300, 'A', 'allowed')"
+   ],
+   "requests": [
+    "/api/domains/unique",
+    "/api/domains/blocked-actual"
+   ]
+  },
+  {
+   "name": "domains-null-domain",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-10}, '10.0.0.1', NULL, NULL, 300, 'A', 'blocked')"
+   ],
+   "requests": [
+    "/api/domains/unique",
+    "/api/domains/blocked-actual",
+    "/api/domains/ignored"
+   ]
+  },
+  {
+   "name": "domains-early-match-before-bad-entry",
+   "config": "block_domains: [bad.test, 5]\nallow_domains: [ok.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-10}, '10.0.0.1', 'bad.test', NULL, 300, 'A', 'blocked')"
+   ],
+   "requests": [
+    "/api/domains/unique",
+    "/api/domains/blocked-actual"
+   ]
+  },
+  {
+   "name": "domains-bad-entry-reached",
+   "config": "block_domains: [5]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-10}, '10.0.0.1', 'x.test', NULL, 300, 'A', 'blocked')"
+   ],
+   "requests": [
+    "/api/domains/unique",
+    "/api/domains/blocked-actual"
+   ]
+  },
+  {
+   "name": "domains-config-not-a-mapping-no-rows",
+   "config": "- a\n",
+   "requests": [
+    "/api/domains/unique",
+    "/api/domains/blocked-actual",
+    "/api/domains/ignored"
+   ]
+  },
+  {
+   "name": "domains-list-is-a-string",
+   "config": "allow_domains: x.test\nblock_domains: []\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-10}, '10.0.0.1', 'x', '1.1.1.1', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-9}, '10.0.0.1', 'y.test', '1.1.1.1', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-8}, '10.0.0.1', 'y.test', '1.1.1.1', 300, 'A', 'allowed')"
+   ],
+   "requests": [
+    "/api/domains/unique"
+   ]
+  },
+  {
+   "name": "relay-disabled",
+   "config": "allow_domains: [example.com]\n",
+   "requests": [
+    "/api/relay/config",
+    "/api/relay/stats",
+    "/api/relay/tokens",
+    "/api/relay/audit"
+   ]
+  },
+  {
+   "name": "relay-full",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/tokens.json": "{\"version\": 1, \"records\": {\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\": {\"label\": \"skm_aaaaaaaa\", \"project\": \"case-a\", \"issued_at\": \"{ts:now-7200}\", \"expires_at\": \"{ts:now+86400}\", \"last_used\": \"{tsx:now-3600}.5Z\", \"use_count\": 7, \"revoked\": false, \"fingerprint\": \"SHA256:agentkey\"}, \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\": {\"label\": \"skm_bbbbbbbb\", \"project\": \"case-a\", \"issued_at\": \"{ts:now-10800}\", \"expires_at\": \"{ts:now+86400}\", \"revoked\": true}, \"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\": {\"label\": \"skm_cccccccc\", \"project\": \"case-a\", \"issued_at\": \"{ts:now-90000}\", \"expires_at\": \"{ts:now-50000}\"}}}",
+    "relay/audit.jsonl": "{\"actor\":\"system\",\"domain\":\"github.com\",\"event\":\"serve_started\",\"project\":\"case-a\",\"ts\":\"{ts:now-5000}\",\"via\":\"sekimore-gateway\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"ssh_auth_ok\",\"fingerprint\":\"SHA256:abc\",\"peer\":\"192.168.0.3:55766\",\"ts\":\"{ts:now-4900}\",\"via\":\"sekimore-gateway\"}\n{\"actor\":\"agent-via-gateway\",\"bytes_in\":\"4\",\"bytes_out\":\"481\",\"event\":\"relay_ok\",\"ms\":\"1994\",\"peer\":\"192.168.0.3:55766\",\"repo\":\"Org/App\",\"status\":\"0\",\"ts\":\"{ts:now-4800}\",\"verb\":\"git-upload-pack\",\"via\":\"sekimore-gateway\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"repo_denied\",\"kind\":\"repo_not_in_project\",\"peer\":\"192.168.0.3:55770\",\"reason\":\"repository \\\"x/y\\\" is not in project \\\"case-a\\\"\",\"repo\":\"x/y.git\",\"ts\":\"{ts:now-4700}\",\"verb\":\"git-upload-pack\",\"via\":\"sekimore-gateway\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"api_error\",\"label\":\"skm_b99fc15a\",\"path\":\"/pr/close\",\"reason\":\"pr:close is not allowed by policy\",\"repo\":\"Org/App\",\"status\":\"403\",\"ts\":\"{ts:now-4600}\",\"via\":\"sekimore-gateway\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"token_denied\",\"path\":\"/whoami\",\"peer\":\"192.168.0.3\",\"reason\":\"unknown token\",\"ts\":\"{ts:now-4500}\",\"via\":\"sekimore-gateway\"}\nthis line is not json\n{\"actor\":\"agent-via-gateway\",\"bytes_in\":\"756\",\"bytes_out\":\"587215\",\"event\":\"https_passthrough\",\"peer\":\"192.168.0.3:49946\",\"ts\":\"{tsx:now-4400}.123456789Z\",\"upstream\":\"github.com\",\"via\":\"sekimore-gateway\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"relay_ok\",\"repo\":\"Org/App\",\"ts\":\"{ts:now-100000}\",\"via\":\"sekimore-gateway\"}\n{\"actor\":\"system\",\"event\":\"custom_thing_failed\",\"ts\":\"{ts:now-4300}\"}\n{\"actor\":\"system\",\"event\":\"custom_note\",\"ts\":\"{ts:now-4200}\"}\n{\"actor\":\"system\",\"event\":\"bootstrap_enabled\",\"ts\":\"{ts:now-4100}\"}\n",
+    "relay/authorized_keys": "ssh-ed25519 AAAA one\n# comment\n\nssh-ed25519 BBBB two\r\nssh-ed25519 CCCC three",
+    "relay/known_hosts": "github.com ssh-ed25519 AAAA\n",
+    "relay/upstream_token": "gho_secret_never_shown",
+    "relay/host_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nnot shown\n"
+   },
+   "requests": [
+    "/api/relay/config",
+    "/api/relay/stats",
+    "/api/relay/tokens",
+    "/api/relay/audit",
+    "/api/relay/audit?kind=allowed",
+    "/api/relay/audit?kind=blocked",
+    "/api/relay/audit?kind=bogus",
+    "/api/relay/audit?limit=2",
+    "/api/relay/audit?limit=0",
+    "/api/relay/audit?limit=-5",
+    "/api/relay/audit?limit=5000",
+    "/api/relay/audit?limit=x",
+    "/api/relay/audit?limit=99999999999999999999"
+   ]
+  },
+  {
+   "name": "relay-missing-state",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "requests": [
+    "/api/relay/config",
+    "/api/relay/stats",
+    "/api/relay/tokens",
+    "/api/relay/audit"
+   ]
+  },
+  {
+   "name": "relay-bootstrap-disabled",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/bootstrap.disabled": "",
+    "relay/known_hosts/x": "a directory"
+   },
+   "requests": [
+    "/api/relay/config",
+    "/api/relay/stats"
+   ]
+  },
+  {
+   "name": "relay-per-repo-policy",
+   "config": "\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  allow_tags: true\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    permissions: {allow: [pr:create, pr:read, ci:read], deny: [issue:label]}\n    tags: []\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main], tags: [\"v*\"], permissions: {add_is_not_a_key: 1}}\n      - {name: Org/Lib, mode: read-only, permissions: {allow: [pr:merge, issue:label], deny: [ci:read]}}\n      - {name: Org/Old, mode: read-only, permissions: [pr:read], delete: true, signed_tags: false, signing: required}\n      - {name: /Org/Slash, push: [feat/*], force_push: true}\n      - {mode: read-only}\n      - just-a-string\n",
+   "requests": [
+    "/api/relay/config"
+   ]
+  },
+  {
+   "name": "relay-multi-upstream",
+   "config": "\ndomain_handlers:\n  github.com: {handler: git-relay}\n  ghe.example.com: {handler: git-relay, ssh_port: 2222}\nrelay:\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-m\n    permissions: [pr:create]\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: ghe.example.com/Corp/Internal, mode: read-write, bases: [main]}\n",
+   "files": {
+    "relay/upstream_token": "gho_x",
+    "relay/upstreams/ghe.example.com/known_hosts": "[ghe.example.com]:22 ssh-ed25519 AAAA\n"
+   },
+   "requests": [
+    "/api/relay/config",
+    "/api/relay/stats"
+   ]
+  },
+  {
+   "name": "relay-default-true",
+   "config": "\ndomain_handlers:\n  github.com: {handler: git-relay, ssh_port: 2201}\n  ghe.example.com: {handler: git-relay, ssh_port: 2222, default: true}\nrelay:\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-m\n    permissions: [pr:create]\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: ghe.example.com/Corp/Internal, mode: read-write, bases: [main]}\n",
+   "requests": [
+    "/api/relay/config"
+   ]
+  },
+  {
+   "name": "relay-default-lexical",
+   "config": "\ndomain_handlers:\n  github.com: {handler: git-relay, ssh_port: 2201}\n  ghe.example.com: {handler: git-relay, ssh_port: 2222}\nrelay:\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-m\n    permissions: [pr:create]\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: ghe.example.com/Corp/Internal, mode: read-write, bases: [main]}\n",
+   "requests": [
+    "/api/relay/config"
+   ]
+  },
+  {
+   "name": "relay-upstream-layer",
+   "config": "\ndomain_handlers:\n  github.com: {handler: git-relay}\n  ghe.example.com: {handler: git-relay, ssh_port: 2222}\nrelay:\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-m\n    permissions: [pr:read, ci:read]\n    upstreams:\n      github.com:\n        permissions: {allow: [pr:create, pr:merge]}\n        tags: [\"v*\"]\n        repos:\n          - {name: Org/App, mode: read-write, bases: [main]}\n          - {name: Org/Tool, mode: read-write, tags: [], permissions: {deny: [pr:merge]}}\n      ghe.example.com:\n        permissions: {allow: [pr:create], deny: [pr:merge]}\n        delete: true\n        repos:\n          - {name: Corp/Internal, mode: read-write, bases: [main]}\n    repos:\n      - {name: ghe.example.com/Corp/Legacy, mode: read-only}\n",
+   "requests": [
+    "/api/relay/config"
+   ]
+  },
+  {
+   "name": "relay-api-base-ssh-options",
+   "config": "\ndomain_handlers:\n  github.com: {handler: git-relay}\n  ghe.example.com: {handler: git-relay, ssh_port: 2222, upstream: host.docker.internal, api_base: 'https://ghe.example.com/api/v3', ssh_options: [ProxyJump=bastion.example.com]}\nrelay:\n  state_dir: \"{dir}/relay\"\n  ssh_options: [ConnectionAttempts=2]\n  project:\n    name: case-m\n    permissions: [pr:read, ci:read]\n    upstreams:\n      github.com:\n        permissions: {allow: [pr:create, pr:merge]}\n        tags: [\"v*\"]\n        repos:\n          - {name: Org/App, mode: read-write, bases: [main]}\n          - {name: Org/Tool, mode: read-write, tags: [], permissions: {deny: [pr:merge]}}\n      ghe.example.com:\n        permissions: {allow: [pr:create], deny: [pr:merge]}\n        delete: true\n        repos:\n          - {name: Corp/Internal, mode: read-write, bases: [main]}\n    repos:\n      - {name: ghe.example.com/Corp/Legacy, mode: read-only}\n",
+   "requests": [
+    "/api/relay/config"
+   ]
+  },
+  {
+   "name": "relay-upload-caps",
+   "config": "\ndomain_handlers:\n  github.com: {handler: git-relay, max_upload_bytes: 262144}\n  ghcr.io: {handler: https-relay, max_upload_bytes: -1}\n  registry-1.docker.io: {handler: https-relay}\n  odd.example: {handler: https-relay, max_upload_bytes: lots, upstream: Mirror.Example.}\nrelay:\n  https_max_upload_bytes: 4194304\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-c\n    permissions: [pr:create]\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n",
+   "files": {
+    "relay/audit.jsonl": "{\"actor\":\"agent-via-gateway\",\"bytes_in\":\"512\",\"bytes_out\":\"9000\",\"event\":\"https_passthrough\",\"peer\":\"192.168.0.3:1\",\"sni\":\"github.com\",\"ts\":\"{ts:now-30}\",\"upstream\":\"github.com\",\"via\":\"sekimore-gateway\"}\n{\"actor\":\"agent-via-gateway\",\"bytes_in\":\"5242880\",\"bytes_out\":\"100\",\"event\":\"https_passthrough\",\"peer\":\"192.168.0.3:2\",\"sni\":\"ghcr.io\",\"ts\":\"{ts:now-20}\",\"upstream\":\"ghcr.io\",\"via\":\"sekimore-gateway\"}\n{\"actor\":\"agent-via-gateway\",\"bytes_in\":\"262145\",\"cap\":\"262144\",\"event\":\"https_upload_capped\",\"peer\":\"192.168.0.3:3\",\"reason\":\"upload exceeded max_upload_bytes; connection closed\",\"sni\":\"github.com\",\"ts\":\"{ts:now-10}\",\"upstream\":\"github.com\",\"via\":\"sekimore-gateway\"}\n{\"actor\":\"agent-via-gateway\",\"bytes_in\":1048576,\"event\":\"https_passthrough\",\"ts\":\"{ts:now-5}\",\"upstream\":\"ghcr.io\"}\n"
+   },
+   "requests": [
+    "/api/relay/config",
+    "/api/relay/stats",
+    "/api/relay/audit?kind=allowed",
+    "/api/relay/audit?kind=blocked"
+   ]
+  },
+  {
+   "name": "relay-https-destination-and-edge",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/audit.jsonl": "{\"actor\":\"agent-via-gateway\",\"event\":\"https_failed\",\"peer\":\"192.168.0.3:50000\",\"reason\":\"connect: refused\",\"sni\":\"github.com\",\"ts\":\"{ts:now-60}\",\"upstream\":\"github.com\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"https_passthrough\",\"bytes_in\":\"1\",\"peer\":\"192.168.0.3:50001\",\"sni\":\"github.com\",\"ts\":\"{ts:now-59}\",\"upstream\":\"github.com\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"https_rejected\",\"peer\":\"192.168.0.3:50002\",\"sni\":\"api.github.com\",\"ts\":\"{ts:now-58}\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"https_rejected\",\"peer\":\"192.168.0.3:50003\",\"sni\":\"-\",\"ts\":\"{ts:now-57}\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"https_passthrough\",\"peer\":\"192.168.0.3:50005\",\"sni\":\"-\",\"upstream\":\"github.com\",\"ts\":\"{ts:now-57}\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"https_passthrough\",\"peer\":\"192.168.0.3:50004\",\"sni\":\"registry.example\",\"ts\":\"{ts:now-56}\",\"upstream\":\"mirror.example\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"relay_ok\",\"repo\":\"Org/App\",\"ts\":\"{ts:now-55}\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"relay_ok\",\"repo\":\"Org/App\",\"ts\":\"{ts:now-54}\",\"edge\":\"relay.ssh.upstream\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"token_issued\",\"ts\":\"{ts:now-53}\",\"edge\":\"\"}\n{\"actor\":\"agent-via-gateway\",\"event\":\"token_issued\",\"ts\":\"{ts:now-52}\",\"edge\":\"-\"}\n"
+   },
+   "requests": [
+    "/api/relay/audit",
+    "/api/relay/stats"
+   ]
+  },
+  {
+   "name": "relay-audit-odd-lines",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/audit.jsonl": "{\"event\":null,\"ts\":\"{ts:now-60}\"}\n{\"event\":\"\",\"ts\":\"{ts:now-59}\"}\n{\"event\":\"relay_ok\"}\n{\"event\":\"relay_ok\",\"ts\":\"not a time\"}\n{\"event\":\"relay_ok\",\"ts\":12345}\n[1,2,3]\n\"a string\"\n   \n{\"event\":\"relay_ok\",\"ts\":\"{ts:now-58}\",\"method\":0,\"bytes_in\":true,\"cap\":\"\",\"ms\":null,\"status\":1.5,\"cmdline\":[1,\"a\"],\"fingerprint\":{\"k\":\"v\"},\"repo\":\"\",\"peer\":0,\"reason\":\"-\",\"detail\":\"ignored\"}\n{\"event\":\"relay_ok\",\"ts\":\"{ts:now-57}\",\"repo\":5,\"peer\":\"p\",\"reason\":7}\n{\"event\":\"relay_ok\",\"ts\":\"{ts:now-56}\",\"event\":\"api_ok\"}\n{\"event\":\"https_passthrough\",\"ts\":\"{ts:now-55}\",\"bytes_in\":\"1048576.0\"}\n{\"event\":\"https_passthrough\",\"ts\":\"{ts:now-54}\",\"bytes_in\":\"2000000\"}\n{\"event\":\"some_error_here\",\"ts\":\"{tsx:now-53}Z\\n\"}\n"
+   },
+   "requests": [
+    "/api/relay/audit",
+    "/api/relay/stats",
+    "/api/relay/audit?kind=blocked"
+   ]
+  },
+  {
+   "name": "relay-audit-actor-not-a-string",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/audit.jsonl": "{\"event\":\"relay_ok\",\"ts\":\"{ts:now-60}\",\"actor\":5}\n"
+   },
+   "requests": [
+    "/api/relay/audit",
+    "/api/relay/stats"
+   ]
+  },
+  {
+   "name": "relay-audit-impossible-date",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/audit.jsonl": "{\"event\":\"relay_ok\",\"ts\":\"2026-02-30T00:00:00Z\"}\n"
+   },
+   "requests": [
+    "/api/relay/audit"
+   ]
+  },
+  {
+   "name": "relay-audit-crlf",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/audit.jsonl": "{\"event\":\"relay_ok\",\"ts\":\"{ts:now-60}\"}\r\n{\"event\":\"api_ok\",\"ts\":\"{ts:now-50}\"}\r\n"
+   },
+   "requests": [
+    "/api/relay/audit"
+   ]
+  },
+  {
+   "name": "relay-tokens-odd",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/tokens.json": "{\"records\": {\"h1\": {\"label\": null, \"issued_at\": \"{ts:now-100}\", \"expires_at\": \"garbage\", \"use_count\": \"5\"}, \"h2\": \"not a dict\", \"h3\": {\"project\": 7, \"revoked\": 1, \"use_count\": 0}, \"h4\": {\"label\": \"skm_dddddddd\", \"issued_at\": \"{ts:now-50}\", \"use_count\": 2.9, \"last_used\": 5}, \"h5\": {\"label\": \"skm_eeeeeeee\", \"expires_at\": \"{ts:now-10}\"}}}"
+   },
+   "requests": [
+    "/api/relay/tokens",
+    "/api/relay/stats"
+   ]
+  },
+  {
+   "name": "relay-tokens-bad-use-count",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/tokens.json": "{\"records\": {\"h\": {\"use_count\": \"many\"}}}"
+   },
+   "requests": [
+    "/api/relay/tokens"
+   ]
+  },
+  {
+   "name": "relay-tokens-not-json",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/tokens.json": "{not json"
+   },
+   "requests": [
+    "/api/relay/tokens"
+   ]
+  },
+  {
+   "name": "relay-tokens-records-a-list",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/tokens.json": "{\"records\": [1, 2]}"
+   },
+   "requests": [
+    "/api/relay/tokens"
+   ]
+  },
+  {
+   "name": "relay-tokens-a-list",
+   "config": "\nallow_domains: [github.com]\ndomain_handlers:\n  github.com: {handler: git-relay}\nrelay:\n  https: passthrough\n  bootstrap: auto\n  token_ttl: 12h\n  state_dir: \"{dir}/relay\"\n  project:\n    name: case-a\n    repos:\n      - {name: Org/App, mode: read-write, bases: [main]}\n      - {name: Org/Lib, mode: read-only}\n    permissions: [pr:create, issue:comment]\n",
+   "files": {
+    "relay/tokens.json": "[{\"records\": {}}]"
+   },
+   "requests": [
+    "/api/relay/tokens"
+   ]
+  },
+  {
+   "name": "relay-config-odd-shapes",
+   "config": "\ndomain_handlers:\n  GitHub.com.: {handler: github, upstream: ' Git.Example ', ssh_port: abc, api_base: ''}\n  second.example: {handler: git-relay, ssh_port: '2222', default: 0}\n  splice.example: splice\nrelay:\n  ssh_listen: 'host:notaport'\n  state_dir: \"{dir}/relay\"\n  allow_delete: yes\n  https: 5\n  project:\n    name: 0\n    push: notalist\n    signing: ''\n    upstreams: {Git.Example: {tags: [a]}, nope: 5}\n    repos:\n      - {name: Git.Example/Org/Three/Parts}\n      - {name: a.b/Org/Repo}\n      - {name: Org/App, mode: 1, bases: none}\n",
+   "requests": [
+    "/api/relay/config",
+    "/api/relay/stats"
+   ]
+  },
+  {
+   "name": "relay-config-not-dicts",
+   "config": "domain_handlers: [a]\nrelay: [b]\n",
+   "requests": [
+    "/api/relay/config",
+    "/api/relay/stats",
+    "/api/relay/tokens"
+   ]
+  },
+  {
+   "name": "relay-config-mixed-keys",
+   "config": "domain_handlers:\n  github.com: {handler: git-relay}\n  5: {handler: https-relay}\nrelay:\n  state_dir: \"{dir}/relay\"\n",
+   "requests": [
+    "/api/relay/config",
+    "/api/relay/tokens"
+   ]
+  },
+  {
+   "name": "relay-config-ssh-port-inf",
+   "config": "domain_handlers:\n  github.com: {handler: git-relay, ssh_port: .inf}\nrelay: {}\n",
+   "requests": [
+    "/api/relay/config"
+   ]
+  },
+  {
+   "name": "ws-session",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-300}, '10.100.0.5', 'a.example', '1.1.1.1,2.2.2.2', 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-299}, '10.100.0.5', 'i.example', NULL, 300, 'A', 'ignored')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-298}, '10.100.0.5', 'n.example', NULL, 300, 'A', NULL)",
+    "INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-297}, '10.100.0.5', '9.9.9.9', 443, 'TCP')",
+    "INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-296}, '10.100.0.5', 'GET', 'http://x/', 403, 'TCP_DENIED', 'blocked')"
+   ],
+   "requests": [],
+   "ws": [
+    {
+     "send": "{\"type\":\"resync\"}"
+    },
+    {
+     "expect": 1.5
+    },
+    {
+     "sql": [
+      "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-10}, '10.100.0.5', 'new.example', '3.3.3.3', 300, 'A', 'allowed');INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-9}, '10.100.0.5', 'skip.example', NULL, 300, 'A', 'ignored');INSERT INTO firewall_blocks (timestamp, src_ip, dst_ip, dst_port, protocol) VALUES ({now-11}, 'blocked', 'blocked', NULL, 'IP');INSERT INTO proxy_logs (timestamp, client_ip, method, url, status_code, squid_result, action) VALUES ({now-8}, '10.100.0.5', 'CONNECT', 'x:443', 200, 'TCP_TUNNEL', 'allowed')"
+     ]
+    },
+    {
+     "expect": 3.5
+    },
+    {
+     "send": "not json",
+     "wait": 1.5
+    },
+    {
+     "send": "{\"type\":\"other\"}",
+     "wait": 1.5
+    },
+    {
+     "send": "{\"type\":\"resync\"}"
+    },
+    {
+     "binary": true
+    }
+   ]
+  },
+  {
+   "name": "ws-snapshot-limit",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "sql": [
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-1000}, '10.0.0.1', 'd0.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-999}, '10.0.0.1', 'd1.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-998}, '10.0.0.1', 'd2.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-997}, '10.0.0.1', 'd3.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-996}, '10.0.0.1', 'd4.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-995}, '10.0.0.1', 'd5.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-994}, '10.0.0.1', 'd6.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-993}, '10.0.0.1', 'd7.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-992}, '10.0.0.1', 'd8.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-991}, '10.0.0.1', 'd9.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-990}, '10.0.0.1', 'd10.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-989}, '10.0.0.1', 'd11.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-988}, '10.0.0.1', 'd12.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-987}, '10.0.0.1', 'd13.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-986}, '10.0.0.1', 'd14.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-985}, '10.0.0.1', 'd15.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-984}, '10.0.0.1', 'd16.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-983}, '10.0.0.1', 'd17.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-982}, '10.0.0.1', 'd18.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-981}, '10.0.0.1', 'd19.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-980}, '10.0.0.1', 'd20.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-979}, '10.0.0.1', 'd21.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-978}, '10.0.0.1', 'd22.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-977}, '10.0.0.1', 'd23.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-976}, '10.0.0.1', 'd24.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-975}, '10.0.0.1', 'd25.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-974}, '10.0.0.1', 'd26.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-973}, '10.0.0.1', 'd27.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-972}, '10.0.0.1', 'd28.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-971}, '10.0.0.1', 'd29.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-970}, '10.0.0.1', 'd30.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-969}, '10.0.0.1', 'd31.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-968}, '10.0.0.1', 'd32.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-967}, '10.0.0.1', 'd33.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-966}, '10.0.0.1', 'd34.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-965}, '10.0.0.1', 'd35.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-964}, '10.0.0.1', 'd36.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-963}, '10.0.0.1', 'd37.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-962}, '10.0.0.1', 'd38.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-961}, '10.0.0.1', 'd39.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-960}, '10.0.0.1', 'd40.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-959}, '10.0.0.1', 'd41.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-958}, '10.0.0.1', 'd42.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-957}, '10.0.0.1', 'd43.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-956}, '10.0.0.1', 'd44.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-955}, '10.0.0.1', 'd45.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-954}, '10.0.0.1', 'd46.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-953}, '10.0.0.1', 'd47.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-952}, '10.0.0.1', 'd48.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-951}, '10.0.0.1', 'd49.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-950}, '10.0.0.1', 'd50.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-949}, '10.0.0.1', 'd51.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-948}, '10.0.0.1', 'd52.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-947}, '10.0.0.1', 'd53.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-946}, '10.0.0.1', 'd54.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-945}, '10.0.0.1', 'd55.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-944}, '10.0.0.1', 'd56.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-943}, '10.0.0.1', 'd57.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-942}, '10.0.0.1', 'd58.example', NULL, 300, 'A', 'allowed')",
+    "INSERT INTO dns_queries (timestamp, client_ip, query_domain, response_ips, ttl, query_type, status) VALUES ({now-941}, '10.0.0.1', 'd59.example', NULL, 300, 'A', 'allowed')"
+   ],
+   "requests": [],
+   "ws": [
+    {
+     "send": "{\"type\":\"resync\"}"
+    }
+   ]
+  },
+  {
+   "name": "ws-missing-tables",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "db": "empty-file",
+   "requests": [],
+   "ws": [
+    {
+     "send": "{\"type\":\"resync\"}"
+    }
+   ]
+  },
+  {
+   "name": "ws-no-db-file",
+   "config": "name: Example GW\ndescription: An example gateway\nallow_domains: [example.com, .allowed.test, Mixed.Example.org]\nblock_domains: [bad.example.com, .blocked.test]\nignore_domains: [noise.example.com, .ignored.test]\n",
+   "db": "none",
+   "requests": [],
+   "ws": [
+    {
+     "send": "{\"type\":\"resync\"}"
+    }
+   ]
+  }
+ ]
+}

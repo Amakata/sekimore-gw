@@ -8,7 +8,7 @@
 
 ## Web UI
 
-ダッシュボードの文言は `src/locales/<lang>.json`（`en`、`ja`）から読み込みます。`/api/i18n` が言語を決定して辞書を返し、
+ダッシュボードの文言は `relay/src/webui/locales/<lang>.json`（`en`、`ja`）にあり、Web UI を提供する `sekimore-relay` に組み込まれています。`/api/i18n` が言語を決定して辞書を返し、
 画面は `data-i18n` 属性を通じてそれを適用します。ヘッダの言語セレクタは `sekimore_lang` cookie（有効期間 1 年、`SameSite=Lax`）を設定し、
 ページを再読み込みします。
 
