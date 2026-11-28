@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.3.0-alpha.4 -->
+<!-- reviewed-up-to: 0.3.0-alpha.5 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -47,7 +47,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.3.0-alpha.1 | [0.3.0-alpha.2](#030-alpha2-languages-live-in-optmise-prerelease), **only if your Dockerfile installs languages or writes under `/usr/local/share`** |
 | 0.3.0-alpha.2 | [0.3.0-alpha.3](#030-alpha3-sidecar-text-is-checked-and-recreate-starts-sidecars-prerelease), **only if you run a command sidecar or a GitHub Enterprise Server whose Actions storage is on a private address** |
 | 0.3.0-alpha.3 | [0.3.0-alpha.4](#030-alpha4-the-web-ui-moves-into-sekimore-relay-serve-and-the-sidecar-template-is-go-prerelease), **only if you use the Web UI's `/docs` or `/openapi.json`, or rely on the Web UI's access log** |
-| 0.3.0-alpha.4 | [0.3.0-alpha.5](#030-alpha5-the-base-image-is-also-on-debian-13-prerelease), **only if you want Debian 13 in the dev container** |
+| 0.3.0-alpha.4 | [0.3.0-alpha.5](#030-alpha5-the-base-image-is-also-on-debian-13-prerelease), **only if you want Debian 13 in the dev container, or a script reads `python -m src.maint`'s `--help` or refusal text** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -1070,3 +1070,11 @@ stays plain, `-bookworm` stays `-bookworm`. Nothing moves a project to another D
     ([docs/languages.md](docs/languages.md)).
   - `iptables` is 1.8.11 (from 1.8.9), the nft backend on both.
 - **`config.yml`, the compose files:** nothing to change.
+- **The gateway's log followers and `maint` are Rust:** the followers now run in a process of
+  their own, `sekimore-relay gateway` (restarted if it exits), and start with the container. The
+  proxy follower waits for Squid's `access.log` instead of ending when it is missing.
+  `sekimore-relay maint` replaces `python -m src.maint`, which still works as a shim: same
+  commands, options, output and exit codes, except that `--help` and the wording of a refusal are
+  no longer argparse's. `sgw` uses the Rust entry points when the gateway has them and falls back
+  for an older one. Nothing to change in a project; only a script that parses `maint`'s `--help`
+  or refusal text needs a look.

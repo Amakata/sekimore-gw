@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.3.0-alpha.4 -->
+<!-- reviewed-up-to: 0.3.0-alpha.5 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -47,7 +47,7 @@
 | 0.3.0-alpha.1 | 下の 0.3.0-alpha.2。**Dockerfile で言語を入れている、または `/usr/local/share` に書く場合だけ** |
 | 0.3.0-alpha.2 | 下の 0.3.0-alpha.3。**コマンドサイドカーを使う、または Actions のストレージがプライベートアドレスにある GitHub Enterprise Server を使う場合だけ** |
 | 0.3.0-alpha.3 | 下の 0.3.0-alpha.4。**Web UI の `/docs` や `/openapi.json` を使う、または Web UI のアクセスログに頼る場合だけ** |
-| 0.3.0-alpha.4 | 下の 0.3.0-alpha.5。**dev コンテナを Debian 13 にしたい場合だけ** |
+| 0.3.0-alpha.4 | 下の 0.3.0-alpha.5。**dev コンテナを Debian 13 にしたい場合、または `python -m src.maint` の `--help` や拒否の文言を読むスクリプトがある場合だけ** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -1028,3 +1028,10 @@ Dockerfile で何も入れていないプロジェクトは、することはあ
     `mise install --system` で入れてください（[docs/languages.ja.md](docs/languages.ja.md)）。
   - `iptables` は 1.8.11（1.8.9 から）。どちらも nft バックエンドです。
 - **`config.yml`、compose ファイル:** 変えるものはありません。
+- **gateway のログ追尾と `maint` が Rust になる:** 追尾は専用のプロセス `sekimore-relay gateway`
+  （終了すると再起動される）で動き、コンテナの起動とともに始まります。proxy の追尾は、Squid の
+  `access.log` がなくても終わらず、現れるのを待ちます。`sekimore-relay maint` が
+  `python -m src.maint` に代わります。後者は橋渡しとして動き続け、コマンド・オプション・出力・終了コードは
+  同じですが、`--help` と拒否の文言は argparse のものではなくなります。`sgw` は gateway が持っていれば
+  Rust の入口を使い、古い gateway には従来の入口を使います。プロジェクトで変えるものはありません。
+  `maint` の `--help` や拒否の文言を解析するスクリプトだけ確認してください。
