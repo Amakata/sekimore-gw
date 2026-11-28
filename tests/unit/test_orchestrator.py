@@ -1004,6 +1004,53 @@ database_path: /tmp/test.db
 
         assert result is False  # Should return False on failure
 
+    @pytest.mark.asyncio
+    async def it_deletes_the_rule_of_a_dropped_domain(tmp_path):
+        """The reload deletes a dropped name's ACCEPT rule with the spec it was added with.
+
+        iptables -D matches the whole spec; a delete without the interfaces left the rule and its
+        set in FORWARD, admitting the name's addresses until the gateway restarted.
+        """
+        import subprocess
+
+        calls: list[list[str]] = []
+
+        def run(cmd, **_kw):
+            calls.append(cmd)
+            # Deleting the NFLOG rule reports "not found", so _remove_block_log_rule's loop ends
+            if len(cmd) > 1 and cmd[1] == "-D" and "--nflog-prefix" in cmd:
+                raise subprocess.CalledProcessError(1, cmd, stderr="No such rule")
+            return Mock(returncode=0, stdout="", stderr="")
+
+        body = """
+block_domains: []
+allow_ips: []
+block_ips: []
+network:
+  lan_subnets:
+    - "172.20.0.0/16"
+proxy:
+  enabled: false
+database_path: /tmp/test.db
+"""
+        config_file = tmp_path / "config.yml"
+        config_file.write_text("allow_domains:\n  - example.com\n  - dropped.example.com\n" + body)
+
+        with patch("subprocess.run", side_effect=run):
+            orch = SecurityGatewayOrchestrator(config_path=config_file)
+            orch.proxy_manager = None
+            orch.firewall.setup_domain("dropped.example.com", ["192.0.2.20"])
+            added = [c for c in calls if c[1:3] == ["-A", "FORWARD"] and "ACCEPT" in c]
+            calls.clear()
+
+            config_file.write_text("allow_domains:\n  - example.com\n" + body)
+            assert await orch.reload_config() is True
+
+        deleted = [c for c in calls if c[1:3] == ["-D", "FORWARD"] and "ACCEPT" in c]
+        assert added
+        assert [["-A" if a == "-D" else a for a in rule] for rule in deleted] == added
+        assert "dropped.example.com" not in orch.firewall.domain_ipsets
+
 
 def describe_service_restart():
     """Service restart functionality tests."""
