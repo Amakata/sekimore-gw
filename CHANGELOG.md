@@ -12,6 +12,16 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.3.0-alpha.4 (2026-11-28)
+
+### Enhancement
+
+- the sidecar template in `examples/` is now Go (standard library only) with a Dockerfile; `sidecar.py` is gone. Copies of the Python template keep working (#500)
+- the Web UI is served by `sekimore-relay serve`, which always starts (Web UI only when there is no git-relay); `fastapi`, `uvicorn`, `websockets` and `python-multipart` are gone (#503)
+- the Web UI no longer has `/docs`, `/redoc` or `/openapi.json`, logs no request except at debug level, and limits connections (128 HTTP, 64 WebSocket); "upstream auth" can lag an unlock by up to 1 s (#503)
+- `serve` is restarted if it exits; the store then needs `sgw unlock` again (#503)
+- `config.yml` is read a second time in Rust, matching the Python reading, with a harness that compares the two; nothing changes in a running gateway. A first step of moving the gateway off Python (#502)
+
 ## 0.3.0-alpha.3 (2026-11-27)
 
 ### Security

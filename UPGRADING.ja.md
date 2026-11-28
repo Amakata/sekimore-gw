@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.3.0-alpha.3 -->
+<!-- reviewed-up-to: 0.3.0-alpha.4 -->
 # 更新のしかた：版ごとに必要な変更
 
 *[English](UPGRADING.md)*
@@ -46,6 +46,7 @@
 | 0.2.71 | 下の 0.3.0-alpha.1。**0.3 のプレリリースに移り、github サイドカーを使う場合だけ** |
 | 0.3.0-alpha.1 | 下の 0.3.0-alpha.2。**Dockerfile で言語を入れている、または `/usr/local/share` に書く場合だけ** |
 | 0.3.0-alpha.2 | 下の 0.3.0-alpha.3。**コマンドサイドカーを使う、または Actions のストレージがプライベートアドレスにある GitHub Enterprise Server を使う場合だけ** |
+| 0.3.0-alpha.3 | 下の 0.3.0-alpha.4。**Web UI の `/docs` や `/openapi.json` を使う、または Web UI のアクセスログに頼る場合だけ** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -984,3 +985,17 @@ Dockerfile で何も入れていないプロジェクトは、することはあ
   プライベートアドレスの Actions ストレージは拒否されます。
 
 コマンドサイドカーも GHES も使わないプロジェクトは、することはありません。
+
+## 0.3.0-alpha.4 Web UI が sekimore-relay serve に移る。サイドカーの雛形は Go（プレリリース）
+
+0.3 系のプレリリースです。入れ方は 0.3.0-alpha.1 と同じです（`--version 0.3.0-alpha.4`）。
+
+- **Web UI:** `sekimore-relay serve` が配信し、`serve` は常に起動します。git-relay がなければ Web UI だけ動きます。
+  FastAPI のページ `/docs`、`/redoc`、`/openapi.json` は無くなりました。リクエストごとのアクセスログはありません
+  （debug のときだけ）。「upstream auth」の表示は unlock から最大 1 秒遅れることがあります。
+  接続数に上限があります（HTTP 128、WebSocket 64）。`serve` が終了すると再起動され、ストアは再び `sgw unlock` が要ります。
+- **サイドカーの雛形:** `examples/sidecar-template/` は Go になり、Dockerfile が付きました。Python 版の雛形
+  （`sidecar.py`）のコピーはそのまま動きます。移る必要はありません。
+- **`config.yml`:** 変えるものはありません。
+
+これらの Web UI のページを使わないプロジェクトは、することはありません。

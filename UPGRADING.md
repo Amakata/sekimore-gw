@@ -1,4 +1,4 @@
-<!-- reviewed-up-to: 0.3.0-alpha.3 -->
+<!-- reviewed-up-to: 0.3.0-alpha.4 -->
 # Upgrading: the changes each release requires
 
 *[日本語版](UPGRADING.ja.md)*
@@ -46,6 +46,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.2.71 | [0.3.0-alpha.1](#030-alpha1-the-github-api-can-run-in-a-sidecar-prerelease), **only if you move to the 0.3 prerelease and want the github sidecar** |
 | 0.3.0-alpha.1 | [0.3.0-alpha.2](#030-alpha2-languages-live-in-optmise-prerelease), **only if your Dockerfile installs languages or writes under `/usr/local/share`** |
 | 0.3.0-alpha.2 | [0.3.0-alpha.3](#030-alpha3-sidecar-text-is-checked-and-recreate-starts-sidecars-prerelease), **only if you run a command sidecar or a GitHub Enterprise Server whose Actions storage is on a private address** |
+| 0.3.0-alpha.3 | [0.3.0-alpha.4](#030-alpha4-the-web-ui-moves-into-sekimore-relay-serve-and-the-sidecar-template-is-go-prerelease), **only if you use the Web UI's `/docs` or `/openapi.json`, or rely on the Web UI's access log** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -1021,3 +1022,18 @@ A prerelease of the 0.3 line, installed the same way as 0.3.0-alpha.1 (`--versio
   that is public. Actions storage on a private address is refused.
 
 Nothing to do for a project with no command sidecar and no GHES.
+
+## 0.3.0-alpha.4 The Web UI moves into sekimore-relay serve, and the sidecar template is Go (prerelease)
+
+A prerelease of the 0.3 line, installed the same way as 0.3.0-alpha.1 (`--version 0.3.0-alpha.4`).
+
+- **Web UI:** `sekimore-relay serve` now serves it, and always starts; with no git-relay it runs the
+  Web UI only. The FastAPI pages `/docs`, `/redoc` and `/openapi.json` are gone. There is no
+  per-request access log (debug level only). The "upstream auth" display can lag an unlock by up to
+  a second. The Web UI limits connections (128 HTTP, 64 WebSocket). If `serve` exits it is restarted,
+  and the store then needs `sgw unlock` again.
+- **Sidecar template:** `examples/sidecar-template/` is Go now, with a Dockerfile. A copy of the
+  Python template (`sidecar.py`) keeps working; nothing forces a move.
+- **`config.yml`:** nothing to change.
+
+Nothing to do for a project that does not use those Web UI pages.
