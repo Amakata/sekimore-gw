@@ -24,6 +24,7 @@ from src.firewall import FirewallManager, _ipset_name, _is_lan_only
 IPTABLES = "iptables-legacy"
 IPSET = "ipset"
 DOMAINS = ["real-tools.example.com", "real-tools.lan"]
+WILDCARD_SUBDOMAINS = ["a.real-tools.example.net", "b.real-tools.example.net"]
 PORTS = [[], [443]]
 
 
@@ -62,7 +63,7 @@ def firewall():
     yield fw
 
     # Leave nothing behind, also when remove_domain left the rule and the set
-    for domain in DOMAINS:
+    for domain in DOMAINS + WILDCARD_SUBDOMAINS:
         for ports in PORTS:
             fw.allowed_ports = ports
             for rule in fw._forward_accept_rules(
@@ -89,3 +90,32 @@ def describe_remove_domain_with_the_real_tools():
         assert ipset_name not in _forward()
         assert ipset_name not in _sets()
         assert domain not in firewall.domain_ipsets
+
+
+def describe_reload_withdrawal_with_the_real_tools():
+    def it_withdraws_the_subdomains_of_a_dropped_wildcard(firewall):
+        """What reload_config does once DNS has the new lists, without a DNS server."""
+        from types import SimpleNamespace
+
+        from src.dns_server import DNSServer
+        from src.orchestrator import SecurityGatewayOrchestrator
+
+        for name in WILDCARD_SUBDOMAINS:
+            assert firewall.setup_domain(name, ["203.0.113.30"]) is True
+        sets = [firewall.domain_ipsets[name] for name in WILDCARD_SUBDOMAINS]
+
+        # The new lists: the wildcard is gone
+        dns = DNSServer.__new__(DNSServer)
+        dns.allowed_domains = ["example.org"]
+        dns.blocked_domains = set()
+        dns.ignored_domains = []
+        dns.domain_handlers = {}
+        SecurityGatewayOrchestrator._withdraw_refused_admissions(
+            SimpleNamespace(firewall=firewall, dns_server=dns)  # type: ignore[arg-type]
+        )
+
+        forward, listed = _forward(), _sets()
+        for ipset_name in sets:
+            assert ipset_name not in forward
+            assert ipset_name not in listed
+        assert firewall.domain_ipsets == {}

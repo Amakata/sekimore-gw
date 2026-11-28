@@ -503,6 +503,32 @@ class DNSServer:
         # its own kind of surprise.
         return domain_matches(domain, list(self.blocked_domains))
 
+    def _not_admitted_because(self, domain: str) -> str | None:
+        """Why a query for `domain` would not put its addresses into the allow ipset under the
+        lists in force now, or None when it would.
+
+        The one question asked by every path that admits (the query handler, the cache refresh)
+        and by the reload, which withdraws whatever was admitted that this now refuses.
+        """
+        if self._is_blocked(domain):
+            return "blocked"
+        if self._is_ignored(domain):
+            return "ignored"
+        if self._handler_for(domain) == "deny":
+            return "domain_handlers: deny"
+        if not self._is_allowed(domain):
+            return "not in allowlist"
+        # A relayed name reaches the admission point only on the gateway's own query (or when
+        # the gateway IP is unknown). It gets the real answer, which is what keeps the relay
+        # from resolving to itself, but its address stays out of the allow ipset: reachable by
+        # address, it would let dev bypass the relay.
+        if self._is_relayed(domain):
+            return "the relay answers for it"
+        # getattr: the unit tests build the server with __new__ and set attributes one by one
+        if getattr(self, "direct_egress_denied", False):
+            return "direct egress denied"
+        return None
+
     async def _resolve_domain(
         self, domain: str, query_type: str = "A", *, executor: Executor | None = None
     ) -> tuple[list[str], int] | None:
@@ -839,22 +865,11 @@ class DNSServer:
                 # #212: not under `proxy.direct_egress: deny` — the answer above still goes back,
                 # so the client resolves the name, but with no ipset entry the only route out is
                 # the proxy. `allow_ips` is untouched: an address named explicitly stays admitted.
-                if self._is_allowed(query_name) and self.firewall_manager:
-                    # A relayed name reaches this point only on the gateway's own query (or when
-                    # the gateway IP is unknown). It gets the real answer, which is what keeps
-                    # the relay from resolving to itself, but its address stays out of the allow
-                    # ipset: reachable by address, it would let dev bypass the relay.
-                    if self._is_relayed(query_name):
+                if self.firewall_manager:
+                    refused = self._not_admitted_because(query_name)
+                    if refused:
                         log_system_event(
-                            "Firewall rule skipped (the relay answers for it)",
-                            domain=query_name,
-                            ip_count=str(len(ips)),
-                        )
-                    # getattr: the unit tests build the server with __new__ and set attributes
-                    # one by one, as they do for domain_handlers
-                    elif getattr(self, "direct_egress_denied", False):
-                        log_system_event(
-                            "Firewall rule skipped (direct egress denied)",
+                            f"Firewall rule skipped ({refused})",
                             domain=query_name,
                             ip_count=str(len(ips)),
                         )
@@ -953,15 +968,12 @@ class DNSServer:
                                     new_ips=",".join(sorted(new_ips_set)),
                                 )
 
-                                # Update the firewall rules. #212: nothing was admitted under
-                                # `direct_egress: deny`, so there is nothing to update either.
-                                # The cache also holds the gateway's own lookups of relayed
-                                # names; those were never admitted and must not be now.
+                                # Update the firewall rules, only for a name a query would admit
+                                # now: the cache outlives a reload that blocked or dropped it, and
+                                # holds the gateway's own lookups of relayed names.
                                 if (
                                     self.firewall_manager
-                                    and self._is_allowed(entry.domain)
-                                    and not self._is_relayed(entry.domain)
-                                    and not getattr(self, "direct_egress_denied", False)
+                                    and self._not_admitted_because(entry.domain) is None
                                 ):
                                     # Drop the rules for the old IPs and add the new ones
                                     self.firewall_manager.setup_domain(entry.domain, new_ips)

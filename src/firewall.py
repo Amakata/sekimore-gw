@@ -605,6 +605,11 @@ class FirewallManager:
         return True
 
     @_serialized
+    def tracked_domains(self) -> list[str]:
+        """The domains whose addresses are admitted, as a snapshot taken under the lock."""
+        return list(self.domain_ipsets)
+
+    @_serialized
     def remove_domain(self, domain: str) -> bool:
         """Remove a domain's rules.
 

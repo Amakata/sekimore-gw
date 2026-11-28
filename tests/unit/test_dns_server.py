@@ -977,6 +977,7 @@ def describe_cache_refresh_worker():
         dns_server.cache_refresh_interval = 0.1
         dns_server.allowed_domains = ["example.com"]
         dns_server.blocked_domains = []
+        dns_server.ignored_domains = []
         dns_server.firewall_manager = Mock()
         dns_server.firewall_manager.setup_domain = Mock()
 
@@ -1026,6 +1027,7 @@ def describe_cache_refresh_worker():
         dns_server.cache_refresh_interval = 0.1
         dns_server.allowed_domains = ["github.com", "example.com"]
         dns_server.blocked_domains = []
+        dns_server.ignored_domains = []
         dns_server.domain_handlers = {"github.com": "github"}
         dns_server.firewall_manager = Mock()
         dns_server.firewall_manager.setup_domain = Mock()
@@ -1047,6 +1049,43 @@ def describe_cache_refresh_worker():
         refreshed = {c.args[0] for c in dns_server.firewall_manager.setup_domain.call_args_list}
         # The unrelayed neighbour still has its rule updated; the relayed name never gets one.
         assert refreshed == {"example.com"}
+
+    @pytest.mark.asyncio
+    async def it_does_not_readmit_a_name_a_reload_blocked_or_dropped():
+        """The cache outlives a reload. A refresh must not admit what a query would refuse now."""
+        import time
+        from unittest.mock import Mock
+
+        from src.dns_server import DNSCache, DNSCacheEntry, DNSServer
+
+        dns_server = DNSServer.__new__(DNSServer)
+        dns_server.cache_enabled = True
+        dns_server.cache = DNSCache()
+        dns_server.running = True
+        dns_server.cache_refresh_interval = 0.1
+        # As after a reload: .example.com still allowed, bad.example.com newly blocked,
+        # gone.example.org dropped from the allow list
+        dns_server.allowed_domains = [".example.com"]
+        dns_server.blocked_domains = {"bad.example.com"}
+        dns_server.ignored_domains = []
+        dns_server.firewall_manager = Mock()
+
+        for domain in ("ok.example.com", "bad.example.com", "gone.example.org"):
+            dns_server.cache._cache[f"{domain}:A"] = DNSCacheEntry(
+                domain=domain, query_type="A", ips=["192.0.2.1"], ttl=1, expiry=time.time() + 1
+            )
+        dns_server._resolve_domain = AsyncMock(return_value=(["192.0.2.2"], 300))
+        dns_server._save_cache_stats_to_db = AsyncMock()
+
+        task = asyncio.create_task(dns_server._cache_refresh_worker())
+        await asyncio.sleep(0.3)
+        dns_server.running = False
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        refreshed = {c.args[0] for c in dns_server.firewall_manager.setup_domain.call_args_list}
+        assert refreshed == {"ok.example.com"}
 
     @pytest.mark.asyncio
     async def it_handles_refresh_errors_gracefully():
@@ -1317,6 +1356,21 @@ def describe_domain_handler_resolution():
         s._resolve_domain = AsyncMock(return_value=(["140.82.112.3"], 300))
         r = await _query(s, "github.com")
         assert str(r.rr[0].rdata) == "140.82.112.3"
+        s.firewall_manager.setup_domain.assert_not_called()
+        await s.mapping.db.close()
+
+    @pytest.mark.asyncio
+    async def it_does_not_answer_from_cache_for_a_name_no_longer_allowed_or_now_blocked():
+        # The cache outlives a reload; the list checks come before it, so neither name is
+        # answered from it nor admitted.
+        s = await _server({}, allowed=[".example.com"], blocked=["bad.example.com"])
+        s.cache_enabled = True
+        s.cache = DNSCache()
+        for name in ("bad.example.com", "gone.example.org"):
+            s.cache.put(name, ["192.0.2.1"], 300)
+        for name in ("bad.example.com", "gone.example.org"):
+            r = await _query(s, name)
+            assert r.header.rcode == 3 and not r.rr, name
         s.firewall_manager.setup_domain.assert_not_called()
         await s.mapping.db.close()
 
