@@ -157,8 +157,8 @@ fn fill(text: &str, dir: &Path, now: i64) -> String {
     result
 }
 
-/// The gateway's own tables, as `src/dns_server.py`, `src/firewall_monitor.py` and
-/// `src/proxy_monitor.py` create them.
+/// The gateway's own tables, as `src/dns_server.py` and the followers (`relay/src/gateway/logdb.rs`,
+/// before 0.3.0-alpha.5 `src/firewall_monitor.py` and `src/proxy_monitor.py`) create them.
 const GATEWAY_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS dns_queries (timestamp REAL, client_ip TEXT, query_domain TEXT, response_ips TEXT, ttl INTEGER, query_type TEXT, status TEXT DEFAULT 'allowed');
 CREATE INDEX IF NOT EXISTS idx_response_ips ON dns_queries(response_ips);

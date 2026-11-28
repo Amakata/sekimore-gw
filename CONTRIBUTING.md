@@ -229,7 +229,9 @@ CI runs clippy and the tests with `--features test-hooks,host`. Its help and mes
 
 0.3.0 moves the gateway from Python to Rust without changing what it does (#496). The harness
 asks both implementations the same questions and compares the answers: how every config in
-`relay/tests/fixtures/corpus/` is read (#498), and what the Web UI answers (#493).
+`relay/tests/fixtures/corpus/` is read (#498), what the Web UI answers (#493), and what the log
+followers record, what `maint` answers and how the orchestrator reads the reload window's state
+file that `maint` writes (#505; the cases are `relay/tests/fixtures/gateway/`).
 
 ```bash
 cd relay
@@ -258,6 +260,23 @@ git worktree remove ../webui-oracle
 ```
 
 A case whose files or requests that commit's harness cannot express needs a Rust test instead.
+
+**The followers' and `maint`'s records are fixed** the same way: the Python log followers and
+`src/maint.py` were removed in 0.3.0-alpha.5 (`python -m src.maint` now runs `sekimore-relay
+maint`). They were recorded at commit `2f22f15`, the last with them in it:
+
+```bash
+git worktree add ../periphery-oracle 2f22f15
+cp relay/tests/fixtures/gateway/*.json ../periphery-oracle/relay/tests/fixtures/gateway/
+(cd ../periphery-oracle && uv sync --frozen && cd relay && \
+  SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence the_followers_record_what_python_recorded && \
+  SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence maint_answers_as_python_did)
+cp ../periphery-oracle/relay/tests/fixtures/oracle/{followers,maint}.json relay/tests/fixtures/oracle/
+git worktree remove ../periphery-oracle
+```
+
+`reload_state` is still compared with live Python, and re-recorded from the current tree
+(`… the_orchestrator_reads_the_window_maint_writes`), until the orchestrator moves.
 
 ### The base image (`base/`)
 

@@ -12,6 +12,13 @@
 //! processes. A follower is stopped once it has recorded a sentinel line written after the case,
 //! or when it ends by itself.
 //!
+//! **The Python followers and maint are gone.** They were removed in the change that brought the
+//! Rust ones (0.3.0-alpha.5; the plan switches the periphery without a fallback, and
+//! `python -m src.maint` is now a shim that runs `sekimore-relay maint`), so the records of
+//! `followers` and `maint` are their only oracles: made at commit [`RECORDED_AT`], where the Python
+//! code was still in the tree. CONTRIBUTING.md says how to make them again from there.
+//! `reload_state` keeps its live side: the orchestrator that reads the file is still Python.
+//!
 //! Before comparing, both answers lose what changes from run to run: a firewall row's time (the
 //! time it was recorded) becomes `now`; the directory becomes `{dir}`; `open for Xm Ys` and the
 //! state file's `until` are rounded to a minute from the run's time; a log line on stdout keeps
@@ -140,6 +147,15 @@ fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
+/// The commit the `followers` and `maint` records were made at.
+pub const RECORDED_AT: &str = "2f22f15";
+
+const GONE: &str =
+    "the Python log followers and maint were removed in 0.3.0-alpha.5 (the periphery \
+     switched without a fallback); relay/tests/fixtures/oracle/followers.json and maint.json were \
+     recorded at commit 2f22f15, where they still were, and are the reference (CONTRIBUTING.md \
+     says how to record them again)";
+
 // ---- followers ---------------------------------------------------------------------------------
 
 pub struct Followers;
@@ -174,6 +190,10 @@ impl Comparison for Followers {
 
     fn record_test(&self) -> &'static str {
         "the_followers_record_what_python_recorded"
+    }
+
+    fn live_gone(&self) -> Option<&'static str> {
+        Some(GONE)
     }
 
     fn request(&self, case: &Case) -> Value {
@@ -355,6 +375,10 @@ impl Comparison for Maint {
 
     fn record_test(&self) -> &'static str {
         "maint_answers_as_python_did"
+    }
+
+    fn live_gone(&self) -> Option<&'static str> {
+        Some(GONE)
     }
 
     fn request(&self, case: &Case) -> Value {

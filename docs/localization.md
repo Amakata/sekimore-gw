@@ -40,10 +40,11 @@ falls back to the English string. A partial translation therefore never leaves a
 
 Command-line tools read the environment instead of the configuration file. They check
 `SEKIMORE_LANG`, `LC_ALL`, `LC_MESSAGES` and `LANG` in that order, and default to English. This
-applies to `python -m src.maint` in the gateway container and to the Rust `sekimore-relay` binary.
+applies to the Rust `sekimore-relay` binary in the gateway container, `sekimore-relay maint`
+(which `python -m src.maint` runs since 0.3.0-alpha.5) included.
 
 ```bash
-SEKIMORE_LANG=ja python -m src.maint db-stats
+SEKIMORE_LANG=ja sekimore-relay maint db-stats
 ```
 
 For the relay's dictionaries and for `sekimore guide --lang`, see

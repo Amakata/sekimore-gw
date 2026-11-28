@@ -21,12 +21,10 @@ from .config import load_config
 from .dns_server import DNSServer
 from .domains import domain_matches
 from .firewall import FirewallManager
-from .firewall_monitor import FirewallMonitor
 from .host_enforcement import HostEnforcement
 from .ip_manager import StaticIPManager
 from .logger import ComponentType, log_error, log_system_event, log_warning, setup_logging
 from .proxy_manager import ProxyManager
-from .proxy_monitor import ProxyMonitor
 from .secret_store import (
     SecretStoreError,
     literal,
@@ -76,7 +74,7 @@ class ReloadWindow:
             self._refresh_locked()
 
     def _refresh_locked(self) -> None:
-        """Pick up an override written by `python -m src.maint reload-*`.
+        """Pick up an override written by `sekimore-relay maint reload-*`.
 
         The operator's command runs in its own process, so the running gateway only learns
         about a freeze by reading the file. Checked on every read rather than at start-up:
@@ -821,8 +819,8 @@ class SecurityGatewayOrchestrator:
             direct_egress_denied=self.config.proxy.direct_egress_denied(),
         )
 
-        # Firewall monitor, tailing the iptables log
-        self.firewall_monitor = FirewallMonitor(db_path=self.config.database_path)
+        # The firewall and proxy logs are followed by `sekimore-relay gateway`, a process of its
+        # own started by entrypoint.sh (0.3.0-alpha.5)
 
         # Host-side FORWARD enforcement (#186), set up in initialize()
         self.host_enforcement: HostEnforcement | None = None
@@ -867,11 +865,6 @@ class SecurityGatewayOrchestrator:
                 allowed_destinations=list(self.config.resolve_allow_cidrs)
                 + list(detected_lan_subnets or []),
             )
-
-        # Proxy monitor, tailing the Squid access log
-        self.proxy_monitor: ProxyMonitor | None = None
-        if self.config.proxy.enabled:
-            self.proxy_monitor = ProxyMonitor(db_path=self.config.database_path)
 
         # 0.2.13: whether a save is applied (see ReloadWindow)
         self.reload_window = ReloadWindow(
@@ -1680,18 +1673,10 @@ class SecurityGatewayOrchestrator:
             log_error(ComponentType.ORCHESTRATOR, "Failed to start Squid proxy")
             # Carry on if the proxy fails to start; DNS and the firewall still work
 
-        # Start the firewall monitor in the background
-        firewall_monitor_task = asyncio.create_task(self.firewall_monitor.start())
-
         # Keep the host-side FORWARD rules in place (#186)
         host_enforcement_task = None
         if self.host_enforcement:
             host_enforcement_task = asyncio.create_task(self.host_enforcement.watch())
-
-        # Start the proxy monitor in the background, when enabled
-        proxy_monitor_task = None
-        if self.proxy_monitor:
-            proxy_monitor_task = asyncio.create_task(self.proxy_monitor.start())
 
         # Start watching the file, to reload automatically when config.yml changes.
         # 0.2.15: the handler runs on a watchdog thread and needs this loop to hand the reload
@@ -1714,18 +1699,6 @@ class SecurityGatewayOrchestrator:
         except Exception as e:
             log_error(ComponentType.ORCHESTRATOR, f"Fatal error: {e}")
         finally:
-            # Stop the monitors
-            await self.firewall_monitor.stop()
-            firewall_monitor_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await firewall_monitor_task
-
-            if self.proxy_monitor and proxy_monitor_task:
-                await self.proxy_monitor.stop()
-                proxy_monitor_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await proxy_monitor_task
-
             if host_enforcement_task:
                 host_enforcement_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

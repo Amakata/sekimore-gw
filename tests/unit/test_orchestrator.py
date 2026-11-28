@@ -2850,8 +2850,6 @@ database_path: /tmp/test.db
         orch.firewall.cleanup = Mock()
         orch.ip_manager.setup_static_ips = Mock(return_value=True)
         orch.ip_manager.cleanup = Mock()
-        orch.firewall_monitor.start = AsyncMock()
-        orch.firewall_monitor.stop = AsyncMock()
         orch.dns_server.stop = AsyncMock()
         seen = {}
 

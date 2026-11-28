@@ -178,3 +178,21 @@ fn the_web_ui_record_names_where_it_was_made() {
     let why = harness::Comparison::live_gone(&webui::WebUi::new()).unwrap();
     assert!(why.contains(webui::RECORDED_AT), "{why}");
 }
+
+/// The periphery's records, too, can only be made at the commit that still had the Python code.
+#[test]
+fn the_periphery_records_name_where_they_were_made() {
+    let contributing =
+        std::fs::read_to_string(harness::repo_root().join("CONTRIBUTING.md")).unwrap();
+    assert!(contributing.contains(&format!(
+        "git worktree add ../periphery-oracle {}",
+        gateway::RECORDED_AT
+    )));
+    for c in [
+        harness::Comparison::live_gone(&gateway::Followers),
+        harness::Comparison::live_gone(&gateway::Maint),
+    ] {
+        assert!(c.unwrap().contains(gateway::RECORDED_AT));
+    }
+    assert!(harness::Comparison::live_gone(&gateway::ReloadState).is_none());
+}
