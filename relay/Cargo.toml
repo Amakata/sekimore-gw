@@ -56,6 +56,12 @@ base64 = "0.23"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 rustls-native-certs = "0.8"
+# 0.3.0-alpha.4: the Web UI's `/ws` (Issue #493). Without its default features: no client, no
+# handshake code and no TLS — `serve` does the handshake over hyper's upgrade and hands the
+# connection over. futures-util was in the tree already (hyper, reqwest); it is named here for the
+# Sink / Stream extension traits the WebSocket stream is driven with.
+tokio-tungstenite = { version = "0.30", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 [dev-dependencies]
 tempfile = "3.20"

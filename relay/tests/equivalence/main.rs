@@ -1,11 +1,13 @@
 //! The equivalence harness: the Rust gateway against the Python gateway, through ends that do
 //! not depend on either language (0.3.0 plan, "挙動が変わっていないことの確かめ方").
 //!
-//! In this step it compares the two readings of `config.yml` (Issue #498). `harness.rs` says how
-//! the later steps plug in, how the Python side is reached, and when it is required.
+//! It compares the two readings of `config.yml` (Issue #498) and the two Web UIs (Issue #493).
+//! `harness.rs` says how the later steps plug in, how the Python side is reached, and when it is
+//! required.
 
 mod config;
 mod harness;
+mod webui;
 
 use serde_json::{json, Value};
 
@@ -18,6 +20,11 @@ use harness::{compare, corpus, diff, recorded, report, Case, Comparison};
 #[test]
 fn the_config_is_read_as_python_reads_it() {
     harness::run(&ConfigReading);
+}
+
+#[test]
+fn the_web_ui_answers_as_python_did() {
+    harness::run_cases(&webui::WebUi::new(), &webui::cases());
 }
 
 /// A reader that gets one case wrong, the way a port would: it lets a relayed name into the

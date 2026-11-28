@@ -28,11 +28,11 @@ if [ -f "/etc/squid/squid.conf" ]; then
     squid -z 2>/dev/null || true
 fi
 
-# Start sekimore-relay when config.yml declares a git-relay handler (see scripts/start-relay.sh).
-# Same background pattern as ulogd / web_ui; a relay failure never stops the gateway.
+# Start sekimore-relay serve: the Web UI always (:8080), and the relay when config.yml declares a
+# git-relay handler (see scripts/start-relay.sh). Same background pattern as ulogd; nothing it does
+# stops the gateway.
 /app/scripts/start-relay.sh &
 
-# Start Web UI and main application
+# Start the main application
 echo "Starting applications..."
-python -m src.web_ui.app &
 python -m src.main

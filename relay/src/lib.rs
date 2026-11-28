@@ -26,3 +26,4 @@ pub mod store;
 pub mod tasks;
 pub mod tokens;
 pub mod vars;
+pub mod webui;
