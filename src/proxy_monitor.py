@@ -5,7 +5,7 @@ import re
 
 import aiosqlite
 
-from .logger import ComponentType, log_error, log_system_event
+from .logger import ComponentType, log_error, log_system_event, log_warning
 
 SQUID_LOG_PATTERN = re.compile(r"^(\d+\.\d+)\s+\d+\s+(\S+)\s+(\S+)/(\d+)\s+\d+\s+(\S+)\s+(\S+)")
 
@@ -35,6 +35,8 @@ class ProxyMonitor:
         self.log_path = log_path
         self.db: aiosqlite.Connection | None = None
         self.running = False
+        # Lines skipped because they are not UTF-8
+        self.undecodable_lines = 0
 
     async def init_db(self) -> None:
         """Initialize the database: create proxy_logs and migrate from proxy_blocks."""
@@ -186,10 +188,23 @@ class ProxyMonitor:
             "action": action,
         }
 
+    def _note_undecodable_line(self) -> None:
+        """Count a skipped line; warn at the 1st, 10th, 100th, ... so the log stays bounded."""
+        self.undecodable_lines += 1
+        n = self.undecodable_lines
+        if n == 10 ** (len(str(n)) - 1):
+            log_warning(
+                ComponentType.PROXY,
+                "Skipped Squid log lines that are not UTF-8",
+                count=str(n),
+            )
+
     async def _follow_log(self) -> None:
         """Follow the Squid log (equivalent to tail -f)."""
         try:
-            with open(self.log_path) as f:
+            # surrogateescape: a byte that is not UTF-8 used to raise out of readline() and end
+            # the follower for good. Escaped, it reaches only its own line, which is skipped.
+            with open(self.log_path, encoding="utf-8", errors="surrogateescape") as f:
                 f.seek(0, 2)
 
                 while self.running:
@@ -197,6 +212,12 @@ class ProxyMonitor:
 
                     if not line:
                         await asyncio.sleep(0.5)
+                        continue
+
+                    try:
+                        line.encode("utf-8")
+                    except UnicodeEncodeError:
+                        self._note_undecodable_line()
                         continue
 
                     access_info = self._parse_squid_log_line(line.strip())

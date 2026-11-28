@@ -1,6 +1,8 @@
 """Unit tests for proxy_monitor module."""
 
+import asyncio
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -320,3 +322,81 @@ def describe_proxy_monitor_migration():
         assert (await cursor.fetchone()) is not None
 
         await monitor.db.close()
+
+
+def describe_a_line_that_is_not_utf8():
+    @pytest.mark.asyncio
+    async def it_is_skipped_and_the_follower_goes_on(tmp_path):
+        log_path = tmp_path / "access.log"
+        log_path.write_bytes(b"")
+        monitor = ProxyMonitor(db_path=str(tmp_path / "proxy.db"), log_path=str(log_path))
+        task = asyncio.create_task(monitor.start())
+        try:
+            for _ in range(50):
+                if monitor.running:
+                    break
+                await asyncio.sleep(0.05)
+            await asyncio.sleep(0.2)  # past the seek to the end
+
+            with open(log_path, "ab") as f:
+                f.write(
+                    b"1700000001.000 10 192.0.2.5 TCP_MISS/200 512 GET http://example.com/a - HIER_DIRECT/- -\n"
+                    b"1700000002.000 10 192.0.2.5 TCP_MISS/200 512 GET http://example.com/\xff\xfe - HIER_DIRECT/- -\n"
+                    b"1700000003.000 10 192.0.2.5 TCP_DENIED/403 0 GET http://example.org/b - HIER_NONE/- -\n"
+                )
+
+            rows: list = []
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                cursor = await monitor.db.execute("SELECT url FROM proxy_logs ORDER BY timestamp")
+                rows = await cursor.fetchall()
+                if len(rows) >= 2:
+                    break
+
+            assert [r[0] for r in rows] == ["http://example.com/a", "http://example.org/b"]
+            assert monitor.undecodable_lines == 1
+            assert not task.done()
+        finally:
+            await monitor.stop()
+            await asyncio.wait_for(task, timeout=5)
+
+    def it_warns_with_a_running_count_not_once_per_line():
+        monitor = ProxyMonitor(db_path="/tmp/unused.db")
+        with patch("src.proxy_monitor.log_warning") as log_warning:
+            for _ in range(250):
+                monitor._note_undecodable_line()
+        assert [c.kwargs["count"] for c in log_warning.call_args_list] == ["1", "10", "100"]
+
+    @pytest.mark.asyncio
+    async def it_still_ends_a_line_at_a_lone_carriage_return(tmp_path):
+        """Read as text, as before: universal newlines, so \\r alone still ends a line."""
+        log_path = tmp_path / "access.log"
+        log_path.write_bytes(b"")
+        monitor = ProxyMonitor(db_path=str(tmp_path / "proxy.db"), log_path=str(log_path))
+        task = asyncio.create_task(monitor.start())
+        try:
+            for _ in range(50):
+                if monitor.running:
+                    break
+                await asyncio.sleep(0.05)
+            await asyncio.sleep(0.2)
+
+            with open(log_path, "ab") as f:
+                f.write(
+                    b"1.5 0 192.0.2.1 TCP_MISS/200 0 GET http://example.com/1\r"
+                    b"1.6 0 192.0.2.2 TCP_HIT/200 0 GET http://example.com/\xe2\x82\r\n"
+                    b"1.7 0 192.0.2.3 TCP_HIT/200 0 GET http://example.com/3\n"
+                )
+
+            rows: list = []
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                cursor = await monitor.db.execute("SELECT client_ip FROM proxy_logs")
+                rows = await cursor.fetchall()
+                if len(rows) >= 2:
+                    break
+            assert [r[0] for r in rows] == ["192.0.2.1", "192.0.2.3"]
+            assert monitor.undecodable_lines == 1
+        finally:
+            await monitor.stop()
+            await asyncio.wait_for(task, timeout=5)
