@@ -119,11 +119,32 @@ class FirewallManager:
             log_error(ComponentType.FIREWALL, f"Command not found: {cmd[0]}")
             return False
 
+    def _run_required(self, cmd: list[str], why: str) -> bool:
+        """Run a command the gateway's isolation rests on; log an error naming it if it fails.
+
+        Args:
+            cmd: Command and arguments
+            why: What is left open without it, for the log line
+
+        Returns:
+            True on success
+        """
+        if self._run_command(cmd):
+            return True
+        log_error(
+            ComponentType.FIREWALL,
+            f"Required firewall command failed: {' '.join(cmd)} ({why})",
+        )
+        return False
+
     def initialize_firewall(self) -> bool:
         """Initialize the firewall.
 
         Returns:
-            True on success
+            True on success. False when flushing the filter table or setting the INPUT / FORWARD
+            DROP policy failed: without them traffic that should be dropped may be allowed. The
+            other commands only add ACCEPT rules or restate a default, so a failure of one of
+            them leaves less allowed, not more.
         """
         log_system_event("Initializing firewall...")
 
@@ -131,18 +152,28 @@ class FirewallManager:
         # (net.ipv4.ip_forward=1, net.ipv4.conf.*.send_redirects=0)
 
         # 2. Flush existing rules (Docker DNS NAT rules are preserved)
-        self._run_command([self.iptables_cmd, "-F"])
+        if not self._run_required(
+            [self.iptables_cmd, "-F"], "rules left from before may still allow traffic"
+        ):
+            return False
         # Never flush the whole NAT table: that would drop Docker DNS's 127.0.0.11
         # redirect rules. Only sekimore's own POSTROUTING rules are removed.
         # WARNING: `iptables -t nat -F` deletes the NAT rules for 127.0.0.11.
         self._run_command([self.iptables_cmd, "-X"])
 
         # 3. Default policies
-        self._run_command([self.iptables_cmd, "-P", "INPUT", "DROP"])  # Reject inbound traffic
+        # Reject inbound traffic
+        if not self._run_required(
+            [self.iptables_cmd, "-P", "INPUT", "DROP"], "inbound traffic is not denied by default"
+        ):
+            return False
         self._run_command([self.iptables_cmd, "-P", "OUTPUT", "ACCEPT"])  # Allow our own outbound
-        self._run_command(
-            [self.iptables_cmd, "-P", "FORWARD", "DROP"]
-        )  # Forwarding only via explicit rules
+        # Forwarding only via explicit rules
+        if not self._run_required(
+            [self.iptables_cmd, "-P", "FORWARD", "DROP"],
+            "forwarded traffic is not denied by default",
+        ):
+            return False
 
         # 4. NAT (MASQUERADE)
         if not self._run_command(

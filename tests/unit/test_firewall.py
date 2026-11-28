@@ -1,6 +1,9 @@
 """Unit tests for firewall module."""
 
+import subprocess
 from unittest.mock import Mock, patch
+
+import pytest
 
 from src.firewall import FirewallManager
 
@@ -716,3 +719,54 @@ def describe_remove_domain_deletes_what_setup_domain_added():
         assert fw.domain_ipsets["api.example.com"] == ipset_name
         messages = [c.args[1] for c in log_error.call_args_list]
         assert any("api.example.com" in m and ipset_name in m for m in messages), messages
+
+
+def _run_failing(failing):
+    """A subprocess.run fake that fails the commands `failing` picks, as a refused iptables does."""
+    calls: list[list[str]] = []
+
+    def run(cmd, **_kw):
+        calls.append(cmd)
+        if failing(cmd):
+            raise subprocess.CalledProcessError(
+                1, cmd, stderr="iptables: Permission denied (you must be root)."
+            )
+        return Mock(returncode=0, stdout="", stderr="")
+
+    return run, calls
+
+
+def describe_initialize_firewall_fails_closed():
+    @pytest.mark.parametrize(
+        "required",
+        [["-F"], ["-P", "INPUT", "DROP"], ["-P", "FORWARD", "DROP"]],
+        ids=["flush", "input-drop", "forward-drop"],
+    )
+    def it_fails_when_a_command_the_isolation_rests_on_fails(required):
+        run, calls = _run_failing(lambda cmd: cmd[1:] == required)
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        with (
+            patch("subprocess.run", side_effect=run),
+            patch("src.firewall.log_error") as log_error,
+        ):
+            assert fw.initialize_firewall() is False
+
+        assert any(" ".join(required) in c.args[1] for c in log_error.call_args_list)
+        # Nothing is opened after the failure
+        assert calls[-1][1:] == required
+
+    @pytest.mark.parametrize(
+        "optional",
+        [
+            ["-X"],
+            ["-P", "OUTPUT", "ACCEPT"],
+            ["-A", "INPUT", "-i", "lo", "-j", "ACCEPT"],
+            ["-A", "INPUT", "-i", "eth1", "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
+        ],
+        ids=["delete-chains", "output-accept", "loopback-accept", "dns-accept"],
+    )
+    def it_goes_on_when_a_failure_leaves_less_allowed(optional):
+        run, _ = _run_failing(lambda cmd: cmd[1:] == optional)
+        fw = FirewallManager(wan_interface="eth0", lan_interface="eth1")
+        with patch("subprocess.run", side_effect=run):
+            assert fw.initialize_firewall() is True
