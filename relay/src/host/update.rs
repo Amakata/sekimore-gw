@@ -153,17 +153,102 @@ pub fn pinned_gateway(compose: &str) -> Option<String> {
     })
 }
 
-/// `FROM [--flag …] <BASE_IMAGE>:X.Y.Z [AS name]` in the Dockerfile.
+/// `FROM [--flag …] <BASE_IMAGE>:X.Y.Z[-debian] [AS name]` in the Dockerfile: the version, without
+/// the Debian (#507).
 pub fn pinned_base(dockerfile: &str) -> Option<String> {
+    pinned_base_tag(dockerfile).map(|(v, _)| v)
+}
+
+/// The same pin, read whole: the version and the Debian its tag names, `None` for the plain tag.
+pub fn pinned_base_tag(dockerfile: &str) -> Option<(String, Option<&'static str>)> {
     dockerfile.lines().find_map(|line| {
         let mut words = line.split_whitespace();
         if words.next()? != "FROM" {
             return None;
         }
         let image = words.find(|w| !w.starts_with("--"))?;
-        let v = image.strip_prefix(&format!("{BASE_IMAGE}:"))?;
-        ver_key(v).map(|_| v.to_string())
+        let (v, debian) = split_debian(image.strip_prefix(&format!("{BASE_IMAGE}:"))?);
+        ver_key(v).map(|_| (v.to_string(), debian))
     })
+}
+
+// ---- #507: the Debian a project's base is on -------------------------------------------------
+
+/// The Debian releases the base image is published on, as its tags name them:
+/// `<version>-bookworm` and `<version>-trixie`. The plain `<version>` is the bookworm image. A
+/// project is on the one its FROM line names, and nothing here ever moves it to another.
+pub const DEBIANS: [&str; 2] = ["bookworm", "trixie"];
+
+/// A base tag as its version and the Debian it names: `0.3.0-alpha.5-trixie` →
+/// (`0.3.0-alpha.5`, Some(`trixie`)), `0.3.0` → (`0.3.0`, None). Read off before the version is,
+/// because `0.3.0-trixie` would otherwise pass for a SemVer prerelease.
+pub fn split_debian(tag: &str) -> (&str, Option<&'static str>) {
+    match tag.rsplit_once('-') {
+        Some((v, d)) => match DEBIANS.iter().find(|x| **x == d) {
+            Some(d) => (v, Some(d)),
+            None => (tag, None),
+        },
+        None => (tag, None),
+    }
+}
+
+/// The tag of `version` on `debian`: `0.3.0-trixie`, or the plain `0.3.0` for None.
+pub fn base_tag(version: &str, debian: Option<&str>) -> String {
+    match debian {
+        Some(d) => format!("{version}-{d}"),
+        None => version.to_string(),
+    }
+}
+
+/// A template file as a project on `debian` has it: this version's base pin with the Debian's
+/// suffix. The plain tag (None) is the template byte for byte.
+pub fn with_debian(content: &str, debian: Option<&str>) -> String {
+    match debian {
+        None => content.to_string(),
+        Some(_) => retag(content, BASE_IMAGE, VERSION, &base_tag(VERSION, debian)),
+    }
+}
+
+/// `text` with the Debian suffix taken off every base pin: the file as it would be on the plain
+/// tag. sgw.toml records a template file this way, and a project's file is compared with the
+/// template this way, so the Debian a project chose is never read as an edit of the template —
+/// a project on `-trixie` whose file is otherwise the template's is still updated in place. For
+/// a project on the plain tag it is the file unchanged, so its hashes are what they always were.
+pub fn without_debian(text: &str) -> std::borrow::Cow<'_, str> {
+    let needle = format!("{BASE_IMAGE}:");
+    let mut out = String::with_capacity(text.len());
+    let mut changed = false;
+    let mut rest = text;
+    while let Some(i) = rest.find(&needle) {
+        let start = i + needle.len();
+        out.push_str(&rest[..start]);
+        let after = &rest[start..];
+        let len = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-'))
+            .unwrap_or(after.len());
+        let tag = &after[..len];
+        match split_debian(tag) {
+            (v, Some(_)) if ver_key(v).is_some() => {
+                out.push_str(v);
+                changed = true;
+            }
+            _ => out.push_str(tag),
+        }
+        rest = &after[len..];
+    }
+    if !changed {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
+}
+
+/// The sha sgw.toml records for a file's bytes: of the file without the Debian (`without_debian`).
+pub fn recorded_sha(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => sha256_hex(without_debian(text).as_bytes()),
+        Err(_) => sha256_hex(bytes),
+    }
 }
 
 /// `image:from` → `image:to`, only where the version ends where the tag ends: moving 0.2.1 →
@@ -709,7 +794,9 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
             &[("image", GW_IMAGE), ("file", &rel(&compose_path))]
         ))
     })?;
-    let cur_base = pinned_base(&dockerfile).ok_or_else(|| {
+    // #507: the Debian the project is on goes with every tag it is moved to, and comes back off
+    // for the version comparisons
+    let (cur_base, debian) = pinned_base_tag(&dockerfile).ok_or_else(|| {
         anyhow::anyhow!(tf(
             "sgw.update.unpinned",
             &[("image", BASE_IMAGE), ("file", &rel(&dockerfile_path))]
@@ -836,12 +923,18 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
             _ => (new.to_string(), state(cur, new)),
         }
     };
-    for (what, cur, new) in [
-        ("gateway", &cur_gw, &new_gw),
-        ("base", &cur_base, &new_base),
+    for (what, cur, new, debian) in [
+        ("gateway", &cur_gw, &new_gw, None),
+        ("base", &cur_base, &new_base, debian),
     ] {
         let (newest, st) = row(cur, new);
-        table.push([what.to_string(), cur.to_string(), newest, st]);
+        // the base's tags as the project writes them: the Debian it is on shows (#507)
+        table.push([
+            what.to_string(),
+            base_tag(cur, debian),
+            base_tag(&newest, debian),
+            st,
+        ]);
     }
     for (pin, to) in &lang_rows {
         let to = to.as_deref().unwrap_or(&pin.tag);
@@ -866,9 +959,10 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
     println!("{}", t("sgw.update.files_hdr"));
     let mut states: Vec<(&templates::Template, FileState, String)> = Vec::new();
     for tpl in templates::FILES {
+        // #507: both without the Debian, so a project's choice of one is not an edit
         let current = std::fs::read(root.join(tpl.path))
             .ok()
-            .map(|b| sha256_hex(&b));
+            .map(|b| recorded_sha(&b));
         let new = sha256_hex(tpl.content.as_bytes());
         let rec = recorded
             .as_ref()
@@ -1054,7 +1148,12 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         // the base and the language images are in one file: rewrite it once
         let mut df = df_ai.clone().unwrap_or_else(|| dockerfile.clone());
         if cur_base != new_base {
-            df = retag(&df, BASE_IMAGE, &cur_base, &new_base);
+            df = retag(
+                &df,
+                BASE_IMAGE,
+                &base_tag(&cur_base, debian),
+                &base_tag(&new_base, debian),
+            );
         }
         for (pin, to) in &lang_moves {
             let to = to.as_deref().unwrap_or(&pin.tag);
@@ -1076,8 +1175,8 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
                     "sgw.update.tag",
                     &[
                         ("what", "base"),
-                        ("from", &cur_base),
-                        ("to", &new_base),
+                        ("from", &base_tag(&cur_base, debian)),
+                        ("to", &base_tag(&new_base, debian)),
                         ("file", &rel(&dockerfile_path))
                     ]
                 )
@@ -1097,8 +1196,10 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
                 )
             );
         }
+        // a template file is written as the project's Debian has it (#507)
         for tpl in &to_write {
-            write_file(&root.join(tpl.path), tpl.content.as_bytes(), tpl.executable)?;
+            let content = with_debian(tpl.content, debian);
+            write_file(&root.join(tpl.path), content.as_bytes(), tpl.executable)?;
             println!("{}", tf("sgw.update.wrote", &[("file", tpl.path)]));
             // the sample moved, so this version's menu differs from what the project's own
             // file was copied from: say which two files to diff, once, here
@@ -1111,7 +1212,8 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         }
         for tpl in &conflicts {
             let beside = format!("{}.sgw-new", tpl.path);
-            write_file(&root.join(&beside), tpl.content.as_bytes(), tpl.executable)?;
+            let content = with_debian(tpl.content, debian);
+            write_file(&root.join(&beside), content.as_bytes(), tpl.executable)?;
             println!("{}", tf("sgw.update.wrote", &[("file", &beside)]));
             remain.push(tf("sgw.update.r_sgw_new", &[("file", tpl.path)]));
         }
@@ -1156,7 +1258,10 @@ pub fn run(docker: &Docker, project: &Project, opts: Options) -> anyhow::Result<
         }
     }
     if cur_base != new_base {
-        remain.push(tf("sgw.update.r_rebuild", &[("version", &new_base)]));
+        remain.push(tf(
+            "sgw.update.r_rebuild",
+            &[("version", &base_tag(&new_base, debian))],
+        ));
     }
     if !notes.trim().is_empty() {
         remain.push(t("sgw.update.r_notes"));
@@ -1477,6 +1582,85 @@ mod tests {
         );
     }
 
+    /// #507: the Debian is read off the end of a base tag, before the version, and nothing else is.
+    #[test]
+    fn a_base_tag_names_its_debian_and_the_plain_tag_none() {
+        assert_eq!(split_debian("0.3.0"), ("0.3.0", None));
+        assert_eq!(split_debian("0.3.0-trixie"), ("0.3.0", Some("trixie")));
+        assert_eq!(split_debian("0.3.0-bookworm"), ("0.3.0", Some("bookworm")));
+        assert_eq!(
+            split_debian("0.3.0-alpha.5-trixie"),
+            ("0.3.0-alpha.5", Some("trixie"))
+        );
+        assert_eq!(split_debian("0.3.0-alpha.5"), ("0.3.0-alpha.5", None));
+        assert_eq!(split_debian("0.3.0-bullseye"), ("0.3.0-bullseye", None));
+        let df = |tag: &str| format!("FROM ghcr.io/amakata/sgw-devcontainer-base:{tag} AS dev\n");
+        assert_eq!(
+            pinned_base_tag(&df("0.3.0-alpha.5-trixie")),
+            Some(("0.3.0-alpha.5".to_string(), Some("trixie")))
+        );
+        assert_eq!(
+            pinned_base_tag(&df("0.3.0-bookworm")),
+            Some(("0.3.0".to_string(), Some("bookworm")))
+        );
+        assert_eq!(
+            pinned_base_tag(&df("0.2.71")),
+            Some(("0.2.71".to_string(), None))
+        );
+        assert_eq!(pinned_base(&df("0.3.1-trixie")).as_deref(), Some("0.3.1"));
+        assert_eq!(base_tag("0.3.1", Some("trixie")), "0.3.1-trixie");
+        assert_eq!(base_tag("0.3.1", None), "0.3.1");
+        // the version compares as the version: 0.3.0-trixie is not a prerelease below 0.3.0
+        assert!(!ver_lt(split_debian("0.3.0-trixie").0, "0.3.0"));
+    }
+
+    /// #507: moving a pin keeps its suffix; the plain tag stays plain.
+    #[test]
+    fn a_base_pin_moves_on_its_own_debian() {
+        let df = "FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.5-trixie\nFROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.5 AS plain\n";
+        assert_eq!(
+            retag(
+                df,
+                BASE_IMAGE,
+                &base_tag("0.3.0-alpha.5", Some("trixie")),
+                &base_tag("0.3.0-alpha.6", Some("trixie"))
+            ),
+            "FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.6-trixie\nFROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.5 AS plain\n"
+        );
+        assert_eq!(
+            retag(df, BASE_IMAGE, "0.3.0-alpha.5", "0.3.0-alpha.6"),
+            "FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.5-trixie\nFROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.6 AS plain\n",
+            "the plain pin moves, and the trixie one is not taken for it"
+        );
+    }
+
+    /// #507: what sgw.toml records is the file without the Debian, so the template written for
+    /// trixie hashes as the template; the plain template is left as it is.
+    #[test]
+    fn the_recorded_form_takes_the_debian_off_and_nothing_else() {
+        let tpl = templates::FILES
+            .iter()
+            .find(|t| t.path == ".devcontainer/Dockerfile")
+            .unwrap()
+            .content;
+        assert_eq!(with_debian(tpl, None), tpl, "the plain tag is the template");
+        let trixie = with_debian(tpl, Some("trixie"));
+        assert!(trixie.contains(&format!("{BASE_IMAGE}:{VERSION}-trixie\n")));
+        assert_eq!(without_debian(&trixie), tpl);
+        assert_eq!(without_debian(&with_debian(tpl, Some("bookworm"))), tpl);
+        assert!(matches!(without_debian(tpl), std::borrow::Cow::Borrowed(_)));
+        assert_eq!(recorded_sha(trixie.as_bytes()), sha256_hex(tpl.as_bytes()));
+        assert_eq!(recorded_sha(tpl.as_bytes()), sha256_hex(tpl.as_bytes()));
+        // other tags, other images and an unknown suffix are left as they are
+        let s = "FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.5\nFROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-bullseye\nFROM ghcr.io/amakata/sgw-lang-php:8.3.33-1-bookworm\n";
+        assert_eq!(without_debian(s), s);
+        assert_eq!(
+            without_debian("x ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.5-bookworm y"),
+            "x ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.5 y"
+        );
+        assert_eq!(recorded_sha(&[0xff, 0xfe]), sha256_hex(&[0xff, 0xfe]));
+    }
+
     #[test]
     fn the_sections_up_to_a_prerelease() {
         let upg = "## 0.2.62 last of 0.2\n## 0.3.0-alpha.1 first alpha\n## 0.3.0-alpha.2 second\n## 0.3.0 release\n";
@@ -1700,7 +1884,7 @@ mod tests {
         assert!(notes[3].contains(".devcontainer/scripts/sgw.sh"));
         // the template's own files need nothing
         let tmp = tempfile::tempdir().unwrap();
-        templates::write(tmp.path(), false).unwrap();
+        templates::write(tmp.path(), false, None).unwrap();
         assert!(owned_notes(tmp.path()).is_empty());
         // a mise.toml whose comments still mention .devcontainer/sgw/ (the old template's
         // header) after the migration took the includes out: nothing to say

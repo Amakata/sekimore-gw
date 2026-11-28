@@ -129,6 +129,8 @@ macro_rules! passthrough {
                 target: String,
                 #[arg(long, help = t("sgw.cmd.init.force"))]
                 force: bool,
+                #[arg(long, value_parser = super::update::DEBIANS, help = t("sgw.cmd.init.debian"))]
+                debian: Option<String>,
                 #[arg(value_name = "DIR", help = t("sgw.cmd.init.dir"))]
                 dir: Option<PathBuf>,
             },
@@ -246,8 +248,19 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
     project::refuse_inside_devcontainer(env)?;
     let cwd = std::env::current_dir()?;
     // init needs no project yet: it makes one
-    if let Cmd::Init { target, force, dir } = &cli.cmd {
-        return init(target, *force, dir.as_deref().unwrap_or(&cwd));
+    if let Cmd::Init {
+        target,
+        force,
+        debian,
+        dir,
+    } = &cli.cmd
+    {
+        return init(
+            target,
+            *force,
+            debian.as_deref(),
+            dir.as_deref().unwrap_or(&cwd),
+        );
     }
     // #294: neither does replacing this binary
     if let Cmd::SelfUpdate { version } = &cli.cmd {
@@ -393,8 +406,14 @@ fn run(cli: Cli) -> anyhow::Result<i32> {
     }
 }
 
-/// `sgw init [--target T] [DIR]`: the project template, for the one target this version knows.
-fn init(target: &str, force: bool, dir: &std::path::Path) -> anyhow::Result<i32> {
+/// `sgw init [--target T] [--debian D] [DIR]`: the project template, for the one target this
+/// version knows, on the plain base tag or on the Debian asked for (#507).
+fn init(
+    target: &str,
+    force: bool,
+    debian: Option<&str>,
+    dir: &std::path::Path,
+) -> anyhow::Result<i32> {
     use crate::i18n::tf;
     let target = super::target::Target::parse(target).map_err(anyhow::Error::msg)?;
     if !target.supported() {
@@ -404,7 +423,7 @@ fn init(target: &str, force: bool, dir: &std::path::Path) -> anyhow::Result<i32>
         ));
     }
     std::fs::create_dir_all(dir)?;
-    let report = super::templates::write(dir, force)?;
+    let report = super::templates::write(dir, force, debian)?;
     let shown = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     println!(
         "{}",
@@ -421,6 +440,16 @@ fn init(target: &str, force: bool, dir: &std::path::Path) -> anyhow::Result<i32>
     }
     for f in &report.existed {
         println!("  {f}  {}", t("sgw.init.kept"));
+    }
+    if let Some(d) = debian {
+        let tag = super::update::base_tag(super::update::VERSION, Some(d));
+        println!(
+            "{}",
+            tf(
+                "sgw.init.debian",
+                &[("image", &format!("{}:{tag}", super::update::BASE_IMAGE))]
+            )
+        );
     }
     println!();
     println!("{}", t("sgw.init.next"));

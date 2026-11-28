@@ -1,6 +1,10 @@
 //! `sgw.toml`: what `sgw init` and `sgw update` last wrote to a project — the version, and the
 //! sha256 of each template file as written — so `update` can tell a file the project edited from
 //! one a new version changes. The project's, committed with the rest; never edited by hand.
+//!
+//! #507: the sha is of the file with the Debian suffix taken off the base pin
+//! (`update::without_debian`): a project on `<version>-trixie` records what a project on the plain
+//! tag does, and its choice of Debian is not an edit.
 
 use std::collections::BTreeMap;
 
