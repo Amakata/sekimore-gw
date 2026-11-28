@@ -11,6 +11,22 @@ gateway のイメージ、その中の relay、dev コンテナの base イメ�
 base イメージは 0.2.45 まで独立したリポジトリで、版番号も別だった。その時期の履歴は
 [base/CHANGELOG.ja.md](base/CHANGELOG.ja.md) にある。
 
+## 0.3.0-alpha.5（2026-11-28）
+
+### Security
+
+- 0.2.79 から取り込んだ: `allowed_ports` が空（既定）のとき、reload で allow_domains から外した名前が再起動まで許可されたままだった。`remove_domain` が `setup_domain` の足したルールを消すようにした。更新すること。再起動でも解消する (#513)
+- 0.2.79 から取り込んだ: reload のあと、DNS がもう許可しない名前の許可をすべて取り下げる。外したワイルドカード配下、新たに block した名前、relay に移した名前、`direct_egress: deny` に切り替えたときの全名前 (#513)
+- 0.2.79 から取り込んだ: フィルタ表の flush、INPUT/FORWARD の DROP ポリシー、`block_ips` ルールの挿入に失敗したら、gateway は起動を拒む（exit 1）。proxy のログ追尾は UTF-8 でない行を数えて読み飛ばす (#516)
+
+### Enhancement
+
+- ログの追尾と `maint` を Rust にした。新しいプロセス `sekimore-relay gateway`（終了すると再起動される）が追尾を持ち、`sekimore-relay maint` が reload 窓とデータベースのコマンドを持つ（`python -m src.maint` は橋渡し）。`sgw` は gateway の中の Python を要らなくなった (#509)
+- 追尾はコンテナの起動とともに始まり、proxy の追尾は `access.log` を待つ。`maint` の `--help` と拒否の文言は argparse のものと違う (#509)
+- base イメージを Debian 13 向けにも `<version>-trixie` として `<version>-bookworm` と並べて公開する。素のタグは Debian 12 のまま。`sgw init --debian` で選び、`sgw update` はプロジェクトの接尾辞を保つ (#514)
+- このリポジトリ自身のツールと検査を Python から Rust（`tools/`）にした。イメージは変わらない (#508)
+- 0.2.79 を取り込んだ (#518)
+
 ## 0.3.0-alpha.4（2026-11-28）
 
 ### Enhancement

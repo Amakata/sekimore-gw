@@ -22,7 +22,7 @@ between the two is in [UPGRADING.md](../UPGRADING.md#030-alpha5-the-base-image-i
 
 ```dockerfile
 # a version, not latest: sgw update --apply raises it
-FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.4
+FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.5
 
 # only what this project adds, e.g. mise use -g python@3.13.0 && mise reshim
 ```
@@ -41,7 +41,7 @@ The template's [Dockerfile](../relay/templates/devcontainer/.devcontainer/Docker
 | Languages | `mise`. No language version |
 | AI | `sgw-install-ai` only, and the node Codex runs on. Claude Code, Codex and the Anthropic skills are not ours to redistribute: the template's Dockerfile runs `sgw-install-ai` to download them when you build your image |
 | Cloud | AWS CLI v2, Docker CE with buildx and compose |
-| Gateway | four tools copied out of `ghcr.io/amakata/sekimore-gw:0.3.0-alpha.4`, below |
+| Gateway | four tools copied out of `ghcr.io/amakata/sekimore-gw:0.3.0-alpha.5`, below |
 | zsh defaults | `/etc/skel/zsh-rc.d/`, copied into `~/.config/zsh/rc.d/` by post-create |
 
 From the gateway image:

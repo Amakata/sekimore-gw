@@ -35,7 +35,7 @@
 # agent-setup script. Taking both from the SAME tag keeps them in lock-step.
 # Override for local testing: --build-arg SEKIMORE_GW_IMAGE=sekimore-gw:relay-dev
 # ---------------------------------------------------------------------------
-ARG SEKIMORE_GW_IMAGE=ghcr.io/amakata/sekimore-gw:0.3.0-alpha.4
+ARG SEKIMORE_GW_IMAGE=ghcr.io/amakata/sekimore-gw:0.3.0-alpha.5
 # ---------------------------------------------------------------------------
 # #507: the Debian the image is on. bookworm (Debian 12) is what the plain tag `<version>` is, and
 # is published as `<version>-bookworm` too; trixie (Debian 13) is `<version>-trixie`, which a

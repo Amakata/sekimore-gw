@@ -12,6 +12,22 @@ the pull request.
 The base image was a repository of its own until 0.2.45, numbered on its own; those releases
 are in [base/CHANGELOG.md](base/CHANGELOG.md).
 
+## 0.3.0-alpha.5 (2026-11-28)
+
+### Security
+
+- Merged 0.2.79: with `allowed_ports` empty (the default), a name a reload removed from `allow_domains` stayed allowed until restart. `remove_domain` now deletes the rule `setup_domain` added. Update; a restart also clears it (#513)
+- Merged 0.2.79: a reload withdraws every admission DNS would no longer make: names under a dropped wildcard, names newly blocked, names the relay took over, and all names after a switch to `direct_egress: deny` (#513)
+- Merged 0.2.79: the gateway refuses to start (exit 1) when it cannot flush the filter table, set the INPUT/FORWARD DROP policy or insert the `block_ips` rule; the proxy log follower skips and counts a line that is not UTF-8 (#516)
+
+### Enhancement
+
+- The log followers and `maint` are Rust: the new process `sekimore-relay gateway` holds the followers; `sekimore-relay maint` has the reload-window and database commands (`python -m src.maint` is a shim). `sgw` needs no Python in the gateway (#509)
+- The followers start with the container and the proxy follower waits for `access.log`; `maint`'s `--help` and refusal wording differ from argparse's (#509)
+- The base image is published for Debian 13 as `<version>-trixie` beside `<version>-bookworm`; the plain tag stays Debian 12. `sgw init --debian` chooses one, and `sgw update` keeps a project's suffix (#514)
+- The repository's own tools and checks are Rust (`tools/`), not Python. Nothing changes in the images (#508)
+- Merged 0.2.79 (#518)
+
 ## 0.3.0-alpha.4 (2026-11-28)
 
 ### Enhancement
