@@ -6,7 +6,8 @@
 //! process of its own, never part of `serve`: the relay and the Web UI can fail without taking the
 //! gateway's own work with them (S8), and the other way round.
 //!
-//! `entrypoint.sh` starts it in the background, beside the orchestrator. The followers read what
+//! `entrypoint.sh` starts it in the background, beside the orchestrator, through
+//! `scripts/start-gateway.sh`, which starts it again if it exits. The followers read what
 //! the orchestrator read: `database_path` and `proxy.enabled` from `config.yml`, once, at the
 //! start (a reload never changed them), with the same reading (`crate::settings`). The proxy
 //! follower runs only when the proxy is enabled, as before.
