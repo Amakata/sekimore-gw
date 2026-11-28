@@ -65,6 +65,18 @@ base イメージは 0.2.45 まで独立したリポジトリで、版番号も�
 - `GET /relays` が各 relay とそのコマンドを返す。`sgw-agent setup` がそれを保存し、サイドカーのガイドをスキルファイルに足す。`sgw-agent <sidecar> <words>` でコマンドサイドカーのコマンドを実行する (#368)
 - `docs/sidecar-protocol.md` にコマンドサイドカーのプロトコルを書いた。`examples/sidecar-template` は標準ライブラリだけの Python で動くサイドカー (#369)
 
+## 0.2.79（2026-11-28）
+
+### Security
+
+- `allowed_ports` が空（既定）のとき、設定の reload で allow_domains から外した名前が、再起動まで許可されたままだった。`remove_domain` が `setup_domain` の足したルールを消すようにした。更新すること。再起動でも解消する (#512)
+- reload のあと、DNS がもう許可しない名前の許可をすべて取り下げる。外したワイルドカード配下の名前、新たに block した名前、relay に移した名前、`direct_egress: deny` に切り替えたときの全名前 (#512)
+- フィルタ表の flush、INPUT/FORWARD の DROP ポリシー、`block_ips` ルールの挿入のいずれかに失敗したら、gateway は起動を拒み（exit 1）、そのまま動かない (#515)
+
+### Fix
+
+- proxy のログ追尾は、UTF-8 でない行を数えて読み飛ばし、止まらない。proxy のリクエストが引き続きログのデータベースと Web UI に届く (#515)
+
 ## 0.2.78（2026-11-27）
 
 ### Security
