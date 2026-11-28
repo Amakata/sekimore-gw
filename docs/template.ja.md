@@ -39,12 +39,14 @@
 - コマンドサイドカー `<name>`（`relay.sidecars.<name>`）は compose のサービス `sekimore-<name>` として動かす。`sgw recreate` がゲートウェイと一緒に作り直す（サイドカーがメモリに持つものは消える）。詳しくは [docs/sidecar-protocol.md](sidecar-protocol.md#configuration)
 - 署名鍵の GitHub での題名は `sekimore-agent-signing: <project> / <name> <email>`。`.env` の `SEKIMORE_SIGNING_KEY_COMMENT` で変えられる
 - 案件が終わったら: `sgw revoke-project`
+- ベースの Debian は `FROM` 行のタグで決まる（#507）。無印の `<version>` と `<version>-bookworm` は Debian 12、`<version>-trixie` は Debian 13。`sgw init --debian trixie` は `-trixie` を書く。既存のプロジェクトを移すなら接尾辞を手で付けて Rebuild Container。二つの違いは [UPGRADING.ja.md](../UPGRADING.ja.md) の 0.3.0-alpha.5
 - 関所の使い方はエージェントに自動で届く。`sgw-agent setup` が起動のたびに Claude Code の skill `~/.claude/skills/sgw-agent/SKILL.md` と `~/.codex/AGENTS.md` に置く。プロジェクトの `CLAUDE.md` / `AGENTS.md` に関所のことを書く必要はない。skill は毎起動で上書きされるので編集しない。他のエージェントツールには `sgw-agent guide` の出力を、そのツールが指示を読む場所に置く
 
 ## 最新への追従
 
 `sgw init` が書いたものはすべてあなたのもので、編集してよい。`sgw.toml` は sgw が書いたものの記録
 （各ファイルの sha）で、`sgw update` はこれで「あなたが編集したファイル」と「新しい版が変えるファイル」を見分ける。
+sha はベースのタグの Debian の接尾辞を除いたファイルのものなので、Debian を選ぶことは編集とみなされない。
 
 ```bash
 sgw update            # 何が新しいか、どのファイルが変わるか、UPGRADING が何を求めるか。何も変更しない
@@ -53,7 +55,8 @@ sgw update --apply    # 更新する
 
 `sgw update --apply` がすること:
 
-1. ゲートウェイの `image:` タグと `FROM` タグを `sgw` 自身の版に上げる
+1. ゲートウェイの `image:` タグと `FROM` タグを `sgw` 自身の版に上げる。`FROM` タグは Debian を保つ
+   （`-trixie` は `-trixie` のまま、無印は無印のまま）
 2. sgw が書いたままの雛形ファイルをこの版が変えるなら上書きする。あなたが編集したものは触らない。
    両方なら、この版のファイルを `<file>.sgw-new` として隣に書く（取り込んだら消す。`--force` で上書き）
 3. 確認のうえ、ゲートウェイを作り直す

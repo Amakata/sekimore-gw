@@ -7,6 +7,16 @@ This page is what the image holds, and where to change the base itself.
 
 - `ghcr.io/amakata/sgw-devcontainer-base`, the gateway's version number, from the same tag
 - `linux/amd64`, `linux/arm64`
+- Debian 12 and Debian 13 (#507), by tag:
+
+| Tag | Debian |
+|---|---|
+| `<version>` | 12 (bookworm), on the 0.3 line as on 0.2 |
+| `<version>-bookworm` | 12: the same image as `<version>` |
+| `<version>-trixie` | 13 |
+
+A project is on the Debian its `FROM` tag names, and `sgw update` keeps it there. What differs
+between the two is in [UPGRADING.md](../UPGRADING.md#030-alpha5-the-base-image-is-also-on-debian-13-prerelease).
 
 ## The project's Dockerfile
 
@@ -23,9 +33,9 @@ The template's [Dockerfile](../relay/templates/devcontainer/.devcontainer/Docker
 
 | | |
 |---|---|
-| Base | `mcr.microsoft.com/devcontainers/base:bookworm` (`vscode`, uid 1000) |
+| Base | `mcr.microsoft.com/devcontainers/base:bookworm`, or `:trixie` for `-trixie` (`vscode`, uid 1000) |
 | Shell | zsh, oh-my-zsh, `fzf`, `jq`, `vim`, `nano`, `curl`, `wget`, `unzip`, `rsync`, `pv`, `gnupg`, `sudo` |
-| Network | `iptables`, `iproute2`, `iputils-ping`, `dnsutils` |
+| Network | `iptables`, `iproute2`, `iputils-ping`, `dnsutils` (`bind9-dnsutils` on Debian 13: the same `dig`, `nslookup`) |
 | Git | `git-delta` |
 | DB headers | `libpq-dev`, `default-libmysqlclient-dev` |
 | Languages | `mise`. No language version |
@@ -60,12 +70,16 @@ Not in the image:
 | Claude Code's managed settings | [managed-settings.json](managed-settings.json) |
 | The `sekimore` wrapper, `docker-init.sh`, the Docker install | [scripts/](scripts/) |
 | Which gateway the relay tools come from | `ARG SEKIMORE_GW_IMAGE`. A release sets it |
+| Which Debian | `ARG DEBIAN` (`bookworm`, `trixie`). A release builds both; a line that differs between them says so |
 
 Build and test locally:
 
 ```sh
 docker build -t sgw-devcontainer-base:dev base
 base/tests/test_image.sh sgw-devcontainer-base:dev
+# Debian 13
+docker build -t sgw-devcontainer-base:dev-trixie --build-arg DEBIAN=trixie base
+SGW_DEBIAN=trixie base/tests/test_image.sh sgw-devcontainer-base:dev-trixie
 ```
 
 ## Links

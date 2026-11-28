@@ -47,6 +47,7 @@
 | 0.3.0-alpha.1 | 下の 0.3.0-alpha.2。**Dockerfile で言語を入れている、または `/usr/local/share` に書く場合だけ** |
 | 0.3.0-alpha.2 | 下の 0.3.0-alpha.3。**コマンドサイドカーを使う、または Actions のストレージがプライベートアドレスにある GitHub Enterprise Server を使う場合だけ** |
 | 0.3.0-alpha.3 | 下の 0.3.0-alpha.4。**Web UI の `/docs` や `/openapi.json` を使う、または Web UI のアクセスログに頼る場合だけ** |
+| 0.3.0-alpha.4 | 下の 0.3.0-alpha.5。**dev コンテナを Debian 13 にしたい場合だけ** |
 
 ゲートウェイの版とは別に、base 0.2.20 より前に作ったプロジェクトは、一度だけ手作業で
 `.devcontainer/sgw/` に移行する必要があります。
@@ -999,3 +1000,31 @@ Dockerfile で何も入れていないプロジェクトは、することはあ
 - **`config.yml`:** 変えるものはありません。
 
 これらの Web UI のページを使わないプロジェクトは、することはありません。
+
+## 0.3.0-alpha.5 ベースイメージに Debian 13 版ができる（プレリリース）
+
+**選ばなければ何も変わりません。** この版からベースイメージは Debian 12（bookworm）と Debian 13（trixie）の両方で出ます。
+
+| タグ | Debian |
+|---|---|
+| `ghcr.io/amakata/sgw-devcontainer-base:<version>` | 12。これまでどおり。0.3 系でも 0.2 系と同じ |
+| `…:<version>-bookworm` | 12。無印のタグと同じイメージ |
+| `…:<version>-trixie` | 13 |
+
+`sgw update` はプロジェクトの Debian を保ちます。`-trixie` は次の `-trixie` へ、無印は無印のまま、`-bookworm` は
+`-bookworm` のまま上げます。プロジェクトが勝手に別の Debian へ移ることはありません。
+
+- **Debian 13 にするには:** `.devcontainer/Dockerfile` のベースのタグに `-trixie` を付け
+  （`FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.5-trixie`）、Rebuild Container。新しいプロジェクトは
+  `sgw init --debian trixie`。Debian 12 を明示するなら `-bookworm`（`sgw init --debian bookworm`）。
+  この接尾辞は雛形の編集とはみなされません。`sgw update` はこれまでどおり Dockerfile を更新します。
+- **Debian 13 で違うところ**（Dockerfile で足すものに関わる）:
+  - `dnsutils` はありません。パッケージは `bind9-dnsutils` です（`dig` と `nslookup` は同じ。ベースにはどちらの版にも入っています）。
+  - 64 ビット時刻のためにライブラリの名前が変わりました（`libssl3` は `libssl3t64` など）。OpenSSL は 3.5（3.0 から）。
+    実行時ライブラリを名指しする `apt-get install` は新しい名前が要ることがあります。
+  - GCC 14（12 から）は古い C コードの暗黙の宣言をエラーにします。ソースからビルドする古い言語の版（PHP、Ruby）は
+    ビルドできないことがあります。新しいパッチを使うか、Debian 12 に留まってください。
+  - 言語イメージ（`sgw-lang-*:…-bookworm`）は Debian 12 でビルドしたものです。`-trixie` のイメージにコピーせず、
+    `mise install --system` で入れてください（[docs/languages.ja.md](docs/languages.ja.md)）。
+  - `iptables` は 1.8.11（1.8.9 から）。どちらも nft バックエンドです。
+- **`config.yml`、compose ファイル:** 変えるものはありません。

@@ -47,6 +47,7 @@ changed in each release, see the [changelog](CHANGELOG.md).
 | 0.3.0-alpha.1 | [0.3.0-alpha.2](#030-alpha2-languages-live-in-optmise-prerelease), **only if your Dockerfile installs languages or writes under `/usr/local/share`** |
 | 0.3.0-alpha.2 | [0.3.0-alpha.3](#030-alpha3-sidecar-text-is-checked-and-recreate-starts-sidecars-prerelease), **only if you run a command sidecar or a GitHub Enterprise Server whose Actions storage is on a private address** |
 | 0.3.0-alpha.3 | [0.3.0-alpha.4](#030-alpha4-the-web-ui-moves-into-sekimore-relay-serve-and-the-sidecar-template-is-go-prerelease), **only if you use the Web UI's `/docs` or `/openapi.json`, or rely on the Web UI's access log** |
+| 0.3.0-alpha.4 | [0.3.0-alpha.5](#030-alpha5-the-base-image-is-also-on-debian-13-prerelease), **only if you want Debian 13 in the dev container** |
 
 Independently of the gateway version, a project created before base 0.2.20 must move to
 `.devcontainer/sgw/` once, by hand. See
@@ -1037,3 +1038,35 @@ A prerelease of the 0.3 line, installed the same way as 0.3.0-alpha.1 (`--versio
 - **`config.yml`:** nothing to change.
 
 Nothing to do for a project that does not use those Web UI pages.
+
+## 0.3.0-alpha.5 The base image is also on Debian 13 (prerelease)
+
+**Nothing changes unless you choose it.** The base image is published on Debian 12 (bookworm) and
+Debian 13 (trixie) from this release on:
+
+| Tag | Debian |
+|---|---|
+| `ghcr.io/amakata/sgw-devcontainer-base:<version>` | 12, as before, on the 0.3 line as on 0.2 |
+| `…:<version>-bookworm` | 12: the same image as the plain tag |
+| `…:<version>-trixie` | 13 |
+
+`sgw update` keeps the Debian a project is on: `-trixie` moves to the next `-trixie`, the plain tag
+stays plain, `-bookworm` stays `-bookworm`. Nothing moves a project to another Debian.
+
+- **To choose Debian 13:** add `-trixie` to the base tag in `.devcontainer/Dockerfile`
+  (`FROM ghcr.io/amakata/sgw-devcontainer-base:0.3.0-alpha.5-trixie`), then Rebuild Container. A
+  new project: `sgw init --debian trixie`. To name Debian 12 explicitly: `-bookworm`
+  (`sgw init --debian bookworm`). The suffix is not an edit of the template: `sgw update` still
+  updates the Dockerfile in place.
+- **What differs on Debian 13**, for what your Dockerfile adds:
+  - `dnsutils` is gone; the package is `bind9-dnsutils` (the same `dig` and `nslookup`, which the
+    base has on both).
+  - Libraries renamed for 64-bit time (`libssl3` is `libssl3t64`, and others), OpenSSL 3.5 (from
+    3.0): an `apt-get install` naming a runtime library may need the new name.
+  - GCC 14 (from 12) makes old C code's implicit declarations errors: an old language version
+    built from source (PHP, Ruby) may not build. Take a newer patch, or stay on Debian 12.
+  - The language images (`sgw-lang-*:…-bookworm`) are built on Debian 12. Do not copy them into a
+    `-trixie` image; install the language with `mise install --system` instead
+    ([docs/languages.md](docs/languages.md)).
+  - `iptables` is 1.8.11 (from 1.8.9), the nft backend on both.
+- **`config.yml`, the compose files:** nothing to change.

@@ -116,8 +116,9 @@ pub fn conflicts(root: &Path) -> Vec<String> {
 
 /// Writes the template into `root`. Refuses when any file exists, unless `force`; the files a
 /// project owns (`FROM_SAMPLE`: `.env` and `config.yml`) are written from their samples only
-/// when absent, force or not.
-pub fn write(root: &Path, force: bool) -> anyhow::Result<Report> {
+/// when absent, force or not. `debian` (#507) puts the base on that Debian's tag
+/// (`<version>-trixie`); None keeps the plain tag, and writes the template byte for byte.
+pub fn write(root: &Path, force: bool, debian: Option<&str>) -> anyhow::Result<Report> {
     let existing = conflicts(root);
     if !existing.is_empty() && !force {
         bail!(crate::i18n::tf(
@@ -131,7 +132,8 @@ pub fn write(root: &Path, force: bool) -> anyhow::Result<Report> {
         if let Some(dir) = dest.parent() {
             std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         }
-        std::fs::write(&dest, t.content).with_context(|| format!("write {}", dest.display()))?;
+        std::fs::write(&dest, super::update::with_debian(t.content, debian))
+            .with_context(|| format!("write {}", dest.display()))?;
         set_mode(&dest, t.executable)?;
         report.written.push(t.path.to_string());
     }
@@ -154,6 +156,7 @@ pub fn write(root: &Path, force: bool) -> anyhow::Result<Report> {
         set_mode(&own_path, false)?;
         report.written.push((*own).to_string());
     }
+    // the record is of the files without the Debian, so it is the same whichever was chosen
     let toml = root.join(super::sgwtoml::NAME);
     std::fs::write(&toml, super::sgwtoml::SgwToml::of_template().render())
         .with_context(|| format!("write {}", toml.display()))?;
@@ -245,7 +248,7 @@ mod tests {
     fn init_writes_everything_once_and_refuses_the_second_time() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
-        let r = write(tmp.path(), false).unwrap();
+        let r = write(tmp.path(), false, None).unwrap();
         assert_eq!(
             r.written.len(),
             FILES.len() + FROM_SAMPLE.len() + 1,
@@ -286,7 +289,7 @@ mod tests {
         assert!(!tmp.path().join("mise.toml").exists());
         // again: refused, and nothing changed
         std::fs::write(tmp.path().join(".devcontainer/.env"), "EDITED=1\n").unwrap();
-        let e = write(tmp.path(), false).unwrap_err().to_string();
+        let e = write(tmp.path(), false, None).unwrap_err().to_string();
         assert!(e.contains(".devcontainer/docker-compose.yml"), "{e}");
         assert_eq!(
             std::fs::read_to_string(tmp.path().join(".devcontainer/.env")).unwrap(),
@@ -296,7 +299,7 @@ mod tests {
         // config.yml would take the permissions, the repositories and the allowlist with it
         let config = tmp.path().join(".devcontainer/config/config.yml");
         std::fs::write(&config, "name: mine\n").unwrap();
-        let r = write(tmp.path(), true).unwrap();
+        let r = write(tmp.path(), true, None).unwrap();
         assert_eq!(
             r.existed,
             vec![".devcontainer/.env", ".devcontainer/config/config.yml"]

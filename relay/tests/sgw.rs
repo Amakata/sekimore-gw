@@ -1284,6 +1284,207 @@ fn a_template_that_changed_only_in_its_pin_leaves_an_edited_file_alone() {
     );
 }
 
+/// #507: `init --debian trixie` writes the template with the base on `<version>-trixie` and
+/// nothing else different — the same files, the same sgw.toml — and the project is then current.
+/// Without the option the template is written as it always was; an unknown Debian is refused.
+#[test]
+fn init_on_trixie_differs_from_the_plain_template_only_in_the_base_tag() {
+    let f = fixture();
+    let version = env!("CARGO_PKG_VERSION");
+    let plain = f._tmp.path().join("plain");
+    let trixie = f._tmp.path().join("trixie");
+    let out = sgw(&f, &["init", plain.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("sgw-devcontainer-base"),
+        "the plain init says what it always said"
+    );
+    let out = sgw(
+        &f,
+        &["init", "--debian", "trixie", trixie.to_str().unwrap()],
+    )
+    .output()
+    .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(&format!("sgw-devcontainer-base:{version}-trixie")),
+        "{stdout}"
+    );
+    let template = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/devcontainer");
+    let read = |d: &Path, p: &str| std::fs::read_to_string(d.join(p)).unwrap();
+    for p in [
+        ".devcontainer/docker-compose.yml",
+        ".devcontainer/devcontainer.json",
+        ".devcontainer/scripts/post-create.sh",
+        ".devcontainer/config/config.yml",
+        "sgw.toml",
+    ] {
+        assert_eq!(read(&plain, p), read(&trixie, p), "{p}");
+    }
+    let df = ".devcontainer/Dockerfile";
+    assert_eq!(
+        read(&plain, df),
+        read(&template, df),
+        "plain: the template byte for byte"
+    );
+    assert_eq!(
+        read(&trixie, df),
+        read(&template, df).replace(
+            &format!("sgw-devcontainer-base:{version}\n"),
+            &format!("sgw-devcontainer-base:{version}-trixie\n")
+        )
+    );
+    assert_ne!(read(&trixie, df), read(&plain, df));
+    let out = sgw(&f, &["update", "--offline"])
+        .current_dir(&trixie)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Everything is up to date."), "{stdout}");
+    assert!(
+        stdout.contains(&format!("{version}-trixie")),
+        "the table shows the Debian: {stdout}"
+    );
+    let other = f._tmp.path().join("bullseye");
+    let out = sgw(
+        &f,
+        &["init", "--debian", "bullseye", other.to_str().unwrap()],
+    )
+    .output()
+    .unwrap();
+    assert!(!out.status.success());
+    assert!(!other.join(".devcontainer").exists());
+}
+
+/// #507: `update` moves a base pin to the new version on the Debian it names — `-trixie` stays
+/// `-trixie`, `-bookworm` stays `-bookworm`, the plain tag stays plain — and a Dockerfile it
+/// replaces (as an older sgw wrote it) is written for that same Debian.
+#[test]
+fn update_keeps_the_debian_a_project_is_on() {
+    let version = env!("CARGO_PKG_VERSION");
+    for (debian, suffix) in [
+        (None, ""),
+        (Some("trixie"), "-trixie"),
+        (Some("bookworm"), "-bookworm"),
+    ] {
+        let f = fixture();
+        let dir = f._tmp.path().join("deb");
+        let mut args = vec!["init"];
+        if let Some(d) = debian {
+            args.extend(["--debian", d]);
+        }
+        args.push(dir.to_str().unwrap());
+        assert!(sgw(&f, &args).output().unwrap().status.success());
+        let dockerfile = dir.join(".devcontainer/Dockerfile");
+        let as_init = std::fs::read_to_string(&dockerfile).unwrap();
+        let old_pin = format!("sgw-devcontainer-base:0.2.80{suffix}");
+        let new_pin = format!("sgw-devcontainer-base:{version}{suffix}");
+        assert!(as_init.contains(&format!("{new_pin}\n")), "{as_init}");
+
+        // the pin alone behind: moved, on the same Debian
+        std::fs::write(&dockerfile, as_init.replace(&new_pin, &old_pin)).unwrap();
+        let out = sgw(&f, &["update", "--offline"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let base_row: Vec<&str> = stdout
+            .lines()
+            .find(|l| l.starts_with("base "))
+            .unwrap_or_else(|| panic!("no base row in {stdout}"))
+            .split_whitespace()
+            .take(3)
+            .collect();
+        let (old_tag, new_tag) = (format!("0.2.80{suffix}"), format!("{version}{suffix}"));
+        assert_eq!(
+            base_row,
+            ["base", old_tag.as_str(), new_tag.as_str()],
+            "{stdout}"
+        );
+        let out = sgw(&f, &["update", "--apply", "--offline", "--yes"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{stdout}");
+        assert!(
+            stdout.contains(&format!("base: 0.2.80{suffix} → {version}{suffix}")),
+            "{stdout}"
+        );
+        assert_eq!(std::fs::read_to_string(&dockerfile).unwrap(), as_init);
+
+        // a Dockerfile as an older sgw wrote it, on this Debian: replaced, on this Debian
+        let older = format!("FROM ghcr.io/amakata/{old_pin}\n# an older template\n");
+        std::fs::write(&dockerfile, &older).unwrap();
+        record(
+            &dir,
+            ".devcontainer/Dockerfile",
+            &sha("FROM ghcr.io/amakata/sgw-devcontainer-base:0.2.80\n# an older template\n"),
+        );
+        let out = sgw(&f, &["update", "--apply", "--offline", "--yes"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("wrote .devcontainer/Dockerfile\n"),
+            "{suffix}: {stdout}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&dockerfile).unwrap(),
+            as_init,
+            "{suffix}"
+        );
+        let out = sgw(&f, &["update", "--offline"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).contains("Everything is up to date."));
+    }
+}
+
+/// #507: a person moves a project to Debian 13 by adding `-trixie` to its FROM line. That is not
+/// an edit of the template: the Dockerfile is still "same", and the project is current.
+#[test]
+fn choosing_trixie_by_hand_is_not_an_edit_of_the_template() {
+    let f = fixture();
+    let version = env!("CARGO_PKG_VERSION");
+    let dir = f._tmp.path().join("switch");
+    assert!(sgw(&f, &["init", dir.to_str().unwrap()])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let dockerfile = dir.join(".devcontainer/Dockerfile");
+    let text = std::fs::read_to_string(&dockerfile).unwrap();
+    std::fs::write(
+        &dockerfile,
+        text.replace(
+            &format!("sgw-devcontainer-base:{version}\n"),
+            &format!("sgw-devcontainer-base:{version}-trixie\n"),
+        ),
+    )
+    .unwrap();
+    let out = sgw(&f, &["update", "--offline"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout
+        .lines()
+        .find(|l| l.contains(".devcontainer/Dockerfile"))
+        .unwrap_or_else(|| panic!("no Dockerfile line in {stdout}"));
+    assert!(line.ends_with("same"), "{line}");
+    assert!(stdout.contains("Everything is up to date."), "{stdout}");
+}
+
 /// The project's `config.yml` holds the permission list, the repositories and the allowlist:
 /// losing it cuts the agent off from GitHub. `update` never writes it — not even with `--force`,
 /// which overwrites every other template file the project edited. The template of the same

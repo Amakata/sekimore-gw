@@ -27,6 +27,9 @@ use serde_yaml_ng::Value;
 
 use crate::pyfmt::{json_str, last_line, py_repr_str, py_str, truthy};
 
+/// The Debian the images are built on: lang/Dockerfile's `ARG BASE` is a plain base tag, which is
+/// Debian 12. The base is on Debian 13 too (`<version>-trixie`, #507), but these images are not:
+/// their binaries and runtime package names are Debian 12's (docs/languages.md).
 pub const SUFFIX: &str = "bookworm";
 /// A change here is a change to every language's build.
 pub const COMMON: [&str; 2] = ["lang/Dockerfile", "lang/runtime-packages.sh"];
