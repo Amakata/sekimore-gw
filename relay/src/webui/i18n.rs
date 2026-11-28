@@ -3,8 +3,8 @@
 //! and the dictionary for it, laid over the English one.
 //!
 //! The dictionaries are `locales/{en,ja}.json`, moved here from the Python gateway's
-//! `src/locales/`. They keep the `maint.*` keys the Python `maint` command still reads from its own
-//! copy until it moves (0.3.0-alpha.5), so `/api/i18n` answers exactly what it answered.
+//! `src/locales/`. They keep the `maint.*` keys, which `sekimore-relay maint` prints from its own
+//! copy in `relay/locales/` (0.3.0-alpha.5), so `/api/i18n` answers exactly what it answered.
 
 use std::fmt;
 

@@ -238,7 +238,7 @@ fn recording() -> bool {
     std::env::var("SEKIMORE_ORACLE_RECORD").is_ok()
 }
 
-fn uv() -> Option<PathBuf> {
+pub fn uv() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("UV") {
         return Some(PathBuf::from(p));
     }

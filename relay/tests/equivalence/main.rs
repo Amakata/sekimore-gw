@@ -1,11 +1,13 @@
 //! The equivalence harness: the Rust gateway against the Python gateway, through ends that do
 //! not depend on either language (0.3.0 plan, "挙動が変わっていないことの確かめ方").
 //!
-//! It compares the two readings of `config.yml` (Issue #498) and the two Web UIs (Issue #493).
+//! It compares the two readings of `config.yml` (Issue #498), the two Web UIs (Issue #493), and the
+//! periphery (Issue #505): the log followers, `maint`, and the reload window's state file.
 //! `harness.rs` says how the later steps plug in, how the Python side is reached, and when it is
 //! required.
 
 mod config;
+mod gateway;
 mod harness;
 mod webui;
 
@@ -20,6 +22,21 @@ use harness::{compare, corpus, diff, recorded, report, Case, Comparison};
 #[test]
 fn the_config_is_read_as_python_reads_it() {
     harness::run(&ConfigReading);
+}
+
+#[test]
+fn the_followers_record_what_python_recorded() {
+    harness::run_cases(&gateway::Followers, &gateway::followers_cases());
+}
+
+#[test]
+fn maint_answers_as_python_did() {
+    harness::run_cases(&gateway::Maint, &gateway::maint_cases());
+}
+
+#[test]
+fn the_orchestrator_reads_the_window_maint_writes() {
+    harness::run_cases(&gateway::ReloadState, &gateway::reload_state_cases());
 }
 
 #[test]

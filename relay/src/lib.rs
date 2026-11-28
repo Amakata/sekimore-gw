@@ -9,6 +9,7 @@ pub mod cli;
 pub mod config;
 pub mod forge;
 pub mod fsutil;
+pub mod gateway;
 pub mod git;
 pub mod github;
 #[cfg(feature = "host")]

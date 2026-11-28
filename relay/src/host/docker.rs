@@ -183,6 +183,26 @@ pub fn parse_port(docker_port_output: &str) -> Option<u16> {
     first.rsplit(':').next()?.parse().ok()
 }
 
+/// What `sekimore-relay ready` in the gateway said after a recreate.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Readiness {
+    /// 0: the Web UI answered
+    Ready,
+    /// The gateway is still starting (1), or docker could not reach it yet
+    NotYet,
+    /// The relay has no `ready` (clap's 2 for an unknown word), or there is no relay to run (126,
+    /// 127): a gateway older than 0.3.0-alpha.5, probed through its Python instead
+    NoProbe,
+}
+
+pub fn readiness(code: Option<i32>) -> Readiness {
+    match code {
+        Some(0) => Readiness::Ready,
+        Some(2 | 126 | 127) => Readiness::NoProbe,
+        _ => Readiness::NotYet,
+    }
+}
+
 /// What a captured `docker exec` gave back.
 pub struct Captured {
     pub code: i32,
@@ -535,22 +555,22 @@ impl Docker {
         self.recreate_command_sidecars(&new, &compose, &services);
         print!("{}", crate::i18n::t("sgw.waiting"));
         std::io::stdout().flush().ok();
+        let mut python = false;
         for _ in 0..30 {
-            // the gateway has no curl; python is always there
-            let probe = self
-                .cmd()
-                .args([
-                    "exec",
-                    &new,
-                    "python",
-                    "-c",
-                    "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/config', timeout=3)",
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-            if matches!(probe, Ok(s) if s.success()) {
+            let ready = if python {
+                self.python_probe(&new)
+            } else {
+                match readiness(self.exec_status(&new, &["sekimore-relay", "ready"])) {
+                    Readiness::Ready => true,
+                    Readiness::NotYet => false,
+                    Readiness::NoProbe => {
+                        // a gateway from before 0.3.0-alpha.5: its relay has no `ready`
+                        python = true;
+                        self.python_probe(&new)
+                    }
+                }
+            };
+            if ready {
                 println!(" ok");
                 break;
             }
@@ -560,6 +580,34 @@ impl Docker {
         }
         println!("{}", crate::i18n::t("sgw.recreated"));
         Ok(())
+    }
+
+    /// `docker exec <cid> <argv…>` with nothing attached; the exit code, None when docker did
+    /// not run.
+    fn exec_status(&self, cid: &str, argv: &[&str]) -> Option<i32> {
+        self.cmd()
+            .arg("exec")
+            .arg(cid)
+            .args(argv)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .ok()
+            .and_then(|s| s.code())
+    }
+
+    /// The probe of a gateway older than 0.3.0-alpha.5, which has no curl and whose relay has no
+    /// `ready`: the same request through its Python.
+    fn python_probe(&self, cid: &str) -> bool {
+        self.exec_status(
+            cid,
+            &[
+                "python",
+                "-c",
+                "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/config', timeout=3)",
+            ],
+        ) == Some(0)
     }
 
     /// #480: recreate the command sidecars' services (`sekimore-<name>` for each name under
@@ -659,6 +707,18 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_readiness_probe_falls_back_only_when_the_relay_has_none() {
+        assert_eq!(readiness(Some(0)), Readiness::Ready);
+        assert_eq!(readiness(Some(1)), Readiness::NotYet);
+        assert_eq!(readiness(None), Readiness::NotYet);
+        // docker's own failures (a container still starting) are not an old gateway
+        assert_eq!(readiness(Some(125)), Readiness::NotYet);
+        for old in [2, 126, 127] {
+            assert_eq!(readiness(Some(old)), Readiness::NoProbe);
+        }
+    }
 
     /// #329: the sidecar moves with the gateway when the project has one, and an older compose
     /// without it is not asked for a service it does not declare.

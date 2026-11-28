@@ -1,0 +1,1284 @@
+{
+  "answers": {
+    "maint/help/follow": {
+      "code": 0,
+      "files": [],
+      "id": "maint/help/follow",
+      "state": null,
+      "stderr": "",
+      "stdout": "<help>"
+    },
+    "maint/help/prune": {
+      "code": 0,
+      "files": [],
+      "id": "maint/help/prune",
+      "state": null,
+      "stderr": "",
+      "stdout": "<help>"
+    },
+    "maint/help/short": {
+      "code": 0,
+      "files": [],
+      "id": "maint/help/short",
+      "state": null,
+      "stderr": "",
+      "stdout": "<help>"
+    },
+    "maint/help/top": {
+      "code": 0,
+      "files": [],
+      "id": "maint/help/top",
+      "state": null,
+      "stderr": "",
+      "stdout": "<help>"
+    },
+    "maint/prune/abbreviated": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/abbreviated",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 3,
+        "firewall_blocks": 3,
+        "proxy_logs": 3
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "dns_queries        deleted 2 rows\nfirewall_blocks    deleted 2 rows\nproxy_logs         deleted 2 rows\nnot vacuumed (add --vacuum to shrink the file)\n"
+    },
+    "maint/prune/bad_days": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/bad_days",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/prune/confirm_-1": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_-1",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes records older than -1 days from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/prune/confirm_0.5": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_0.5",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes records older than 0.5 days from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/prune/confirm_1.5": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_1.5",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes records older than 1.5 days from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/prune/confirm_1234567": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_1234567",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes records older than 1.23457e+06 days from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/prune/confirm_1_0": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_1_0",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes records older than 10 days from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/prune/confirm_1e6": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_1e6",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes records older than 1e+06 days from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/prune/confirm_30": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_30",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes records older than 30 days from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/prune/confirm_90": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_90",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes records older than 90 days from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/prune/confirm_inf": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_inf",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes records older than inf days from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/prune/confirm_ja": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_ja",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "{dir}/gw.db から 30 日より古い記録 を削除します（DNS / firewall / proxy のログ。relay の監査は別ファイル）。\n実行するには --yes を付けて再実行してください。\n"
+    },
+    "maint/prune/confirm_minus_inf": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_minus_inf",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes records older than -inf days from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/prune/confirm_nan": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/confirm_nan",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes records older than nan days from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/prune/empty_days": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/empty_days",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/prune/inf_yes": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/inf_yes",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "dns_queries        deleted 0 rows\nfirewall_blocks    deleted 0 rows\nproxy_logs         deleted 0 rows\nnot vacuumed (add --vacuum to shrink the file)\n"
+    },
+    "maint/prune/minus_inf_as_a_word": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/minus_inf_as_a_word",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/prune/missing_db": {
+      "code": 1,
+      "files": [],
+      "id": "maint/prune/missing_db",
+      "state": null,
+      "stderr": "db not found: {dir}/gw.db\n",
+      "stdout": ""
+    },
+    "maint/prune/missing_db_no_yes": {
+      "code": 1,
+      "files": [],
+      "id": "maint/prune/missing_db_no_yes",
+      "state": null,
+      "stderr": "db not found: {dir}/gw.db\n",
+      "stdout": ""
+    },
+    "maint/prune/nan_yes": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/nan_yes",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "dns_queries        deleted 0 rows\nfirewall_blocks    deleted 0 rows\nproxy_logs         deleted 0 rows\nnot vacuumed (add --vacuum to shrink the file)\n"
+    },
+    "maint/prune/negative_yes": {
+      "code": 1,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/negative_yes",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "<raised>",
+      "stdout": ""
+    },
+    "maint/prune/no_days": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/no_days",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/prune/some_tables": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/some_tables",
+      "rows": {
+        "firewall_blocks": 0,
+        "other": 0
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "firewall_blocks    deleted 0 rows\nnot vacuumed (add --vacuum to shrink the file)\n"
+    },
+    "maint/prune/yes": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/yes",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 2,
+        "firewall_blocks": 2,
+        "proxy_logs": 2
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "dns_queries        deleted 3 rows\nfirewall_blocks    deleted 3 rows\nproxy_logs         deleted 3 rows\nnot vacuumed (add --vacuum to shrink the file)\n"
+    },
+    "maint/prune/yes_ja": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/yes_ja",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 2,
+        "firewall_blocks": 2,
+        "proxy_logs": 2
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "dns_queries        から 3 行を削除\nfirewall_blocks    から 3 行を削除\nproxy_logs         から 3 行を削除\nVACUUM していません（--vacuum でファイルを縮められます）\n"
+    },
+    "maint/prune/yes_vacuum": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/yes_vacuum",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 2,
+        "firewall_blocks": 2,
+        "proxy_logs": 2
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "dns_queries        deleted 3 rows\nfirewall_blocks    deleted 3 rows\nproxy_logs         deleted 3 rows\nvacuumed\n"
+    },
+    "maint/prune/zero_yes": {
+      "code": 1,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/prune/zero_yes",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 5,
+        "firewall_blocks": 5,
+        "proxy_logs": 5
+      },
+      "state": null,
+      "stderr": "<raised>",
+      "stdout": ""
+    },
+    "maint/reload/follow_-5m": {
+      "code": 2,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/follow_-5m",
+      "state": null,
+      "stderr": "not a duration: -5m. Use something like 30m, 2h, 90s.\n",
+      "stdout": ""
+    },
+    "maint/reload/follow_0m": {
+      "code": 2,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/follow_0m",
+      "state": null,
+      "stderr": "not a duration: 0m. Use something like 30m, 2h, 90s.\n",
+      "stdout": ""
+    },
+    "maint/reload/follow_10m": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/follow_10m",
+      "state": "{\"until\": <now+600>}",
+      "stderr": "",
+      "stdout": "reload window open for 10m. Saving config.yml applies until it runs out.\n"
+    },
+    "maint/reload/follow_1d": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/follow_1d",
+      "state": "{\"until\": <now+86400>}",
+      "stderr": "",
+      "stdout": "reload window open for 1d. Saving config.yml applies until it runs out.\n"
+    },
+    "maint/reload/follow_2H": {
+      "code": 2,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/follow_2H",
+      "state": null,
+      "stderr": "not a duration: 2H. Use something like 30m, 2h, 90s.\n",
+      "stdout": ""
+    },
+    "maint/reload/follow_3_0m": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/follow_3_0m",
+      "state": "{\"until\": <now+1800>}",
+      "stderr": "",
+      "stdout": "reload window open for  3_0m . Saving config.yml applies until it runs out.\n"
+    },
+    "maint/reload/follow_90s": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/follow_90s",
+      "state": "{\"until\": <now+120>}",
+      "stderr": "",
+      "stdout": "reload window open for 90s. Saving config.yml applies until it runs out.\n"
+    },
+    "maint/reload/follow_bad_and_unwritable": {
+      "code": 2,
+      "files": [
+        "config.yml",
+        "state"
+      ],
+      "id": "maint/reload/follow_bad_and_unwritable",
+      "state": null,
+      "stderr": "not a duration: x. Use something like 30m, 2h, 90s.\n",
+      "stdout": ""
+    },
+    "maint/reload/follow_bad_ja": {
+      "code": 2,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/follow_bad_ja",
+      "state": null,
+      "stderr": "期間として読めない: soon。30m, 2h, 90s のように書く。\n",
+      "stdout": ""
+    },
+    "maint/reload/follow_default": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/follow_default",
+      "state": "{\"until\": <now+1800>}",
+      "stderr": "",
+      "stdout": "reload window open for 30m. Saving config.yml applies until it runs out.\n"
+    },
+    "maint/reload/follow_empty": {
+      "code": 2,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/follow_empty",
+      "state": null,
+      "stderr": "not a duration: . Use something like 30m, 2h, 90s.\n",
+      "stdout": ""
+    },
+    "maint/reload/follow_ja": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/follow_ja",
+      "state": "{\"until\": <now+600>}",
+      "stderr": "",
+      "stdout": "反映の窓を 10m 開けた。切れるまでは config.yml の保存が適用される。\n"
+    },
+    "maint/reload/follow_soon": {
+      "code": 2,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/follow_soon",
+      "state": null,
+      "stderr": "not a duration: soon. Use something like 30m, 2h, 90s.\n",
+      "stdout": ""
+    },
+    "maint/reload/follow_two": {
+      "code": 2,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/follow_two",
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/reload/follow_unwritable": {
+      "code": 1,
+      "files": [
+        "config.yml",
+        "state"
+      ],
+      "id": "maint/reload/follow_unwritable",
+      "state": null,
+      "stderr": "could not record the reload window; it is unchanged. Check the log for the reason.\n",
+      "stdout": "<log: Cannot record the reload window>\n"
+    },
+    "maint/reload/freeze": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/freeze",
+      "state": "{\"frozen\": true}",
+      "stderr": "",
+      "stdout": "reload window closed. Saving config.yml no longer applies.\n"
+    },
+    "maint/reload/freeze_ja": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/freeze_ja",
+      "state": "{\"frozen\": true}",
+      "stderr": "",
+      "stdout": "反映の窓を閉じた。config.yml を保存しても適用されない。\n"
+    },
+    "maint/reload/freeze_over_follow": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/freeze_over_follow",
+      "state": "{\"frozen\": true}",
+      "stderr": "",
+      "stdout": "reload window closed. Saving config.yml no longer applies.\n"
+    },
+    "maint/reload/freeze_refused_config": {
+      "code": 1,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/freeze_refused_config",
+      "state": null,
+      "stderr": "<raised>",
+      "stdout": ""
+    },
+    "maint/reload/freeze_unwritable": {
+      "code": 1,
+      "files": [
+        "config.yml",
+        "state"
+      ],
+      "id": "maint/reload/freeze_unwritable",
+      "state": null,
+      "stderr": "could not record the reload window; it is unchanged. Check the log for the reason.\n",
+      "stdout": "<log: Cannot record the reload window>\n"
+    },
+    "maint/reload/status_auto": {
+      "code": 0,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/status_auto",
+      "state": null,
+      "stderr": "",
+      "stdout": "reload: auto (applies on save)\n"
+    },
+    "maint/reload/status_corrupt_state": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/status_corrupt_state",
+      "state": "not json",
+      "stderr": "",
+      "stdout": "<log: Cannot read the reload window state>\nreload: manual (does not apply on save)\n"
+    },
+    "maint/reload/status_extra": {
+      "code": 2,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/status_extra",
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/reload/status_frozen": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/status_frozen",
+      "state": "{\"frozen\": true}",
+      "stderr": "",
+      "stdout": "reload: frozen (does not apply on save; reload-follow to reopen)\n"
+    },
+    "maint/reload/status_infinite_until": {
+      "code": 1,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/status_infinite_until",
+      "state": "{\"until\": \"inf\"}",
+      "stderr": "<raised>",
+      "stdout": ""
+    },
+    "maint/reload/status_manual": {
+      "code": 0,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/status_manual",
+      "state": null,
+      "stderr": "",
+      "stdout": "reload: manual (does not apply on save)\n"
+    },
+    "maint/reload/status_no_config": {
+      "code": 0,
+      "files": [],
+      "id": "maint/reload/status_no_config",
+      "state": null,
+      "stderr": "",
+      "stdout": "reload: auto (applies on save)\n"
+    },
+    "maint/reload/status_not_yaml": {
+      "code": 1,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/status_not_yaml",
+      "state": null,
+      "stderr": "<raised>",
+      "stdout": ""
+    },
+    "maint/reload/status_refused_config": {
+      "code": 1,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/status_refused_config",
+      "state": null,
+      "stderr": "<raised>",
+      "stdout": ""
+    },
+    "maint/reload/status_state_not_an_object": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/status_state_not_an_object",
+      "state": "[1]",
+      "stderr": "",
+      "stdout": "<log: Reload window state is not an object>\nreload: auto (applies on save)\n"
+    },
+    "maint/reload/status_state_without_until": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/status_state_without_until",
+      "state": "{\"frozen\": false}",
+      "stderr": "",
+      "stdout": "<log: Reload window state has no usable 'until'>\nreload: auto (applies on save)\n"
+    },
+    "maint/reload/status_until_future": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/status_until_future",
+      "state": "{\"until\": <now+300>}",
+      "stderr": "",
+      "stdout": "reload: open for ~300s (applies on save)\n"
+    },
+    "maint/reload/status_until_future_auto": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/status_until_future_auto",
+      "state": "{\"until\": \"<now+300>\"}",
+      "stderr": "",
+      "stdout": "reload: open for ~300s (applies on save)\n"
+    },
+    "maint/reload/status_until_past": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/status_until_past",
+      "state": "{\"until\": <now+-300>}",
+      "stderr": "",
+      "stdout": "reload: open for ~1800s (applies on save)\n"
+    },
+    "maint/reload/status_until_past_manual": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "state/reload-window.json"
+      ],
+      "id": "maint/reload/status_until_past_manual",
+      "state": "{\"until\": <now+-300>}",
+      "stderr": "",
+      "stdout": "reload: manual (does not apply on save)\n"
+    },
+    "maint/reload/status_window": {
+      "code": 0,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/status_window",
+      "state": null,
+      "stderr": "",
+      "stdout": "reload: open for ~1800s (applies on save)\n"
+    },
+    "maint/reload/status_window_upper": {
+      "code": 0,
+      "files": [
+        "config.yml"
+      ],
+      "id": "maint/reload/status_window_upper",
+      "state": null,
+      "stderr": "",
+      "stdout": "reload: open for ~7200s (applies on save)\n"
+    },
+    "maint/reset/confirm": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/reset/confirm",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 3,
+        "firewall_blocks": 3,
+        "proxy_logs": 3
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "This deletes ALL records from {dir}/gw.db (DNS / firewall / proxy logs; the relay audit is separate).\nRe-run with --yes to proceed.\n"
+    },
+    "maint/reset/missing": {
+      "code": 1,
+      "files": [],
+      "id": "maint/reset/missing",
+      "state": null,
+      "stderr": "db not found: {dir}/gw.db\n",
+      "stdout": ""
+    },
+    "maint/reset/yes": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/reset/yes",
+      "rows": {
+        "cache_stats": 0,
+        "dns_queries": 0,
+        "firewall_blocks": 0,
+        "proxy_logs": 0
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "dns_queries        deleted 3 rows\nfirewall_blocks    deleted 3 rows\nproxy_logs         deleted 3 rows\ncache_stats        deleted 1 rows\nvacuumed; {dir}/gw.db is now 48.0 KiB\n"
+    },
+    "maint/reset/yes_big": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/reset/yes_big",
+      "rows": {
+        "cache_stats": 0,
+        "dns_queries": 0,
+        "firewall_blocks": 0,
+        "proxy_logs": 0
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "dns_queries        deleted 400 rows\nfirewall_blocks    deleted 400 rows\nproxy_logs         deleted 400 rows\ncache_stats        deleted 0 rows\nvacuumed; {dir}/gw.db is now 48.0 KiB\n"
+    },
+    "maint/reset/yes_ja": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/reset/yes_ja",
+      "rows": {
+        "cache_stats": 0,
+        "dns_queries": 0,
+        "firewall_blocks": 0,
+        "proxy_logs": 0
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "dns_queries        から 3 行を削除\nfirewall_blocks    から 3 行を削除\nproxy_logs         から 3 行を削除\ncache_stats        から 1 行を削除\nVACUUM 済み。{dir}/gw.db は 48.0 KiB になりました\n"
+    },
+    "maint/stats/abbreviated": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/abbreviated",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 3,
+        "firewall_blocks": 3,
+        "proxy_logs": 3
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "{\n  \"db_path\": \"{dir}/gw.db\",\n  \"exists\": true,\n  \"tables\": {\n    \"dns_queries\": {\n      \"rows\": 3,\n      \"oldest\": 1700000000.25,\n      \"newest\": 1700000002.75,\n      \"indexes\": [\n        \"idx_dns_status_timestamp\",\n        \"idx_dns_timestamp\",\n        \"idx_query_domain\",\n        \"idx_response_ips\"\n      ]\n    },\n    \"firewall_blocks\": {\n      \"rows\": 3,\n      \"oldest\": 1700000000.25,\n      \"newest\": 1700000002.75,\n      \"indexes\": [\n        \"idx_firewall_timestamp\"\n      ]\n    },\n    \"proxy_logs\": {\n      \"rows\": 3,\n      \"oldest\": 1700000000.25,\n      \"newest\": 1700000002.75,\n      \"indexes\": [\n        \"idx_proxy_logs_action\",\n        \"idx_proxy_logs_timestamp\"\n      ]\n    },\n    \"cache_stats\": {\n      \"rows\": 1\n    }\n  },\n  \"size_bytes\": 49152,\n  \"wal_bytes\": 0,\n  \"journal_mode\": \"wal\",\n  \"page_size\": 4096,\n  \"freelist_pages\": 0\n}\n"
+    },
+    "maint/stats/big": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/big",
+      "rows": {
+        "cache_stats": 0,
+        "dns_queries": 400,
+        "firewall_blocks": 400,
+        "proxy_logs": 400
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "db:            {dir}/gw.db\nsize:          176.0 KiB (+ wal 0 B)\njournal_mode:  wal   free pages: 0 x 4096 B\ntables:\n  dns_queries               400 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:19:59Z   indexes: idx_dns_status_timestamp, idx_dns_timestamp, idx_query_domain, idx_response_ips\n  firewall_blocks           400 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:19:59Z   indexes: idx_firewall_timestamp\n  proxy_logs                400 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:19:59Z   indexes: idx_proxy_logs_action, idx_proxy_logs_timestamp\n  cache_stats                 0 rows\n"
+    },
+    "maint/stats/db_from_config": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "gw.db"
+      ],
+      "id": "maint/stats/db_from_config",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 3,
+        "firewall_blocks": 3,
+        "proxy_logs": 3
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "db:            {dir}/gw.db\nsize:          48.0 KiB (+ wal 0 B)\njournal_mode:  wal   free pages: 0 x 4096 B\ntables:\n  dns_queries                 3 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   indexes: idx_dns_status_timestamp, idx_dns_timestamp, idx_query_domain, idx_response_ips\n  firewall_blocks             3 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   indexes: idx_firewall_timestamp\n  proxy_logs                  3 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   indexes: idx_proxy_logs_action, idx_proxy_logs_timestamp\n  cache_stats                 1 rows\n"
+    },
+    "maint/stats/db_option_wins": {
+      "code": 0,
+      "files": [
+        "config.yml",
+        "gw.db"
+      ],
+      "id": "maint/stats/db_option_wins",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 3,
+        "firewall_blocks": 3,
+        "proxy_logs": 3
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "db:            {dir}/gw.db\nsize:          48.0 KiB (+ wal 0 B)\njournal_mode:  wal   free pages: 0 x 4096 B\ntables:\n  dns_queries                 3 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   indexes: idx_dns_status_timestamp, idx_dns_timestamp, idx_query_domain, idx_response_ips\n  firewall_blocks             3 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   indexes: idx_firewall_timestamp\n  proxy_logs                  3 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   indexes: idx_proxy_logs_action, idx_proxy_logs_timestamp\n  cache_stats                 1 rows\n"
+    },
+    "maint/stats/delete_journal": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/delete_journal",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 2,
+        "firewall_blocks": 2,
+        "proxy_logs": 2
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "db:            {dir}/gw.db\nsize:          48.0 KiB (+ wal 0 B)\njournal_mode:  delete   free pages: 0 x 4096 B\ntables:\n  dns_queries                 2 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:21Z   indexes: idx_dns_status_timestamp, idx_dns_timestamp, idx_query_domain, idx_response_ips\n  firewall_blocks             2 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:21Z   indexes: idx_firewall_timestamp\n  proxy_logs                  2 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:21Z   indexes: idx_proxy_logs_action, idx_proxy_logs_timestamp\n  cache_stats                 1 rows\n"
+    },
+    "maint/stats/huge_timestamp": {
+      "code": 1,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/huge_timestamp",
+      "rows": {
+        "cache_stats": 0,
+        "dns_queries": 0,
+        "firewall_blocks": 0,
+        "proxy_logs": 1
+      },
+      "state": null,
+      "stderr": "<raised>",
+      "stdout": "db:            {dir}/gw.db\nsize:          48.0 KiB (+ wal 0 B)\njournal_mode:  wal   free pages: 0 x 4096 B\ntables:\n  dns_queries                 0 rows   - .. -   indexes: idx_dns_status_timestamp, idx_dns_timestamp, idx_query_domain, idx_response_ips\n  firewall_blocks             0 rows   - .. -   indexes: idx_firewall_timestamp\n"
+    },
+    "maint/stats/json": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/json",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 3,
+        "firewall_blocks": 3,
+        "proxy_logs": 3
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "{\n  \"db_path\": \"{dir}/gw.db\",\n  \"exists\": true,\n  \"tables\": {\n    \"dns_queries\": {\n      \"rows\": 3,\n      \"oldest\": 1700000000.25,\n      \"newest\": 1700000002.75,\n      \"indexes\": [\n        \"idx_dns_status_timestamp\",\n        \"idx_dns_timestamp\",\n        \"idx_query_domain\",\n        \"idx_response_ips\"\n      ]\n    },\n    \"firewall_blocks\": {\n      \"rows\": 3,\n      \"oldest\": 1700000000.25,\n      \"newest\": 1700000002.75,\n      \"indexes\": [\n        \"idx_firewall_timestamp\"\n      ]\n    },\n    \"proxy_logs\": {\n      \"rows\": 3,\n      \"oldest\": 1700000000.25,\n      \"newest\": 1700000002.75,\n      \"indexes\": [\n        \"idx_proxy_logs_action\",\n        \"idx_proxy_logs_timestamp\"\n      ]\n    },\n    \"cache_stats\": {\n      \"rows\": 1\n    }\n  },\n  \"size_bytes\": 49152,\n  \"wal_bytes\": 0,\n  \"journal_mode\": \"wal\",\n  \"page_size\": 4096,\n  \"freelist_pages\": 0\n}\n"
+    },
+    "maint/stats/missing": {
+      "code": 0,
+      "files": [],
+      "id": "maint/stats/missing",
+      "state": null,
+      "stderr": "",
+      "stdout": "db:            {dir}/gw.db\n               (not found)\n"
+    },
+    "maint/stats/missing_ja": {
+      "code": 0,
+      "files": [],
+      "id": "maint/stats/missing_ja",
+      "state": null,
+      "stderr": "",
+      "stdout": "db:            {dir}/gw.db\n               (見つかりません)\n"
+    },
+    "maint/stats/missing_json": {
+      "code": 0,
+      "files": [],
+      "id": "maint/stats/missing_json",
+      "state": null,
+      "stderr": "",
+      "stdout": "{\n  \"db_path\": \"{dir}/gw.db\",\n  \"exists\": false,\n  \"tables\": {}\n}\n"
+    },
+    "maint/stats/no_tables": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/no_tables",
+      "rows": {},
+      "state": null,
+      "stderr": "",
+      "stdout": "db:            {dir}/gw.db\nsize:          4.0 KiB (+ wal 0 B)\njournal_mode:  delete   free pages: 0 x 4096 B\ntables:\n"
+    },
+    "maint/stats/no_tables_json": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/no_tables_json",
+      "rows": {},
+      "state": null,
+      "stderr": "",
+      "stdout": "{\n  \"db_path\": \"{dir}/gw.db\",\n  \"exists\": true,\n  \"tables\": {},\n  \"size_bytes\": 4096,\n  \"wal_bytes\": 0,\n  \"journal_mode\": \"delete\",\n  \"page_size\": 4096,\n  \"freelist_pages\": 0\n}\n"
+    },
+    "maint/stats/odd_values": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/odd_values",
+      "rows": {
+        "cache_stats": 0,
+        "dns_queries": 2,
+        "firewall_blocks": 2,
+        "proxy_logs": 0
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "db:            {dir}/gw.db\nsize:          48.0 KiB (+ wal 0 B)\njournal_mode:  wal   free pages: 0 x 4096 B\ntables:\n  dns_queries                 2 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   indexes: idx_dns_status_timestamp, idx_dns_timestamp, idx_query_domain, idx_response_ips\n  firewall_blocks             2 rows   1969-12-31T23:59:58Z .. 9999-12-31T23:59:59Z   indexes: idx_firewall_timestamp\n  proxy_logs                  0 rows   - .. -   indexes: idx_proxy_logs_action, idx_proxy_logs_timestamp\n  cache_stats                 0 rows\n"
+    },
+    "maint/stats/odd_values_json": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/odd_values_json",
+      "rows": {
+        "cache_stats": 0,
+        "dns_queries": 2,
+        "firewall_blocks": 2,
+        "proxy_logs": 0
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "{\n  \"db_path\": \"{dir}/gw.db\",\n  \"exists\": true,\n  \"tables\": {\n    \"dns_queries\": {\n      \"rows\": 2,\n      \"oldest\": 1700000000.0,\n      \"newest\": 1700000002.0,\n      \"indexes\": [\n        \"idx_dns_status_timestamp\",\n        \"idx_dns_timestamp\",\n        \"idx_query_domain\",\n        \"idx_response_ips\"\n      ]\n    },\n    \"firewall_blocks\": {\n      \"rows\": 2,\n      \"oldest\": -1.5,\n      \"newest\": 253402300799.0,\n      \"indexes\": [\n        \"idx_firewall_timestamp\"\n      ]\n    },\n    \"proxy_logs\": {\n      \"rows\": 0,\n      \"oldest\": null,\n      \"newest\": null,\n      \"indexes\": [\n        \"idx_proxy_logs_action\",\n        \"idx_proxy_logs_timestamp\"\n      ]\n    },\n    \"cache_stats\": {\n      \"rows\": 0\n    }\n  },\n  \"size_bytes\": 49152,\n  \"wal_bytes\": 0,\n  \"journal_mode\": \"wal\",\n  \"page_size\": 4096,\n  \"freelist_pages\": 0\n}\n"
+    },
+    "maint/stats/some_tables": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/some_tables",
+      "rows": {
+        "firewall_blocks": 0,
+        "other": 0
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "{\n  \"db_path\": \"{dir}/gw.db\",\n  \"exists\": true,\n  \"tables\": {\n    \"firewall_blocks\": {\n      \"rows\": 0,\n      \"oldest\": null,\n      \"newest\": null,\n      \"indexes\": []\n    }\n  },\n  \"size_bytes\": 12288,\n  \"wal_bytes\": 0,\n  \"journal_mode\": \"delete\",\n  \"page_size\": 4096,\n  \"freelist_pages\": 0\n}\n"
+    },
+    "maint/stats/text": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/text",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 3,
+        "firewall_blocks": 3,
+        "proxy_logs": 3
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "db:            {dir}/gw.db\nsize:          48.0 KiB (+ wal 0 B)\njournal_mode:  wal   free pages: 0 x 4096 B\ntables:\n  dns_queries                 3 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   indexes: idx_dns_status_timestamp, idx_dns_timestamp, idx_query_domain, idx_response_ips\n  firewall_blocks             3 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   indexes: idx_firewall_timestamp\n  proxy_logs                  3 rows   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   indexes: idx_proxy_logs_action, idx_proxy_logs_timestamp\n  cache_stats                 1 rows\n"
+    },
+    "maint/stats/text_ja": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/text_ja",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 3,
+        "firewall_blocks": 3,
+        "proxy_logs": 3
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "db:            {dir}/gw.db\nサイズ:           48.0 KiB (+ wal 0 B)\njournal_mode:  wal   空きページ: 0 x 4096 B\nテーブル:\n  dns_queries                 3 行   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   索引: idx_dns_status_timestamp, idx_dns_timestamp, idx_query_domain, idx_response_ips\n  firewall_blocks             3 行   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   索引: idx_firewall_timestamp\n  proxy_logs                  3 行   2023-11-14T22:13:20Z .. 2023-11-14T22:13:22Z   索引: idx_proxy_logs_action, idx_proxy_logs_timestamp\n  cache_stats                 1 行\n"
+    },
+    "maint/stats/text_timestamp": {
+      "code": 1,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/text_timestamp",
+      "rows": {
+        "cache_stats": 0,
+        "dns_queries": 1,
+        "firewall_blocks": 0,
+        "proxy_logs": 0
+      },
+      "state": null,
+      "stderr": "<raised>",
+      "stdout": "db:            {dir}/gw.db\nsize:          48.0 KiB (+ wal 0 B)\njournal_mode:  wal   free pages: 0 x 4096 B\ntables:\n"
+    },
+    "maint/stats/text_timestamp_json": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/stats/text_timestamp_json",
+      "rows": {
+        "cache_stats": 0,
+        "dns_queries": 1,
+        "firewall_blocks": 0,
+        "proxy_logs": 0
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "{\n  \"db_path\": \"{dir}/gw.db\",\n  \"exists\": true,\n  \"tables\": {\n    \"dns_queries\": {\n      \"rows\": 1,\n      \"oldest\": \"yesterday\",\n      \"newest\": \"yesterday\",\n      \"indexes\": [\n        \"idx_dns_status_timestamp\",\n        \"idx_dns_timestamp\",\n        \"idx_query_domain\",\n        \"idx_response_ips\"\n      ]\n    },\n    \"firewall_blocks\": {\n      \"rows\": 0,\n      \"oldest\": null,\n      \"newest\": null,\n      \"indexes\": [\n        \"idx_firewall_timestamp\"\n      ]\n    },\n    \"proxy_logs\": {\n      \"rows\": 0,\n      \"oldest\": null,\n      \"newest\": null,\n      \"indexes\": [\n        \"idx_proxy_logs_action\",\n        \"idx_proxy_logs_timestamp\"\n      ]\n    },\n    \"cache_stats\": {\n      \"rows\": 0\n    }\n  },\n  \"size_bytes\": 49152,\n  \"wal_bytes\": 0,\n  \"journal_mode\": \"wal\",\n  \"page_size\": 4096,\n  \"freelist_pages\": 0\n}\n"
+    },
+    "maint/usage/no_value": {
+      "code": 2,
+      "files": [],
+      "id": "maint/usage/no_value",
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/usage/nothing": {
+      "code": 2,
+      "files": [],
+      "id": "maint/usage/nothing",
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/usage/option_after_the_command": {
+      "code": 2,
+      "files": [],
+      "id": "maint/usage/option_after_the_command",
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/usage/trailing_separator": {
+      "code": 2,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/usage/trailing_separator",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 3,
+        "firewall_blocks": 3,
+        "proxy_logs": 3
+      },
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/usage/unknown": {
+      "code": 2,
+      "files": [],
+      "id": "maint/usage/unknown",
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/usage/unknown_option": {
+      "code": 2,
+      "files": [],
+      "id": "maint/usage/unknown_option",
+      "state": null,
+      "stderr": "<usage>",
+      "stdout": ""
+    },
+    "maint/vacuum/big": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/vacuum/big",
+      "rows": {
+        "cache_stats": 0,
+        "dns_queries": 400,
+        "firewall_blocks": 400,
+        "proxy_logs": 400
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "vacuumed: 176.0 KiB -> 176.0 KiB\n"
+    },
+    "maint/vacuum/missing": {
+      "code": 1,
+      "files": [],
+      "id": "maint/vacuum/missing",
+      "state": null,
+      "stderr": "db not found: {dir}/gw.db\n",
+      "stdout": ""
+    },
+    "maint/vacuum/standard": {
+      "code": 0,
+      "files": [
+        "gw.db"
+      ],
+      "id": "maint/vacuum/standard",
+      "rows": {
+        "cache_stats": 1,
+        "dns_queries": 3,
+        "firewall_blocks": 3,
+        "proxy_logs": 3
+      },
+      "state": null,
+      "stderr": "",
+      "stdout": "vacuumed: 48.0 KiB -> 48.0 KiB\n"
+    }
+  },
+  "comment": "Python's answers, recorded by SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence maint_answers_as_python_did. Do not edit by hand.",
+  "kind": "maint",
+  "python": {
+    "pydantic": "2.14.1",
+    "pyyaml": "6.0.3",
+    "version": "3.14.8"
+  }
+}

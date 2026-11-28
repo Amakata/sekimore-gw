@@ -1,0 +1,625 @@
+{
+ "comment": "The reload window's state files for relay/tests/equivalence/gateway.rs, each read under four configurations by the Python orchestrator's ReloadWindow and by maint's. written_by runs sekimore-relay maint to write it; {now±N} is filled in.",
+ "cases": [
+  {
+   "name": "no_file/auto",
+   "mode": "auto",
+   "window": null
+  },
+  {
+   "name": "no_file/manual",
+   "mode": "manual",
+   "window": null
+  },
+  {
+   "name": "no_file/windowed_1800",
+   "mode": "windowed",
+   "window": 1800
+  },
+  {
+   "name": "no_file/windowed_0",
+   "mode": "windowed",
+   "window": 0
+  },
+  {
+   "name": "frozen/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"frozen\": true}"
+  },
+  {
+   "name": "frozen/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"frozen\": true}"
+  },
+  {
+   "name": "frozen/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"frozen\": true}"
+  },
+  {
+   "name": "frozen/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"frozen\": true}"
+  },
+  {
+   "name": "written_by_freeze/auto",
+   "mode": "auto",
+   "window": null,
+   "written_by": [
+    "reload-freeze"
+   ]
+  },
+  {
+   "name": "written_by_freeze/manual",
+   "mode": "manual",
+   "window": null,
+   "written_by": [
+    "reload-freeze"
+   ]
+  },
+  {
+   "name": "written_by_freeze/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "written_by": [
+    "reload-freeze"
+   ]
+  },
+  {
+   "name": "written_by_freeze/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "written_by": [
+    "reload-freeze"
+   ]
+  },
+  {
+   "name": "written_by_follow/auto",
+   "mode": "auto",
+   "window": null,
+   "written_by": [
+    "reload-follow",
+    "10m"
+   ]
+  },
+  {
+   "name": "written_by_follow/manual",
+   "mode": "manual",
+   "window": null,
+   "written_by": [
+    "reload-follow",
+    "10m"
+   ]
+  },
+  {
+   "name": "written_by_follow/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "written_by": [
+    "reload-follow",
+    "10m"
+   ]
+  },
+  {
+   "name": "written_by_follow/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "written_by": [
+    "reload-follow",
+    "10m"
+   ]
+  },
+  {
+   "name": "written_by_follow_long/auto",
+   "mode": "auto",
+   "window": null,
+   "written_by": [
+    "reload-follow",
+    "100000000000000000000d"
+   ]
+  },
+  {
+   "name": "written_by_follow_long/manual",
+   "mode": "manual",
+   "window": null,
+   "written_by": [
+    "reload-follow",
+    "100000000000000000000d"
+   ]
+  },
+  {
+   "name": "written_by_follow_long/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "written_by": [
+    "reload-follow",
+    "100000000000000000000d"
+   ]
+  },
+  {
+   "name": "written_by_follow_long/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "written_by": [
+    "reload-follow",
+    "100000000000000000000d"
+   ]
+  },
+  {
+   "name": "until_future/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"until\": {now+300}}"
+  },
+  {
+   "name": "until_future/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"until\": {now+300}}"
+  },
+  {
+   "name": "until_future/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"until\": {now+300}}"
+  },
+  {
+   "name": "until_future/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"until\": {now+300}}"
+  },
+  {
+   "name": "until_future_string/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"frozen\": 0, \"until\": \" {now+300} \"}"
+  },
+  {
+   "name": "until_future_string/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"frozen\": 0, \"until\": \" {now+300} \"}"
+  },
+  {
+   "name": "until_future_string/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"frozen\": 0, \"until\": \" {now+300} \"}"
+  },
+  {
+   "name": "until_future_string/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"frozen\": 0, \"until\": \" {now+300} \"}"
+  },
+  {
+   "name": "until_past/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"until\": {now-300}}"
+  },
+  {
+   "name": "until_past/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"until\": {now-300}}"
+  },
+  {
+   "name": "until_past/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"until\": {now-300}}"
+  },
+  {
+   "name": "until_past/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"until\": {now-300}}"
+  },
+  {
+   "name": "until_bool/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"until\": true}"
+  },
+  {
+   "name": "until_bool/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"until\": true}"
+  },
+  {
+   "name": "until_bool/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"until\": true}"
+  },
+  {
+   "name": "until_bool/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"until\": true}"
+  },
+  {
+   "name": "until_null/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"until\": null}"
+  },
+  {
+   "name": "until_null/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"until\": null}"
+  },
+  {
+   "name": "until_null/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"until\": null}"
+  },
+  {
+   "name": "until_null/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"until\": null}"
+  },
+  {
+   "name": "no_until/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{}"
+  },
+  {
+   "name": "no_until/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{}"
+  },
+  {
+   "name": "no_until/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{}"
+  },
+  {
+   "name": "no_until/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{}"
+  },
+  {
+   "name": "frozen_falsy/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"frozen\": \"\", \"until\": \"soon\"}"
+  },
+  {
+   "name": "frozen_falsy/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"frozen\": \"\", \"until\": \"soon\"}"
+  },
+  {
+   "name": "frozen_falsy/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"frozen\": \"\", \"until\": \"soon\"}"
+  },
+  {
+   "name": "frozen_falsy/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"frozen\": \"\", \"until\": \"soon\"}"
+  },
+  {
+   "name": "frozen_truthy/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"frozen\": [0]}"
+  },
+  {
+   "name": "frozen_truthy/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"frozen\": [0]}"
+  },
+  {
+   "name": "frozen_truthy/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"frozen\": [0]}"
+  },
+  {
+   "name": "frozen_truthy/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"frozen\": [0]}"
+  },
+  {
+   "name": "not_an_object/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "[{\"frozen\": true}]"
+  },
+  {
+   "name": "not_an_object/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "[{\"frozen\": true}]"
+  },
+  {
+   "name": "not_an_object/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "[{\"frozen\": true}]"
+  },
+  {
+   "name": "not_an_object/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "[{\"frozen\": true}]"
+  },
+  {
+   "name": "not_json/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"frozen\": tru"
+  },
+  {
+   "name": "not_json/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"frozen\": tru"
+  },
+  {
+   "name": "not_json/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"frozen\": tru"
+  },
+  {
+   "name": "not_json/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"frozen\": tru"
+  },
+  {
+   "name": "empty/auto",
+   "mode": "auto",
+   "window": null,
+   "state": ""
+  },
+  {
+   "name": "empty/manual",
+   "mode": "manual",
+   "window": null,
+   "state": ""
+  },
+  {
+   "name": "empty/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": ""
+  },
+  {
+   "name": "empty/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": ""
+  },
+  {
+   "name": "not_utf8/auto",
+   "mode": "auto",
+   "window": null,
+   "state_hex": "7b2266726f7a656e223a2074727565ff7d"
+  },
+  {
+   "name": "not_utf8/manual",
+   "mode": "manual",
+   "window": null,
+   "state_hex": "7b2266726f7a656e223a2074727565ff7d"
+  },
+  {
+   "name": "not_utf8/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state_hex": "7b2266726f7a656e223a2074727565ff7d"
+  },
+  {
+   "name": "not_utf8/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state_hex": "7b2266726f7a656e223a2074727565ff7d"
+  },
+  {
+   "name": "until_inf_string/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"until\": \"Infinity\"}"
+  },
+  {
+   "name": "until_inf_string/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"until\": \"Infinity\"}"
+  },
+  {
+   "name": "until_inf_string/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"until\": \"Infinity\"}"
+  },
+  {
+   "name": "until_inf_string/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"until\": \"Infinity\"}"
+  },
+  {
+   "name": "until_nan_string/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"until\": \"nan\"}"
+  },
+  {
+   "name": "until_nan_string/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"until\": \"nan\"}"
+  },
+  {
+   "name": "until_nan_string/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"until\": \"nan\"}"
+  },
+  {
+   "name": "until_nan_string/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"until\": \"nan\"}"
+  },
+  {
+   "name": "until_huge/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"until\": 1e300}",
+   "ledger": "a window longer than i128 seconds (until 1e300): Python's int is exact, Rust's saturates; only a file written by hand, or by Python's reload-follow with a duration over 1e38 seconds, holds one"
+  },
+  {
+   "name": "until_huge/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"until\": 1e300}",
+   "ledger": "a window longer than i128 seconds (until 1e300): Python's int is exact, Rust's saturates; only a file written by hand, or by Python's reload-follow with a duration over 1e38 seconds, holds one"
+  },
+  {
+   "name": "until_huge/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"until\": 1e300}",
+   "ledger": "a window longer than i128 seconds (until 1e300): Python's int is exact, Rust's saturates; only a file written by hand, or by Python's reload-follow with a duration over 1e38 seconds, holds one"
+  },
+  {
+   "name": "until_huge/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"until\": 1e300}",
+   "ledger": "a window longer than i128 seconds (until 1e300): Python's int is exact, Rust's saturates; only a file written by hand, or by Python's reload-follow with a duration over 1e38 seconds, holds one"
+  },
+  {
+   "name": "duplicate_keys/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"frozen\": true, \"frozen\": false, \"until\": {now+300}}"
+  },
+  {
+   "name": "duplicate_keys/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"frozen\": true, \"frozen\": false, \"until\": {now+300}}"
+  },
+  {
+   "name": "duplicate_keys/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"frozen\": true, \"frozen\": false, \"until\": {now+300}}"
+  },
+  {
+   "name": "duplicate_keys/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"frozen\": true, \"frozen\": false, \"until\": {now+300}}"
+  },
+  {
+   "name": "nan_literal/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"until\": NaN}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  },
+  {
+   "name": "nan_literal/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"until\": NaN}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  },
+  {
+   "name": "nan_literal/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"until\": NaN}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  },
+  {
+   "name": "nan_literal/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"until\": NaN}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  },
+  {
+   "name": "infinity_literal/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"until\": Infinity}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  },
+  {
+   "name": "infinity_literal/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"until\": Infinity}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  },
+  {
+   "name": "infinity_literal/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"until\": Infinity}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  },
+  {
+   "name": "infinity_literal/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"until\": Infinity}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  },
+  {
+   "name": "overflowing_number/auto",
+   "mode": "auto",
+   "window": null,
+   "state": "{\"until\": 1e400}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  },
+  {
+   "name": "overflowing_number/manual",
+   "mode": "manual",
+   "window": null,
+   "state": "{\"until\": 1e400}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  },
+  {
+   "name": "overflowing_number/windowed_1800",
+   "mode": "windowed",
+   "window": 1800,
+   "state": "{\"until\": 1e400}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  },
+  {
+   "name": "overflowing_number/windowed_0",
+   "mode": "windowed",
+   "window": 0,
+   "state": "{\"until\": 1e400}",
+   "ledger": "Python's json reads NaN, Infinity and numbers beyond a double (as inf); serde_json refuses them, so Rust logs the file as unreadable where Python ignored it (NaN) or raised (inf)"
+  }
+ ]
+}

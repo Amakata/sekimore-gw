@@ -1,0 +1,715 @@
+{
+  "answers": {
+    "reload_state/duplicate_keys/auto": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/duplicate_keys/auto",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/duplicate_keys/manual": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/duplicate_keys/manual",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/duplicate_keys/windowed_0": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/duplicate_keys/windowed_0",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/duplicate_keys/windowed_1800": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/duplicate_keys/windowed_1800",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/empty/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/empty/auto",
+      "is_open": true,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/empty/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/empty/manual",
+      "is_open": false,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/empty/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/empty/windowed_0",
+      "is_open": false,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/empty/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/empty/windowed_1800",
+      "is_open": true,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": "~1800"
+    },
+    "reload_state/frozen/auto": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/frozen/auto",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/frozen/manual": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/frozen/manual",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/frozen/windowed_0": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/frozen/windowed_0",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/frozen/windowed_1800": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/frozen/windowed_1800",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/frozen_falsy/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/frozen_falsy/auto",
+      "is_open": true,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/frozen_falsy/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/frozen_falsy/manual",
+      "is_open": false,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/frozen_falsy/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/frozen_falsy/windowed_0",
+      "is_open": false,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/frozen_falsy/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/frozen_falsy/windowed_1800",
+      "is_open": true,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": "~1800"
+    },
+    "reload_state/frozen_truthy/auto": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/frozen_truthy/auto",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/frozen_truthy/manual": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/frozen_truthy/manual",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/frozen_truthy/windowed_0": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/frozen_truthy/windowed_0",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/frozen_truthy/windowed_1800": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/frozen_truthy/windowed_1800",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/infinity_literal/auto": {
+      "id": "reload_state/infinity_literal/auto",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/infinity_literal/manual": {
+      "id": "reload_state/infinity_literal/manual",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/infinity_literal/windowed_0": {
+      "id": "reload_state/infinity_literal/windowed_0",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/infinity_literal/windowed_1800": {
+      "id": "reload_state/infinity_literal/windowed_1800",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/nan_literal/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/nan_literal/auto",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/nan_literal/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/nan_literal/manual",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/nan_literal/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/nan_literal/windowed_0",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/nan_literal/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/nan_literal/windowed_1800",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~1800"
+    },
+    "reload_state/no_file/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/no_file/auto",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/no_file/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/no_file/manual",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/no_file/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/no_file/windowed_0",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/no_file/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/no_file/windowed_1800",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~1800"
+    },
+    "reload_state/no_until/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/no_until/auto",
+      "is_open": true,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/no_until/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/no_until/manual",
+      "is_open": false,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/no_until/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/no_until/windowed_0",
+      "is_open": false,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/no_until/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/no_until/windowed_1800",
+      "is_open": true,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": "~1800"
+    },
+    "reload_state/not_an_object/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/not_an_object/auto",
+      "is_open": true,
+      "logged": [
+        "Reload window state is not an object"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/not_an_object/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/not_an_object/manual",
+      "is_open": false,
+      "logged": [
+        "Reload window state is not an object"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/not_an_object/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/not_an_object/windowed_0",
+      "is_open": false,
+      "logged": [
+        "Reload window state is not an object"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/not_an_object/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/not_an_object/windowed_1800",
+      "is_open": true,
+      "logged": [
+        "Reload window state is not an object"
+      ],
+      "seconds_left": "~1800"
+    },
+    "reload_state/not_json/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/not_json/auto",
+      "is_open": true,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/not_json/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/not_json/manual",
+      "is_open": false,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/not_json/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/not_json/windowed_0",
+      "is_open": false,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/not_json/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/not_json/windowed_1800",
+      "is_open": true,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": "~1800"
+    },
+    "reload_state/not_utf8/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/not_utf8/auto",
+      "is_open": true,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/not_utf8/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/not_utf8/manual",
+      "is_open": false,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/not_utf8/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/not_utf8/windowed_0",
+      "is_open": false,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/not_utf8/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/not_utf8/windowed_1800",
+      "is_open": true,
+      "logged": [
+        "Cannot read the reload window state"
+      ],
+      "seconds_left": "~1800"
+    },
+    "reload_state/overflowing_number/auto": {
+      "id": "reload_state/overflowing_number/auto",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/overflowing_number/manual": {
+      "id": "reload_state/overflowing_number/manual",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/overflowing_number/windowed_0": {
+      "id": "reload_state/overflowing_number/windowed_0",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/overflowing_number/windowed_1800": {
+      "id": "reload_state/overflowing_number/windowed_1800",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/until_bool/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/until_bool/auto",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_bool/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/until_bool/manual",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_bool/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/until_bool/windowed_0",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_bool/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/until_bool/windowed_1800",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~1800"
+    },
+    "reload_state/until_future/auto": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/until_future/auto",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/until_future/manual": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/until_future/manual",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/until_future/windowed_0": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/until_future/windowed_0",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/until_future/windowed_1800": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/until_future/windowed_1800",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/until_future_string/auto": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/until_future_string/auto",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/until_future_string/manual": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/until_future_string/manual",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/until_future_string/windowed_0": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/until_future_string/windowed_0",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/until_future_string/windowed_1800": {
+      "describe": "open for ~300s (applies on save)",
+      "id": "reload_state/until_future_string/windowed_1800",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~300"
+    },
+    "reload_state/until_huge/auto": {
+      "describe": "open for 16666666666666667541746004253407004145074476351802652581930901925196707633148469929772856251340797734061740730548064636282375387256007176260746536413111783047473120015442930062297170563246468167656149220582846665751351983982794014667910879046335708242987646480334280713968594491203273114424323342336m 0s (applies on save)",
+      "id": "reload_state/until_huge/auto",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_huge/manual": {
+      "describe": "open for 16666666666666667541746004253407004145074476351802652581930901925196707633148469929772856251340797734061740730548064636282375387256007176260746536413111783047473120015442930062297170563246468167656149220582846665751351983982794014667910879046335708242987646480334280713968594491203273114424323342336m 0s (applies on save)",
+      "id": "reload_state/until_huge/manual",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_huge/windowed_0": {
+      "describe": "open for 16666666666666667541746004253407004145074476351802652581930901925196707633148469929772856251340797734061740730548064636282375387256007176260746536413111783047473120015442930062297170563246468167656149220582846665751351983982794014667910879046335708242987646480334280713968594491203273114424323342336m 0s (applies on save)",
+      "id": "reload_state/until_huge/windowed_0",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_huge/windowed_1800": {
+      "describe": "open for 16666666666666667541746004253407004145074476351802652581930901925196707633148469929772856251340797734061740730548064636282375387256007176260746536413111783047473120015442930062297170563246468167656149220582846665751351983982794014667910879046335708242987646480334280713968594491203273114424323342336m 0s (applies on save)",
+      "id": "reload_state/until_huge/windowed_1800",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_inf_string/auto": {
+      "id": "reload_state/until_inf_string/auto",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/until_inf_string/manual": {
+      "id": "reload_state/until_inf_string/manual",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/until_inf_string/windowed_0": {
+      "id": "reload_state/until_inf_string/windowed_0",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/until_inf_string/windowed_1800": {
+      "id": "reload_state/until_inf_string/windowed_1800",
+      "logged": [],
+      "raised": true
+    },
+    "reload_state/until_nan_string/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/until_nan_string/auto",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_nan_string/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/until_nan_string/manual",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_nan_string/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/until_nan_string/windowed_0",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_nan_string/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/until_nan_string/windowed_1800",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~1800"
+    },
+    "reload_state/until_null/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/until_null/auto",
+      "is_open": true,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/until_null/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/until_null/manual",
+      "is_open": false,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/until_null/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/until_null/windowed_0",
+      "is_open": false,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": null
+    },
+    "reload_state/until_null/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/until_null/windowed_1800",
+      "is_open": true,
+      "logged": [
+        "Reload window state has no usable 'until'"
+      ],
+      "seconds_left": "~1800"
+    },
+    "reload_state/until_past/auto": {
+      "describe": "auto (applies on save)",
+      "id": "reload_state/until_past/auto",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_past/manual": {
+      "describe": "manual (does not apply on save)",
+      "id": "reload_state/until_past/manual",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_past/windowed_0": {
+      "describe": "window closed (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/until_past/windowed_0",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/until_past/windowed_1800": {
+      "describe": "open for ~1800s (applies on save)",
+      "id": "reload_state/until_past/windowed_1800",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~1800"
+    },
+    "reload_state/written_by_follow/auto": {
+      "describe": "open for ~600s (applies on save)",
+      "id": "reload_state/written_by_follow/auto",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~600"
+    },
+    "reload_state/written_by_follow/manual": {
+      "describe": "open for ~600s (applies on save)",
+      "id": "reload_state/written_by_follow/manual",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~600"
+    },
+    "reload_state/written_by_follow/windowed_0": {
+      "describe": "open for ~600s (applies on save)",
+      "id": "reload_state/written_by_follow/windowed_0",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~600"
+    },
+    "reload_state/written_by_follow/windowed_1800": {
+      "describe": "open for ~600s (applies on save)",
+      "id": "reload_state/written_by_follow/windowed_1800",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~600"
+    },
+    "reload_state/written_by_follow_long/auto": {
+      "describe": "open for ~8639999999999999597346840s (applies on save)",
+      "id": "reload_state/written_by_follow_long/auto",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~8639999999999999597346840"
+    },
+    "reload_state/written_by_follow_long/manual": {
+      "describe": "open for ~8639999999999999597346840s (applies on save)",
+      "id": "reload_state/written_by_follow_long/manual",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~8639999999999999597346840"
+    },
+    "reload_state/written_by_follow_long/windowed_0": {
+      "describe": "open for ~8639999999999999597346840s (applies on save)",
+      "id": "reload_state/written_by_follow_long/windowed_0",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~8639999999999999597346840"
+    },
+    "reload_state/written_by_follow_long/windowed_1800": {
+      "describe": "open for ~8639999999999999597346840s (applies on save)",
+      "id": "reload_state/written_by_follow_long/windowed_1800",
+      "is_open": true,
+      "logged": [],
+      "seconds_left": "~8639999999999999597346840"
+    },
+    "reload_state/written_by_freeze/auto": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/written_by_freeze/auto",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/written_by_freeze/manual": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/written_by_freeze/manual",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/written_by_freeze/windowed_0": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/written_by_freeze/windowed_0",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    },
+    "reload_state/written_by_freeze/windowed_1800": {
+      "describe": "frozen (does not apply on save; reload-follow to reopen)",
+      "id": "reload_state/written_by_freeze/windowed_1800",
+      "is_open": false,
+      "logged": [],
+      "seconds_left": null
+    }
+  },
+  "comment": "Python's answers, recorded by SEKIMORE_ORACLE_RECORD=1 cargo test --test equivalence the_orchestrator_reads_the_window_maint_writes. Do not edit by hand.",
+  "kind": "reload_state",
+  "python": {
+    "pydantic": "2.14.1",
+    "pyyaml": "6.0.3",
+    "version": "3.14.8"
+  }
+}

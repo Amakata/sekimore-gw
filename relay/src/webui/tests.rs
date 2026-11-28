@@ -413,23 +413,30 @@ fn every_credential_state_has_a_name_in_both_locales() {
     }
 }
 
-/// The `maint.*` strings the Python CLI still reads from `src/locales/` are the ones this copy
-/// serves in `/api/i18n`, until `maint` moves (0.3.0-alpha.5).
+/// The `maint.*` strings `/api/i18n` has always served are the ones `sekimore-relay maint` prints
+/// (`relay/locales/`, moved there from the Python CLI's `src/locales/` in 0.3.0-alpha.5). Both
+/// copies are kept: the Web UI imports no CLI module.
 #[test]
 fn the_cli_strings_are_the_same_in_both_dictionaries() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for lang in ["en", "ja"] {
-        let py: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
-            &std::fs::read_to_string(root.join(format!("src/locales/{lang}.json"))).unwrap(),
+        let cli: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(root.join(format!("locales/{lang}.json"))).unwrap(),
         )
         .unwrap();
-        assert!(py.len() > 30, "{lang}: {}", py.len());
+        let cli: Vec<(&String, &serde_json::Value)> = cli
+            .iter()
+            .filter(|(k, _)| k.starts_with("maint.") && *k != "maint.help")
+            .collect();
+        assert!(cli.len() > 30, "{lang}: {}", cli.len());
         let ours = super::i18n::strings(lang);
-        for (k, v) in &py {
-            assert!(
-                k.starts_with("maint."),
-                "{lang}: {k} belongs in relay/src/webui/locales"
-            );
+        let ours_maint: Vec<&String> = ours
+            .iter()
+            .filter(|(k, _)| k.starts_with("maint."))
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(ours_maint.len(), cli.len(), "{lang}");
+        for (k, v) in cli {
             let mine = ours.iter().find(|(x, _)| x == k).map(|(_, v)| v.as_str());
             assert_eq!(mine, v.as_str(), "{lang}: {k}");
         }
