@@ -12,11 +12,18 @@
 #   - the relay CLI runs, and is the version ARG SEKIMORE_GW_IMAGE pins
 #   - the agent guide ships in both languages and came from that same release
 #   - the tools the base promises are on PATH, and the AI tools are not (#405)
+#   - #507: the image is on the Debian it was built for, and what a project relies on works
+#     there: what agent setup runs (ip, nslookup, the proxy environment's files, ssh-keygen),
+#     git signing with an SSH key, and docker in docker
 #
 # Needs docker and a built image. Pass one, or let it build:
 #
 #   tests/test_image.sh                     # builds from ./Dockerfile
 #   tests/test_image.sh ghcr.io/…:0.2.27    # checks one that exists
+#   SGW_DEBIAN=trixie tests/test_image.sh   # builds the Debian 13 image, and checks it is that
+#
+# SGW_DEBIAN names the Debian the image must be on (bookworm, trixie); unset, it is not checked.
+# SGW_TEST_NO_PRIVILEGED=1 skips docker in docker, which needs a privileged container.
 set -eu
 
 unset CDPATH
@@ -33,14 +40,23 @@ BUILT=""
 if [ -z "$IMAGE" ]; then
   IMAGE=sgw-devcontainer-base:test-$$
   BUILT=$IMAGE
-  echo "== building $IMAGE (gateway $GW)"
-  docker build -q -t "$IMAGE" "$ROOT" >/dev/null || fail "the image does not build"
+  echo "== building $IMAGE (gateway $GW, Debian ${SGW_DEBIAN:-bookworm})"
+  docker build -q -t "$IMAGE" --build-arg "DEBIAN=${SGW_DEBIAN:-bookworm}" "$ROOT" >/dev/null ||
+    fail "the image does not build"
 fi
 cleanup() { [ -n "$BUILT" ] && docker rmi -f "$BUILT" >/dev/null 2>&1 || true; }
 trap cleanup EXIT INT TERM
 
 # `docker run` with an explicit entrypoint, because this image's own entrypoint is a login shell.
 in_image() { docker run --rm --entrypoint "$1" "$IMAGE" "${@:2}" 2>&1; }
+
+# ---- #507: the Debian it was built for ----
+# shellcheck disable=SC2016 # expanded in the image, not here
+codename=$(in_image /bin/sh -c '. /etc/os-release && echo "$VERSION_CODENAME"')
+if [ -n "${SGW_DEBIAN:-}" ]; then
+  [ "$codename" = "$SGW_DEBIAN" ] || fail "the image is on $codename, not $SGW_DEBIAN"
+fi
+echo "== the image is on Debian $codename ($(in_image /bin/cat /etc/debian_version))"
 
 # ---- the relay CLI is the one the Dockerfile asked for ----
 got=$(in_image /usr/local/bin/sekimore-relay --version) ||
@@ -84,7 +100,10 @@ echo "== the agent guide ships in both languages"
 # ~/.local/bin, which the shell rc adds rather than ENV PATH.
 # node and npm come from the mise shims, which Debian's /etc/profile would drop from a login shell
 # if /etc/profile.d did not put them back (#60) — so checking them here is checking that too.
-for t in git delta zsh mise node npm aws docker sekimore sgw-agent sgw-post-start sgw-install-ai; do
+# #507: and what agent setup runs (ip, ssh-keygen, ssh-keyscan, ssh-add) or tells a person to use
+# (nslookup, dig): `dnsutils` on bookworm and `bind9-dnsutils` on trixie hold the same commands.
+for t in git delta zsh mise node npm aws docker sekimore sgw-agent sgw-post-start sgw-install-ai \
+  ip nslookup dig ssh-keygen ssh-keyscan ssh-add; do
   in_image /bin/sh -lc "command -v $t >/dev/null" ||
     fail "$t is not on PATH in the image"
 done
@@ -181,6 +200,64 @@ else
 fi
 rm -f /tmp/sgw-install-ai.$$
 
+# ---- #507: what agent setup does to the container, with this Debian's tools ----
+# sgw-agent setup reads eth0's address from `ip -4 -o addr` (agent_setup/discover.rs), points the
+# default route at the gateway, and writes the proxy environment to /etc/profile.d and
+# /etc/environment (proxy_env.rs). The gateway is not here; the commands and the files are.
+out=$(docker run --rm --user root --cap-add NET_ADMIN --entrypoint /bin/sh "$IMAGE" -c '
+  ip -4 -o addr show eth0
+  gw=$(ip -4 route show default | sed -n "s/^default via \([0-9.]*\).*/\1/p")
+  ip route del default && ip route add default via "$gw" dev eth0 && echo route-ok
+  iptables --version' 2>&1) || true
+printf '%s\n' "$out" | grep -Eq '^[0-9]+: eth0 +inet [0-9.]+/[0-9]+ ' ||
+  fail "ip -4 -o addr show eth0 does not print what agent setup parses: $out"
+case "$out" in *route-ok*) ;; *) fail "the default route cannot be replaced: $out" ;; esac
+# dockerd's rules, and anything a project adds: the nft backend on both Debians
+case "$out" in *"(nf_tables)"*) ;; *) fail "iptables is not the nft backend: $out" ;; esac
+echo "== ip prints eth0 the way agent setup reads it, the default route can be replaced, iptables is nft"
+out=$(docker run --rm --user root --entrypoint /bin/sh "$IMAGE" -c '
+  echo "export SGW_T_PROFILE=from-profile" > /etc/profile.d/sekimore-proxy.sh
+  echo "SGW_T_ENV=from-environment" >> /etc/environment
+  su - vscode -c "printf \"%s %s\" \"\$SGW_T_PROFILE\" \"\$SGW_T_ENV\""' 2>&1) || true
+[ "$out" = "from-profile from-environment" ] ||
+  fail "a login shell does not see the proxy environment's files: '$out'"
+echo "== a login shell reads /etc/profile.d and /etc/environment, where agent setup writes the proxy"
+
+# ---- #507: git signs with an SSH key, the way agent setup configures it ----
+# gpg.format ssh and user.signingkey (agent_setup/relay.rs); signing and checking are ssh-keygen's.
+out=$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c '
+  set -e; cd /tmp
+  ssh-keygen -q -t ed25519 -N "" -C t@sgw -f k
+  git init -q r && cd r
+  git config user.name t && git config user.email t@sgw
+  git config gpg.format ssh && git config user.signingkey /tmp/k.pub
+  echo "t@sgw $(cat /tmp/k.pub)" > /tmp/allowed
+  git config gpg.ssh.allowedSignersFile /tmp/allowed
+  git commit -q -S --allow-empty -m signed
+  git verify-commit HEAD 2>&1' 2>&1) || true
+case "$out" in
+  *'Good "git" signature'*) ;;
+  *) fail "git does not sign and verify with an SSH key: $out" ;;
+esac
+echo "== git signs a commit with an SSH key and verifies it"
+
+# ---- #507: docker in docker ----
+# What docker-init.sh starts from postStartCommand: dockerd as root, used by the user. Needs a
+# privileged container, as the template's compose gives it. No network: the build is FROM scratch.
+if [ -n "${SGW_TEST_NO_PRIVILEGED:-}" ]; then
+  echo "SKIP: docker in docker (SGW_TEST_NO_PRIVILEGED)"
+else
+  out=$(docker run --rm --privileged --entrypoint /bin/sh "$IMAGE" -c '
+    docker-init.sh || { sudo tail -20 /var/log/dockerd.log; exit 1; }
+    mkdir -p /tmp/ctx && echo hi > /tmp/ctx/f && printf "FROM scratch\nCOPY f /f\n" > /tmp/ctx/Dockerfile
+    docker build -q -t sgw-dind-probe /tmp/ctx >/dev/null && docker image inspect sgw-dind-probe >/dev/null && echo dind-ok' 2>&1) || true
+  case "$out" in
+    *dind-ok*) ;;
+    *) fail "docker in docker does not start or build: $out" ;;
+  esac
+  echo "== dockerd starts in the container and the user builds with it"
+fi
+
 # ---- #339: GID 20 is free ----
 # Dev Containers' updateRemoteUserUID changes nothing when the host's GID is taken, and 20 is the
 # Mac's `staff`: a Linux VM built with 501:20 left the user at 1000:1000.
@@ -189,4 +266,4 @@ if in_image /usr/bin/getent group 20 >/dev/null; then
 fi
 echo "== GID 20 is free for the host user's group"
 
-echo "PASS: the image holds gateway $GW"
+echo "PASS: the image holds gateway $GW, on Debian $codename"

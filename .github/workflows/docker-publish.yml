@@ -185,6 +185,9 @@ jobs:
   #
   # `merge` is still a gate before anything base is *published*: base-merge needs both, so a
   # failing gateway smoke test still stops the base image's manifest from being tagged.
+  #
+  # #507: once per Debian too (ARG DEBIAN): bookworm, which the plain tag is, and trixie. The four
+  # builds run side by side, so the second Debian adds runners, not time.
   base-build:
     needs: build
     # On a tag, after the gateway image of that tag. On a dispatch with base_version, alone: the
@@ -193,13 +196,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        debian: [bookworm, trixie]
+        arch: [amd64, arm64]
         include:
-          - platform: linux/amd64
+          - arch: amd64
+            platform: linux/amd64
             runner: ubuntu-26.04
-            arch: amd64
-          - platform: linux/arm64
+          - arch: arm64
+            platform: linux/arm64
             runner: ubuntu-26.04-arm
-            arch: arm64
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -254,7 +259,7 @@ jobs:
       - name: Normalise the layer timestamps
         run: echo "SOURCE_DATE_EPOCH=1577836800" >> "$GITHUB_ENV"
 
-      - name: Build and push by digest (${{ matrix.arch }})
+      - name: Build and push by digest (${{ matrix.debian }}, ${{ matrix.arch }})
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -264,6 +269,7 @@ jobs:
           provenance: false
           build-args: |
             SEKIMORE_GW_IMAGE=${{ env.SEKIMORE_GW_IMAGE }}
+            DEBIAN=${{ matrix.debian }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.BASE_IMAGE }},push-by-digest=true,name-canonical=true,push=true,rewrite-timestamp=true
 
       - name: Export digest
@@ -275,7 +281,7 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: base-digests-${{ matrix.arch }}
+          name: base-digests-${{ matrix.debian }}-${{ matrix.arch }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -298,11 +304,17 @@ jobs:
           v="${{ inputs.base_version }}"; [ -n "$v" ] || v="${GITHUB_REF_NAME#v}"
           echo "VERSION=$v" >> "$GITHUB_ENV"
 
+      # one directory per Debian, each holding that Debian's two digests
       - name: Download digests
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: /tmp/digests
-          pattern: base-digests-*
+          path: /tmp/digests/bookworm
+          pattern: base-digests-bookworm-*
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: /tmp/digests/trixie
+          pattern: base-digests-trixie-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
@@ -316,33 +328,51 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # The same tags the gateway gets (X.Y.Z, X.Y, X, latest; a prerelease X.Y.Z-pre alone), from
-      # VERSION rather than from the git ref, so a dispatch on main tags the same way a tag push does
-      - name: Create and push manifest list
+      # VERSION rather than from the git ref, so a dispatch on main tags the same way a tag push does.
+      # #507: those are bookworm's, as they always were, together with X.Y.Z-bookworm; trixie is
+      # X.Y.Z-trixie alone. Each Debian's tags are one `imagetools create`, so the plain tag and
+      # -bookworm are one manifest list with one digest, not two builds.
+      - name: Create and push manifest lists
         working-directory: /tmp/digests
         run: |
           set -eu
           REPO="${REGISTRY}/${BASE_IMAGE}"
-          n=$(ls | wc -l); test "$n" -eq 2 || { echo "expected 2 digests, got $n"; ls; exit 1; }
           case "$VERSION" in *.*.*) ;; *) echo "VERSION '$VERSION' is not X.Y.Z"; exit 1 ;; esac
           major=${VERSION%%.*}; minor=${VERSION%.*}
           case "$VERSION" in
-            *-*) tags="$REPO:$VERSION" ;;
-            *) tags="$REPO:$VERSION $REPO:$minor $REPO:$major $REPO:latest" ;;
+            *-*) plain="$VERSION" ;;
+            *) plain="$VERSION $minor $major latest" ;;
           esac
-          for TAG in $tags; do
-            # shellcheck disable=SC2046
-            docker buildx imagetools create -t "$TAG" $(printf "${REPO}@sha256:%s " *)
+          for debian in bookworm trixie; do
+            n=$(ls "$debian" | wc -l); test "$n" -eq 2 || { echo "expected 2 $debian digests, got $n"; ls "$debian"; exit 1; }
+            tags="$VERSION-$debian"
+            [ "$debian" = bookworm ] && tags="$plain $tags"
+            args=""
+            for t in $tags; do args="$args -t $REPO:$t"; done
+            # shellcheck disable=SC2046,SC2086
+            docker buildx imagetools create $args $(cd "$debian" && printf "${REPO}@sha256:%s " *)
           done
 
-      # The image holds the relay of this same tag: what base/tests/test_image.sh asks locally
+      # The image holds the relay of this same tag: what base/tests/test_image.sh asks locally.
+      # #507: each tag is on its Debian, and the plain tag is the -bookworm image itself.
       - name: Smoke test (amd64)
         run: |
           set -eu
-          IMAGE="${REGISTRY}/${BASE_IMAGE}:${VERSION}"
-          docker pull --platform linux/amd64 "$IMAGE"
-          got=$(docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/sekimore-relay "$IMAGE" --version)
-          echo "$got"
-          case "$got" in *"$VERSION"*) ;; *) echo "the base image holds '$got', not $VERSION"; exit 1 ;; esac
+          REPO="${REGISTRY}/${BASE_IMAGE}"
+          digest() { docker buildx imagetools inspect "$1" --format '{{json .Manifest.Digest}}'; }
+          plain=$(digest "$REPO:$VERSION"); bookworm=$(digest "$REPO:$VERSION-bookworm")
+          echo "$VERSION: $plain, $VERSION-bookworm: $bookworm"
+          [ "$plain" = "$bookworm" ] || { echo "the plain tag is not the -bookworm image"; exit 1; }
+          for pair in "$VERSION:bookworm" "$VERSION-bookworm:bookworm" "$VERSION-trixie:trixie"; do
+            tag=${pair%:*}; want=${pair##*:}
+            IMAGE="$REPO:$tag"
+            docker pull -q --platform linux/amd64 "$IMAGE"
+            got=$(docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/sekimore-relay "$IMAGE" --version)
+            echo "$tag: $got"
+            case "$got" in *"$VERSION"*) ;; *) echo "$tag holds '$got', not $VERSION"; exit 1 ;; esac
+            codename=$(docker run --rm --platform linux/amd64 --entrypoint /bin/sh "$IMAGE" -c '. /etc/os-release && echo "$VERSION_CODENAME"')
+            [ "$codename" = "$want" ] || { echo "$tag is on $codename, not $want"; exit 1; }
+          done
 
   # ---- the host tool `sgw`, as release assets (#234) ----
   # Built natively on each platform: macOS on an Apple-silicon runner (rustls-native-certs pulls

@@ -4,7 +4,8 @@
 # Base image for Amakata personal-dev devcontainers that sit behind sekimore-gw.
 #
 # What's baked in:
-#   - mcr.microsoft.com/devcontainers/base:bookworm  (provides vscode user uid=1000, git, sudo, etc.)
+#   - mcr.microsoft.com/devcontainers/base:bookworm or :trixie (provides vscode user uid=1000, git,
+#     sudo, etc.; ARG DEBIAN below picks the Debian)
 #   - common shell tooling (fzf, iproute2, jq, vim, rsync, ...)
 #   - DB client dev headers (libpq-dev, default-libmysqlclient-dev)
 #   - git-delta
@@ -35,22 +36,44 @@
 # Override for local testing: --build-arg SEKIMORE_GW_IMAGE=sekimore-gw:relay-dev
 # ---------------------------------------------------------------------------
 ARG SEKIMORE_GW_IMAGE=ghcr.io/amakata/sekimore-gw:0.3.0-alpha.4
+# ---------------------------------------------------------------------------
+# #507: the Debian the image is on. bookworm (Debian 12) is what the plain tag `<version>` is, and
+# is published as `<version>-bookworm` too; trixie (Debian 13) is `<version>-trixie`, which a
+# project chooses. One Dockerfile for both: where the two differ, the line says so.
+#   docker build --build-arg DEBIAN=trixie -t sgw-devcontainer-base:dev-trixie base
+# ---------------------------------------------------------------------------
+ARG DEBIAN=bookworm
 FROM ${SEKIMORE_GW_IMAGE} AS sekimore-gw
 
-FROM mcr.microsoft.com/devcontainers/base:bookworm
+FROM mcr.microsoft.com/devcontainers/base:${DEBIAN}
 
 ARG USERNAME=vscode
 ARG TARGETARCH
+ARG DEBIAN
 
 # ---------------------------------------------------------------------------
 # Base apt packages
+#
+# #507: the same list on both Debians but one name. `dnsutils` (dig, nslookup; agent-setup
+# looks the gateway up with nslookup) is a transitional package on bookworm and gone on trixie,
+# where the package is `bind9-dnsutils`. bookworm keeps the name it always had, so its image holds
+# what it held. Everything else here has the same name on both; versions differ (trixie's
+# iptables is 1.8.11 against 1.8.9, both defaulting to the nft backend). The upstream tag is
+# the codename, and the first line holds the image to it.
 # ---------------------------------------------------------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN . /etc/os-release && [ "${VERSION_CODENAME}" = "${DEBIAN}" ] \
+    || { echo "DEBIAN=${DEBIAN} but the upstream image is ${VERSION_CODENAME}" >&2; exit 1; }; \
+    case "${DEBIAN}" in \
+      bookworm) DNSUTILS=dnsutils ;; \
+      trixie) DNSUTILS=bind9-dnsutils ;; \
+      *) echo "DEBIAN=${DEBIAN}: bookworm or trixie" >&2; exit 1 ;; \
+    esac \
+    && apt-get update && apt-get install -y --no-install-recommends \
       fzf \
       iptables \
       iproute2 \
       iputils-ping \
-      dnsutils \
+      "${DNSUTILS}" \
       jq \
       nano \
       vim \
