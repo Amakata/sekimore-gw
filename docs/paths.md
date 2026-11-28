@@ -3,7 +3,7 @@
 *[日本語版](paths.ja.md)*
 
 `docs/paths.yml` lists every connection the gateway opens or governs, as a graph: one row per
-edge. `tests/unit/test_paths.py` loads it with NetworkX and checks rules over the whole graph.
+edge. `tools/tests/paths_ledger.rs` loads it as a graph and checks rules over the whole of it.
 The bugs of 2026-09-25 (#186, #190, #205, #212, #217, #220) were each a missing row or a missing
 attribute; the ledger makes that a test failure.
 
@@ -48,13 +48,15 @@ store unlocked) carry no edge.
 
 ## Asking it questions
 
+The `paths` tool in `tools/`, from that directory:
+
 ```
-uv run scripts/paths.py edges                        every edge
-uv run scripts/paths.py edges -v --switch direct_egress
-uv run scripts/paths.py edges --without verify       edges no relay:verify item probes
-uv run scripts/paths.py paths dev internet           every path, with the mediating nodes
-uv run scripts/paths.py secret upstream_proxy_password
-uv run scripts/paths.py dot | dot -Tsvg > paths.svg  draw it (Graphviz)
+cargo run -q --bin paths -- edges                        every edge
+cargo run -q --bin paths -- edges -v --switch direct_egress
+cargo run -q --bin paths -- edges --without verify       edges no relay:verify item probes
+cargo run -q --bin paths -- paths dev internet           every path, with the mediating nodes
+cargo run -q --bin paths -- secret upstream_proxy_password
+cargo run -q --bin paths -- dot | dot -Tsvg > paths.svg  draw it (Graphviz)
 ```
 
 ## Adding an edge
@@ -64,4 +66,4 @@ uv run scripts/paths.py dot | dot -Tsvg > paths.svg  draw it (Graphviz)
    connection is opened
 3. Name the tests that cover it; add a `sgw verify` item in `relay/src/host/verify.rs` when a real
    machine has to probe it
-4. Run `uv run pytest tests/unit/test_paths.py`
+4. Run `cargo test --test paths_ledger` in `tools/`

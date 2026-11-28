@@ -14,14 +14,15 @@
 #
 #   - the Debian packages (`apt-get install iptables=1.8.11-2 …`) in Dockerfile and
 #     Dockerfile.agent, and the `ARG DEBIAN_SNAPSHOT=…` archive they resolve against. There is no
-#     reader for either. They move by hand, and `tests/unit/test_supply_chain_pins.py` fails once
+#     reader for either. They move by hand, and `tools/tests/supply_chain_pins.rs` fails once
 #     the snapshot is more than 90 days old — that test is the whole of the guard.
 #   - the `# syntax=docker/dockerfile:1.7@sha256:…` frontend directive. The Docker parser matches
 #     `FROM` lines and Kubernetes-shaped YAML, and nothing else.
 #   - the Rust toolchain. Dependabot does have a `rust-toolchain` ecosystem, and it is left out
 #     on purpose rather than for want of one: `1.89.0` is written in relay/rust-toolchain.toml,
-#     as `rust-version` in relay/Cargo.toml, as `rust = "1.89.0"` in mise.toml, and as the ref of
-#     dtolnay/rust-toolchain below. It would move one of the four and desync the other three.
+#     as `rust-version` in relay/Cargo.toml (and tools/Cargo.toml), as `rust = "1.89.0"` in
+#     mise.toml, and as the ref of dtolnay/rust-toolchain below. It would move one of the four
+#     and desync the other three.
 #   - Go modules. The sidecar template (examples/sidecar-template) requires none, so there is no
 #     `gomod` entry: it would have nothing to read. Its Go version is in four places too — go.mod,
 #     the golang image of its Dockerfile, `go = …` in mise.toml, and setup-go's `go-version` in
@@ -55,11 +56,15 @@ updates:
       # above: the toolchain moves in four files at once, by hand.
       - dependency-name: "dtolnay/rust-toolchain"
 
-  # ---- Rust (relay/Cargo.toml, relay/Cargo.lock) ----
+  # ---- Rust (relay/ and tools/: each a Cargo.toml with its own Cargo.lock) ----
   # Minor and patch in one pull request. A major is left on its own, because that is the one
-  # whose diff has to be read rather than whose CI result has to be looked at.
+  # whose diff has to be read rather than whose CI result has to be looked at. tools/ is the
+  # repository's own tools and checks (#506); it ships in nothing, and its few crates are the
+  # relay's too.
   - package-ecosystem: "cargo"
-    directory: "/relay"
+    directories:
+      - "/relay"
+      - "/tools"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -127,7 +132,7 @@ updates:
   # not read compose files. `/` is listed as well: docker-compose.yml builds both its services and
   # so has nothing to bump today, but an `image:` added to it later is covered from the start
   # rather than whenever someone remembers the file exists — the same reason
-  # test_supply_chain_pins.py already lists it.
+  # tools/tests/supply_chain_pins.rs already lists it.
   - package-ecosystem: "docker-compose"
     directories:
       - "/"

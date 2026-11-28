@@ -1,0 +1,8 @@
+docker run --rm registry.example/base:1 mise latest php@8.3
+docker run --rm registry.example/base:1 mise latest php@8.4
+docker run --rm registry.example/base:1 mise latest python@3.13
+docker buildx imagetools inspect ghcr.io/amakata/sgw-lang-php:8.4.2-2-bookworm
+docker buildx imagetools inspect ghcr.io/amakata/sgw-lang-php:8.3.35-1-bookworm
+docker buildx imagetools inspect ghcr.io/amakata/sgw-lang-php:8.3.35-bookworm
+docker buildx imagetools inspect ghcr.io/amakata/sgw-lang-python:3.13.9-1-bookworm
+docker buildx imagetools inspect ghcr.io/amakata/sgw-lang-python:3.13.9-bookworm

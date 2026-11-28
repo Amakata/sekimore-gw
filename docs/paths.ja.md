@@ -3,7 +3,7 @@
 *[English](paths.md)*
 
 `docs/paths.yml` は、ゲートウェイが開く・管理するすべての接続をグラフとして列挙します。1 行が 1 本の辺です。
-`tests/unit/test_paths.py` が NetworkX で読み込み、グラフ全体に対する規則を検査します。
+`tools/tests/paths_ledger.rs` がグラフとして読み込み、グラフ全体に対する規則を検査します。
 2026-09-25 の不具合（#186, #190, #205, #212, #217, #220）はどれも「行が無い」か「属性が無い」ことが原因でした。
 台帳はそれをテストの失敗に変えます。
 
@@ -44,13 +44,15 @@
 
 ## 問い合わせる
 
+`tools/` の `paths` を、そのディレクトリで実行します。
+
 ```
-uv run scripts/paths.py edges                        すべての辺
-uv run scripts/paths.py edges -v --switch direct_egress
-uv run scripts/paths.py edges --without verify       relay:verify が確かめていない辺
-uv run scripts/paths.py paths dev internet           すべての経路と、その中継ノード
-uv run scripts/paths.py secret upstream_proxy_password
-uv run scripts/paths.py dot | dot -Tsvg > paths.svg  描く（Graphviz）
+cargo run -q --bin paths -- edges                        すべての辺
+cargo run -q --bin paths -- edges -v --switch direct_egress
+cargo run -q --bin paths -- edges --without verify       relay:verify が確かめていない辺
+cargo run -q --bin paths -- paths dev internet           すべての経路と、その中継ノード
+cargo run -q --bin paths -- secret upstream_proxy_password
+cargo run -q --bin paths -- dot | dot -Tsvg > paths.svg  描く（Graphviz）
 ```
 
 ## 辺を追加する
@@ -58,4 +60,4 @@ uv run scripts/paths.py dot | dot -Tsvg > paths.svg  描く（Graphviz）
 1. `docs/paths.yml` に行を足す
 2. `src/paths.py` か `relay/src/paths.rs` に id を足し、接続を開く場所でその定数を使う
 3. 覆うテストを書く。実機で確かめる必要があれば `relay/src/host/verify.rs` の `sgw verify` に項目を足す
-4. `uv run pytest tests/unit/test_paths.py` を実行する
+4. `tools/` で `cargo test --test paths_ledger` を実行する

@@ -9,7 +9,7 @@ of the same tag) and, later, the `sgw` binaries. One version number, `pyproject.
 1. Bump the version in `pyproject.toml` and `relay/Cargo.toml`; refresh `uv.lock` (`uv lock`) and
    `relay/Cargo.lock` (`cargo update -p sekimore-relay` in `relay/`)
 2. Write the release up in `CHANGELOG.md` and `CHANGELOG.ja.md`: one section for the gateway, the
-   relay, the base and sgw (`tests/unit/test_changelog_style.py` holds the shape)
+   relay, the base and sgw (`tools/tests/changelog_style.rs` holds the shape)
 3. Move the base's pins to the new version: `ARG SEKIMORE_GW_IMAGE` in `base/Dockerfile`, the
    template's compose, relay overlay and Dockerfile (`relay/templates/devcontainer/`), the READMEs under
    `base/`, and the `reviewed-up-to` marker of `UPGRADING.md` / `UPGRADING.ja.md` after

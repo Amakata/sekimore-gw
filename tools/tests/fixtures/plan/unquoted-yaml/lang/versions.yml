@@ -1,0 +1,7 @@
+track:
+  php: [8.3]
+pin:
+  python:
+    2.7.18: 1
+  php:
+    8.3.26: 3

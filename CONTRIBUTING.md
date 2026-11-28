@@ -286,8 +286,10 @@ from the same tag as the gateway (#235). Their tests are shell scripts, run dire
 ```bash
 base/tests/test_sgw_post_start.sh  # the dev container's start: setup, docker-init, post-create
 base/tests/test_image.sh           # builds the image; needs docker
-python3 base/scripts/check-upgrading.py
 ```
+
+That `UPGRADING.md` has been reviewed up to the gateway `base/Dockerfile` takes is a check in
+`tools/` (`cargo test --test upgrading`, below).
 
 The project template `sgw init` writes is `relay/templates/devcontainer/`, embedded in the
 `sgw` binary; `relay/src/host/templates.rs` holds the two to each other, and
@@ -309,6 +311,30 @@ docker build -t sekimore-notes .
 `relay/tests/command_sidecar.rs` builds it with `go build` and runs it through the gateway; `GO`
 names a toolchain other than `go`. Without one the test is skipped, or fails under
 `SEKIMORE_E2E_REQUIRED` (CI and `mise run ci`).
+
+### The repository's tools and checks (`tools/`)
+
+`tools/` is a crate of its own (#506): nothing in it ships in the image or in `sgw`. It holds two
+tools and the checks that are about the repository rather than the gateway, run by
+`mise run ci:tools` and the `Tools` workflow on every pull request:
+
+```bash
+cd tools
+cargo test                              # every check below
+cargo test --test changelog_style       # CHANGELOG.md / CHANGELOG.ja.md keep their shape
+cargo test --test paths_ledger          # docs/paths.yml against the code (docs/paths.md)
+cargo test --test supply_chain_pins     # actions, images, apt packages, the Debian snapshot's age, Dependabot
+cargo test --test upgrading             # UPGRADING's reviewed-up-to marker
+cargo test --test agent_setup_sh        # agent-setup.sh, with fake curl / ssh-keyscan
+cargo run --bin paths -- edges          # ask the path ledger (docs/paths.md)
+```
+
+`lang-plan` is what `lang-images.yml` runs to decide which language images to build. It reads
+`lang/` relative to where it runs, so run it from the repository root:
+`cargo run --manifest-path tools/Cargo.toml --bin lang-plan -- pr --base <file> --changed <file>`.
+
+`lang-plan` and `paths` replaced `lang/plan.py` and `scripts/paths.py` and print the same bytes:
+`tests/plan_golden.rs` and `tests/paths_golden.rs` replay runs recorded from the Python versions.
 
 ### Integration tests
 

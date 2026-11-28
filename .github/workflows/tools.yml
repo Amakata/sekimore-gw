@@ -1,0 +1,60 @@
+name: Tools and repository checks
+
+# tools/ (#506): the language-image plan, the path ledger, and the checks that are about the
+# repository rather than the gateway — the changelog's shape, the path ledger against the code,
+# the action / image / apt pins and the Debian snapshot's age, UPGRADING's marker, and
+# agent-setup.sh. They read files from all over the repository (CHANGELOG, workflows,
+# Dockerfiles, docs/paths.yml, relay/src, agent-setup.sh), so there is no path filter: the crate
+# is small, cached, and its whole run is well under a minute. It builds nothing of the relay.
+on:
+  push:
+    branches: [main, next]
+  pull_request:
+  # weekly: the snapshot ages and advisories appear without a commit
+  schedule:
+    - cron: "37 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # 1.89.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: test (the repository checks; agent-setup.sh needs git, ssh-keygen and ssh-agent)
+        run: cargo test --locked
+        env:
+          SEKIMORE_E2E_REQUIRED: "1"
+
+  # tools/Cargo.lock is not the relay's, so relay.yml's audit does not read it
+  audit:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # 1.89.0
+      # rust-cache keeps ~/.cargo/bin, so cargo-audit is built once, not on every run
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools
+          cache-on-failure: true
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
